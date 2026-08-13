@@ -16,6 +16,7 @@ grill them
 | `have-it-all-done` | Take over one complete task behind a single risk gate, carrying prior grilling through take-this and get-to-work; use issue-chain only when no task context exists |
 | `issue-chain` | Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action |
 | `review-pr` | Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes. |
+| `clean-it-up` | Safely remove merged local branches and obsolete worktrees after a Git task is finished; remote branches require explicit opt-in. |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
