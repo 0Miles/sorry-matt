@@ -10,12 +10,14 @@ disable-model-invocation: true
 
 ## 1. 鎖定 tracker 與脈絡
 
-第一個動作是讀 `docs/agents/issue-tracker.md`；不存在時，先執行
-`/setup-matt-pocock-skills`。後續的發布位置、識別格式與 triage 表示均依該設定。
+第一個動作是讀 `docs/agents/issue-tracker.md`；不存在時，請使用者執行
+`/setup-matt-pocock-skills`，取得設定後再繼續。後續的發布位置、識別格式與 triage 表示
+均依該設定。
 
 整段依序完成「需求脈絡 → to-spec → to-tickets」，並維持同一份連續脈絡；to-tickets 完成
-前，保留這份脈絡。若接近 smart zone，在任何 compact 前用 `/handoff` 把完整脈絡交到新
-session，再從中斷處繼續。
+前，保留這份脈絡。若接近 smart zone，在任何 compact 前解析並照做
+`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/handoff/SKILL.md`
+（版本段用萬用字元），把完整脈絡交到新 session，再從中斷處繼續。
 
 完成判準：已讀取 configured tracker；目前 context 或 handoff 同時保有任務輸入、既有
 grilling 成果與後續步驟所需資訊。
@@ -42,7 +44,9 @@ grilling 成果與後續步驟所需資訊。
 
 ## 3. 寫成 spec（to-spec）
 
-以完整需求脈絡執行 mattpocock-skills `to-spec`，完成其 seam 與使用者確認。Open questions
+解析
+`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/to-spec/SKILL.md`
+（版本段用萬用字元），以完整需求脈絡照做全文，完成其 seam 與使用者確認。Open questions
 放入 Further Notes 或 Out of Scope；requirements 僅保留採用的選項。
 
 完成判準：spec 已發布到 configured tracker，逐項涵蓋需求脈絡，並以 provider 原生方式標成
@@ -50,7 +54,8 @@ grilling 成果與後續步驟所需資訊。
 
 ## 4. 切成 tickets（to-tickets）
 
-以剛發布的 spec 執行 `to-tickets`，完成其切票與阻塞關係確認。
+解析同一 cache 目錄的 `skills/engineering/to-tickets/SKILL.md`，以剛發布的 spec 照做全文，
+完成其切票與阻塞關係確認。
 
 完成判準：所有 tickets 均發布到同一 configured tracker；每張票的範圍與阻塞邊均已確認，
 並記錄 GitHub 識別／URL 或 Local Markdown `NN`／路徑。

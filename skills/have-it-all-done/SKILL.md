@@ -48,7 +48,9 @@ red-or-green result; every red light has an explicit user approval record.
 
 ## 2. Prepare the tickets (skip when they already exist)
 
-Run the complete `take-this` sequence: establish the requirements context, run to-spec, then run to-tickets.
+Starting from the base directory stated when this skill was loaded, read the sibling `../take-this/SKILL.md`
+and follow its complete sequence: establish the requirements context, complete to-spec, then complete
+to-tickets.
 When step 1 picked up `grill-me`, `grill-with-docs`, or `grill-them`, pass its decisions, evidence, and documents
 explicitly to `take-this`, preserving that single requirements context.
 
@@ -63,10 +65,10 @@ confirmation after the risk gate has an answer and rationale in the self-answer 
 
 ## 3. Clear the tickets
 
-Pass the tickets created in step 2, or the executable links selected in step 1, to `get-to-work` as explicit
-tracker-native identifiers: GitHub issue numbers or URLs, or Local Markdown paths. Preserve its full quality
-gate: automated checks before review, then a GitHub PR or Local Markdown integration-branch update only after
-review passes.
+Read the sibling `../get-to-work/SKILL.md` and follow it, giving it the tickets created in step 2, or the
+executable links selected in step 1, as its explicit argument in tracker-native identifiers: GitHub issue
+numbers or URLs, or Local Markdown paths. Preserve its full quality gate: automated checks before review,
+then a GitHub PR or Local Markdown integration-branch update only after review passes.
 
 Done when: `get-to-work` has stopped; every supplied ticket appears in its reconciliation table with a
 delivered, stuck, or awaiting-ruling result and supporting evidence.

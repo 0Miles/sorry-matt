@@ -20,6 +20,24 @@
 - 僅適用於原作者的細節要一般化或移除(如個人的輸出語言偏好、個人環境路徑)
 - frontmatter 的 `name` 兩版相同;`description` 用英文重寫
 
+## 跨 skill 組合
+
+Model 只能用 Skill tool 呼叫 **model-invoked**(frontmatter 沒有
+`disable-model-invocation: true`)的 skills;user-invoked 的不在 model 的可呼叫清單上,
+skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的指令會讓 agent 攤手
+自己模擬。skill 內文引用其他 skill 時:
+
+- 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`;matt 的
+  `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、`codebase-design`、
+  `code-review`、`resolving-merge-conflicts`)→ 可直接指名執行
+- 對方是 **user-invoked** → 寫成「讀 SKILL.md 並照做」:
+  - 自家的:以本 skill 載入時標示的 base directory 為起點,讀同層的
+    `../<name>/SKILL.md`
+  - matt 的:cache 萬用字元路徑
+    `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/<分類>/<name>/SKILL.md`
+- 要「人」執行的指令(`/setup-matt-pocock-skills`、`/triage`、`/implement` 等
+  下一步建議)措辭必須是「請使用者執行」,不能寫成 agent 的動作
+
 ### 詞彙對照
 
 | src | dist |

@@ -11,13 +11,15 @@ argument, use the current conversation.
 
 ## 1. Lock the tracker and context
 
-First read `docs/agents/issue-tracker.md`. If it does not exist, run
-`/setup-matt-pocock-skills` before continuing. Use that configuration for every publication target,
-identifier format, and triage designation.
+First read `docs/agents/issue-tracker.md`. If it does not exist, ask the user to run
+`/setup-matt-pocock-skills`, then continue once the configuration exists. Use that configuration for every
+publication target, identifier format, and triage designation.
 
 Complete requirements context, to-spec, and to-tickets in that order while preserving one continuous
-context through to-tickets. When approaching the smart zone, use `/handoff` before any compaction, transfer
-the complete context to a new session, and resume at the interrupted step.
+context through to-tickets. When approaching the smart zone, before any compaction resolve and follow
+`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/handoff/SKILL.md`
+(use the wildcard for the version directory), transfer the complete context to a new session, and resume at
+the interrupted step.
 
 Done when: the configured tracker has been read, and the current context or handoff contains the task input,
 prior grilling output, and everything required by the remaining steps.
@@ -49,9 +51,11 @@ once in the requirements context; reused output is the sole grilling input for t
 
 ## 3. Write the spec with to-spec
 
-Run the mattpocock-skills `to-spec` with the complete requirements context, including its seam and user
-confirmation. Put open questions under Further Notes or Out of Scope. Keep only adopted options in the
-requirements.
+Resolve
+`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/to-spec/SKILL.md`
+(use the wildcard for the version directory) and follow it in full with the complete requirements context,
+including its seam and user confirmation. Put open questions under Further Notes or Out of Scope. Keep only
+adopted options in the requirements.
 
 Done when: the spec is published to the configured tracker, accounts for every requirements-context item,
 is marked `ready-for-agent` through the provider's native mechanism, and its GitHub URL or Local Markdown
@@ -59,7 +63,8 @@ path is recorded.
 
 ## 4. Cut tickets with to-tickets
 
-Run `to-tickets` against the published spec and complete its ticket-cut and blocker confirmation.
+Resolve `skills/engineering/to-tickets/SKILL.md` under the same cache directory and follow it in full
+against the published spec, completing its ticket-cut and blocker confirmation.
 
 Done when: every ticket is published to the same configured tracker; each scope and blocker edge has been
 confirmed; every GitHub identifier/URL or Local Markdown `NN`/path is recorded.

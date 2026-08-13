@@ -43,7 +43,8 @@ disable-model-invocation: true
 
 ## 2. 完成開局（已有 tickets 時跳過）
 
-執行 `take-this` 的完整步驟：取得需求脈絡、執行 to-spec、再執行 to-tickets。步驟 1 若已接棒
+以本 skill 載入時標示的 base directory 為起點，讀同層的 `../take-this/SKILL.md` 並照做其
+完整步驟：取得需求脈絡、完成 to-spec、再完成 to-tickets。步驟 1 若已接棒
 `grill-me`、`grill-with-docs` 或 `grill-them`，將其決策、證據與文件明確交給 `take-this`，沿用
 同一份需求脈絡。
 
@@ -57,8 +58,9 @@ agent 替使用者回答的每個確認點，都把答案與理由逐項記入**
 
 ## 3. 清票
 
-把步驟 2 建立的 tickets，或步驟 1 找到的可執行環，以 tracker 原生識別（GitHub issue
-編號／URL，或 Local Markdown 路徑）作為明確引數交給 `get-to-work`。完整遵守它的品質閘門：
+讀同層的 `../get-to-work/SKILL.md` 並照做，把步驟 2 建立的 tickets，或步驟 1 找到的
+可執行環，以 tracker 原生識別（GitHub issue 編號／URL，或 Local Markdown 路徑）作為它的
+明確引數。完整遵守它的品質閘門：
 自動檢查通過後才驗收，驗收通過後才建立 GitHub PR 或更新 Local Markdown 整合分支。
 
 完成判準：`get-to-work` 已停止；交付給它的每張票都出現在對帳表中，且明列已交付、卡住
