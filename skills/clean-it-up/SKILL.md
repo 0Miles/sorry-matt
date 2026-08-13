@@ -1,6 +1,6 @@
 ---
 name: clean-it-up
-description: Safely remove merged local branches and obsolete worktrees after a Git task is finished. Use when the user asks to wrap up, clean merged branches or worktrees, or says clean it up.
+description: Safely remove merged local branches and obsolete worktrees after a Git task is finished. Use when the user wraps up a Git task (clean it up) or asks to clean merged branches or worktrees.
 ---
 
 # Clean it up: Retire finished Git work safely
@@ -9,8 +9,9 @@ Optional arguments may identify the repository, merge target, and whether remote
 the current repository when none is given. By default, remove only local branches, linked worktrees, and stale
 worktree administration records; do not delete remote branches.
 
-Treat "merged" as a state that requires proof. Never infer it from a branch name, age, upstream `gone` marker,
-or apparent work content. Preserve anything with insufficient evidence, a dirty state, or a Git refusal.
+Two rules govern the whole run: **merged is a state that requires proof**, and **a refusal is a verdict** —
+use only non-forcing commands throughout, and **downgrade to keep** anything with insufficient evidence, a
+dirty state, or a Git refusal; retrying with a stronger tool is outside this skill's authority.
 
 ## 1. Fix the merge target and authority
 
@@ -79,8 +80,8 @@ A worktree is removable only when:
 - It is unlocked, completely clean, and has no Git operation in progress.
 - Its checked-out local branch is proved merged under these rules and is itself a deletion candidate.
 
-Do not remove a detached worktree merely because it appears unused. List a missing-on-disk administration
-record separately as a prune candidate only when the dry run explicitly identifies it.
+List a missing-on-disk administration record separately as a prune candidate only when the dry run
+explicitly identifies it.
 
 First print a candidate table: `item | ref/path | merge proof | action | reason kept`. Local candidates may
 proceed under this skill invocation. A remote candidate additionally requires explicit authority from this
@@ -91,29 +92,29 @@ merge proof, and every retained item has a concrete reason.
 
 ## 4. Clean in the safe order
 
-Immediately before each action, recheck its SHA, worktree state, and merge proof. Downgrade it to keep if
-anything changed.
+**Last-minute recheck**: immediately before each action, recheck its SHA, worktree state, and merge proof.
+Downgrade it to keep if anything changed.
 
-1. For administration records shown by the dry run whose paths truly do not exist, run normal
-   `git worktree prune --verbose`; do not use `--expire now`.
-2. Run `git worktree remove -- <absolute-path>` for each linked-worktree candidate. Never add `--force`; if
-   Git refuses, retain it and record why.
+1. For administration records shown by the dry run whose paths truly do not exist, run
+   `git worktree prune --verbose`.
+2. Run `git worktree remove -- <absolute-path>` for each linked-worktree candidate; when Git refuses,
+   downgrade it to keep and record why.
 3. Never remove the primary worktree. If its checked-out branch is a deletion candidate, switch first with
    `git switch <local-target>` only when the worktree is clean, a local branch for the merge target is
    available, and no other worktree uses that branch. Otherwise retain the current branch.
 4. After confirming no worktree uses the branch, run `git branch -d -- <branch>` from a worktree checked out
-   on the local merge target. If no such worktree exists or `-d` refuses, preserve the branch. Never use `-D`
-   or bypass Git's protection.
+   on the local merge target; when no such worktree exists or `-d` refuses, downgrade the branch to keep.
 5. Only with explicit remote-cleanup authority, query the remote again and confirm the full remote ref still
    points to the expected SHA. Then delete branches one at a time with
-   `git push <remote> --delete <exact-branch>`. Stop that item if the SHA changed, the ref is ambiguous, or the
-   query or push failed. Never use force or wildcards.
+   `git push <remote> --delete <exact-branch>`; stop that item if the SHA changed, the ref is ambiguous, or
+   the query or push failed.
 
-Failure on one item does not loosen any other item's criteria. Do not manually delete `.git/worktrees`,
-recursively delete worktree directories, use `git branch -D`, force-push, or batch through a wildcard.
+Each item is judged independently: one item's failure changes no other item's criteria. Every deletion goes
+through the Git commands above; filesystem-level deletion (`.git/worktrees`, worktree directories) is outside
+this skill's authority.
 
 Done when: only exact actions from the candidate table were attempted; every deletion passed its last-minute
-recheck; no force, wildcard, or manual filesystem deletion was used.
+recheck; every Git refusal was downgraded to keep and recorded.
 
 ## 5. Verify and hand off
 

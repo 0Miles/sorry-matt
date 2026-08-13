@@ -1,6 +1,6 @@
 ---
 name: clean-it-up
-description: 在一段 Git 工作結束後，安全清理已合併的本地分支與不再需要的 worktrees。當使用者要求收尾、清理 merged branches/worktrees，或說 clean it up 時使用。
+description: 在一段 Git 工作結束後，安全清理已合併的本地分支與不再需要的 worktrees。當使用者收尾一段 Git 工作（clean it up），或要求清理 merged branches/worktrees 時使用。
 ---
 
 # Clean it up：安全收掉已完成的 Git 工作
@@ -8,8 +8,9 @@ description: 在一段 Git 工作結束後，安全清理已合併的本地分�
 引數可指定 repo、合併目標分支，以及是否連遠端分支一起清理。沒有 repo 引數時使用目前 repo；
 預設只移除本地分支、linked worktrees 與失效的 worktree 管理紀錄，不刪遠端分支。
 
-把「已合併」當成必須證明的狀態，不從分支名稱、日期、upstream 的 `gone` 標記或工作內容猜測。
-凡是證據不足、狀態不乾淨或 Git 拒絕的項目一律保留。
+兩條規則主宰全程：「已合併」是必須用證據證明的狀態；**Git 的拒絕就是判決** ——
+全程只用不帶強制旗標的指令，凡是證據不足、狀態不乾淨或 Git 拒絕的項目一律**降級為保留**，
+換更強的手段重試不在授權內。
 
 ## 1. 鎖定合併目標與權限
 
@@ -75,8 +76,7 @@ Worktree 只在下列情況列入移除候選：
 - 它未 locked、完全乾淨、沒有進行中的 Git operation。
 - 它 checkout 的本地 branch 已依上述規則證明合併，且同時列入刪除候選。
 
-Detached worktree 不因「看來沒用」而自動移除。不存在於磁碟、且 dry-run 明確認定可 prune 的
-管理紀錄另列為 prune 候選。
+不存在於磁碟、且 dry-run 明確認定可 prune 的管理紀錄另列為 prune 候選。
 
 先輸出候選表：`項目 | ref/path | 合併證據 | 動作 | 保留原因`。本地候選可依本次 skill 呼叫直接
 執行；遠端候選必須同時具備本次明確授權、remote 名稱、完整 branch ref 與預期 SHA。
@@ -86,27 +86,26 @@ Detached worktree 不因「看來沒用」而自動移除。不存在於磁碟�
 
 ## 4. 依安全順序清理
 
-每一步執行前立刻重查該項的 SHA、worktree 狀態與合併證據；狀態改變就把它降級為保留。
+**臨場重驗**：每一步執行前立刻重查該項的 SHA、worktree 狀態與合併證據；狀態改變就
+降級為保留。
 
-1. 對 dry-run 已列出、且路徑確實不存在的管理紀錄執行正常的
-   `git worktree prune --verbose`；不用 `--expire now`。
-2. 對 linked worktree 候選執行 `git worktree remove -- <absolute-path>`。不用 `--force`；Git
-   拒絕時保留並記錄原因。
+1. 對 dry-run 已列出、且路徑確實不存在的管理紀錄執行 `git worktree prune --verbose`。
+2. 對 linked worktree 候選執行 `git worktree remove -- <absolute-path>`；Git 拒絕時
+   降級為保留並記錄原因。
 3. Primary worktree 永不移除。若它目前 checkout 的 branch 是刪除候選，只有在 worktree
    乾淨、合併目標有可 checkout 的本地 branch，且該 branch 未被其他 worktree 使用時，才先
    `git switch <local-target>`；否則保留目前 branch。
 4. 確認 branch 已不被任何 worktree 使用後，從 checkout 在 local merge target 的 worktree 執行
-   `git branch -d -- <branch>`。沒有這種 worktree，或 `-d` 拒絕時就保留；不用 `-D`，也不
-   繞過 Git 的防護。
+   `git branch -d -- <branch>`；沒有這種 worktree，或 `-d` 拒絕時就降級為保留。
 5. 僅在遠端清理有明確授權時，重新用 remote 查詢確認完整 remote ref 仍指向預期 SHA，再以
-   `git push <remote> --delete <exact-branch>` 逐支刪除。SHA 改變、ref 歧義或 API／push 失敗
-   都停止該項，不使用 force 或 wildcard。
+   `git push <remote> --delete <exact-branch>` 逐支刪除；SHA 改變、ref 歧義或 API／push 失敗
+   都停止該項。
 
-一個項目失敗不代表可以放寬其他項目的判準。不要手動刪 `.git/worktrees`、不要遞迴刪除
-worktree 目錄，也不要用 `git branch -D`、force-push 或批次 wildcard。
+每個項目獨立裁決：一個項目的失敗不改變其他項目的判準。所有刪除都經由上列 Git 指令進行；
+檔案系統層的刪除（`.git/worktrees`、worktree 目錄）不在授權內。
 
-完成判準：只執行候選表列出的精確動作；所有刪除都通過執行前重驗；沒有使用任何 force、
-wildcard 或手動檔案刪除。
+完成判準：只執行候選表列出的精確動作；每個刪除都通過臨場重驗；每個被 Git 拒絕的項目都
+降級為保留並附紀錄。
 
 ## 5. 驗證並交棒
 

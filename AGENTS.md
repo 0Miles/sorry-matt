@@ -61,6 +61,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 自答清單 | self-answer log |
 | 硬護欄 | hard rail |
 | 沉澱 | distillation |
+| Git 的拒絕就是判決 | a refusal is a verdict |
+| 降級為保留 | downgrade to keep |
+| 臨場重驗 | last-minute recheck |
 
 ## 收尾檢查
 
