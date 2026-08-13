@@ -1,0 +1,26 @@
+{
+  "name": "sorry-matt",
+  "version": "0.1.0",
+  "description": "基於 mattpocock-skills 的自動工作流",
+  "author": {
+    "name": "Miles",
+    "url": "https://github.com/0Miles"
+  },
+  "repository": "https://github.com/0Miles/sorry-matt",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "workflow",
+    "issue-chain",
+    "mattpocock"
+  ],
+  "skills": [
+    "./skills/issue-chain",
+    "./skills/grill-them",
+    "./skills/take-this",
+    "./skills/get-to-work",
+    "./skills/have-it-all-done",
+    "./skills/review-pr",
+    "./skills/ask-miles"
+  ]
+}

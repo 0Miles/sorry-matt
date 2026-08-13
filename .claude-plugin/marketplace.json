@@ -1,0 +1,22 @@
+{
+  "name": "sorry-matt",
+  "owner": {
+    "name": "Miles",
+    "url": "https://github.com/0Miles"
+  },
+  "description": "基於 mattpocock-skills 的自動工作流",
+  "plugins": [
+    {
+      "name": "sorry-matt",
+      "source": "./",
+      "description": "基於 mattpocock-skills 的自動工作流",
+      "category": "productivity",
+      "keywords": [
+        "skills",
+        "workflow",
+        "issue-chain",
+        "mattpocock"
+      ]
+    }
+  ]
+}
