@@ -1,6 +1,6 @@
 {
   "name": "sorry-matt",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "基於 mattpocock-skills 的自動工作流",
   "author": {
     "name": "Miles",
@@ -22,6 +22,7 @@
     "./skills/have-it-all-done",
     "./skills/review-pr",
     "./skills/ask-miles",
+    "./skills/speak-human",
     "./skills/clean-it-up"
   ]
 }

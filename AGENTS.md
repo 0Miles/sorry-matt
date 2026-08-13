@@ -55,6 +55,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 整合分支 | integration branch |
 | 收輪/開輪 | close the round / open the round |
 | 對帳表 | reconciliation table |
+| 語義帳本 | semantic ledger |
+| 母語重寫 | native rewrite |
+| 回帳 | reconcile |
 | 卡住 | stuck |
 | 期間開票 | filing along the way |
 | 紅燈/全綠 | red light / all green |

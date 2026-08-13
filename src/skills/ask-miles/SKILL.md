@@ -19,6 +19,8 @@ disable-model-invocation: true
 - **Tracker tickets 與本地工作散在各處，想先理出順序** → `/issue-chain`。依 configured
   tracker 整理成線性工作鏈並指出唯一下一步；全程只讀。
 - **有人送來 GitHub PR 要審查** → `/review-pr <PR>`，自動審查 PR 包含的改動，並在 Github 留言建議與要求修改。
+- **當Agent不講人話時** → `/speak-human`。在不改變事實、
+  條件、責任與不確定程度的前提下，改成目標語言與地區中自然、常用的說法。
 - **工作已合併，想安全收掉本地分支與多餘 worktrees** → `/clean-it-up`。只刪除有合併證據且
   狀態乾淨的項目；遠端分支必須另外明確授權。
 

@@ -21,6 +21,8 @@ Choose the path matching the current stage:
   linear work chain and identify exactly one next action; this path is read-only.
 - **Review an incoming GitHub PR** → `/review-pr <PR>`. It automatically reviews the changes in the PR and
   posts suggestions and change requests on GitHub.
+- **The agent is not speaking human** → `/speak-human`. Rewrite its output in natural, common language for the
+  target language and locale without changing facts, conditions, responsibility, or uncertainty.
 - **Retire local branches and worktrees after the work is merged** → `/clean-it-up`. It removes only clean
   items backed by merge proof; remote branches require separate explicit authority.
 
