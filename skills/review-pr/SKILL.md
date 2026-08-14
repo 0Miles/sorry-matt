@@ -11,7 +11,7 @@ and only then are surviving findings written back to the PR. A candidate is not 
 
 Except for generated artifacts that must be regenerated, every inline comment contains an **anchored new-file line
 range**, a **concise explanation**, and a directly applicable `suggestion` block. Submit all inline comments together
-as one review. Follow the repository's existing language convention for review text.
+as one review. Follow the repository's existing language and locale conventions for review text.
 
 ## 1. Fetch the PR and line-addressable source
 
@@ -96,21 +96,29 @@ verification in the review body. When a Verifier disproves a candidate with stro
 Done when: every ruling is assigned to exactly one of inline comment, review body, or discard, and every inline comment
 is both confirmed and blocking.
 
-## 5. Write directly applicable suggestions
+## 5. Write human-facing feedback and directly applicable suggestions
 
 A GitHub `suggestion` block replaces the entire `start_line..line` range. After the author selects Commit suggestion,
 the block contents become the range's new state.
 
+After drafting the factual content of the review body and each inline-comment explanation, run `speak-human`. Set the
+PR author as the audience and pass the language and locale established above. The semantic ledger must preserve the
+technical facts, `file:line` evidence, degree of uncertainty, blocking severity, strength of obligation, and assignment
+of responsibility. Limit the rewrite to human-facing prose; exclude `suggestion` blocks, code, commands, and any other
+content that must remain verbatim.
+
 - The suggestion must contain the complete desired content of the replaced range. Preserve every unchanged line and
   its indentation byte for byte.
 - Cut the range at a self-contained boundary such as a whole function, CSS rule, or HTML element.
-- Keep the explanation to three to five sentences in this order: **symptom → root cause with `file:line` → why the
-  change matters**. Put the code change only in the suggestion block.
+- Keep each inline-comment explanation to three to five sentences in this order: **symptom → root cause with
+  `file:line` → why the change matters**. This is an information order, not a set of headings or fixed sentence
+  patterns. Put the code change only in the suggestion block.
 - Split cross-file fixes into separate, independently applicable comments and cross-reference them. When one suggestion
   invalidates another line—for example by removing the last user of an import—name that line in the prose.
 - For generated artifacts such as lockfiles and build output, provide the regeneration command instead of a suggestion.
 
-Done when: every suggestion has been compared side by side with
+Done when: the review body and every inline-comment explanation have been reconciled through `speak-human`, with zero
+missing and zero added semantic-ledger entries; every suggestion has been compared side by side with
 `git show pr-<n>:<path> | sed -n '<start>,<end>p'`; every line outside the intended edit matches byte for byte; the
 resulting file is syntactically valid; and every cross-file fix has corresponding cross-referenced comments.
 

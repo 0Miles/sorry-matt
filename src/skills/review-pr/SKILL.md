@@ -10,7 +10,8 @@ disable-model-invocation: true
 最後才把存活的發現寫回 PR。候選本身不是留言。
 
 除了只能重產的機器產物，每則行內留言都包含**錨定的新檔行數範圍**、**簡短說明**與可直接
-套用的 `suggestion` 區塊；所有行內留言集結成一筆 review。審查文字沿用 repo 的既有語言慣例。
+套用的 `suggestion` 區塊；所有行內留言集結成一筆 review。審查文字沿用 repo 既有的語言與
+locale 慣例。
 
 ## 1. 取得 PR 與可定位的原始碼
 
@@ -91,20 +92,26 @@ Review body 收錄成立但不 blocking 的結構性建議與後續工作、pre-
 完成判準：每項裁決都恰好分派到行內留言、review body 或丟棄三者之一；每則行內留言均為
 成立且 blocking。
 
-## 5. 撰寫可直接套用的 suggestion
+## 5. 撰寫給人的評語與可直接套用的 suggestion
 
 GitHub 的 `suggestion` 區塊會完整取代 `start_line..line` 範圍；作者按下 Commit suggestion
 後，區塊內容就是該範圍的新狀態。
 
+完成 review body 與每則行內留言說明的事實稿後，執行 `speak-human`。將 PR 作者設為受眾，
+並傳入上述語言與 locale；語義帳本必須保留技術事實、`file:line` 證據、不確定程度、
+blocking 程度、義務強度與責任歸屬。改寫範圍只包含給人看的散文；`suggestion` 區塊、
+程式碼、指令與其他必須逐字保留的內容不在範圍內。
+
 - Suggestion 必須包含套用後該範圍的完整內容；未修改的行與縮排逐字保留。
 - 範圍切在能自成一體的邊界，例如完整函式、整條 CSS 規則或完整 HTML 元素。
-- 說明控制在三到五句，依序交代**症狀 → 根因（附 `file:line`）→ 修改必要性**；修正程式碼
-  只放在 suggestion 區塊。
+- 行內留言的說明控制在三到五句，依序交代**症狀 → 根因（附 `file:line`）→
+  修改必要性**。這是資訊順序，不是要輸出的標題或固定句型；修正程式碼只放在 suggestion 區塊。
 - 跨檔案修正拆成可各自套用的留言並互相指涉。若某則 suggestion 會讓其他行失效，例如移除
   最後一個 import 使用者，也在文字中點名該行。
 - Lockfile 與建置產出等機器產物以重產指令取代 suggestion。
 
-完成判準：每個 suggestion 都已與
+完成判準：review body 與每則行內留言說明都已透過 `speak-human` 回帳，且上述帳目零遺失、
+零新增；每個 suggestion 都已與
 `git show pr-<n>:<path> | sed -n '<start>,<end>p'` 並排比對；除預定修改的行外，其餘內容
 逐字相同；套用後檔案語法有效；每項跨檔案修正都有對應並互相指涉的留言。
 
