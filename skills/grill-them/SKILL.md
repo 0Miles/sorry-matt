@@ -31,9 +31,8 @@ constraint, and contains no answer-leading or partisan wording.
 Spawn agent-griller first, then agent-grillee. Both remain read-only throughout; the moderator may write to the repository
 only during the distillation in Step 4.
 
-- **agent-griller, the griller**: give it the topic card and instruct it to resolve and read
-  `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/grilling/SKILL.md` in full, using the
-  wildcard for the version directory. Have it follow those rules with “me” referring to agent-grillee. It asks one
+- **agent-griller, the griller**: give it the topic card and instruct it to invoke the model-invoked mattpocock
+  `grilling` skill, treating “me” in that workflow as agent-grillee. It asks one
   question at a time, includes a recommended answer with every question, and targets ambiguous terms, overloaded words,
   and hard-to-reverse decisions.
 - **agent-grillee, the respondent**: give it the same topic card and instruct it to read the applicable `CLAUDE.md` or
@@ -88,8 +87,8 @@ change. The moderator then delivers exactly four sections:
 - **Verdict**: the surviving claims, exposed weaknesses, and revised decision.
 - **Awaiting ruling**: matters where the agents still disagree or only a human can decide.
 
-When the topic involves a repository, the moderator performs **distillation**: resolve and read
-`skills/engineering/domain-modeling/SKILL.md` under the same mattpocock cache directory, add agreed vocabulary to the
+When the topic involves a repository, the moderator performs **distillation**: invoke the model-invoked mattpocock
+`domain-modeling` skill, add agreed vocabulary to the
 glossary in `CONTEXT.md`, and record hard-to-reverse decisions as ADRs according to its conventions. If nothing merits
 distillation, mark it not applicable.
 

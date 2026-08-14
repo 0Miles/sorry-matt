@@ -56,7 +56,11 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 ## Repository structure
 
 - `src/skills/` contains the Traditional Chinese source files and is the single source of truth.
-- `skills/` contains the rewritten English distribution loaded by the plugin.
+- `skills/` contains the rewritten English distribution loaded by the managed Claude plugin.
+- Each dist skill includes `agents/openai.yaml` for OpenAI-compatible display metadata, prompts, and invocation policy.
+- Pinned verbatim workflows and MIT notices live under the owning skill's `references/upstream/` directory;
+  `SKILL.md` reads those references directly at runtime, and the same files serve as upgrade-diff baselines.
+- `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the
 distribution as the only copy: the next rewrite from `src/` will overwrite it.

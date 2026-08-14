@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Them"
+  short_description: "Refine a plan through an agent duel"
+  default_prompt: "Use $grill-them to refine this plan through an autonomous agent duel."

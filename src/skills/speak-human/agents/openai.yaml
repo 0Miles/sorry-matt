@@ -1,0 +1,4 @@
+interface:
+  display_name: "Speak Human"
+  short_description: "Rewrite text naturally without drift"
+  default_prompt: "Use $speak-human to rewrite this text naturally without changing its meaning."

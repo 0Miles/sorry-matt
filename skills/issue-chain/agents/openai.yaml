@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Chain"
+  short_description: "Order tracker work by blockers"
+  default_prompt: "Use $issue-chain to order the active work and identify the one executable next step."

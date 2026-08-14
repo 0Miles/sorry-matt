@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clean It Up"
+  short_description: "Safely retire merged Git work"
+  default_prompt: "Use $clean-it-up to remove merged local branches and obsolete worktrees safely."

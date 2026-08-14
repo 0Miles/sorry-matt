@@ -52,12 +52,9 @@ in separate rounds.
 For each frontier ticket:
 
 1. From its line integration branch, create `<run>/<NN>-<slug>` and a ticket worktree.
-2. Spawn one subagent with the worktree, provider-native ticket identifier and full text, and integration
-   branch. Tell it to resolve and follow
-   `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/implement/SKILL.md`.
-   The subagent modifies and commits only in its worktree; the host owns review and delivery.
-3. When the ticket is a bug or regression, use `skills/engineering/diagnosing-bugs/SKILL.md` from the same
-   cache instead. Establish a tight feedback loop first and add a regression test after the fix.
+2. Read the [pinned implement workflow](references/upstream/implement.md) in full. Spawn one subagent with that
+   complete workflow, the worktree, provider-native ticket identifier and full text, and integration branch;
+   require it to follow the workflow completely. The host owns review and delivery through the close-round workflow below.
 
 Done when: every frontier ticket in the round has an independent branch, worktree, and responsible agent;
 same-line or file-overlapping tickets are absent from the same round.

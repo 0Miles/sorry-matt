@@ -1,0 +1,6 @@
+interface:
+  display_name: "Have It All Done"
+  short_description: "Take a task from planning to delivery"
+  default_prompt: "Use $have-it-all-done to take this task from planning through delivery."
+policy:
+  allow_implicit_invocation: false

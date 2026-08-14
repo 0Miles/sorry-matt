@@ -1,0 +1,6 @@
+interface:
+  display_name: "Get to Work"
+  short_description: "Deliver a prepared ticket set"
+  default_prompt: "Use $get-to-work to implement and deliver this prepared ticket set."
+policy:
+  allow_implicit_invocation: false

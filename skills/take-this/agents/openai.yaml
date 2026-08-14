@@ -1,0 +1,6 @@
+interface:
+  display_name: "Take This"
+  short_description: "Turn task context into specs and tickets"
+  default_prompt: "Use $take-this to turn this task context into an executable spec and ticket set."
+policy:
+  allow_implicit_invocation: false

@@ -46,13 +46,10 @@ blocker map；每條線都有從同一基底尖端建立的整合分支及 workt
 對每張 frontier ticket：
 
 1. 從所屬線的整合分支建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。
-2. Spawn 一個 subagent，提供 worktree、ticket 在 tracker 上的原生識別碼與全文、整合分支，
-   並指示它解析
-   `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/implement/SKILL.md`
-   後照做。Subagent 只在自己的 worktree 修改並 commit；主持人負責驗收與交付。
-3. Ticket 本質是 bug 或 regression 時，改讀同一 cache 下的
-   `skills/engineering/diagnosing-bugs/SKILL.md`：先建立 tight feedback loop，修復後加入
-   regression test。
+2. 完整讀取[pinned implement 流程](references/upstream/implement.md)。Spawn 一個 subagent，
+   提供該流程全文、worktree、ticket 在 tracker 上的原生識別碼與全文，以及整合分支；要求它
+   完整照做。主持人依下方收輪流程負責
+   驗收與交付。
 
 完成判準：本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent；同線或檔案重疊的票
 均排入不同輪。

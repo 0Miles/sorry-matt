@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ask Miles"
+  short_description: "Find the right sorry-matt workflow"
+  default_prompt: "Use $ask-miles to choose the best next workflow for my current situation."
+policy:
+  allow_implicit_invocation: false

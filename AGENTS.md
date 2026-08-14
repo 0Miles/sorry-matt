@@ -3,7 +3,11 @@
 ## 結構
 
 - `src/skills/<name>/SKILL.md` — 繁體中文原稿,**single source of truth**
+- `src/skills/<name>/agents/openai.yaml` — OpenAI UI 與 invocation metadata 原稿
+- `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
+- `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
+- `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
 
 ## 開發規則
 
@@ -30,11 +34,12 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 - 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`;matt 的
   `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、`codebase-design`、
   `code-review`、`resolving-merge-conflicts`)→ 可直接指名執行
-- 對方是 **user-invoked** → 寫成「讀 SKILL.md 並照做」:
+- 對方是 **user-invoked**:
   - 自家的:以本 skill 載入時標示的 base directory 為起點,讀同層的
-    `../<name>/SKILL.md`
-  - matt 的:cache 萬用字元路徑
-    `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/<分類>/<name>/SKILL.md`
+    `../<name>/SKILL.md` 並照做
+  - 第三方的:不得解析任何 agent 或 plugin 的安裝路徑。若本 skill 必須自主完成該程序,
+    把 pin 住的原文與授權聲明放進自己的 `references/upstream/`,並由 `SKILL.md` 以相對路徑
+    直接要求全文讀取。若它本來就是獨立的人為步驟,請使用者執行
 - 要「人」執行的指令(`/setup-matt-pocock-skills`、`/triage`、`/implement` 等
   下一步建議)措辭必須是「請使用者執行」,不能寫成 agent 的動作
 
@@ -71,6 +76,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 ## 收尾檢查
 
 1. 動過的每個 `src/skills/<name>/` 都有對應重寫過的 `skills/<name>/`
-2. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
-3. `.claude-plugin/plugin.json` 的 `version` 已 bump
-4. `README.md` 的 skills 表格與 src 一致
+2. 每個 dist skill 都有 `agents/openai.yaml`,且與 src 對應檔一致
+3. `SKILL.md` 以相對路徑直接引用每份 vendored runtime reference
+4. Vendored 上游檔案保留 pin、來源、hash 與授權聲明;更新上游 pin 時,抓新的 tag 或發布版,
+   diff 並更新 `references/upstream/`
+5. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
+6. `.claude-plugin/plugin.json` 的 `version` 已 bump
+7. `README.md` 的 skills 表格與 src 一致

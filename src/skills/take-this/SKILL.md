@@ -15,9 +15,8 @@ disable-model-invocation: true
 均依該設定。
 
 整段依序完成「需求脈絡 → to-spec → to-tickets」，並維持同一份連續脈絡；to-tickets 完成
-前，保留這份脈絡。若接近 smart zone，在任何 compact 前解析並照做
-`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/handoff/SKILL.md`
-（版本段用萬用字元），把完整脈絡交到新 session，再從中斷處繼續。
+前，保留這份脈絡。若接近 smart zone，在任何 compact 前完整讀取並執行
+[pinned handoff 流程](references/upstream/handoff.md)，再從中斷處繼續。
 
 完成判準：已讀取 configured tracker；目前 context 或 handoff 同時保有任務輸入、既有
 grilling 成果與後續步驟所需資訊。
@@ -42,20 +41,17 @@ grilling 成果與後續步驟所需資訊。
 完成判準：已記錄採用的 grilling 來源；逐項對帳後，上述資訊不重不漏地進入需求脈絡；承接
 既有成果時，該成果是本次唯一的 grilling 輸入。
 
-## 3. 寫成 spec（to-spec）
+## 3. 寫成 spec
 
-解析
-`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/to-spec/SKILL.md`
-（版本段用萬用字元），以完整需求脈絡照做全文，完成其 seam 與使用者確認。Open questions
-放入 Further Notes 或 Out of Scope；requirements 僅保留採用的選項。
+完整讀取[pinned to-spec 流程](references/upstream/to-spec.md)，以需求脈絡為輸入照做全文。
 
 完成判準：spec 已發布到 configured tracker，逐項涵蓋需求脈絡，並以 provider 原生方式標成
 `ready-for-agent`；已記錄其 GitHub URL 或 Local Markdown 路徑。
 
-## 4. 切成 tickets（to-tickets）
+## 4. 切成 tickets
 
-解析同一 cache 目錄的 `skills/engineering/to-tickets/SKILL.md`，以剛發布的 spec 照做全文，
-完成其切票與阻塞關係確認。
+完整讀取[pinned to-tickets 流程](references/upstream/to-tickets.md)，以剛發布的 spec 為輸入
+照做全文。
 
 完成判準：所有 tickets 均發布到同一 configured tracker；每張票的範圍與阻塞邊均已確認，
 並記錄 GitHub 識別／URL 或 Local Markdown `NN`／路徑。

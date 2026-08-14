@@ -27,9 +27,8 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 
 先 spawn agent-griller，再 spawn agent-grillee。兩者全程只讀；主持人只在步驟 4 沉澱共識時寫入 repo。
 
-- **agent-griller（拷問者）**：交付題目卡，指示它解析並完整讀取
-  `~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/grilling/SKILL.md`
-  （萬用字元是版本目錄），照其中規則執行，並把「me」視為 agent-grillee。每次只問一題，每題都附建議答案；
+- **agent-griller（拷問者）**：交付題目卡，指示它執行 mattpocock 的 model-invoked `grilling`
+  skill，並把其中的「me」視為 agent-grillee。每次只問一題，每題都附建議答案；
   把模糊詞、一詞多義與難以逆轉的決策列為主要靶點。
 - **agent-grillee（受審者）**：交付同一張題目卡，指示它先讀取專案適用的 `CLAUDE.md` 或通用
   `AGENTS.md`，再勘查相關 docs、code 與 git 現況，從整體專案的角度作答。每個事實主張都附出處；
@@ -76,8 +75,8 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 - **判決**：保留的論點、暴露的弱點與修正後的決策。
 - **待裁決**：雙方仍無共識，或只能由人拍板的事項。
 
-題目涉及 repo 時，主持人再做**沉澱**：解析並讀取同一 mattpocock cache 目錄下的
-`skills/engineering/domain-modeling/SKILL.md`，把共識術語寫入 `CONTEXT.md` 詞彙表，並依其慣例把
+題目涉及 repo 時，主持人再做**沉澱**：執行 mattpocock 的 model-invoked `domain-modeling`
+skill，把共識術語寫入 `CONTEXT.md` 詞彙表，並依其慣例把
 難以逆轉的決策記成 ADR。若沒有可沉澱項目，明確註記不適用。
 
 完成判準：報告恰有上述四個區塊；交鋒摘要逐回合對帳且無遺漏；判決中的每個結論都能追溯到交鋒內容；

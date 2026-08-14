@@ -16,10 +16,8 @@ First read `docs/agents/issue-tracker.md`. If it does not exist, ask the user to
 publication target, identifier format, and triage designation.
 
 Complete requirements context, to-spec, and to-tickets in that order while preserving one continuous
-context through to-tickets. When approaching the smart zone, before any compaction resolve and follow
-`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/productivity/handoff/SKILL.md`
-(use the wildcard for the version directory), transfer the complete context to a new session, and resume at
-the interrupted step.
+context through to-tickets. When approaching the smart zone, before any compaction read and execute the
+[pinned handoff workflow](references/upstream/handoff.md) in full, then resume at the interrupted step.
 
 Done when: the configured tracker has been read, and the current context or handoff contains the task input,
 prior grilling output, and everything required by the remaining steps.
@@ -49,22 +47,19 @@ user, agent-grillee, or a named document.
 Done when: the selected grilling source is recorded; reconciliation has placed every required item exactly
 once in the requirements context; reused output is the sole grilling input for this run.
 
-## 3. Write the spec with to-spec
+## 3. Write the spec
 
-Resolve
-`~/.claude/plugins/cache/mattpocock/mattpocock-skills/*/skills/engineering/to-spec/SKILL.md`
-(use the wildcard for the version directory) and follow it in full with the complete requirements context,
-including its seam and user confirmation. Put open questions under Further Notes or Out of Scope. Keep only
-adopted options in the requirements.
+Read the [pinned to-spec workflow](references/upstream/to-spec.md) in full and follow it with the requirements
+context as input.
 
 Done when: the spec is published to the configured tracker, accounts for every requirements-context item,
 is marked `ready-for-agent` through the provider's native mechanism, and its GitHub URL or Local Markdown
 path is recorded.
 
-## 4. Cut tickets with to-tickets
+## 4. Cut tickets
 
-Resolve `skills/engineering/to-tickets/SKILL.md` under the same cache directory and follow it in full
-against the published spec, completing its ticket-cut and blocker confirmation.
+Read the [pinned to-tickets workflow](references/upstream/to-tickets.md) in full and follow it with the newly
+published spec as input.
 
 Done when: every ticket is published to the same configured tracker; each scope and blocker edge has been
 confirmed; every GitHub identifier/URL or Local Markdown `NN`/path is recorded.
