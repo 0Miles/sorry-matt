@@ -22,6 +22,7 @@ disable-model-invocation: true
   建議與修改要求。
 - **當 Agent 不講人話時** → `/speak-human`。保留事實、條件、責任與不確定程度，
   改成目標語言與地區中自然、常用的說法。
+- **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。
 - **工作已合併，想安全收掉本地分支與多餘 worktrees** → `/clean-it-up`。只刪除有合併證據且
   狀態乾淨的項目；遠端分支必須另外明確授權。
 - **情境是 triage、bug 診斷、wayfinder 或 prototype** → `/ask-matt`；它是 matt skills 的 router。

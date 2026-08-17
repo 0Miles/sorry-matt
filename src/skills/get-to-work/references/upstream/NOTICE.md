@@ -4,10 +4,11 @@
 - Source: https://github.com/mattpocock/skills
 - Pin: Claude plugin distribution `mattpocock-skills@1.2.3` (`main` @ `9c9f36c`)
 - Vendored file: `skills/engineering/implement/SKILL.md`
-- SHA-256 of the pinned source: `30CD7BC1EBFB3891E85A1EED3B3B81AEA0FA4AD4553A784DE7F8E421B2D223E0`
+- SHA-256 of the pinned source: `6D3FD9E83B8F36E5213854779DB49B256A457A7EBB4A503E53FA7DCFF696ADC3`
 
-The adjacent source is a verbatim vendored runtime reference and upstream reconciliation baseline. Repository
-newline normalization may change its byte-level hash. The parent `SKILL.md` directs when to read and execute it.
+The adjacent source is a verbatim vendored runtime reference and upstream reconciliation baseline. The pinned
+SHA-256 is taken over LF-normalized content, so it holds however a working tree checks newlines out. The parent
+`SKILL.md` directs when to read and execute it.
 
 ## MIT License
 

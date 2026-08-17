@@ -102,11 +102,13 @@ A GitHub `suggestion` block replaces the entire `start_line..line` range. After 
 the block contents become the range's new state.
 
 After drafting the factual content of the review body and each inline-comment explanation, call the Skill tool with
-`speak-human`. Set the
-PR author as the audience and pass the language and locale established above. The semantic ledger must preserve the
-technical facts, `file:line` evidence, degree of uncertainty, blocking severity, strength of obligation, and assignment
-of responsibility. Limit the rewrite to human-facing prose; exclude `suggestion` blocks, code, commands, and any other
-content that must remain verbatim.
+`no-bullshit` and cut the draft down to the point; keep the language and locale this skill established at the top.
+Limit the rewrite to human-facing prose; exclude `suggestion` blocks, code, commands, and any other content that must
+remain verbatim.
+
+Then check the six things that **must survive the cut**: the technical facts, `file:line` evidence, degree of
+uncertainty, blocking severity, strength of obligation, and assignment of responsibility. Restore anything lost, then
+cut again.
 
 - The suggestion must contain the complete desired content of the replaced range. Preserve every unchanged line and
   its indentation byte for byte.
@@ -118,8 +120,8 @@ content that must remain verbatim.
   invalidates another line—for example by removing the last user of an import—name that line in the prose.
 - For generated artifacts such as lockfiles and build output, provide the regeneration command instead of a suggestion.
 
-Done when: the review body and every inline-comment explanation have been reconciled through `speak-human`, with zero
-missing and zero added semantic-ledger entries; every suggestion has been compared side by side with
+Done when: the review body and every inline-comment explanation have been through `no-bullshit`, with zero missing and
+zero added entries among the six; every suggestion has been compared side by side with
 `git show pr-<n>:<path> | sed -n '<start>,<end>p'`; every line outside the intended edit matches byte for byte; the
 resulting file is syntactically valid; and every cross-file fix has corresponding cross-referenced comments.
 

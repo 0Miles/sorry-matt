@@ -8,8 +8,9 @@
   - `skills/engineering/to-spec/SKILL.md`: `69AE8BD0EE33D4D350E50EED68F8C958C4B95FFA502AD90E7757E95E7E21419D`
   - `skills/engineering/to-tickets/SKILL.md`: `7D211A9262A741B62C70E06DAFB507732F5927CCA6839391A4FD9F47ACE98984`
 
-The adjacent sources are verbatim vendored runtime references and upstream reconciliation baselines. Repository
-newline normalization may change their byte-level hashes. The parent `SKILL.md` directs when to read and execute them.
+The adjacent sources are verbatim vendored runtime references and upstream reconciliation baselines. The pinned
+SHA-256 values are taken over LF-normalized content, so they hold however a working tree checks newlines out. The
+parent `SKILL.md` directs when to read and execute them.
 
 ## MIT License
 

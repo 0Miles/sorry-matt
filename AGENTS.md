@@ -32,7 +32,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 自己模擬。skill 內文引用其他 skill 時:
 
 - 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`、`speak-human`、
-  `clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
+  `no-bullshit`、`clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
   `codebase-design`、`code-review`、`resolving-merge-conflicts`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
@@ -87,7 +87,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 2. 每個 dist skill 都有 `agents/openai.yaml`,且與 src 對應檔一致
 3. `SKILL.md` 以相對路徑直接引用每份 vendored runtime reference
 4. Vendored 上游檔案保留 pin、來源、hash 與授權聲明;更新上游 pin 時,抓新的 tag 或發布版,
-   diff 並更新 `references/upstream/`
+   diff 並更新 `references/upstream/`。**hash 一律取 LF 正規化後的內容**
+   (`git show HEAD:<path> | sha256sum`),不要量 working tree —— checkout 會把它轉成 CRLF,
+   量到的值換一台機器就對不上
 5. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
 6. `.claude-plugin/plugin.json` 的 `version` 已 bump
 7. `README.md` 的 skills 表格與 src 一致

@@ -1,0 +1,4 @@
+interface:
+  display_name: "No Bullshit"
+  short_description: "Cut the crap. Get to the point."
+  default_prompt: "Use $no-bullshit and get to the point."

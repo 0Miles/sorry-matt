@@ -25,6 +25,7 @@ branch is the next step for the user to run.
   change requests on GitHub.
 - **The agent is not speaking human** → `/speak-human`. Preserve facts, conditions, responsibility, and
   uncertainty while rewriting in natural, common language for the target language and locale.
+- **The agent is padding and burying the point** → `/no-bullshit`.
 - **Safely retire local branches and extra worktrees after the work is merged** → `/clean-it-up`. Remove only
   clean items backed by merge evidence; remote branches require separate explicit authority.
 - **The situation calls for triage, bug diagnosis, wayfinding, or prototyping** → `/ask-matt`; it is the router
