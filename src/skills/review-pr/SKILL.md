@@ -97,7 +97,7 @@ Review body 收錄成立但不 blocking 的結構性建議與後續工作、pre-
 GitHub 的 `suggestion` 區塊會完整取代 `start_line..line` 範圍；作者按下 Commit suggestion
 後，區塊內容就是該範圍的新狀態。
 
-完成 review body 與每則行內留言說明的事實稿後，執行 `speak-human`。將 PR 作者設為受眾，
+完成 review body 與每則行內留言說明的事實稿後，呼叫 Skill tool 帶入 `speak-human`。將 PR 作者設為受眾，
 並傳入上述語言與 locale；語義帳本必須保留技術事實、`file:line` 證據、不確定程度、
 blocking 程度、義務強度與責任歸屬。改寫範圍只包含給人看的散文；`suggestion` 區塊、
 程式碼、指令與其他必須逐字保留的內容不在範圍內。

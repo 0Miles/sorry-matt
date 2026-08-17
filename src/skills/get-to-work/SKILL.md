@@ -58,13 +58,13 @@ blocker map；每條線都有從同一基底尖端建立的整合分支及 workt
 
 同輪所有 agents 回報後，逐票完成下列關卡：
 
-1. **驗收**：執行 mattpocock `code-review` 的雙軸審查；fixed point 是該線整合分支，spec
+1. **驗收**：呼叫 Skill tool 帶入 `code-review`，執行它的雙軸審查；fixed point 是該線整合分支，spec
    來源是 ticket URL 或路徑。把 finding 交回保有 context 的原 agent 修正後重驗，最多兩輪
    修正。
 2. **票級 PR（GitHub only）**：push ticket 分支，建立以線整合分支為 base 的 PR；body
    必須含 `Closes #N` 與驗收摘要。
-3. **整併**：在整合 worktree 合併 ticket 分支。遇到 conflict 時，依 mattpocock
-   `resolving-merge-conflicts` 保留雙方意圖並執行 repo 自動檢查。
+3. **整併**：在整合 worktree 合併 ticket 分支。遇到 conflict 時，呼叫 Skill tool 帶入
+   `resolving-merge-conflicts`，保留雙方意圖並執行 repo 自動檢查。
 4. **完成交付**：
    - **GitHub**：push 整合分支；保留已因整併顯示為 merged 的票級 PR 作為審查紀錄。
    - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion，將

@@ -26,8 +26,8 @@ prior grilling output, and everything required by the remaining steps.
 
 **Carry forward first:** find completed `grill-me`, `grill-with-docs`, or `grill-them` output that clearly
 belongs to this task. It may come from the current session, the argument, or a handoff. Reuse a matching
-result directly. If several results could match, ask the user to identify the intended one. Run `grill-them`
-only when no reusable result exists.
+result directly. If several results could match, ask the user to identify the intended one. Call the Skill
+tool with `grill-them` only when no reusable result exists.
 
 Normalize the selected source into one **requirements context**:
 

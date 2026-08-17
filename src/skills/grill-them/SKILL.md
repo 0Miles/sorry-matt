@@ -27,42 +27,51 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 
 先 spawn agent-griller，再 spawn agent-grillee。兩者全程只讀；主持人只在步驟 4 沉澱共識時寫入 repo。
 
-- **agent-griller（拷問者）**：交付題目卡，指示它執行 mattpocock 的 model-invoked `grilling`
-  skill，並把其中的「me」視為 agent-grillee。每次只問一題，每題都附建議答案；
-  把模糊詞、一詞多義與難以逆轉的決策列為主要靶點。
+- **agent-griller（拷問者）**：交付題目卡，指示它呼叫 Skill tool 帶入 `grilling`，並把其中的
+  「使用者」視為 agent-grillee。`grilling` 的行為原樣保留：它每輪一次問完 **frontier** 上的
+  所有問題、逐題編號並附建議答案，也自行 spawn sub-agent 查證事實。主持人不干預這兩件事，
+  只要求它把模糊詞、一詞多義與難以逆轉的決策列為主要靶點。
 - **agent-grillee（受審者）**：交付同一張題目卡，指示它先讀取專案適用的 `CLAUDE.md` 或通用
   `AGENTS.md`，再勘查相關 docs、code 與 git 現況，從整體專案的角度作答。每個事實主張都附出處；
   每個決策答案都說明取捨；資訊不足時指出缺口；問題前提與證據衝突時直接指出衝突。
 
-對打遵守同一條分工：可從環境查證的**事實**由 agent 自行勘查，只有**決策與取捨**交給受審者回答。
+對打的分工只有一條：**決策與取捨**一律由 agent-grillee 回答。**事實**兩邊都可以自己查——
+agent-griller 依 `grilling` 查它要問的，agent-grillee 勘查整個專案——兩邊查到的事實衝突時，
+由 agent-grillee 附出處指出衝突。
 
-完成判準：agent-griller 已根據題目卡提出第一題；agent-grillee 已完成必要勘查，能以證據與取捨作答；
-兩者只收到題目卡與各自角色指令，且都未修改工作區或外部狀態。
+完成判準：agent-griller 已根據題目卡提出第一輪問題；agent-grillee 已完成必要勘查，能以證據與
+取捨作答；兩者只收到題目卡與各自角色指令，且都未修改工作區或外部狀態。
 
 ## 3. 進行對打
 
-每回合嚴格依序進行：
+回合以 agent-griller 的 frontier 為單位，每回合嚴格依序進行：
 
-1. 把 agent-griller 的問題逐字轉給 agent-grillee。
-2. 把 agent-grillee 的完整回答逐字傳回 agent-griller。
-3. 由 agent-griller 決定追問、改問下一個面向，或結束拷問。
+1. 把 agent-griller **整輪的所有問題**逐字轉給 agent-grillee，保留原編號與建議答案。
+2. agent-grillee 逐題作答，答案編號與題號對應。
+3. 把整輪答案逐字傳回 agent-griller。
+4. 由 agent-griller 重算 frontier，開下一輪或結束拷問。
 
-主持人只傳原文，不摘要、潤飾或加入立場。
+主持人只傳原文，不摘要、潤飾或加入立場，也不挑題傳話。
 
-遇到現有證據無法回答的問題時，先由 agent-grillee 標示缺口，再由主持人開一條不計入回合數的**支線**：
+某題現有證據無法回答時，agent-grillee 把該題標為**待支線**並說明缺口，該題不擋整輪：同輪其餘
+答案照步驟 3 先傳回，主持人另開一條不計入回合數的**支線**：
 
-- **可執行驗證**，例如狀態模型、業務邏輯或視覺化 UI：spawn subagent，依 mattpocock 的 `prototype`
-  執行。原型放在獨立、可丟棄的 worktree 與分支，不接觸基底分支；取回 verdict 及它回答的原始問題後，
-  清理 worktree。
-- **外部事實查證**，例如 API 行為或套件文件：spawn agent，依 `research` 執行。findings 寫入
-  scratchpad，不寫入 repo；把結論與出處交回 agent-grillee，再由它完成原回答。
+- **可執行驗證**，例如狀態模型、業務邏輯或視覺化 UI：spawn subagent，要它寫一個**實例**——
+  能實際跑起來、且只涵蓋該題爭點的最小案例——並真的執行它。實例與執行輸出都寫入 scratchpad，
+  不寫入 repo，也不建立 worktree 或分支。取回實例路徑、實際跑出來的結果，以及它對原問題的
+  verdict。
+- **外部事實查證**，例如 API 行為或套件文件：spawn agent，要它呼叫 Skill tool 帶入 `research`
+  並照做。findings 寫入 scratchpad，不寫入 repo；把結論與出處交回 agent-grillee，再由它完成
+  該題回答。
 
-支線結果只補足證據，不替 agent-grillee 做決策。原回答完成後，再按正常順序逐字交給 agent-griller。
+支線結果只補足證據，不替 agent-grillee 做決策。補完的答案在下一次傳話中連同原題號一併交回。
+待支線題對 agent-griller 而言是未解除的前置：只有依賴它的問題等待，其餘 frontier 照常推進。
 
-不設回合上限。只有 agent-griller 判定已達成共識，且沒有新的重大疑慮時才結束。
+不設回合上限。frontier 清空、且 agent-griller 判定已達成共識並無新的重大疑慮時才結束。
 
-完成判準：每回合都有一個完整問題與一個完整回答；每條支線都已把結論帶回 agent-grillee，並反映在原回答中；
-主持人未替任一方發言；agent-griller 已明確記錄結束理由。
+完成判準：每回合的每個問題都有編號對應的完整回答，或已標為待支線並在後續回合補齊；每條支線都已
+把結論帶回 agent-grillee，並反映在該題回答中；主持人未替任一方發言，也未挑題或改寫；agent-griller
+已明確記錄結束理由。
 
 ## 4. 收場與沉澱
 
@@ -70,14 +79,13 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 主持人隨後交付恰好四個區塊：
 
 - **題目卡**：原始題目與硬約束。
-- **交鋒摘要**：每回合一行，列出問題、agent-grillee 的最終立場，以及 agent-griller 的裁定
-  （接受、戳破或存疑）。
+- **交鋒摘要**：每題一行並標明所屬回合，列出問題、agent-grillee 的最終立場，以及 agent-griller
+  的裁定（接受、戳破或存疑）。
 - **判決**：保留的論點、暴露的弱點與修正後的決策。
 - **待裁決**：雙方仍無共識，或只能由人拍板的事項。
 
-題目涉及 repo 時，主持人再做**沉澱**：執行 mattpocock 的 model-invoked `domain-modeling`
-skill，把共識術語寫入 `CONTEXT.md` 詞彙表，並依其慣例把
-難以逆轉的決策記成 ADR。若沒有可沉澱項目，明確註記不適用。
+題目涉及 repo 時，主持人再做**沉澱**：呼叫 Skill tool 帶入 `domain-modeling`，把共識術語寫入
+`CONTEXT.md` 詞彙表，並依其慣例把難以逆轉的決策記成 ADR。若沒有可沉澱項目，明確註記不適用。
 
-完成判準：報告恰有上述四個區塊；交鋒摘要逐回合對帳且無遺漏；判決中的每個結論都能追溯到交鋒內容；
+完成判準：報告恰有上述四個區塊；交鋒摘要逐題對帳且無遺漏；判決中的每個結論都能追溯到交鋒內容；
 所有未達共識事項都在待裁決區；每個共識術語與難以逆轉的決策均已沉澱，或已註記不適用。

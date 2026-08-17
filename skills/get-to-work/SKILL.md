@@ -63,12 +63,12 @@ same-line or file-overlapping tickets are absent from the same round.
 
 After every agent in the round reports, take each ticket through these gates:
 
-1. **Review:** run the two-axis mattpocock `code-review`; the fixed point is the line integration branch and
+1. **Review:** call the Skill tool with `code-review` and run its two-axis review; the fixed point is the line integration branch and
    the spec source is the ticket URL or path. Return findings to the original context-holding agent, then
    review again, allowing at most two correction rounds.
 2. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
    Its body must include `Closes #N` and the review summary.
-3. **Integrate:** merge the ticket branch in the integration worktree. On conflicts, follow mattpocock
+3. **Integrate:** merge the ticket branch in the integration worktree. On conflicts, call the Skill tool with
    `resolving-merge-conflicts`, preserve both intentions, and run the repository checks.
 4. **Complete delivery:**
    - **GitHub:** push the integration branch and retain the ticket PR, now merged by ancestry, as the review

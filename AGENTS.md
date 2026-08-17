@@ -31,9 +31,12 @@ Model 只能用 Skill tool 呼叫 **model-invoked**(frontmatter 沒有
 skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的指令會讓 agent 攤手
 自己模擬。skill 內文引用其他 skill 時:
 
-- 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`;matt 的
-  `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、`codebase-design`、
-  `code-review`、`resolving-merge-conflicts`)→ 可直接指名執行
+- 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`、`speak-human`、
+  `clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
+  `codebase-design`、`code-review`、`resolving-merge-conflicts`)→ 措辭必須明寫
+  **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
+  不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
+  skill:需要兩個就寫成兩次呼叫,不能寫成一次帶兩個名字
 - 對方是 **user-invoked**:
   - 自家的:以本 skill 載入時標示的 base directory 為起點,讀同層的
     `../<name>/SKILL.md` 並照做
@@ -42,6 +45,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
     直接要求全文讀取。若它本來就是獨立的人為步驟,請使用者執行
 - 要「人」執行的指令(`/setup-matt-pocock-skills`、`/triage`、`/implement` 等
   下一步建議)措辭必須是「請使用者執行」,不能寫成 agent 的動作
+
+以上只約束 **operative** 指令 —— skill 自己的步驟要 agent 現在就去跑另一個 skill。純粹列給人
+挑選的 router 散文(`ask-miles`、README 表格)沒有在呼叫任何東西,`/name` 在那裡是標籤,照原樣寫。
 
 ### 詞彙對照
 
@@ -53,6 +59,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 拷問者/受審者 | griller / respondent |
 | 待裁決 | awaiting ruling |
 | 支線 | side quest |
+| 待支線 | parked |
+| 實例 | worked instance |
 | 鏈/環 | chain / link |
 | 邊 | edge |
 | 互斥 | mutually exclusive |

@@ -2,7 +2,7 @@
 
 - Project: `mattpocock/skills`
 - Source: https://github.com/mattpocock/skills
-- Pin: Claude plugin distribution `mattpocock-skills@1.2.0`
+- Pin: Claude plugin distribution `mattpocock-skills@1.2.3` (`main` @ `9c9f36c`)
 - Vendored file: `skills/engineering/implement/SKILL.md`
 - SHA-256 of the pinned source: `30CD7BC1EBFB3891E85A1EED3B3B81AEA0FA4AD4553A784DE7F8E421B2D223E0`
 

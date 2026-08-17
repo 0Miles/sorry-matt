@@ -101,7 +101,8 @@ is both confirmed and blocking.
 A GitHub `suggestion` block replaces the entire `start_line..line` range. After the author selects Commit suggestion,
 the block contents become the range's new state.
 
-After drafting the factual content of the review body and each inline-comment explanation, run `speak-human`. Set the
+After drafting the factual content of the review body and each inline-comment explanation, call the Skill tool with
+`speak-human`. Set the
 PR author as the audience and pass the language and locale established above. The semantic ledger must preserve the
 technical facts, `file:line` evidence, degree of uncertainty, blocking severity, strength of obligation, and assignment
 of responsibility. Limit the rewrite to human-facing prose; exclude `suggestion` blocks, code, commands, and any other

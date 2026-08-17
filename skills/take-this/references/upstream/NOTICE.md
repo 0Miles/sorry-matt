@@ -2,11 +2,11 @@
 
 - Project: `mattpocock/skills`
 - Source: https://github.com/mattpocock/skills
-- Pin: Claude plugin distribution `mattpocock-skills@1.2.0`
+- Pin: Claude plugin distribution `mattpocock-skills@1.2.3` (`main` @ `9c9f36c`)
 - Vendored files and pinned SHA-256 values:
-  - `skills/productivity/handoff/SKILL.md`: `65E80725923677F128B1D3CF23397B4BF0CC8659CD408AAEE5AB285D01AA54AF`
-  - `skills/engineering/to-spec/SKILL.md`: `A8FFE2ECD1692F012D310DCA3F3C9A75F61086DF77DBB0A5BC38DDBC0BD2E6BC`
-  - `skills/engineering/to-tickets/SKILL.md`: `B9478FAA82B40C653BBA2EA110682B5AE22A6736E4600768AE158C17DB861AE2`
+  - `skills/productivity/handoff/SKILL.md`: `7C62DE979FDC7AC32FB5DDB2146156C917F80EE070D30FADC9D40343C4B6ED25`
+  - `skills/engineering/to-spec/SKILL.md`: `69AE8BD0EE33D4D350E50EED68F8C958C4B95FFA502AD90E7757E95E7E21419D`
+  - `skills/engineering/to-tickets/SKILL.md`: `7D211A9262A741B62C70E06DAFB507732F5927CCA6839391A4FD9F47ACE98984`
 
 The adjacent sources are verbatim vendored runtime references and upstream reconciliation baselines. Repository
 newline normalization may change their byte-level hashes. The parent `SKILL.md` directs when to read and execute them.
