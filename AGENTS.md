@@ -5,9 +5,12 @@
 - `src/skills/<name>/SKILL.md` — 繁體中文原稿,**single source of truth**
 - `src/skills/<name>/agents/openai.yaml` — OpenAI UI 與 invocation metadata 原稿
 - `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
+- `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,由 `SKILL.md`
+  以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`)
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
+- `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
 
 ## 開發規則
 
@@ -80,6 +83,14 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | Git 的拒絕就是判決 | a refusal is a verdict |
 | 降級為保留 | downgrade to keep |
 | 臨場重驗 | last-minute recheck |
+| 修法 | fix |
+| 反駁優先 | disprove-first |
+| 延伸/推翻/來回 | extends / reverses / flip-flops |
+| 實跑 | live run |
+| 突變 | mutation |
+| 釘住 | pinned |
+| 舉證責任在你身上 | the burden is on you |
+| 來源與規模 | source and scale |
 
 ## 收尾檢查
 

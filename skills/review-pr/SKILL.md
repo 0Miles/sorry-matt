@@ -1,17 +1,22 @@
 ---
 name: review-pr
-description: Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes.
+description: Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, or to re-review one after the author has pushed fixes.
 disable-model-invocation: true
 ---
 
 # Review PR: Publish evidenced, directly applicable feedback
 
-Follow one **evidence chain**: Finders surface candidates, Verifiers rule independently, severity determines placement,
-and only then are surviving findings written back to the PR. A candidate is not yet a comment.
+Follow one **evidence chain**: Finders surface candidates, Verifiers rule independently on whether a finding holds,
+Fix Verifiers rule independently on whether its fix is right, and only then are surviving findings written back to the
+PR. A candidate is not yet a comment, and neither is a fix no one has tried to disprove.
 
 Except for generated artifacts that must be regenerated, every inline comment contains an **anchored new-file line
 range**, a **concise explanation**, and a directly applicable `suggestion` block. Submit all inline comments together
 as one review. Follow the repository's existing language and locale conventions for review text.
+
+When the author has already acted on an earlier round and asks for another pass, this is a **follow-up review**: same
+evidence chain, different candidate sources, body structure, and closing conditions. Read
+[FOLLOW-UP.md](FOLLOW-UP.md) in full before starting and follow it; it names which steps it overrides.
 
 ## 1. Fetch the PR and line-addressable source
 
@@ -32,7 +37,7 @@ new-file line numbers.
 
 ## 2. Finder: Search for candidates in parallel
 
-Assign each lens to an independent general-purpose finder subagent and dispatch them together in one message.
+Assign each lens to an independent finder subagent and dispatch them together in one message.
 For a tiny diff of one file and no more than a few dozen lines, one finder may apply every lens.
 
 - **Line by line**: for every line in every hunk, ask which input, state, timing, or platform could make it fail.
@@ -65,8 +70,7 @@ candidate with the most concrete `failure_scenario`, and the line-by-line lens h
 
 ## 3. Verifier: Rule on every candidate independently
 
-Assign every deduplicated candidate to its own independent general-purpose verifier subagent and dispatch them in
-parallel.
+Assign every deduplicated candidate to its own independent verifier subagent and dispatch them in parallel.
 
 The Verifier prompt must be self-contained and contain only the absolute repository path, `pr-<n>` ref, base branch,
 the candidate's four fields, and the rules below. Exclude the Finder's reasoning to prevent anchoring.
@@ -81,6 +85,9 @@ probe, or consult caniuse and source code. Only after disproof fails, test these
 
 There are exactly three rulings, each with `file:line` evidence: **confirmed** when all gates pass, **pre-existing**
 when only the second gate fails, or **invalid**.
+
+A single Verifier reading the wrong ref or the wrong branch produces a wholly wrong ruling. When a ruling's cited
+`file:line` does not match `pr-<n>`, re-verify that candidate with a different Verifier.
 
 Done when: every candidate has exactly one ruling with evidence and an explicit result for all three gates.
 
@@ -117,7 +124,7 @@ cut again.
   `file:line` → why the change matters**. This is an information order, not a set of headings or fixed sentence
   patterns. Put the code change only in the suggestion block.
 - Split cross-file fixes into separate, independently applicable comments and cross-reference them. When one suggestion
-  invalidates another line—for example by removing the last user of an import—name that line in the prose.
+  invalidates another line, name that line in the prose.
 - For generated artifacts such as lockfiles and build output, provide the regeneration command instead of a suggestion.
 
 Done when: the review body and every inline-comment explanation have been through `no-bullshit`, with zero missing and
@@ -125,9 +132,107 @@ zero added entries among the six; every suggestion has been compared side by sid
 `git show pr-<n>:<path> | sed -n '<start>,<end>p'`; every line outside the intended edit matches byte for byte; the
 resulting file is syntactically valid; and every cross-file fix has corresponding cross-referenced comments.
 
-## 6. Submit the review and verify its anchors
+## 6. Fix Verifier: Disprove the fix
 
-Use the Write tool to create a Python file that generates the payload JSON. Let Python encode backticks, backslashes,
+A finding earns its comment by surviving disproof; so must its fix. This step turns the same disprove-first discipline
+on the suggestions.
+
+Assign every suggestion to its own independent subagent and dispatch them in parallel. The prompt must
+be self-contained and contain the absolute repository path, `pr-<n>` ref, the finding's `failure_scenario`, and the
+suggestion's full content and line range. Exclude the author's reasoning to prevent anchoring.
+
+Try to disprove the fix first, answering all four with `file:line`:
+
+1. Does the fix close every failure window the finding enumerated?
+2. Does it open a new one?
+3. Is the fix falsifiable? Name the observable difference between applying it and not: output, an error, timing, or a
+   type. A fix with no nameable difference is a style preference, so withdraw it — that is precisely the fix that comes
+   back inverted next round.
+4. Does applying it break any other caller?
+
+There are exactly two rulings: **sound**, or **unsound** — withdraw the suggestion, name the correct fix where one
+exists, and otherwise demote the finding to a body observation.
+
+### Conflicts within the round
+
+Each Fix Verifier sees only its own suggestion, never the others. Once every ruling is back, and before the live run,
+compare the round's surviving suggestions pairwise. Three kinds of conflict, each with its own resolution:
+
+- **Overlapping ranges**: two `start_line..line` ranges intersect in the same file. GitHub applies each suggestion
+  independently, so intersecting ones produce wrong content whichever order the author commits them in. Merge them into
+  one, or keep one and turn the other into plain prose.
+- **Incompatible fixes**: two suggestions reach incompatible conclusions about the same symbol, contract, or invariant.
+  Keep the one with the stronger evidence; withdraw or demote the other to the body.
+- **Dependent fixes**: applying A is what invalidates B's anchor lines, premise, or necessity — A removing the last user
+  of B's line, for instance. Re-cut B's range against the content after A is applied and name A in B's comment; merge
+  them into one where they cannot be decoupled.
+
+The surviving suggestions must apply together, or the live run proves nothing.
+
+### Live run
+
+When the project defines test, typecheck, lint, or format scripts, run all of them twice: once before applying this
+round's suggestions and once after. The first run establishes which red lights already existed; only then can the
+second one attribute.
+
+Run in a detached worktree, reusing the existing dependency install, leaving the user's checkout untouched:
+
+```bash
+git -C <repo> worktree add --detach <scratchpad>/verify pr-<n>
+```
+
+Withdraw or repair any suggestion that turns the run red, until it is all green.
+
+### Mutation
+
+Where the project has tests, delete or invert the lines each finding points at and run the tests:
+
+- Still all green: the author's tests do not **pin** that finding. This strengthens the finding; ask for the test in
+  the same comment. Lines of new test code are not evidence of coverage, mutation is.
+- Red: it is pinned. Record that in the body.
+
+Mutate once more after applying the suggestions, to answer whether this round's fixes are locked in.
+
+Done when: every suggestion has one Fix Verifier ruling with `file:line` evidence; the round's surviving suggestions
+have been compared pairwise, with no intersecting ranges, incompatible pairs cut to one, and dependent ones named and
+re-cut against the applied content; every script that exists ran once before and once after, and the run after is all
+green; every finding has a mutation result; and every suggestion ruled unsound or turning the run red has been
+withdrawn or repaired.
+
+## 7. Reconcile before submitting
+
+Two mechanical checks, both completed before the payload is generated.
+
+**Self-consistency.** Compare every suggestion in this round against every suggestion submitted in earlier rounds and
+every reversal recorded against them (conflicts within the round were resolved in step 6). Where one touches the same
+symbol or the same block, it is one of three things:
+
+- **Extends**: submit normally.
+- **Reverses**, meaning it moves, inverts, or replaces an earlier fix: this holds only when the incoming diff touched
+  that code, or you hold evidence the earlier round did not. Say plainly in the comment that the earlier one was wrong,
+  attach that new evidence, and count this round's self-reversals in the body. Without new evidence it is not a
+  reversal but a **flip-flop**.
+- **Flip-flops**, meaning it returns to a fix an earlier round already abandoned: withdraw it and do not resubmit.
+  Oscillating over one place across rounds proves that no round's evidence supported either form. Put that uncertainty
+  in the body for the author to settle, with no suggestion attached.
+
+The classification takes the Fix Verifier's rulings and the earlier rounds' submission record rather than
+self-assessment.
+
+**Honesty.** Check item by item:
+
+- The finding count claimed in the body matches the length of the `comments` array.
+- Every sentence in the body's non-blocking sections is backed by named Verifier or Fix Verifier evidence. Delete any
+  statement resting on a Finder's word alone, or demote it to open.
+
+Done when: every suggestion overlapping history is labeled extends, reverses, or flip-flops; every reversal carries
+evidence the earlier round did not have and is stated in both the comment and the body; every flip-flop has been
+withdrawn with its uncertainty recorded in the body; the body's numbers match the `comments` array; and every sentence
+in the non-blocking sections carries named evidence.
+
+## 8. Submit the review and verify its anchors
+
+Create a Python file that generates the payload JSON. Let Python encode backticks, backslashes,
 and quotes in suggestion text so a shell heredoc cannot damage them.
 
 ```python
@@ -174,22 +279,3 @@ browser or runtime environment.
 
 Done when: the review has been submitted with the correct event, every intended comment appears on the PR with a
 non-null `line`, and the user report contains the review link, all findings, and every unverified area.
-
-## Follow-up review
-
-Run the complete evidence chain again, changing only candidate sources and closeout:
-
-- In Step 1, also fetch the previous reviews and comments with
-  `gh api /repos/<owner>/<repo>/pulls/<n>/reviews` and
-  `gh api /repos/<owner>/<repo>/pulls/<n>/comments`. Every prior blocking comment is a mandatory candidate: has the
-  original problem been fixed, and did the fix introduce a new one?
-- In Step 2, focus Finders on incremental commits and the area around each fix. The claims-versus-implementation lens
-  still scans the complete `gh pr diff` to catch unclaimed changes bundled into fix commits, such as lockfiles or
-  opportunistic edits.
-- In Steps 4 and 6, reconcile every prior finding as fixed, unfixed, or partially fixed with verification evidence in
-  the body. Route new findings normally.
-- Use `APPROVE` when every prior issue is fixed and there is no new blocking finding; otherwise choose the event by
-  the Step 6 rules. An approval body still includes the itemized verification evidence.
-
-Done when: every prior finding has a current ruling and evidence, all new changes have been inspected, and the
-submitted event matches the remaining blocking state.
