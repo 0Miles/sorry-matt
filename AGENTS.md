@@ -35,10 +35,9 @@ Model 只能用 Skill tool 呼叫 **model-invoked**(frontmatter 沒有
 skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的指令會讓 agent 攤手
 自己模擬。skill 內文引用其他 skill 時:
 
-- 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`、`speak-human`、
-  `no-bullshit`、`clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
-  `codebase-design`、`code-review`、`resolving-merge-conflicts`、`wizard`;harness 內建的
-  `simplify`)→ 措辭必須明寫
+- 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`speak-human`、`no-bullshit`、
+  `clean-it-up`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
+  `disable-model-invocation: true`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
   skill:需要兩個就寫成兩次呼叫,不能寫成一次帶兩個名字
@@ -126,7 +125,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 4. Vendored 上游檔案保留 pin、來源、hash 與授權聲明;更新上游 pin 時,抓新的 tag 或發布版,
    diff 並更新 `references/upstream/`。**hash 一律取 LF 正規化後的內容**
    (`git show HEAD:<path> | sha256sum`),不要量 working tree —— checkout 會把它轉成 CRLF,
-   量到的值換一台機器就對不上
+   量到的值換一台機器就對不上。更新 pin 的同一輪,把本 repo 以 Skill tool 引用的每個第三方
+   skill 逐一確認仍存在且仍是 model-invoked:上游移除或改名不會讓任何檢查轉紅
 5. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
 6. `.claude-plugin/plugin.json` 的 `version` 已 bump
 7. `README.md` 的 skills 表格與 src 一致

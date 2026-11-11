@@ -97,7 +97,7 @@ change. The moderator then delivers exactly four sections:
 - **Awaiting ruling**: matters where the agents still disagree or only a human can decide.
 
 When the topic involves a repository, the moderator performs **distillation**: call the Skill tool with
-`domain-modeling`, add agreed vocabulary to the glossary in `CONTEXT.md`, and record hard-to-reverse decisions as ADRs
+`domain-modeling`, add agreed vocabulary to the glossary in `GLOSSARY.md`, and record hard-to-reverse decisions as ADRs
 according to its conventions. If nothing merits distillation, mark it not applicable.
 
 Done when: the report contains exactly those four sections; the duel summary reconciles every question; every conclusion

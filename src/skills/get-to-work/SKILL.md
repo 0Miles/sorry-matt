@@ -89,8 +89,10 @@ disable-model-invocation: true
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
 3. **票級 PR（GitHub only）**：push ticket 分支，建立以線整合分支為 base 的 PR；body
    必須含 `Closes #N` 與驗收摘要。
-4. **整併**：在整合 worktree 合併 ticket 分支。遇到 conflict 時，呼叫 Skill tool 帶入
-   `resolving-merge-conflicts`，保留雙方意圖並執行 repo 自動檢查。
+4. **整併**：在整合 worktree 合併 ticket 分支。conflict 逐塊解，判的是兩個意圖而不是兩段
+   文字：先追兩邊的 primary source（票面與 commit message），相容就都保留，不相容就取合乎
+   本次合併目標的那邊、並把取捨記進自答清單。落地的行為限於某一邊實際寫過的。解完執行
+   repo 自動檢查。
 5. **完成交付**：
    - **GitHub**：push 整合分支；保留已因整併顯示為 merged 的票級 PR 作為審查紀錄。
    - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion，將
