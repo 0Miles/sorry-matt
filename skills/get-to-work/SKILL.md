@@ -97,8 +97,11 @@ After every agent in the round reports, take each ticket through these gates:
    all leave it unfixed. If two correction rounds do not find the root cause, mark the ticket stuck.
 3. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
    Its body must include `Closes #N` and the review summary.
-4. **Integrate:** merge the ticket branch in the integration worktree. On conflicts, call the Skill tool with
-   `resolving-merge-conflicts`, preserve both intentions, and run the repository checks.
+4. **Integrate:** merge the ticket branch in the integration worktree. Resolve conflicts hunk by hunk, choosing
+   between two intents rather than two blocks of text: trace each side to its primary source (the ticket text and
+   the commit message), keep both where they are compatible, and where they are not, take the side that matches
+   this merge's goal and record the trade-off in the self-answer log. What lands is limited to behaviour one side
+   actually wrote. Then run the repository checks.
 5. **Complete delivery:**
    - **GitHub:** push the integration branch and retain the ticket PR, now merged by ancestry, as the review
      record.

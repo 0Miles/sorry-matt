@@ -26,6 +26,7 @@ description: 排鏈：依 tracker 與本地證據建立阻塞邊、線性工作�
   與未合併整合分支上的 commits；有 remote 才 fetch 並比對差異。乾淨的 worktree 仍可能屬於
   active session。
 - **GitHub tracker**：查範圍內的 open issues、labels、sub-issues、open PRs、CI 與近期留言。
+  sub-issue 記的是「這張票出自哪份 spec」這層歸屬；阻塞邊另在步驟 3 判。
 - **Local Markdown tracker**：依設定掃描一票一檔的 issues，讀取 `Status`、`Blocked by`、
   acceptance criteria 與 `Comments`。同一 ticket 若也存在於未合併整合分支，還要讀該分支上的
   `sorry-matt completion`／`sorry-matt blocker`，並標明快照採用哪個 branch 版本。Spec 只提供

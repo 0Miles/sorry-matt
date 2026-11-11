@@ -27,7 +27,8 @@ sources conflict, follow the higher-ranked source and mark the stale source in t
 - **Git:** inspect `git status`, the current branch, unpushed commits, `git worktree list`, and commits on
   every worktree and unmerged integration branch. Fetch and compare remote divergence only when a remote
   exists. A clean worktree may still belong to an active session.
-- **GitHub tracker:** inspect in-scope open issues, labels, sub-issues, open PRs, CI, and recent comments.
+- **GitHub tracker:** inspect in-scope open issues, labels, sub-issues, open PRs, CI, and recent comments. A
+  sub-issue records which spec a ticket came from; blocker edges are judged in step 3.
 - **Local Markdown tracker:** scan the configured one-ticket-per-file issue paths and read `Status`,
   `Blocked by`, acceptance criteria, and `Comments`. When the same ticket exists on an unmerged integration
   branch, also read that branch's `sorry-matt completion` or `sorry-matt blocker`, and identify which branch
