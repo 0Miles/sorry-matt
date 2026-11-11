@@ -13,7 +13,7 @@ grill them
 | `grill-them` | Run an autonomous iterative interview between two agents to refine a plan or design |
 | `take-this` | Carry completed grilling into an executable spec and ticket set for a new task |
 | `get-to-work` | Clear a prepared ticket set round by round, implementing and reviewing in blocker order before delivering GitHub PRs or local integration branches |
-| `have-it-all-done` | Take over one complete task behind a single risk gate, carrying prior grilling through take-this and get-to-work; use issue-chain only when no task context exists |
+| `have-it-all-done` | Take over one complete task, carrying prior grilling through planning and implementation to something a human can merge |
 | `issue-chain` | Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action |
 | `review-pr` | Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes. |
 | `speak-human` | Rewrite stiff, bureaucratic, ambiguous, translated, or AI-sounding text into clear, natural language for the target locale without semantic drift. |

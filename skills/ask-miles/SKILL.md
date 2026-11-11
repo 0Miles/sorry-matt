@@ -14,11 +14,11 @@ branch is the next step for the user to run.
 - **Start a new task, or continue after grill-me or grill-with-docs, without a spec or tickets** → `/take-this`.
   Carry forward existing grilling; when none exists, run grill-them before completing to-spec → to-tickets.
 - **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them in rounds according
-  to the tracker configuration, delivering GitHub PRs or Local Markdown integration branches until the initial ticket
-  set is complete or explicitly stuck.
+  to the tracker configuration, delivering GitHub PRs or Local Markdown integration branches until the initial
+  ticket set is complete or explicitly stuck.
 - **Delegate existing grilling, planning, and implementation end to end, with controlled scope, convergent
   requirements, and reliable acceptance checks** → `/have-it-all-done`. Pass its risk gate, then run
-  take-this → get-to-work autonomously.
+  take-this → get-to-work autonomously, with one ruling point for what only you can decide.
 - **Order tracker tickets and local work scattered across the repository** → `/issue-chain`. Use the configured
   tracker to build a linear work chain and identify exactly one next action; this branch is read-only.
 - **Review an incoming GitHub PR** → `/review-pr <PR>`. Review the changes in the PR and publish suggestions and

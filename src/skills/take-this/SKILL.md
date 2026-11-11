@@ -12,7 +12,13 @@ disable-model-invocation: true
 
 第一個動作是讀 `docs/agents/issue-tracker.md`；不存在時，請使用者執行
 `/setup-matt-pocock-skills`，取得設定後再繼續。後續的發布位置、識別格式與 triage 表示
-均依該設定。
+均依該設定。接著讀兩份：`git rev-parse --path-format=absolute --git-common-dir` 指出的
+共用目錄下的 `sorry-matt/authority.md`（不存在時照預設走），以及以本 skill 載入時標示的
+base directory 為起點、同層的
+[`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md) 全文。
+
+全程依 `ASKING.md` 行事：to-spec 與 to-tickets 的每個確認點，能寫出建議就依第 3 節代答並
+記入**自答清單**，不先問；只有落在第 2 節四類的事項才留著，交給裁決點一次問完。
 
 整段依序完成「需求脈絡 → to-spec → to-tickets」，並維持同一份連續脈絡；to-tickets 完成
 前，保留這份脈絡。若接近 smart zone，在任何 compact 前完整讀取並執行
@@ -58,8 +64,13 @@ grilling 成果與後續步驟所需資訊。
 
 ## 5. 交接 frontier
 
-輸出需求脈絡來源、spec 識別、附阻塞邊的完整票列表、**frontier**，以及一個可立即執行的
-**下一步**。每張票在新的 session 中執行 `/implement`；需要重建全局時執行 `/issue-chain`。
+輸出需求脈絡來源、spec 識別、附阻塞邊的完整票列表、**frontier**、**本次代答清單**
+（五欄：決定、理由、反轉成本、證據位置），以及一個可立即執行的**下一步**。
+每張票在新的 session 中執行 `/implement`；需要重建全局時執行 `/issue-chain`。
+
+代答清單同時是裁決點的題庫：由 `have-it-all-done` 組合時，它依反轉成本從這份清單取出
+最高的幾項，連同第 2 節四類的待裁事項一次問完。
 
 完成判準：每張已發布 ticket 都出現在輸出中，並保留後續 skill 可直接讀取的 provider 原生
-識別；frontier 與阻塞邊一致，且下一步指向其中一張可立即執行的票。
+識別；frontier 與阻塞邊一致，且下一步指向其中一張可立即執行的票；每個代答都在代答清單上
+且五欄俱全。
