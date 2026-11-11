@@ -1,6 +1,6 @@
 ---
 name: have-it-all-done
-description: "Take over one complete task: one risk gate, one ruling point that asks everything you must decide at once, then carry prior grilling through take-this and get-to-work; use issue-chain only when no task context exists"
+description: Take over one complete task, carrying prior grilling through planning and implementation to something a human can merge
 disable-model-invocation: true
 ---
 
@@ -10,34 +10,37 @@ Optional argument: a task description, or an explicit pointer to prior grilling 
 
 Secure implementation authority once, then answer matt skill confirmations for the user and record every
 delegated decision. The authority level comes from the three layers in `ASKING.md` section 5; it is not hardcoded
-here. The **permanent exceptions**, ungrantable at any layer, are listed in section 0.
+here.
 
-## 0. Do not stop once the risk gate is passed
+## 0. Autonomy
 
-Once the risk gate clears it (step 1), this run aims to reach the handoff without calling the user back. Four
-rules hold throughout, and they are handed to every subagent this run spawns:
+Once the risk gate clears it (step 1), this run aims to reach the handoff calling the user back at exactly two
+points: step 2's ruling point and step 5's eyes-on acceptance. Five rules hold throughout, and they are handed
+to every subagent this run spawns:
 
 - **Make reversible internal decisions yourself.** Local files, commits on local branches, worktrees, tests, and
   merges or deploys already authorized: decide, record the choice in the self-answer log, and continue. Per
-  `ASKING.md` section 2, only four classes are worth asking about, and they are all asked at step 2's single
-  ruling point.
-- **A gate's refusal is an instruction, not a stop signal.** When a process or quality gate denies a call and
-  says how to proceed, follow that text and retry rather than waiting for the user. It counts as stuck only when
-  no such route exists, or following it still gets denied.
-- **Hard stops go on the list; keep working on everything else.** Never do any of these on your own: outgoing
-  messages (mail, chat, social posts) and third-party communication, installing packages or cloning, anything
-  touching credentials or secrets, deleting data that cannot be recovered, payments, permission changes, and
-  production changes to config, rules or permissions or that delete production data. Put each on the
-  **human-work list**, then carry on with every other thing that can be done. This is the same list as the
-  permanent exceptions in `ASKING.md` section 5.
-- **Run prompting calls last, back to back.** Even when the user approved one long ago ("send it when it's
-  done"), or a call raises a confirmation prompt by itself (a hook ask, the built-in delete check), hold it to
-  the end: finish every other step first — uploads, file writes, doc updates, commits — then run all the
-  prompting calls consecutively. The user is interrupted once, at the end, instead of mid-work.
+  `ASKING.md` section 2, four classes are worth asking about, and they are all asked at the ruling point.
+- **A gate's refusal is an instruction.** When a process or quality gate denies a call and says how to proceed,
+  follow that text and retry. It counts as stuck only when no such route exists, or following it still gets
+  denied.
+- **Hard stops go on the list; keep working on everything else.** Put each permanent exception from `ASKING.md`
+  section 5 on the **human-work list**, then carry on with every other thing that can be done.
+- **Run prompting calls last, back to back.** A call that raises a confirmation prompt by itself — a hook ask,
+  the built-in delete check — is a **prompting call**, and it waits for the end even when the user approved it
+  long ago ("send it when it's done"). Finish every other step first — uploads, file writes, doc updates,
+  commits — then run the prompting calls consecutively, so the interruption lands once, at the end.
+- **Expand needs-triage tickets yourself.** When an in-scope ticket carries nothing implementable beyond its
+  needs-triage marker, expand it on their behalf per `ASKING.md` section 3: fill in the scope, the acceptance
+  criteria, and the blocker edges, mark it ready-for-agent the way the tracker does, and record what you filled
+  in and why in the self-answer log. Mark it awaiting ruling only when a fact the expansion needs cannot be
+  found anywhere. Expand before the ticket set freezes; a needs-triage ticket filed during the run is
+  background, held to the handoff per section 4.
 
-Done when: between the risk gate and the handoff, nothing called the user back except step 2's ruling point and
-step 5's eyes-on acceptance; every hard stop is on the human-work list; every prompting call ran after the other
-steps, consecutively.
+Done when: between the risk gate and the handoff, only the ruling point and the eyes-on acceptance called the
+user back; every hard stop is on the human-work list; every prompting call ran after the other steps,
+consecutively; every in-scope needs-triage ticket is expanded, or marked awaiting ruling with the fact that
+could not be found.
 
 ## 1. Pick up the handoff and pass the risk gate
 
@@ -58,8 +61,9 @@ Select exactly one task in this order:
 2. Without an argument, when the current session contains one completed `grill-me`, `grill-with-docs`, or
    `grill-them` result that clearly belongs to a single task, pick up that task, its decisions, and its
    documents as a handoff.
-3. Otherwise, run `/issue-chain` without arguments. Include only executable links and reserve
-   **awaiting ruling** items for the final report.
+3. Otherwise, call the Skill tool with `issue-chain` and no arguments. Include the executable links, plus any
+   needs-triage ticket expanded yourself per section 0, and reserve the remaining **awaiting ruling** items for
+   the final report.
 
 After selecting the task, open the risk gate exactly once. Judge each light:
 
@@ -112,10 +116,9 @@ executable links selected in step 1, as its explicit argument in tracker-native 
 numbers or URLs, or Local Markdown paths. Preserve its full quality gate: automated checks before review,
 then a GitHub PR or Local Markdown integration-branch update only after review passes.
 
-`get-to-work` may not ask questions while it runs. Anything that comes up takes one of the three exits in
-`ASKING.md` section 4: answer and log it, mark it awaiting ruling and let that ticket go stuck, or put it on the
-human-work list. There is no fourth. Section 0's four rules apply here as well: hand them to `get-to-work`, and
-every implementation subagent it spawns gets them too.
+While `get-to-work` runs, anything that comes up takes one of the three exits in `ASKING.md` section 4. Section
+0's five rules apply here as well: hand them to `get-to-work`, and every implementation subagent it spawns gets
+them too.
 
 Done when: `get-to-work` has stopped; every supplied ticket appears in its reconciliation table with a
 delivered, stuck, or awaiting-ruling result and supporting evidence; no question was asked while it ran.

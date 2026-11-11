@@ -1,6 +1,6 @@
 ---
 name: get-to-work
-description: Clear a prepared ticket set round by round, implementing and reviewing in blocker order with no questions mid-round, before delivering GitHub PRs or local integration branches
+description: Clear a prepared ticket set round by round, implementing and reviewing in blocker order before delivering GitHub PRs or local integration branches
 disable-model-invocation: true
 ---
 
@@ -40,12 +40,12 @@ Then **freeze** the initial ticket set:
    exactly the named tickets. Without one, include only tickets with a publication record in this session;
    Local Markdown publication paths count. If none exist, ask the user for the set.
 2. Read blocker **edges** through the tracker contract and divide tickets into **lines**. Connected tickets
-   share a line; isolated tickets form their own. When `/issue-chain` is needed, pass the frozen set explicitly
-   so background work remains outside it.
+   share a line; isolated tickets form their own. When the set needs chaining, call the Skill tool with
+   `issue-chain` and pass the frozen set explicitly so background work remains outside it.
 3. **Exclude what another line holds.** From `git worktree list`, the commits on unmerged integration branches,
    the heads of open PRs, and whatever other sessions this session knows about, derive the files somebody else is
    working in. Tickets overlapping those files are not frozen into this set: list them as **awaiting ruling**
-   with the source of the hold and its clearing condition. Do not wait for the implementation to collide.
+   with the source of the hold and its clearing condition.
 4. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
    per line. Accumulate that line's results there round by round.
 
@@ -82,32 +82,34 @@ same-line or file-overlapping tickets are absent from the same round.
 
 After every agent in the round reports, take each ticket through these gates:
 
-1. **Review:** call the Skill tool with `code-review` and run its two-axis review; the fixed point is the line integration branch and
+1. **Simplify:** in that ticket's worktree, call the Skill tool with `simplify` to make one quality pass over
+   this agent's changes — reuse, simplification, efficiency, altitude — which it applies directly. Re-run the
+   repository checks afterwards: green to continue; on red, hand that item back to the original
+   context-holding agent until it is green, and where it cannot be, drop that one simplification and record it
+   in the self-answer log. The simplification commits stay on the ticket branch.
+2. **Review:** call the Skill tool with `code-review` and run its two-axis review; the fixed point is the line integration branch and
    the spec source is the ticket URL or path. Return findings to the original context-holding agent, then
    review again, allowing at most two correction rounds.
 
-   **Hard rail — a flaky red may not be run away.** A test that goes red and green on the same commit is treated
-   as a real failure: find the root cause, and fix the test when it lies there or fix the product and file a
-   defect ticket when it lies there. Never turn it green by re-running, loosening a wait, adding a retry, or
-   raising a timeout. If two correction rounds do not find the root cause, mark the ticket stuck; do not declare
-   the review passed.
-2. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
+   **Hard rail — a flaky red is chased to its root cause.** A test that goes red and green on the same commit is
+   treated as a real failure: find the root cause, and fix the test when it lies there or fix the product and
+   file a defect ticket when it lies there. Re-running, loosening a wait, adding a retry and raising a timeout
+   all leave it unfixed. If two correction rounds do not find the root cause, mark the ticket stuck.
+3. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
    Its body must include `Closes #N` and the review summary.
-3. **Integrate:** merge the ticket branch in the integration worktree. On conflicts, call the Skill tool with
+4. **Integrate:** merge the ticket branch in the integration worktree. On conflicts, call the Skill tool with
    `resolving-merge-conflicts`, preserve both intentions, and run the repository checks.
-4. **Complete delivery:**
+5. **Complete delivery:**
    - **GitHub:** push the integration branch and retain the ticket PR, now merged by ancestry, as the review
      record.
    - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket,
      set `Status` to `ready-for-human`, and append `## sorry-matt completion` with the implementation commit,
      integration branch, and passed checks. Commit this delivery record. This is a sorry-matt extension;
      upstream defines no terminal state for ordinary local implementation tickets.
-5. Remove the ticket worktree and local ticket branch.
+6. Remove the ticket worktree and local ticket branch.
 
-**No questions mid-round.** Anything worth asking accumulates until the next open-round; when `have-it-all-done`
-composes this skill, it all goes to that single ruling point. Answer what you can and log it, mark what you
-cannot awaiting ruling, and put human-only items on the human-work list — the three exits in `ASKING.md`
-section 4, with no fourth.
+**Anything worth asking accumulates until the next open-round**, handled through the three exits in `ASKING.md`
+section 4; when `have-it-all-done` composes this skill, it all goes to that single ruling point.
 
 In Local Markdown, a blocker clears only when the prerequisite ticket's complete `sorry-matt completion` is
 readable on the same integration branch and every acceptance criterion is checked. `ready-for-human` alone
@@ -123,9 +125,10 @@ it **stuck**:
 After recording the stuck state, also remove the ticket worktree and local ticket branch. Keep tickets
 downstream of a stuck ticket blocked.
 
-Done when: every ticket in the round has either a reviewed, provider-native delivery or a traceable stuck
-record; successful tickets are integrated and their ticket worktrees and local branches removed; Local
-Markdown blockers clear only under the completion contract.
+Done when: every ticket in the round has been through one `simplify` pass with the repository checks back to
+green, and has either a reviewed, provider-native delivery or a traceable stuck record; successful tickets are
+integrated and their ticket worktrees and local branches removed; Local Markdown blockers clear only under the
+completion contract.
 
 ### Filing along the way
 

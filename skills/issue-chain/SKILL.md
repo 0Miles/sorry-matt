@@ -1,6 +1,6 @@
 ---
 name: issue-chain
-description: Build a chain from tracker and local evidence, establish blocker and held-by-another-line edges, and choose exactly one immediately executable next action
+description: Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action
 ---
 
 # issue-chain: Turn scattered work into one chain

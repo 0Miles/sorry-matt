@@ -1,6 +1,6 @@
 ---
 name: issue-chain
-description: 排鏈：依 tracker 與本地證據建立阻塞與他線佔用邊、線性工作鏈，並選出唯一可立即執行的下一步
+description: 排鏈：依 tracker 與本地證據建立阻塞邊、線性工作鏈，並選出唯一可立即執行的下一步
 ---
 
 # issue-chain：把散落的工作排成一條鏈

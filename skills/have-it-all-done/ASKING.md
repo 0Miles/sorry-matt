@@ -8,10 +8,9 @@ human in one go.**
 
 ## 1. Pre-ask check
 
-Every question clears three gates first. Fail any one and you may not ask:
+Every question clears three gates first, and asks only once all three pass:
 
-1. **Is it discoverable?** Can a command, a repo file, or git history answer this? Then go and find out — asking
-   is not allowed.
+1. **Is it discoverable?** Can a command, a repo file, or git history answer this? Then go and find out.
 2. **Have they used this word?** Is every proper noun in the question one the user coined or has used? If not,
    explain it first, or switch to a term they have used.
 3. **Does it ask them to recall state?** Delete every option shaped like "do you remember whether…" or "did you
@@ -31,16 +30,15 @@ where the repo's own `CLAUDE.md` or generic `AGENTS.md` rules differently, the r
 ### (a) How far to go
 
 Scope and stopping points are the user's ruling. **Open the proposal at full scope:** give the complete range
-first, then list the risks item by item. Never make "reduce scope" the recommended option; to recommend
-reducing, name which permanent exception (section 5) or project exception it hits, and attach that item's
-evidence.
+first, then list the risks item by item. When you do recommend reducing, name which permanent exception
+(section 5) or project exception it hits, and attach that item's evidence.
 
 ### (b) Product-behavior correctness
 
 The default is: **fix defects the customer can see, fix every instance of the same shape at once, and register
-the deviation once fixed.** Never make "copy the upstream defect, register a deviation, change no code" the
-recommended option — that saves process cost, it is not an engineering conclusion. Find the other places that
-share the failure shape and put them in the options; do not handle only the one that was pointed at.
+the deviation once fixed.** "Copy the upstream defect, register a deviation, change no code" saves process cost
+rather than reaching an engineering conclusion, so it is not the recommended option. Find the other places that
+share the failure shape and put them in the options.
 
 ### (c) Another repo, or someone else's area
 
@@ -73,14 +71,14 @@ Done when: every non-class decision after the risk gate is in the self-answer lo
 
 ## 4. The ruling point and throttling
 
-- After the risk gate, the whole run gets **exactly one ruling point**, placed after planning is delivered and
+- After the risk gate, the whole run has **exactly one ruling point**, placed after planning is delivered and
   before implementation starts.
 - The ruling point **asks everything at once**: one question call, several questions or multi-select, each with a
   recommendation.
 - The tool caps it at four questions. With more than four pending, sort by **cost to reverse** descending, ask the
   top four, and answer the rest on their behalf.
-- Between the ruling point and the final report, **no further questions**. Anything that comes up mid-run has
-  three exits and no fourth:
+- Between the ruling point and the final report, anything that comes up mid-run takes one of these three exits,
+  and there is no fourth:
   1. Answerable → answer it, log it, keep going.
   2. Not answerable → mark it **awaiting ruling**, let that ticket go stuck, keep going on the others.
   3. Only a human can do it → put it on the **human-work list**, keep going on the others.
@@ -115,9 +113,8 @@ It lands in git's **common directory**, not the working tree:
 git rev-parse --path-format=absolute --git-common-dir
 ```
 
-Write the grant to `sorry-matt/authority.md` under that directory. From any linked worktree this path resolves to
-the same file, and it is outside the working tree — invisible to `git status`, absent from diffs, never pushed,
-and not carried by `git clone`.
+Write the grant to `sorry-matt/authority.md` under that directory: from any linked worktree the path resolves to
+the same file, and it sits outside the working tree, so it is never committed or pushed.
 
 Five columns per row; a row missing any one of them does not exist:
 
@@ -145,7 +142,7 @@ Nothing under `.git` shows up in a diff, so nobody reviews it. Therefore:
 4. **Permanent exceptions, ungrantable at any layer:** outgoing messages (mail, chat, social posts) and
    third-party communication, installing packages or cloning, anything touching credentials or secrets, deleting
    data that cannot be recovered, payments, permission changes, and production changes to config, rules or
-   permissions or that delete production data. Every one goes on the human-work list; none stops the run to ask.
+   permissions or that delete production data. Every one goes on the human-work list.
 
 Done when: every action this run that needed authority points at one source in L0, L1, or L2; every row written to
 L1 carries the user's own words from this round; the final report prints the authority table and the file's

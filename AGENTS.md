@@ -37,7 +37,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 
 - 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`、`speak-human`、
   `no-bullshit`、`clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
-  `codebase-design`、`code-review`、`resolving-merge-conflicts`、`wizard`)→ 措辭必須明寫
+  `codebase-design`、`code-review`、`resolving-merge-conflicts`、`wizard`;harness 內建的
+  `simplify`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
   skill:需要兩個就寫成兩次呼叫,不能寫成一次帶兩個名字
@@ -106,7 +107,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 專案例外 | project exception |
 | 永久例外 | permanent exception |
 | 硬停 | hard stop |
-| 會跳確認的呼叫 | prompting call |
+| 確認呼叫 | prompting call |
+| 精簡 | simplify pass |
+| 展開(票) | expand |
 
 ## 外部語義來源
 

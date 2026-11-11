@@ -13,11 +13,10 @@ disable-model-invocation: true
 - **要開始新任務，或剛完成 grill-me／grill-with-docs，還沒有 spec 或 tickets** →
   `/take-this`。承接既有 grilling；沒有時才執行 grill-them，再完成 to-spec → to-tickets。
 - **Tickets 已備妥，現在要完成它們** → `/get-to-work`。依 tracker 設定逐輪實作與驗收，
-  輪中不提問，收尾依常設授權合併並清理，交付 GitHub PR 或 Local Markdown 整合分支，
-  直到初始票集完成或明確卡住。
+  交付 GitHub PR 或 Local Markdown 整合分支，直到初始票集完成或明確卡住。
 - **想把既有 grilling、規劃到實作整段交出去，且範圍可控、需求足以收斂並有可靠驗收** →
-  `/have-it-all-done`。通過風險閘門後，在單一裁決點一次問完要你裁的事，其餘自主跑完
-  take-this → get-to-work；交棒時附授權表、自答清單與人工作業清單。
+  `/have-it-all-done`。通過風險閘門後自主跑完 take-this → get-to-work，只在單一裁決點
+  問你要裁的事。
 - **Tracker tickets 與本地工作散在各處，想先理出順序** → `/issue-chain`。依 configured
   tracker 整理成線性工作鏈並指出唯一下一步；全程只讀。
 - **有人送來 GitHub PR 要審查** → `/review-pr <PR>`。審查 PR 包含的改動，並在 GitHub 發布
