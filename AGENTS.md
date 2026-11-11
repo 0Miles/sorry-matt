@@ -5,8 +5,9 @@
 - `src/skills/<name>/SKILL.md` — 繁體中文原稿,**single source of truth**
 - `src/skills/<name>/agents/openai.yaml` — OpenAI UI 與 invocation metadata 原稿
 - `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
-- `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,由 `SKILL.md`
-  以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`)
+- `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,或多個 skill
+  共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
+  `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀)
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
@@ -36,7 +37,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 
 - 對方是 **model-invoked**(目前:自家的 `grill-them`、`issue-chain`、`speak-human`、
   `no-bullshit`、`clean-it-up`;matt 的 `grilling`、`prototype`、`research`、`tdd`、`domain-modeling`、
-  `codebase-design`、`code-review`、`resolving-merge-conflicts`)→ 措辭必須明寫
+  `codebase-design`、`code-review`、`resolving-merge-conflicts`、`wizard`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
   skill:需要兩個就寫成兩次呼叫,不能寫成一次帶兩個名字
@@ -91,6 +92,28 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 釘住 | pinned |
 | 舉證責任在你身上 | the burden is on you |
 | 來源與規模 | source and scale |
+| 裁決點 | ruling point |
+| 常設授權 | standing authority |
+| 代答 | answer on their behalf |
+| 提問前置檢查 | pre-ask check |
+| 人工作業清單 | human-work list |
+| 目視驗收 | eyes-on acceptance |
+| 他線佔用 | held by another line |
+| 並行佔用 | concurrent holds |
+| 偶發紅燈 | flaky red |
+| 反轉成本 | cost to reverse |
+| 環境事實 | environment facts |
+| 專案例外 | project exception |
+| 永久例外 | permanent exception |
+| 硬停 | hard stop |
+| 會跳確認的呼叫 | prompting call |
+
+## 外部語義來源
+
+`have-it-all-done` 的第 0 節對帳 `0Miles/claude-work-mode` 的 auto mode
+(`plugins/work-mode/hooks/tempo.ts` 的 `autonomousText()`,MIT)。那邊的 auto 規則改了就回來
+對一次。它不在 runtime 被讀取 —— 規則已寫進 skill 本文 —— 所以不進 `references/upstream/`,
+也不需要 pin 與 hash。
 
 ## 收尾檢查
 

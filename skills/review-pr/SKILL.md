@@ -113,6 +113,10 @@ After drafting the factual content of the review body and each inline-comment ex
 Limit the rewrite to human-facing prose; exclude `suggestion` blocks, code, commands, and any other content that must
 remain verbatim.
 
+Do not ask the author for their preferences, and add no pleasantries or closing invitation. Anything needing
+clarification is written as an evidenced assertion or a blocking comment, not as a question — what the author has to
+answer is your evidence, not your taste in wording.
+
 Then check the six things that **must survive the cut**: the technical facts, `file:line` evidence, degree of
 uncertainty, blocking severity, strength of obligation, and assignment of responsibility. Restore anything lost, then
 cut again.
