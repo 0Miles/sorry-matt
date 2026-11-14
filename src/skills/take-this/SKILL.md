@@ -31,7 +31,12 @@ grilling 成果與後續步驟所需資訊。
 
 **承接優先**：先找與本任務明確對應、且已完成的 `grill-me`、`grill-with-docs` 或
 `grill-them` 成果。來源可以是目前 session，也可以由引數或 handoff 帶入。找到時直接承接；
-若多份成果都可能對應本任務，請使用者指定。沒有可承接成果時，才呼叫 Skill tool 帶入 `grill-them`。
+若多份成果都可能對應本任務，請使用者指定。
+
+沒有可承接成果時**預設不開訪談**：自行從 tracker、repo 檔案與 git 歷史的證據建立需求脈絡，
+不確定的事依 `ASKING.md` 第 3 節代答。只有命中**重大分歧**才呼叫 Skill tool 帶入
+`grill-them` —— 跨模組的介面、資料模型、對外行為，或難以反轉而且沒有測試防護的決策。
+四項都沒命中就不開，理由記進代答清單；一般的實作選擇沿用既有授權自行裁定。
 
 依來源整理成一份**需求脈絡**：
 
@@ -59,13 +64,19 @@ grilling 成果與後續步驟所需資訊。
 完整讀取[pinned to-tickets 流程](references/upstream/to-tickets.md)，以剛發布的 spec 為輸入
 照做全文。
 
-完成判準：所有 tickets 均發布到同一 configured tracker；每張票的範圍與阻塞邊均已確認，
-並記錄 GitHub 識別／URL 或 Local Markdown `NN`／路徑。
+深度只給到下一張可執行的票，這是 sorry-matt 的延伸契約：pinned 流程的模板不變，但只有
+frontier 上的票現在就寫滿驗收項，被阻塞的票先留範圍、阻塞邊與未決問題，驗收項延到它即將
+進入 frontier 時才補滿。上游實作會改寫下游的事實，提前寫好的細節就是要重寫的細節。
+
+完成判準：所有 tickets 均發布到同一 configured tracker；frontier 上的票有完整驗收項，被
+阻塞的票至少有範圍、阻塞邊與未決問題；每張票的阻塞邊均已確認，並記錄 GitHub 識別／URL
+或 Local Markdown `NN`／路徑。
 
 ## 5. 交接 frontier
 
 輸出需求脈絡來源、spec 識別、附阻塞邊的完整票列表、**frontier**、**本次代答清單**
-（五欄：決定、理由、反轉成本、證據位置），以及一個可立即執行的**下一步**。
+（五欄：決定、理由、反轉成本、證據位置，並依 `ASKING.md` 第 3 節分層 —— 只影響單一票的
+實作細節留在該票，這裡只收反轉成本跨票的那些），以及一個可立即執行的**下一步**。
 每張票在新的 session 中執行 `/implement`；需要重建全局時執行 `/issue-chain`。
 
 代答清單同時是裁決點的題庫：由 `have-it-all-done` 組合時，它依反轉成本從這份清單取出

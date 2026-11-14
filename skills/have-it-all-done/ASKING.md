@@ -61,6 +61,11 @@ section 2 is answered on their behalf, not asked first. Record each one in the *
 | # | Decision | Rationale | Cost to reverse | Evidence location |
 | --- | --- | --- | --- | --- |
 
+The log is **two-layered**, and each self-answer is written once: an implementation detail that affects one ticket
+only and is reversible inside that ticket's worktree goes in that ticket's status record; only the self-answers
+whose cost to reverse crosses tickets or deliveries enter the run-level log, and the review pass draws its slate
+from the run level alone.
+
 Cost to reverse states which files have to change, what has to be re-run, and whether anything already delivered
 is affected. It is the ordering key for the review pass, not an adjective; where a count exists, give the count.
 
@@ -154,5 +159,8 @@ absolute path.
 - Outbound text — tracker comments, issue bodies, PR bodies, a query sent to a third party — goes through the
   Skill tool with `speak-human`, then through the Skill tool with `no-bullshit`. State the conclusion and the
   direction only: no asking the reader for their preferences, no pleasantries, no closing invitation.
+- **Status records and the run ledger are not outbound text.** They are machine records for the next agent to
+  read, and complete fields are enough. They skip `speak-human` and `no-bullshit` — running both on every update
+  spends the cost that was just saved. That holds even where they live on the tracker.
 
-Done when: every question and every piece of outbound text this run follows both rules.
+Done when: every question and every piece of outbound text this run follows all three rules.

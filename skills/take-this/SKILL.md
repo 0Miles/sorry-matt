@@ -33,8 +33,14 @@ prior grilling output, and everything required by the remaining steps.
 
 **Carry forward first:** find completed `grill-me`, `grill-with-docs`, or `grill-them` output that clearly
 belongs to this task. It may come from the current session, the argument, or a handoff. Reuse a matching
-result directly. If several results could match, ask the user to identify the intended one. Call the Skill
-tool with `grill-them` only when no reusable result exists.
+result directly. If several results could match, ask the user to identify the intended one.
+
+Where no reusable result exists, **the default is not to open an interrogation**: build the requirements context
+yourself out of the evidence in the tracker, the repository files, and git history, answering what is uncertain on
+their behalf per `ASKING.md` section 3. Call the Skill tool with `grill-them` only on a **material disagreement** —
+an interface across modules, the data model, externally visible behaviour, or a decision that is hard to reverse
+with no test net under it. Where none of the four hit, do not open one, and record the rationale in the self-answer
+log; ordinary implementation choices are ruled on under the authority already granted.
 
 Normalize the selected source into one **requirements context**:
 
@@ -68,14 +74,22 @@ path is recorded.
 Read the [pinned to-tickets workflow](references/upstream/to-tickets.md) in full and follow it with the newly
 published spec as input.
 
-Done when: every ticket is published to the same configured tracker; each scope and blocker edge has been
+Depth reaches only as far as the next executable ticket, as a sorry-matt extension contract: the pinned workflow's
+template is unchanged, but only frontier tickets get their acceptance criteria written now, while blocked tickets
+carry scope, blocker edges, and open questions until they are about to enter the frontier. Upstream implementation
+rewrites the facts the downstream tickets rest on; details written early are the details that get rewritten.
+
+Done when: every ticket is published to the same configured tracker; frontier tickets have complete acceptance
+criteria while blocked tickets carry at least scope, blocker edges, and open questions; every blocker edge has been
 confirmed; every GitHub identifier/URL or Local Markdown `NN`/path is recorded.
 
 ## 5. Hand off the frontier
 
 Output the requirements-context source, spec identifier, complete ticket list with blocker edges,
 **frontier**, the **self-answer log** for this run (five columns: decision, rationale, cost to reverse,
-evidence location), and one immediately executable **next action**. Run each ticket in a fresh session with
+evidence location, layered per `ASKING.md` section 3 — an implementation detail affecting one ticket stays with
+that ticket, and only the ones whose cost to reverse crosses tickets come here), and one immediately executable
+**next action**. Run each ticket in a fresh session with
 `/implement`; use `/issue-chain` when the full picture must be rebuilt.
 
 That log doubles as the ruling point's question pool: when `have-it-all-done` composes this skill, it takes the
