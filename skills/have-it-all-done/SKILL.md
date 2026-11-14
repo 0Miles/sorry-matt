@@ -80,8 +80,10 @@ up instead of rebuilding from the conversation's compaction summary; otherwise c
 8. The reconciliation table, one row per ticket, pointing at that ticket's status record.
 9. Run metrics.
 
-It lives beside `authority.md`, for the reasons `ASKING.md` section 5 gives under L1. Write it current at the end
-of every step and every closed round; after a compaction, a `/loop` wake-up, or any other resume, the first action is to read it
+It lives beside `authority.md`, for the reasons `ASKING.md` section 5 gives under L1. Where the common directory is
+not writable, or the current directory is not inside a git repo, there is no ledger: the final report becomes the
+source of truth and says so — do not stop over it. Write the ledger current at the end of every step and every
+closed round; after a compaction, a `/loop` wake-up, or any other resume, the first action is to read it
 again rather than inferring from the context summary where this run stands.
 
 Select exactly one task in this order:
@@ -112,8 +114,8 @@ project exception, and name which one. The alternatives stay available but are n
 That approval covers later matt skill confirmations, but not the permanent exceptions.
 
 Done when: the tracker configuration, the standing authority, one task, and the grilling source are recorded; the
-run ledger is picked up or created, with all nine fields filled or explicitly `none`; all three lights have a
-red-or-green result; every red light has an explicit user approval record and a proposal that opened at full
+run ledger is picked up or created, with all nine fields filled or explicitly `none`, or the report is recorded as
+the source of truth where no common directory exists; all three lights have a red-or-green result; every red light has an explicit user approval record and a proposal that opened at full
 scope.
 
 ## 2. Prepare the tickets (skip when they already exist)
