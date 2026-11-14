@@ -78,12 +78,19 @@ A side quest supplies evidence; it does not decide for agent-grillee. The comple
 under its original question number. To agent-griller a parked question is an unsettled prerequisite: only the questions
 that depend on it wait, while the rest of the frontier proceeds.
 
-There is no round limit. End only when the frontier is empty and agent-griller finds consensus with no new material
-concern.
+Run by a human directly, there is no round limit: end only when the frontier is empty and agent-griller finds
+consensus with no new material concern.
+
+**Composed by an automated workflow, there are caps.** Called in by `take-this` or `have-it-all-done`, the moderator
+states the caps up front: three rounds, two side quests in total. A question still unsettled at the cap goes straight
+back to the caller as **awaiting ruling** instead of earning another round — an interrogation exists to kill
+disagreement, not to exhaust the questions.
 
 Done when: every question in every round has a numbered answer to match, or was parked and completed in a later round;
 every side quest returned through agent-grillee and is reflected in that answer; the moderator never spoke for either
-side, cherry-picked, or rewrote; and agent-griller recorded the reason for stopping.
+side, cherry-picked, or rewrote; agent-griller recorded the reason for stopping; and where an automated workflow
+composed this skill, rounds and side quests stayed within the caps, with anything past them sent to awaiting
+ruling.
 
 ## 4. Close and distill
 

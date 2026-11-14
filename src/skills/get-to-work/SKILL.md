@@ -19,6 +19,12 @@ disable-model-invocation: true
    [`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md) 全文。它是提問契約，
    全程適用，無論本 skill 是被使用者直接執行還是由 `have-it-all-done` 組合。
 
+**run ledger** 是本 run 狀態的正本：由 `have-it-all-done` 組合時，它會把共用目錄下的
+`sorry-matt/runs/<run>.md` 交給你；獨立執行而共用目錄可寫時自己建一份，不可寫時以本次輸出
+為正本。每輪收輪結束把對帳表、自答清單與計量寫回它。主持人的上下文另有預算：diff、測試
+日誌、agent 報告與票面全文都留在子 agent 與檔案裡，主持人收的是固定格式的摘要（上限十五行）
+與證據路徑，本輪每一次回報都照這條預算。
+
 確認 git repo 與 working tree 乾淨，再依模式檢查交付條件：
 
 - **GitHub**：`gh` 已登入；交付物是票級 PR 與線的總 PR。
@@ -54,7 +60,8 @@ disable-model-invocation: true
 ## 1. 用 `/loop` 推進輪次
 
 進入不帶間隔、可自我調速的 `/loop`，prompt 設為「get-to-work：收輪／開輪」。Agents 尚在
-執行時，使用較長 fallback 等候通知。
+執行時，使用較長 fallback 等候通知。每次喚醒的第一個動作是重讀 ledger 的「下一個動作」，
+不從上下文推自己走到哪裡；收輪邊界是唯一的交接點，所以把 ledger 寫到最新才結束那一輪。
 
 ### 開輪
 
@@ -66,40 +73,61 @@ disable-model-invocation: true
 1. 從所屬線的整合分支建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。
 2. 完整讀取[pinned implement 流程](references/upstream/implement.md)。Spawn 一個 subagent，
    提供該流程全文、worktree、ticket 在 tracker 上的原生識別碼與全文，以及整合分支；要求它
-   完整照做。主持人依下方收輪流程負責
-   驗收與交付。
+   完整照做，另外交付三條 **sorry-matt 的延伸契約**，它們覆寫 pinned 流程的對應兩行：
 
-完成判準：本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent；同線或檔案重疊的票
-均排入不同輪。
+   - **獨立審查留給主持人**，它在收輪跑一次，所以實作 agent 自己不呼叫 `code-review` ——
+     審自己剛寫的程式碼沒有獨立性，而同一份 diff 讓兩個 reviewer 各讀一遍，第二遍買到的
+     只有重複。
+   - **票內只跑受影響範圍的針對性檢查**：typecheck、這張票碰到的測試檔、相關的 lint。
+     完整套件由主持人在收官跑一次，不在每張票各跑一次。
+   - **維護這張票的接續紀錄**，交付前寫到最新。
+
+   該票只標著 needs-triage 而沒有驗收項時，實作 agent 在開工前先完成**完整展開**：依
+   `ASKING.md` 第 3 節代答補上驗收項與實作層級的裁定，寫進接續紀錄，再開始實作。
+
+   依上下文預算回報：票 ID、commit SHA、針對性檢查結果、接續紀錄位置、待裁事項，原文留在
+   worktree 與 scratchpad。
+
+**接續紀錄**是這張票的唯一正本，落在 tracker 原生位置：GitHub 用帶
+`<!-- sorry-matt:status -->` 標記的單一留言，就地更新而不是每次新增一則；Local Markdown 用
+票檔的 `## sorry-matt status` 區塊。六欄：目前版本（branch 與 SHA）、關鍵決策、進度、阻塞、
+驗證結果、證據路徑。其他位置只引用它。它不是對外文字，依 `ASKING.md` 第 6 節處理。
+
+完成判準：本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent，且每個 agent 都收到
+三條延伸契約；同線或檔案重疊的票均排入不同輪；每張票都已建立接續紀錄。
 
 ### 收輪
 
-同輪所有 agents 回報後，逐票完成下列關卡：
+同輪所有 agents 回報後，逐票完成下列關卡。順序固定是**針對性檢查 → 一次獨立審查 → 集中
+修正 → 按影響範圍複驗**；完整驗證只在收官做一次。
 
-1. **精簡**：在該票的 worktree 呼叫 Skill tool 帶入 `simplify`，對這個 agent 的改動做一次
-   品質收斂 —— 復用、簡化、效率、抽象層級 —— 它會直接套用修法。套用後重跑 repo 的自動
-   檢查：綠燈才繼續；轉紅就把那一項交回保有 context 的原 agent 修到綠，修不好就退掉該項
-   精簡並記進自答清單。精簡的 commit 留在 ticket 分支上。
-2. **驗收**：呼叫 Skill tool 帶入 `code-review`，執行它的雙軸審查；fixed point 是該線整合分支，spec
-   來源是 ticket URL 或路徑。把 finding 交回保有 context 的原 agent 修正後重驗，最多兩輪
-   修正。
+1. **針對性檢查**：確認 agent 回報的受影響範圍檢查是綠的。紅燈先交回原 agent 修到綠，
+   審查只收綠燈的票。
+2. **獨立審查**：呼叫 Skill tool 帶入 `code-review`，執行它的雙軸審查；fixed point 是該線
+   整合分支，spec 來源是 ticket URL 或路徑。**一張票預設只有這一位 reviewer**，規範與需求
+   符合性由它同時涵蓋。只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進
+   自答清單；「再看一遍比較保險」不是風險。
+3. **集中修正**：本票的 finding 一次全部交回保有 context 的原 agent，一輪修完，不逐則來回。
+   修完只重跑受影響範圍的針對性檢查。最多兩輪修正。
 
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
-3. **票級 PR（GitHub only）**：push ticket 分支，建立以線整合分支為 base 的 PR；body
+4. **票級 PR（GitHub only）**：push ticket 分支，建立以線整合分支為 base 的 PR；body
    必須含 `Closes #N` 與驗收摘要。
-4. **整併**：在整合 worktree 合併 ticket 分支。conflict 逐塊解，判的是兩個意圖而不是兩段
-   文字：先追兩邊的 primary source（票面與 commit message），相容就都保留，不相容就取合乎
-   本次合併目標的那邊、並把取捨記進自答清單。落地的行為限於某一邊實際寫過的。解完執行
-   repo 自動檢查。
-5. **完成交付**：
+5. **整併**：在整合 worktree 合併 ticket 分支。有 conflict 時守住上下文預算，交給一個
+   **整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
+   以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與
+   commit message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊
+   實際寫過的。它逐塊回報取捨摘要，主持人把取捨記進自答清單。解完執行受影響範圍的針對性
+   檢查。
+6. **完成交付**：
    - **GitHub**：push 整合分支；保留已因整併顯示為 merged 的票級 PR 作為審查紀錄。
    - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion，將
      `Status` 改為 `ready-for-human`，追加 `## sorry-matt completion`，列出 implementation
      commit、整合分支及通過的檢查，再 commit 這份交付紀錄。這是 sorry-matt 的延伸契約；
      上游沒有為普通 local ticket 定義完成狀態。
-6. 移除 ticket worktree 與本地 ticket 分支。
+7. 移除 ticket worktree 與本地 ticket 分支。
 
 **要問的事累積到下一次開輪前**，依 `ASKING.md` 第 4 節的三條出路處理；由
 `have-it-all-done` 組合時，一律交給它的唯一裁決點。
@@ -115,9 +143,10 @@ Local Markdown 的 blocker 只在同一整合分支可讀到前置票的完整 `
 
 完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支；卡住票的下游 tickets 保持阻塞。
 
-完成判準：本輪每張票都跑過一次 `simplify` 且自動檢查回到綠，並有通過驗收的模式原生交付，
-或有可追溯的卡住紀錄；成功票已整併並清理 ticket worktree 與本地分支；Local Markdown 只有
-符合 completion 契約的前置票會解除 blocker。
+完成判準：本輪每張票都恰好經過一次獨立審查、針對性檢查回到綠，並有通過驗收的模式原生
+交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；每張票的接續紀錄都寫到
+最新；成功票已整併並清理 ticket worktree 與本地分支；Local Markdown 只有符合 completion
+契約的前置票會解除 blocker。
 
 ### 期間開票
 
@@ -137,7 +166,20 @@ Local Markdown 的 blocker 只在同一整合分支可讀到前置票的完整 `
 
 ## 2. 收官
 
-依模式交付每條線：
+每條線先過**線級的兩道關**，順序固定：
+
+1. **精簡**：在整合 worktree 呼叫 Skill tool 帶入 `simplify`，對整條線累積的改動做一次品質
+   收斂 —— 復用、簡化、效率、抽象層級 —— 它會直接套用修法。跨票的重複只有整併之後才看得
+   見，所以精簡在這裡做一次，不在每張票各做一次。退掉的修法記進自答清單。
+2. **完整驗證**：跑一次 repo 完整的自動檢查。轉紅就交回那段改動的原 agent，修完重跑；本輪
+   唯一有效的綠燈就是這一次。
+
+**證據失效規則。** 某張票通過票級驗收之後，只要它碰到的檔案在整合分支上又被改動 —— 他票
+整併、conflict 解法、線級精簡 —— 那張票的票級綠燈就過期，不能再當作本輪的驗收證據；仍然
+有效的只有線級完整驗證。重跑範圍依實際改動的影響面決定：預設只重跑受影響範圍的針對性
+檢查，只有新的修正、失敗，或未解的風險才再跑一次完整驗證。
+
+接著依模式交付每條線：
 
 - **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 收錄票級 PR，且只為已完成票
   列 `Closes #N`；卡住與待裁決票列為缺口。
@@ -154,9 +196,11 @@ ticket worktree 與已合併的本地分支。**待人審查的交付物不在�
 線整合分支、以及尚未合併的總 PR 來源分支一律保留 —— 對未合併項目，`clean-it-up` 本身就是
 降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
-最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**、本輪實際採用的授權，
-以及期間新開的 raw tickets 清單並建議執行 `/triage`。
+最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**（一列一票：票 ID、交付物、
+驗證結果、接續紀錄位置）、本輪實際採用的授權、**本輪計量**（spawn 數、審查輪數、修正輪數、
+完整驗證次數、壓縮次數），以及期間新開的 raw tickets 清單並建議執行 `/triage`。
 
-完成判準：每條線恰有一項可供人合併的交付，或已依常設授權合併並回報；對帳表不重不漏地
-涵蓋凍結票集；所有 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合
-worktree 已移除而整合分支仍保留；輸出已列出本輪採用的授權。
+完成判準：每條線都跑過一次線級精簡與一次完整驗證並收在綠燈，且恰有一項可供人合併的交付，
+或已依常設授權合併並回報；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
+ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
+分支仍保留；輸出已列出本輪採用的授權與本輪計量。

@@ -15,7 +15,7 @@ here.
 ## 0. Autonomy
 
 Once the risk gate clears it (step 1), this run aims to reach the handoff calling the user back at exactly two
-points: step 2's ruling point and step 5's eyes-on acceptance. Five rules hold throughout, and they are handed
+points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold throughout, and they are handed
 to every subagent this run spawns:
 
 - **Make reversible internal decisions yourself.** Local files, commits on local branches, worktrees, tests, and
@@ -30,17 +30,28 @@ to every subagent this run spawns:
   the built-in delete check — is a **prompting call**, and it waits for the end even when the user approved it
   long ago ("send it when it's done"). Finish every other step first — uploads, file writes, doc updates,
   commits — then run the prompting calls consecutively, so the interruption lands once, at the end.
-- **Expand needs-triage tickets yourself.** When an in-scope ticket carries nothing implementable beyond its
-  needs-triage marker, expand it on their behalf per `ASKING.md` section 3: fill in the scope, the acceptance
-  criteria, and the blocker edges, mark it ready-for-agent the way the tracker does, and record what you filled
-  in and why in the self-answer log. Mark it awaiting ruling only when a fact the expansion needs cannot be
-  found anywhere. Expand before the ticket set freezes; a needs-triage ticket filed during the run is
-  background, held to the handoff per section 4.
+- **Expand needs-triage tickets in two stages.** What freezes is the ticket set's membership, not how deep each
+  ticket goes. When an in-scope ticket carries nothing beyond its needs-triage marker, fill it only far enough to
+  order it before the freeze: one line of scope, the blocker edges, marked ready-for-agent the way the tracker
+  does. **Full expansion** — acceptance criteria and implementation-level rulings — waits for the moment that
+  ticket is about to enter the frontier, is answered on their behalf per `ASKING.md` section 3, and has its
+  rationale recorded in that ticket's status record. Upstream implementation rewrites the facts the downstream
+  tickets rest on; the rulings made early are the ones that get redone. Mark it awaiting ruling only when a fact
+  the expansion needs cannot be found anywhere; a needs-triage ticket filed during the run is background, held to
+  the handoff per section 4.
+- **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the
+  subagents and the files that hold them; the host takes fixed-format summaries (fifteen lines at most) plus
+  evidence paths, and pulls the few lines it needs with a command. Every report this run follows that budget. The
+  **source of truth** for state is step 1's **run ledger**, not this conversation — compaction costs what it costs
+  because every pass reads the entire context in and writes a long summary out, the prompt cache prefix then has to
+  be rebuilt, and whatever the summary dropped gets looked up again. With the record in a file, compaction loses
+  convenience, not state.
 
 Done when: between the risk gate and the handoff, only the ruling point and the eyes-on acceptance called the
 user back; every hard stop is on the human-work list; every prompting call ran after the other steps,
-consecutively; every in-scope needs-triage ticket is expanded, or marked awaiting ruling with the fact that
-could not be found.
+consecutively; every in-scope needs-triage ticket has cleared its first expansion stage, or is marked awaiting
+ruling with the fact that could not be found; the host's context holds no diff, test log, or agent report source
+text.
 
 ## 1. Pick up the handoff and pass the risk gate
 
@@ -54,6 +65,26 @@ Read four things, in order:
 3. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
 4. Starting from the base directory stated when this skill was loaded, the sibling [`ASKING.md`](ASKING.md), in
    full. It is the asking contract shared with `take-this` and `get-to-work`, and it applies throughout.
+
+Then deal with the **run ledger**: this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the
+common directory (resolved the same way as the second read). When a ledger for this task already exists, pick it
+up instead of rebuilding from the conversation's compaction summary; otherwise create one. Nine fields:
+
+1. **Next action**: one line, followed on resume.
+2. Task scope, and where the grilling source landed.
+3. The three risk lights and the approval record.
+4. Lines, integration branches, and tip SHAs.
+5. The authority used this run.
+6. The run-level self-answer log.
+7. The human-work list.
+8. The reconciliation table, one row per ticket, pointing at that ticket's status record.
+9. Run metrics.
+
+It lives beside `authority.md`, for the reasons `ASKING.md` section 5 gives under L1. Where the common directory is
+not writable, or the current directory is not inside a git repo, there is no ledger: the final report becomes the
+source of truth and says so — do not stop over it. Write the ledger current at the end of every step and every
+closed round; after a compaction, a `/loop` wake-up, or any other resume, the first action is to read it
+again rather than inferring from the context summary where this run stands.
 
 Select exactly one task in this order:
 
@@ -82,32 +113,41 @@ project exception, and name which one. The alternatives stay available but are n
 `/wayfinder` for a large unresolved task. Continue after explicit approval; proceed directly when all are green.
 That approval covers later matt skill confirmations, but not the permanent exceptions.
 
-Done when: the tracker configuration, the standing authority, one task, and the grilling source are recorded; all
-three lights have a red-or-green result; every red light has an explicit user approval record and a proposal that
-opened at full scope.
+Done when: the tracker configuration, the standing authority, one task, and the grilling source are recorded; the
+run ledger is picked up or created, with all nine fields filled or explicitly `none`, or the report is recorded as
+the source of truth where no common directory exists; all three lights have a red-or-green result; every red light has an explicit user approval record and a proposal that opened at full
+scope.
 
 ## 2. Prepare the tickets (skip when they already exist)
 
-Starting from the base directory stated when this skill was loaded, read the sibling `../take-this/SKILL.md`
-and follow its complete sequence: establish the requirements context, complete to-spec, then complete
-to-tickets.
-When step 1 picked up `grill-me`, `grill-with-docs`, or `grill-them`, pass its decisions, evidence, and documents
-explicitly to `take-this`, preserving that single requirements context.
+The whole opening goes to a **kickoff agent**: starting from the base directory stated when this skill was
+loaded, it reads the sibling `../take-this/SKILL.md` and follows its complete sequence — establish the
+requirements context, complete to-spec, then complete to-tickets. When step 1 picked up `grill-me`,
+`grill-with-docs`, or `grill-them`, first write where that result landed (path or URL) and the decisions already
+settled in this session into the ledger's second field; the kickoff agent takes the requirements context from
+there rather than from the host retelling it. It reports the spec identifier, the ticket list with blocker edges,
+the frontier, and the self-answer log, within the context budget; the spec and the ticket bodies stay on the
+tracker.
+
+One run opens one kickoff agent. When it stops short or reports incompletely, start another from the ledger's
+next action instead of re-running what is already published.
 
 Seam and ticket-cut confirmations are answered on their behalf per `ASKING.md` section 3: if you can write a
 recommendation, answer it instead of asking first. Beginning after the risk gate passes, record every one in the
-five-column **self-answer log** — decision, rationale, cost to reverse, evidence location. Decisions the user made
-during prior grilling are requirements evidence, not self-answers.
+five-column **self-answer log** — decision, rationale, cost to reverse, evidence location — layered per
+`ASKING.md` section 3: an implementation detail that affects one ticket only and is reversible there goes in that
+ticket's status record, and the run-level log takes only the self-answers whose cost to reverse crosses tickets or
+deliveries. Decisions the user made during prior grilling are requirements evidence, not self-answers.
 
 After `take-this` delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4: ask
 everything pending at once, each with a recommendation, taking the four highest by cost to reverse when there are
 more. Actions that need authority are asked here too, with options split into "this time" and "from now on"; on
 "from now on", write the grant to `sorry-matt/authority.md` in the common directory straight away.
 
-Done when: tickets are published to the configured tracker and every blocker edge is explicit; `take-this`
-points to the same grilling result selected in step 1 as its requirements context; every agent-answered
-confirmation after the risk gate has an answer and rationale in the self-answer log; the ruling point ran exactly
-once and every grant upgraded to standing is on record.
+Done when: tickets are published to the configured tracker and every blocker edge is explicit; the kickoff
+agent's requirements context points to the same grilling result selected in step 1; every agent-answered
+confirmation after the risk gate has an answer and rationale in the run-level self-answer log or that ticket's
+status record; the ruling point ran exactly once and every grant upgraded to standing is on record.
 
 ## 3. Clear the tickets
 
@@ -117,33 +157,42 @@ numbers or URLs, or Local Markdown paths. Preserve its full quality gate: automa
 then a GitHub PR or Local Markdown integration-branch update only after review passes.
 
 While `get-to-work` runs, anything that comes up takes one of the three exits in `ASKING.md` section 4. Section
-0's five rules apply here as well: hand them to `get-to-work`, and every implementation subagent it spawns gets
-them too.
+0's six rules apply here as well: hand them to `get-to-work`, and every implementation subagent it spawns gets
+them too. Hand it the ledger path along with them: at the end of each closed round it writes the reconciliation
+table, the self-answer log, and the run metrics back to that same ledger.
 
 Done when: `get-to-work` has stopped; every supplied ticket appears in its reconciliation table with a
 delivered, stuck, or awaiting-ruling result and supporting evidence; no question was asked while it ran.
 
 ## 4. Hand off
 
-The final report includes:
+The final report is the ledger brought to a close, with **one source of truth per finding**: written once where
+it belongs, with the other sections citing identifiers and paths — no embedded diffs, test logs, or agent reports.
+It includes:
 
 - Task scope, selected grilling source, and all three risk-light results.
 - **The authority used this run:** every grant actually relied on, one row each with action, level, source words,
   and date, plus the absolute path of the authority file in the common directory. An explicit `none` when no
   standing authority was used.
-- The complete **self-answer log**, or an explicit `none`. Then one **review pass**: a single multi-select,
-  "which of these self-answers do you want flipped?", offering the four with the highest cost to reverse.
+- **The run-level self-answer log**, or an explicit `none`. Ticket-level self-answers stay in each ticket's status
+  record and are cited here by location. Then one **review pass**: a single multi-select, "which of these
+  self-answers do you want flipped?", offering the four with the highest cost to reverse.
 - **The human-work list:** every item carries steps someone can follow to completion. Where the steps are many or
   run through a third-party interface, call the Skill tool with `wizard` to generate an interactive wizard and
   point the list at it.
 - Each line's delivery: a GitHub aggregate PR, or a Local Markdown integration branch and tip SHA, plus the
-  complete reconciliation table.
+  **reconciliation table**, one row per ticket: ticket ID, deliverable, verification result, and where that
+  ticket's status record is.
 - Raw tickets created through filing along the way, the `/triage` recommendation, and every awaiting-ruling
   item.
+- **Run metrics:** the ones `get-to-work` hands back, plus this run's compactions and handovers. Those are
+  countable; a token count stays marked unknown unless the execution environment reports it, and is never
+  inferred from elapsed time or agent count.
 
-Done when: all six categories are present; the authority table matches the actions actually taken, row by row;
+Done when: all seven categories are present; the authority table matches the actions actually taken, row by row;
 every line has a traceable deliverable and acceptance evidence that lets someone outside the run decide whether
-to merge its aggregate PR or local integration branch; every human-work item has followable steps or a wizard.
+to merge its aggregate PR or local integration branch; every human-work item has followable steps or a wizard; no
+section of the report duplicates text that is of record elsewhere.
 
 ## 5. Eyes-on acceptance (conditional)
 

@@ -20,6 +20,14 @@ Read four things, in order:
    [`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md), in full. It is the asking contract, and it
    applies throughout, whether the user ran this skill directly or `have-it-all-done` composed it.
 
+The **run ledger** is this run's source of truth for state: when `have-it-all-done` composes this skill, it hands
+over `sorry-matt/runs/<run>.md` under the common directory; running standalone, create one there where the common
+directory is writable, and where it is not, this run's output is the source of truth. At the end of every closed round, write
+the reconciliation table, the self-answer log, and the run metrics back to it. The host's context has a budget of
+its own: diffs, test logs, agent reports, and full ticket bodies stay in the subagents and files that hold them,
+while the host takes fixed-format summaries (fifteen lines at most) and evidence paths. Every report this round
+follows that budget.
+
 Confirm a Git repository and clean working tree, then verify the mode-specific delivery conditions:
 
 - **GitHub:** `gh` is authenticated; deliveries are ticket PRs and one aggregate PR per line.
@@ -60,7 +68,9 @@ from the same base tip.
 ## 1. Advance rounds with `/loop`
 
 Start a self-paced `/loop` with no interval and the prompt `get-to-work: close the round / open the round`.
-While agents are running, use a longer fallback and wait for notifications.
+While agents are running, use a longer fallback and wait for notifications. Every wake-up starts by reading the
+ledger's next action rather than inferring from the context where this run stands; a closed round is the only
+handover point, so write the ledger current before that round ends.
 
 ### Open the round
 
@@ -73,43 +83,72 @@ For each frontier ticket:
 1. From its line integration branch, create `<run>/<NN>-<slug>` and a ticket worktree.
 2. Read the [pinned implement workflow](references/upstream/implement.md) in full. Spawn one subagent with that
    complete workflow, the worktree, provider-native ticket identifier and full text, and integration branch;
-   require it to follow the workflow completely. The host owns review and delivery through the close-round workflow below.
+   require it to follow the workflow completely, plus three **sorry-matt extension contracts** that override the
+   matching two lines of the pinned workflow:
 
-Done when: every frontier ticket in the round has an independent branch, worktree, and responsible agent;
-same-line or file-overlapping tickets are absent from the same round.
+   - **The independent review belongs to the host**, which runs it once while closing the round, so the
+     implementation agent does not call `code-review` itself — reviewing code you just wrote is not independent,
+     and letting two reviewers each read the same diff buys nothing on the second pass but the repetition.
+   - **Inside the ticket, run only the targeted checks for the affected surface:** typecheck, the test files this
+     ticket touches, the relevant lint. The host runs the full suite once while finishing the run, rather than once
+     per ticket.
+   - **Maintain this ticket's status record**, written current before delivery.
+
+   When the ticket carries its needs-triage marker and no acceptance criteria, the implementation agent completes the
+   **full expansion** before starting: answer on their behalf per `ASKING.md` section 3 to fill in the acceptance
+   criteria and the implementation-level rulings, write them into the status record, then implement.
+
+   Report within the context budget: ticket ID, commit SHA, targeted check results, status-record location, and
+   anything awaiting ruling, with the source text left in the worktree and the scratchpad.
+
+The **status record** is this ticket's own source of truth, kept where the tracker keeps things: on GitHub, a single
+comment marked `<!-- sorry-matt:status -->`, updated in place rather than appended to each round; in Local Markdown, a
+`## sorry-matt status` section in the ticket file. Six fields: current version (branch and SHA), key decisions,
+progress, blockers, verification results, evidence paths. Everywhere else cites it. It is not outbound text, so it
+follows `ASKING.md` section 6.
+
+Done when: every frontier ticket in the round has an independent branch, worktree, and responsible agent, and every
+agent received the three extension contracts; same-line or file-overlapping tickets are absent from the same round;
+every ticket has a status record in place.
 
 ### Close the round
 
-After every agent in the round reports, take each ticket through these gates:
+After every agent in the round reports, take each ticket through these gates. The order is fixed — **targeted checks
+→ one independent review → one batched fix → re-check by affected surface**; full verification happens once, while
+finishing the run.
 
-1. **Simplify:** in that ticket's worktree, call the Skill tool with `simplify` to make one quality pass over
-   this agent's changes — reuse, simplification, efficiency, altitude — which it applies directly. Re-run the
-   repository checks afterwards: green to continue; on red, hand that item back to the original
-   context-holding agent until it is green, and where it cannot be, drop that one simplification and record it
-   in the self-answer log. The simplification commits stay on the ticket branch.
-2. **Review:** call the Skill tool with `code-review` and run its two-axis review; the fixed point is the line integration branch and
-   the spec source is the ticket URL or path. Return findings to the original context-holding agent, then
-   review again, allowing at most two correction rounds.
+1. **Targeted checks:** confirm the affected-surface checks the agent reported are green. Red goes back to that
+   agent first and comes to review green.
+2. **Independent review:** call the Skill tool with `code-review` and run its two-axis review; the fixed point is the
+   line integration branch and the spec source is the ticket URL or path. **One ticket gets this one reviewer by
+   default**, covering standards and spec conformance together. Add a specialist reviewer only where a concrete risk
+   calls for one, naming the risk and recording the rationale in the self-answer log; "another look, to be safe" is
+   not a risk.
+3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
+   round rather than one finding at a time. Afterwards re-run only the targeted checks for the affected surface. At
+   most two correction rounds.
 
    **Hard rail — a flaky red is chased to its root cause.** A test that goes red and green on the same commit is
    treated as a real failure: find the root cause, and fix the test when it lies there or fix the product and
    file a defect ticket when it lies there. Re-running, loosening a wait, adding a retry and raising a timeout
    all leave it unfixed. If two correction rounds do not find the root cause, mark the ticket stuck.
-3. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
+4. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
    Its body must include `Closes #N` and the review summary.
-4. **Integrate:** merge the ticket branch in the integration worktree. Resolve conflicts hunk by hunk, choosing
-   between two intents rather than two blocks of text: trace each side to its primary source (the ticket text and
-   the commit message), keep both where they are compatible, and where they are not, take the side that matches
-   this merge's goal and record the trade-off in the self-answer log. What lands is limited to behaviour one side
-   actually wrote. Then run the repository checks.
-5. **Complete delivery:**
+5. **Integrate:** merge the ticket branch in the integration worktree. Where there are conflicts, hold the context
+   budget and give them to a **merge agent** to resolve hunk by hunk: it gets the integration worktree, both sides'
+   ticket text and commit messages, and this test — the choice is between two intents rather
+   than two blocks of text, so trace each side to its primary source (the ticket text and the commit message), keep
+   both where they are compatible, and where they are not, take the side that matches this merge's goal, with what
+   lands limited to behaviour one side actually wrote. It reports the trade-off per hunk, and the host records those
+   trade-offs in the self-answer log. Then run the targeted checks for the affected surface.
+6. **Complete delivery:**
    - **GitHub:** push the integration branch and retain the ticket PR, now merged by ancestry, as the review
      record.
    - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket,
      set `Status` to `ready-for-human`, and append `## sorry-matt completion` with the implementation commit,
      integration branch, and passed checks. Commit this delivery record. This is a sorry-matt extension;
      upstream defines no terminal state for ordinary local implementation tickets.
-6. Remove the ticket worktree and local ticket branch.
+7. Remove the ticket worktree and local ticket branch.
 
 **Anything worth asking accumulates until the next open-round**, handled through the three exits in `ASKING.md`
 section 4; when `have-it-all-done` composes this skill, it all goes to that single ruling point.
@@ -128,8 +167,9 @@ it **stuck**:
 After recording the stuck state, also remove the ticket worktree and local ticket branch. Keep tickets
 downstream of a stuck ticket blocked.
 
-Done when: every ticket in the round has been through one `simplify` pass with the repository checks back to
-green, and has either a reviewed, provider-native delivery or a traceable stuck record; successful tickets are
+Done when: every ticket in the round went through exactly one independent review with its targeted checks back to
+green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
+specialist reviewer names the risk; every ticket's status record is written current; successful tickets are
 integrated and their ticket worktrees and local branches removed; Local Markdown blockers clear only under the
 completion contract.
 
@@ -152,7 +192,22 @@ ticket filed along the way links its source and none has entered the frozen set.
 
 ## 2. Finish the run
 
-Deliver each line according to its mode:
+Every line passes **two line-level gates** first, in this order:
+
+1. **Simplify:** in the integration worktree, call the Skill tool with `simplify` to make one quality pass over
+   everything the line accumulated — reuse, simplification, efficiency, altitude — which it applies directly.
+   Duplication across tickets is only visible after integration, so this pass runs here once rather than once per
+   ticket. Record any dropped simplification in the self-answer log.
+2. **Full verification:** run the repository's full checks once. On red, hand that stretch of changes back to its
+   original agent and re-run; this single pass is the only green that counts this run.
+
+**The evidence-expiry rule.** Once a ticket has passed its ticket-level review, any later change on the integration
+branch to the files it touched — another ticket integrating, a conflict resolution, the line-level simplify — expires
+that ticket's green: it no longer serves as this run's acceptance evidence, and only the line-level full verification
+still holds. What to re-run follows the real blast radius of that change: by default only the targeted checks for the
+affected surface, with another full verification reserved for a new fix, a failure, or an unresolved risk.
+
+Then deliver each line according to its mode:
 
 - **GitHub:** create one aggregate PR from the line integration branch into the base branch. Link the ticket
   PRs and use `Closes #N` only for completed tickets; list stuck and awaiting-ruling tickets as gaps.
@@ -172,11 +227,13 @@ scope for cleanup:** Local Markdown line integration branches and the source bra
 are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
 explicit authority for this request; do not open a question for it.
 
-Report each line's aggregate PR or integration branch, a **reconciliation table** covering the entire initial
-set, the authority actually used this run, and every raw ticket filed along the way with a recommendation to run
-`/triage`.
+Report each line's aggregate PR or integration branch, a **reconciliation table** covering the entire initial set
+(one row per ticket: ticket ID, deliverable, verification result, status-record location), the authority actually used
+this run, this run's **metrics** (spawns, review rounds, fix rounds, full verification runs, compactions), and every
+raw ticket filed along the way with a recommendation to run `/triage`.
 
-Done when: every line has exactly one human-mergeable delivery, or was merged and reported under the standing
-authority; the reconciliation table covers the frozen set exactly once; every ticket worktree and local ticket
-branch is removed; Local Markdown integration worktrees are removed while their integration branches remain; the
-output lists the authority used this run.
+Done when: every line went through one line-level simplify and one full verification and ended green, and has
+exactly one human-mergeable delivery, or was merged and reported under the standing authority; the reconciliation
+table covers the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree
+and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
+branches remain; the output lists the authority used this run and this run's metrics.

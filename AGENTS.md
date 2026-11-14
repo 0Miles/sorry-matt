@@ -109,6 +109,22 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 確認呼叫 | prompting call |
 | 精簡 | simplify pass |
 | 展開(票) | expand |
+| 兩段展開 | two-stage expansion |
+| 完整展開 | full expansion |
+| 接續紀錄 | status record |
+| 延伸契約 | extension contract |
+| 上下文預算 | context budget |
+| 正本 | source of truth |
+| 開局 agent | kickoff agent |
+| 整併 agent | merge agent |
+| 針對性檢查 | targeted checks |
+| 獨立審查 | independent review |
+| 集中修正 | batched fix |
+| 完整驗證 | full verification |
+| 證據失效 | evidence expiry |
+| 重大分歧 | material disagreement |
+| 計量 | run metrics |
+| 壓縮 | compaction |
 
 ## 外部語義來源
 
