@@ -150,6 +150,14 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 查詢失敗 | query failed |
 | 被取消 | cancelled |
 | CI 不涵蓋整合分支 | CI does not cover the integration branch |
+| 讀 CI | reading CI |
+| 紅/綠(CI 結果) | red / green |
+| 紅燈處置 | red-light handling |
+| 最早的紅 SHA | earliest red SHA |
+| 對不到票 | maps to no ticket |
+| 撤回 | revert |
+| 驗證未過 | failed verification |
+| 本機驗證 | local verification |
 | 恢復 | resuming |
 | 規則檔 | rule files |
 | 狀態標記 | state marker |

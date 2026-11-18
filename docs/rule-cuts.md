@@ -324,6 +324,21 @@ guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 M
 | `ASKING.md` 第 7 節 ledger 第 4 欄 | 補「最近一次讀到的 CI 結果與它的 SHA」 | 恢復時要知道哪條線是紅的，不從記憶推。 |
 | `IMPLEMENTER.md` 第 2 節「完整套件由主持人在收官跑一次」 | 改為「主持人整併後交給 CI 跑」 | 跟著收輪的新步驟 6。 |
 
+獨立審查後的修正（同票第二個 commit）：
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 讀 CI 的指令與判法寫在開輪裡 | 搬到第 1 節新的「讀 CI」小節，開輪與收官都引用它 | 收官也要讀同一套判法，一份正本。 |
+| `gh run list` 沒有 `--limit` | 單一 SHA 用 `--limit 100`、找最早紅 SHA 用 `--limit 200`，按 `headSha` 彙整 | 預設只回 20 筆，多 workflow 時會截掉。 |
+| 「對到那次整併的票」沒有寫怎麼對 | `git log --merges --first-parent <前一個綠 SHA>..<最早的紅 SHA>`，以 ticket 分支名的 merge subject 認票；主持人的非 merge commit 夾在中間不影響；沒有 ticket merge（主持人 commit、精簡、併入基底）就是對不到票 | 完成紀錄、卡住紀錄、期間開票的 commit 會夾在兩次 push 之間。 |
+| 撤回只寫 `git revert -m 1` | 一併撤掉完成紀錄：GitHub 開卡住 raw issue、從 `--done` 移到 `--stuck`；Local Markdown revert 完成紀錄 commit 再追加 blocker；`frontier.mjs` 把完成紀錄之後的 blocker 判為卡住（`scripts/frontier.test.mjs` 有測試）；對帳表改卡住、總 PR 列缺口 | 只撤 merge 時完成紀錄還在，frontier 判 done 優先於 blocker，被撤回的票仍算完成、下游照派。 |
+| 撤回後的下游 | 依賴它而已整併的票改為缺口：merge 不撤、對帳表標「上游撤回」、移到 `--stuck`（Local 追加 blocker），總 PR 不寫 `Closes`；日後重新整併先 revert 撤回的 commit | 下游的程式建立在被撤回的改動上，不能當完成票關掉；不先 revert-of-revert，git 會把再次合併當成已併入。 |
+| 收官紅燈「交回那段改動的原 agent」 | 改套紅燈處置：對到票走修正與撤回，對不到票由主持人或做那一步的 agent 修，兩輪上限；仍紅就整條線**驗證未過**，不送 `gh pr merge`、留給人合併 | 最後一輪之後沒有下一次開輪，原寫法沒有上限也沒有出口。 |
+| 「較早 push 的 SHA 有過 run」沒有指令 | `gh run list --branch <b> --limit 1 --json databaseId`；空清單先當還在跑，連續兩次開輪都空且分支從來沒有 run 才定案為 CI 不涵蓋，定案沿用到收官 | 首次 push 讀到空清單不代表不涵蓋。 |
+| 收官「對每個未完成的 run 執行 `gh run watch`」與「一次阻塞呼叫」 | 改為每個 run 各一次阻塞呼叫 | 原句自相矛盾。 |
+| 改在本機跑的條件寫在多處 | 收官步驟 3 的**本機驗證**是唯一正本，收輪步驟 6 與完成判準引用它 | 條件只留一份。 |
+| `ASKING.md` 第 9 欄「完整驗證次數」 | 寫明計法：收官每得出一個結論算一次，CI 或本機都算；收輪 push 觸發的 CI 不算 | 驗證改由 CI 跑後，原本的計數對象不清楚。 |
+
 本 repo 的 CI（不是 skill 規則）：`.github/workflows/check.yml` 的 `push` 從只有 `main` 改為 `['**', '!claude/**']`。整合分支
 `<run>/<line-slug>` 的 run 名稱不固定，窄的 pattern 會漏；`claude/**` 是開 PR 的 session 分支，`pull_request` 已涵蓋，排除它們避免
 同一個 SHA 跑兩次（matrix 含 Windows，private repo 的 Actions 分鐘數要算）。總 PR 開出後，整合分支的 push 會同時觸發 `push` 與
