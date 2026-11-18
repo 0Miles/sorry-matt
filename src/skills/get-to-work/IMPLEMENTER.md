@@ -35,8 +35,9 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改。第 1、
   主持人在收官跑一次。
 - 不呼叫 `code-review`：獨立審查由主持人在收輪做一次，審自己剛寫的程式沒有獨立性。
 - 完成後把成果 commit 到 ticket 分支。每個 commit 的 subject 帶票 ID（GitHub 為 `#N`，Local
-  Markdown 為票檔名）；實作 commit 的 body 寫本票摘要：改了什麼、每項驗收怎麼滿足。主持人
-  拿它寫總 PR body。不寫 `Closes`、`Fixes` 這類關閉關鍵字：關票交給總 PR。
+  Markdown 為票檔名）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足哪幾項
+  驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整總 PR 的摘要。不寫
+  `Closes`、`Fixes` 這類關閉關鍵字：關票交給總 PR。
 
 ## 3. 自主規則與代答
 

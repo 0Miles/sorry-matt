@@ -155,28 +155,29 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 
 接著依模式交付每條線：
 
-- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 為每張完成票寫一節：摘要（取自
-  該票 commit message 的 body）與 `Closes #N`；卡住與待裁決的票列為**缺口**，不寫 `Closes`。
-  總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後每行 `Closes #N` 仍要在。
+- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 為每張完成票寫一節：摘要與
+  `Closes #N`。摘要由主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
+  `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`。
+  卡住與待裁決的票列為**缺口**，不寫 `Closes`。總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後每行 `Closes #N` 仍要在。
 - **Local Markdown**：保留線整合分支供人審查與合併；記錄 branch name 與 tip SHA，再移除
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
+
+線交付完成後清理：呼叫 Skill tool 帶入 `clean-it-up`，照它的證據規則收掉本輪產生的
+ticket worktree 與已合併的本地分支。**待人審查的交付物不在清理範圍**：Local Markdown 的
+線整合分支、以及尚未合併的總 PR 來源分支一律保留 —— 對未合併項目，`clean-it-up` 本身就是
+降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
 GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是確認呼叫，留到清理之後送出；
 放不放行由 Claude Code 的權限設定決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下
 （`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
 權限規則片段，不為此另開提問。
 
-**關票。** GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；預設分支以
-`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
+**關票**在 `gh pr merge` 送出之後做。GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；
+預設分支以 `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
 
 - 總 PR 已合併：確認每張完成票都已關閉。基底不是預設分支，或合併後仍 open 的票，由主持人依
   tracker 契約的 Close 逐張關閉，留言指向總 PR。
 - 總 PR 留給人合併、且基底不是預設分支：人工作業清單列出合併後要執行的關票指令。
-
-線交付完成後清理：呼叫 Skill tool 帶入 `clean-it-up`，照它的證據規則收掉本輪產生的
-ticket worktree 與已合併的本地分支。**待人審查的交付物不在清理範圍**：Local Markdown 的
-線整合分支、以及尚未合併的總 PR 來源分支一律保留 —— 對未合併項目，`clean-it-up` 本身就是
-降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
 最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
 第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。

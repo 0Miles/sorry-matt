@@ -62,8 +62,8 @@ point, so write the ledger current before that round ends.
 Every open-round starts by re-running `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
 
 - **GitHub:** tickets integrated into their line integration branch are still open on GitHub (closing waits for the
-  aggregate PR's merge), so take the integrated tickets from the ledger's reconciliation table and pass them with `--done <n,...>`; pass stuck tickets
-  with `--stuck <n,...>`.
+  aggregate PR's merge), so take the integrated tickets from the ledger's reconciliation table and pass them with
+  `--done <n,...>`; pass stuck tickets with `--stuck <n,...>`.
 - **Local Markdown:** run once per line, passing the whole frozen set with `--ref <that line's integration branch>`
   and `--line <that line's line>` (the value from the freeze); the frontier is the union of each line's `frontier`.
   Done and stuck come from the `sorry-matt completion` / `sorry-matt blocker` records in the ticket files on that
@@ -176,12 +176,20 @@ reserved for a new fix, a failure, or an unresolved risk.
 Then deliver each line according to its mode:
 
 - **GitHub:** create one aggregate PR from the line integration branch into the base branch. Its body gives each
-  completed ticket a section: the summary (taken from the body of that ticket's commit message) and `Closes #N`;
-  stuck and awaiting-ruling tickets are listed as **gaps**, with no `Closes`. Polish the aggregate PR body per
+  completed ticket a section: a summary and `Closes #N`. The host writes the summary from every commit message the
+  ticket integrated into the line, batched-fix commits included:
+  `git log --format=%B -E --grep='#N([^0-9]|$)' <base branch>..<line integration branch>`.
+  Stuck and awaiting-ruling tickets are listed as **gaps**, with no `Closes`. Polish the aggregate PR body per
   `ASKING.md` section 6; every `Closes #N` line must survive the polish.
 - **Local Markdown:** leave the line integration branch for human review and merge. Record its branch name and
   tip SHA, then remove the integration worktree. Ticket state travels with the implementation on that branch;
   do not simulate a PR or close operation.
+
+Once a line is delivered, clean up: call the Skill tool with `clean-it-up` and let its evidence rules retire the
+ticket worktrees and merged local branches this run created. **Deliverables awaiting human review are out of
+scope for cleanup:** Local Markdown line integration branches and the source branches of unmerged aggregate PRs
+are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
+explicit authority for this request; do not open a question for it.
 
 Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`. It is a prompting call, sent
 after cleanup; Claude Code's permission settings decide whether it is let through, and in `bypassPermissions` and
@@ -189,20 +197,14 @@ after cleanup; Claude Code's permission settings decide whether it is let throug
 blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
 would let it through. Do not open a question for it.
 
-**Closing tickets.** GitHub reads `Closes` only in a PR that targets the repository's default branch; find that
-branch with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
+**Closing tickets** comes after `gh pr merge` is sent. GitHub reads `Closes` only in a PR that targets the
+repository's default branch; find that branch with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
 
 - Aggregate PR merged: confirm every completed ticket is closed. When the base is not the default branch, or a
   ticket is still open after the merge, the host closes it per the tracker contract's Close, with a comment
   pointing at the aggregate PR.
 - Aggregate PR left for a human to merge, with a base that is not the default branch: the human-work list carries
   the close commands to run after the merge.
-
-Once a line is delivered, clean up: call the Skill tool with `clean-it-up` and let its evidence rules retire the
-ticket worktrees and merged local branches this run created. **Deliverables awaiting human review are out of
-scope for cleanup:** Local Markdown line integration branches and the source branches of unmerged aggregate PRs
-are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
-explicit authority for this request; do not open a question for it.
 
 Report each line's aggregate PR or integration branch, the **reconciliation table** covering the entire initial set
 and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (section 5), and every raw ticket

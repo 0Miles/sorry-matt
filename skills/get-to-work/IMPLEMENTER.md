@@ -38,8 +38,9 @@ all the rules you follow, and none of them points at a file or section you canno
 - Do not call `code-review`: the host runs the independent review once while closing the round, and reviewing code
   you just wrote is not independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
-  the ticket file name in Local Markdown); the implementation commit's body carries this ticket's summary: what
-  changed and how each acceptance criterion is met. The host builds the aggregate PR body from it. Write no closing
+  the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
+  acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
+  aggregate PR summary from all of this ticket's commits. Write no closing
   keyword such as `Closes` or `Fixes`: closing the ticket is the aggregate PR's job.
 
 ## 3. Autonomy and answering on the user's behalf
