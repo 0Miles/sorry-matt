@@ -200,3 +200,44 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 - `get-to-work` 收官「關票」：總 PR 合併後確認完成票已關閉；基底不是預設分支時關鍵字不生效，由主持人依 tracker 契約
   關票。總 PR 留給人合併時（`gh pr merge` 被權限設定擋下或被拒，見 #8），關票指令進人工作業清單。
 - `frontier.mjs` 不變：整併後票仍是 open，GitHub 模式照舊由主持人以 `--done` 傳入。
+
+## #7：驗收項改由實作者以外的 agent 在開工前補齊
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `IMPLEMENTER.md` 第 1 節「票上沒有驗收項、只標著 needs-triage 時，先完成完整展開……寫進接續紀錄」 | 刪；改為「驗收項只讀不改，需要改回報待裁決」與「做不到就回報卡住，這是合法結果」 | 補驗收的人就是要通過它的人，審查的需求軸對照的正是實作者自己寫的標準。給模型放棄的出口能降低改測試、改規格的作弊（ImpossibleBench）。 |
+| `have-it-all-done` 第 0 節兩段展開「完整展開……由實作 agent 依它的交付說明完成」 | 改為由 `get-to-work` 開輪的展開 agent 在實作開工前完成 | 同上；延後展開的理由（上游實作改寫下游事實）不變，只換人做。 |
+| `take-this` 第 4 步「驗收項延到它即將進入 frontier 時才補滿」 | 補上「由展開 agent 補，不交給實作 agent」 | 同上。 |
+| `prove-it` 第 1 節「驗收項標了出處的，對照時連出處一起保留」 | 改為輸入原票票面、展開區塊、驗收快照與比對輸出；驗收對照以快照為準 | 「標了出處」原本沒有人負責標，審查也無從得知驗收有沒有被改過。 |
+
+新增：
+
+- `get-to-work/scripts/acceptance.mjs`（零依賴）：讀出一張票的驗收項與出處（`original` 或附 `by`、`run`、`round` 的
+  `expansion`），輸出 `sorry-matt/acceptance@1`；`--against` 與快照比對，勾選狀態不算改動。測試在
+  `scripts/acceptance.test.mjs`，GitHub 經 `gh` seam 用 fixture；CI 一起跑。「只讀不改」用它機械強制：開輪 spawn 前存快照，
+  收輪審查前比對，比對結果交給 `prove-it`。
+- `get-to-work` 開輪：先跑腳本，`needsExpansion` 的票交給一個展開 agent（`get-to-work/EXPANDER.md`，自足交付說明），
+  它在 tracker 寫標明 `by`、`run`、`round` 的展開區塊（GitHub 一則留言；Local Markdown 票檔的 `## sorry-matt expansion`，
+  frontier 腳本本來就不把 `## sorry-matt …` 節的勾選框算進完成判定）；之後每張要派的票存驗收快照，才開分支、spawn 實作 agent。
+  展開不了的票列待裁決。
+- `prove-it`：驗收比對 `changed` 直接記一則 blocking `acceptance` finding，結論不能是 `pass`；輸出區塊加 `acceptance:` 一行，
+  標出原票與展開各幾項。複驗時以新的比對輸出裁決這則 finding。
+- `IMPLEMENTER.md` 回報加 `acceptance:` 逐項狀態，`awaiting ruling` 改為 `awaiting ruling / stuck`。
+- `ASKING.md` 第 3 節：展開時的票級代答記在展開區塊。
+
+機械強制的邊界：腳本證明的是「快照之後驗收沒變」。「不是實作 agent 寫的」靠順序：快照在 spawn 實作 agent 之前存，
+快照裡的每一項都早於它。
+
+審查後的修正：
+
+- 快照路徑推得出來，實作 agent 可以同時改 tracker 與快照，讓比對看起來沒變。主持人在 spawn 前把快照的 `sha256` 記進
+  ledger 對帳表（`ASKING.md` 第 7 節第 8 欄），比對時以 `--sha` 傳入；腳本從快照的 items 重算 hash，不符就
+  `snapshotIntact: false`、`changed: true`、結束代碼 3。ledger 也在共用目錄，但實作 agent 的交付說明不提它，要同時改
+  tracker、快照與 ledger 三處才蓋得過去。
+- 不做 guard hook 擋 `sorry-matt/runs/*/acceptance/` 的寫入：hook 分不出呼叫者是主持人還是實作 agent，主持人自己存
+  快照也會被擋；`--sha` 已經讓改快照被抓到。
+- GitHub 的展開區塊是留言，不在票面全文裡：`IMPLEMENTER.md` 加「展開區塊」佔位，由主持人從驗收快照的
+  `expansions[].text` 填入（腳本輸出新增這個欄位）。
+- 腳本解析：展開區塊裡只有 `by`、`run`、`round`、`acceptance`、`rulings` 是 key，其他 `word: …` 行是一般文字（原本會
+  被當成 key，後面的驗收項默默丟掉）；任何層級的 `Comments`／`sorry-matt …` 節都不算原票驗收，放在 `## Acceptance`
+  底下的 `### sorry-matt expansion` 不會被重複計成 original。`EXPANDER.md` 規定展開節一律用 `##`。

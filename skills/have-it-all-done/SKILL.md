@@ -30,7 +30,8 @@ points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold th
   ticket goes. When an in-scope ticket carries nothing beyond its needs-triage marker, fill it only far enough to
   order it before the freeze: one line of scope, the blocker edges, marked ready-for-agent the way the tracker
   does. **Full expansion** — acceptance criteria and implementation-level rulings — waits for the moment that
-  ticket enters the frontier, where the implementation agent completes it under its brief. Upstream
+  ticket enters the frontier, where `get-to-work`'s expansion agent completes it at open-round, before the
+  implementation agent starts; whoever writes the criteria is not the one who has to pass them. Upstream
   implementation rewrites the facts the downstream tickets rest on; the rulings made early are the ones that get
   redone. Mark it awaiting ruling only when a fact the expansion needs cannot be found anywhere; a needs-triage
   ticket filed during the run is background, held to the handoff.
