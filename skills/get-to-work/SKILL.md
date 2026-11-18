@@ -126,9 +126,42 @@ one result, classified in this order, the first match winning; record the result
    enter no merge queue, say so in the aggregate PR and leave it for a human to merge, with the failing jobs in the
    human-work list.
 
+### Budget and breaker
+
+The limits and their usage live in ledger field 9 (`ASKING.md` section 7). Every open-round starts with these, in
+order:
+
+1. **Update usage:** read spawns from `spawns` in `<run>.counters.json` next to the ledger (without that file, use the
+   count the host keeps itself); compute elapsed time from the start time to now.
+2. **Judge progress:** "once" means one open-round. A `/loop` wake-up that finds agents still running and neither
+   closes nor opens a round does not count. Compare against the progress snapshot recorded at the last open-round —
+   each line's integration-branch tip SHA, and each ticket's state in the reconciliation table: when neither
+   changed, add one to the consecutive no-progress count; when anything changed, reset it to zero. Commits on a
+   ticket branch are not progress: an attempt that was never merged changed no delivery. Then record this
+   snapshot in field 9; the first open-round only records it.
+3. **Check the limits:** when the open-rounds already run reach `rounds`, spawns reach `spawns`, elapsed time
+   reaches `hours`, or the consecutive no-progress count reaches `no-progress`, **stop**. Only when nothing stops
+   the run, add one to the open-round count and go on opening the round.
+
+**Stopping:** dispatch nothing this time and do not read CI. Mark every ticket of the frozen set not yet delivered —
+never dispatched, or whose spawn was blocked this round — **awaiting ruling**, with the limit that stopped the run
+and the usage at the time as the reason. Record the stop reason in field 9; for the no-progress breaker, write for
+each undelivered ticket which step it was stuck at over these last open-rounds and what it was waiting on, pointing
+at its status record. Then stop the loop and finish the run per section 2.
+
+When the plugin's hook blocks a spawn on budget grounds while dispatching or closing a round: do not retry it and do
+not route around it. Agents already dispatched close the round as usual; tickets not dispatched are marked as in the
+previous paragraph, and the next open-round stops at step 3. When a finishing step needs a spawn and is blocked, put
+it on the human-work list per `ASKING.md` section 4.
+
+Done when: every open-round first updated field 9's usage and judged progress and all four limits; when stopping,
+nothing was dispatched that time, every undelivered ticket is awaiting ruling with the limit that stopped the run,
+and field 9 has the stop reason; no spawn blocked on budget was retried or routed around.
+
 ### Open the round
 
-Every open-round starts by reading CI, per reading CI, for each line that has been pushed and is not settled as not
+Every open-round first checks the limits per budget and breaker; when the run does not stop, it reads CI, per
+reading CI, for each line that has been pushed and is not settled as not
 covered by CI. A red line goes through the red-light handling and dispatches nothing new until it is green or the
 culprit is reverted; any other result opens the round as usual.
 
@@ -276,7 +309,7 @@ this scope, only as raw tickets linked to the source finding:
 Keep these raw tickets outside both the initial set and this run's frontier.
 
 Stop the loop when every initial ticket has a completed delivery. Also stop when the frontier is empty but
-stuck or **awaiting ruling** tickets remain.
+stuck or **awaiting ruling** tickets remain, and when budget and breaker stops the run.
 
 Done when: every initial ticket reconciles exactly once to delivered, stuck, or awaiting ruling; every raw
 ticket filed along the way links its source and none has entered the frozen set.
@@ -389,7 +422,7 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 
 Report each line's aggregate PR or integration branch, its merged base SHA (or marked unsynced), and the full
 verification's SHA and source (CI, or local with the reason), the
-**reconciliation table** covering the entire initial set and this run's **metrics** (`ASKING.md` section 7), the
+**reconciliation table** covering the entire initial set and this run's **metrics and budget** (`ASKING.md` section 7, field 9, with the stop reason when it stopped), the
 authorization outcomes (section 5), and every raw ticket filed along the way with a recommendation that the user
 run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run ended -->` after this
 output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
@@ -404,4 +437,4 @@ ticket of a merged aggregate PR is closed, and where an aggregate PR is left to 
 apply, the human-work list carries the close commands; the reconciliation table covers the frozen set exactly
 once, every row pointing at that ticket's status record; every ticket worktree and local ticket branch is removed;
 Local Markdown integration worktrees are removed while their integration branches remain; the output lists the
-authorization outcomes and this run's metrics; running standalone, the ledger's first line is the ended marker.
+authorization outcomes and this run's metrics and budget; running standalone, the ledger's first line is the ended marker.

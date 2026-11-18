@@ -79,6 +79,38 @@ compaction it looks for run ledgers in progress under `<git common dir>/sorry-ma
 `<!-- sorry-matt:run active -->`) and prints each ledger with the rule files it lists, so the host re-reads them
 instead of working from the summary. Outside a git repo, or with no run in progress, it prints nothing.
 
+## Run budget
+
+While a run is in progress, two more hooks share one entry (`hooks/hooks.json` → `hooks/spawns.mjs`):
+
+- **SubagentStart** counts each new subagent in `<run>.counters.json` next to the run ledger (a resumed subagent keeps
+  its `agent_id` and is not counted again). Only the hook writes that file, under an exclusive lock file and through
+  a temporary file and a rename, so it never races with the host writing the ledger. SubagentStart cannot block a
+  spawn; it only counts.
+- **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9;
+  the default is 200). The limit is re-read on every call, so editing that line takes effect immediately.
+
+With no run in progress, or no `budget: spawns` line, neither hook counts against anything or blocks anything. The
+other limits (`rounds`, `hours`, `no-progress`) and the no-progress breaker are enforced by `get-to-work` itself at
+every open-round. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
+
+```json
+{
+  "env": { "SORRY_MATT_BUDGET": "off" }
+}
+```
+
+### Hard caps for headless runs
+
+The ledger limits are counted by the run itself. When you run sorry-matt headless, also give Claude Code a hard cap
+that holds whatever the run does — `--max-turns` limits agentic turns, and `--max-budget-usd` stops the run once the
+estimated API spend reaches the amount (subagent spend counts; spend can overshoot, so leave headroom). Both apply
+in print mode only:
+
+```bash
+claude -p --max-turns 400 --max-budget-usd 50 "/have-it-all-done <task>"
+```
+
 ## Updating
 
 Update sorry-matt:
@@ -109,8 +141,8 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 - `scripts/` holds the repository checks, run on every pull request by `.github/workflows/check.yml`:
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
-- `hooks/` holds the guard hook and the compaction reminder; `scripts/guard.test.mjs` and `scripts/reread.test.mjs`
-  test them in the same CI run.
+- `hooks/` holds the guard hook, the compaction reminder, and the run budget hooks; `scripts/guard.test.mjs`,
+  `scripts/reread.test.mjs`, and `scripts/budget.test.mjs` test them in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
   `scripts/acceptance.test.mjs`) run in the same CI run.

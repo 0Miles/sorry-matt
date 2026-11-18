@@ -143,6 +143,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 預算與斷路 | budget and breaker |
+| 無進展斷路 | no-progress breaker |
+| 上限/用量 | limit / usage |
+| 停止原因 | stop reason |
+| 進度快照 | progress snapshot |
 | 併入基底 | sync the base |
 | 未併入 | unsynced |
 | 還在跑 | still running |

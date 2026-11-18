@@ -109,7 +109,7 @@ Local Markdown 路徑）作為它的明確引數，沿用本 run 的 ledger。�
   Skill tool 帶入 `wizard` 產生互動式 wizard，並在清單裡指向它。
 - 每條線的交付（GitHub 總 PR，或 Local Markdown 整合分支與 tip SHA）與**對帳表**。
 - 期間開票產生的 raw tickets、請使用者執行 `/triage` 的建議，以及所有待裁決項目。
-- **本輪計量**（ledger 第 9 欄）。
+- **本輪計量與預算**（ledger 第 9 欄）：上限與用量；run 因上限或無進展斷路停下時，寫出停在哪一項與卡在哪裡。
 
 報告送出後，步驟 5 不執行時，把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`。
 

@@ -6,6 +6,7 @@
 //   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet and backticks allowed);
 //     every such line in the ledger counts, which ASKING says by keeping `rule:` lines to field 10
 // Anything it cannot find or read means "no run in progress": it prints nothing.
+// budget.mjs finds the runs in progress through commonDir and activeLedgerTexts here.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
@@ -28,18 +29,21 @@ const isAbsolute = (p) => posix.isAbsolute(p) || win32.isAbsolute(p);
 
 /** Parse one ledger's text: null unless it is in progress, else its rule file paths in order. */
 export function parseLedger(text) {
-  const lines = (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).split(/\r?\n/);
-  if (!ACTIVE.test(lines[0].trim())) return null;
+  if (!isActive(text)) return null;
   const rules = [];
-  for (const line of lines) {
+  for (const line of text.split(/\r?\n/)) {
     const m = RULE.exec(line);
     if (m && isAbsolute(m[1]) && !rules.includes(m[1])) rules.push(m[1]);
   }
   return { rules };
 }
 
-/** Every ledger in progress under <common dir>/sorry-matt/runs, sorted by path. */
-export function activeLedgers(common) {
+/** The first line (a BOM aside) is exactly the active marker. */
+export const isActive = (text) => ACTIVE.test(firstLine(text).trim());
+const firstLine = (text) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).split(/\r?\n/, 1)[0];
+
+/** Every ledger in progress under <common dir>/sorry-matt/runs with its text, sorted by path. */
+export function activeLedgerTexts(common) {
   const dir = join(common, 'sorry-matt', 'runs');
   let names;
   try {
@@ -52,13 +56,21 @@ export function activeLedgers(common) {
     const ledger = join(dir, name);
     try {
       if (!statSync(ledger).isFile()) continue;
-      const parsed = parseLedger(readFileSync(ledger, 'utf8'));
-      if (parsed) found.push({ ledger, rules: parsed.rules.map((path) => ({ path, exists: existsSync(path) })) });
+      const text = readFileSync(ledger, 'utf8');
+      if (isActive(text)) found.push({ ledger, text });
     } catch {
       // an unreadable ledger is not a run this hook can point at
     }
   }
   return found;
+}
+
+/** Every ledger in progress under <common dir>/sorry-matt/runs, sorted by path. */
+export function activeLedgers(common) {
+  return activeLedgerTexts(common).map(({ ledger, text }) => ({
+    ledger,
+    rules: parseLedger(text).rules.map((path) => ({ path, exists: existsSync(path) })),
+  }));
 }
 
 /** The text added to context, or null when there is nothing to re-read. */
