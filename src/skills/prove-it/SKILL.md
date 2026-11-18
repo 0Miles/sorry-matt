@@ -47,8 +47,8 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 ```
 
 相依沿用既有安裝；新 worktree 沒有安裝時照 lockfile 還原（`npm ci`、
-`pnpm install --frozen-lockfile` 這類凍結寫法）。不加相依、不下載新工具 —— 那是永久例外，
-plugin 的 guard hook 也會擋。新檔行號一律取自 `git show <ticket 分支>:<path>`。
+`pnpm install --frozen-lockfile` 這類凍結寫法）。不加相依、不下載新工具 —— 審查不改這張票的
+diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
 完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
 審查用 worktree 位於 ticket 分支尖端，diff 已存檔。

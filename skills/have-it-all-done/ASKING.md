@@ -143,14 +143,10 @@ Choosing "don't ask again" at a permission prompt does the same, written by Clau
 
 ### Permanent exceptions
 
-Force-pushes, outgoing messages (mail, chat, social posts) and third-party communication, installing new packages
-or cloning, anything touching credentials or secrets, deleting data that cannot be recovered, payments, permission
-changes (Claude Code's permission settings included), and production changes to config, rules or permissions or
-that delete production data. No instruction can grant them; every one goes on the human-work list.
-
-Installing new packages includes adding a dependency to a manifest and downloading a package to run it with tools
-like `npx`, `pnpm dlx`, or `uvx`. Restoring dependencies from a lockfile does not count; always use the frozen form,
-such as `npm ci` or `pnpm install --frozen-lockfile`.
+Force-pushes, outgoing messages (mail, chat, social posts) and third-party communication, cloning, anything
+touching credentials or secrets, deleting data that cannot be recovered, payments, permission changes (Claude
+Code's permission settings included), and production changes to config, rules or permissions or that delete
+production data. No instruction can grant them; every one goes on the human-work list.
 
 The plugin's `hooks/hooks.json` blocks these calls in PreToolUse, along with every route that lands changes on a
 protected branch without `gh pr merge`. When the hook blocks a call, put it on the human-work list; do not retry

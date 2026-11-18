@@ -420,3 +420,10 @@ guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`ma
 衝突解法放在 merge commit 而不是另一個一般 commit：要把解法拆成獨立的一般 commit，得先 commit 帶衝突標記的樹或改寫 ticket 分支，
 前者讓中間的 SHA 壞掉、後者讓票的範圍混進解法。merge commit 本身不屬於票的範圍，`--remerge-diff` 又能只看解法，腳本也標出哪些
 merge 帶解法（`resolved`，比對 merge commit 的樹與 `git merge-tree --write-tree` 的自動合併結果）。
+
+## 移除「安裝新套件」永久例外
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 永久例外「安裝新套件」（含在 manifest 加相依、用 `npx`、`pnpm dlx`、`uvx` 下載執行套件，以及「照 lockfile 還原一律用凍結寫法」） | 刪除；`have-it-all-done/ASKING.md` 第 5 節與 `get-to-work/IMPLEMENTER.md` 的清單只剩 clone；`prove-it` 仍不加相依，理由改為審查不改這張票的 diff 與 repo 相依 | 使用者 2026-11-19 指示移除。 |
+| guard 對套件管理器安裝的攔截（`hooks/permanent-exceptions.mjs`） | 刪除 npm、pnpm、yarn、bun、npx、bunx、uvx、pip、uv、pipx、cargo、gem、go、poetry、pdm、bundle、系統套件管理器、composer、dotnet 與 PowerShell `Install-*` 的安裝規則；各工具的 publish/push → `production` 保留；類別 `install-or-clone` 改名 `clone-or-extension`（clone、編輯器/agent 擴充安裝、fetch-and-run） | 同上。 |

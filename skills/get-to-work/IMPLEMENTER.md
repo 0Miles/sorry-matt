@@ -68,12 +68,9 @@ all the rules you follow, and none of them points at a file or section you canno
 - When a gate denies a call and says how to proceed, do that and retry; it counts as stuck only when no route
   exists.
 - Permanent exceptions are not yours to do; list them under "human work" in your report: force-pushes, outgoing
-  messages and third-party communication, installing new packages or cloning, anything touching credentials or
-  secrets, deleting data that cannot be recovered, payments, permission changes (Claude Code's permission settings
-  included), and production changes. Keeping this ticket's status record on the tracker is not an outgoing message.
-- Installing new packages includes adding a dependency to a manifest and downloading a package to run it with
-  tools like `npx`, `pnpm dlx`, or `uvx`. Restoring dependencies from a lockfile does not count; always use the
-  frozen form, such as `npm ci` or `pnpm install --frozen-lockfile`.
+  messages and third-party communication, cloning, anything touching credentials or secrets, deleting data that
+  cannot be recovered, payments, permission changes (Claude Code's permission settings included), and production
+  changes. Keeping this ticket's status record on the tracker is not an outgoing message.
 - The plugin's hook blocks these calls: when it does, list the call under "human work" and do not retry with
   another spelling. A spelling the hook fails to recognize, or a hook the user has turned off, changes nothing: do
   not do it either.

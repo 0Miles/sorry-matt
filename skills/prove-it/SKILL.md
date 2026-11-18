@@ -56,8 +56,8 @@ git -C <repo> diff <fixed point>...<ticket branch> > <scratchpad>/review-<ticket
 ```
 
 Reuse existing dependency installs; where the new worktree has none, restore from the lockfile (frozen forms such as
-`npm ci` or `pnpm install --frozen-lockfile`). Never add a dependency or download a new tool — that is a permanent
-exception, and the plugin's guard hook blocks it too. New-file line numbers always come from
+`npm ci` or `pnpm install --frozen-lockfile`). Never add a dependency or download a new tool — the review
+changes neither this ticket's diff nor the repo's dependencies. New-file line numbers always come from
 `git show <ticket branch>:<path>`.
 
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed

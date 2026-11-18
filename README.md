@@ -86,16 +86,16 @@ npx modern-web-guidance@latest install
 The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`). It runs
 in **every session where the plugin is enabled**, not only sorry-matt runs, and denies:
 
-- the permanent exceptions — force-pushes, outgoing messages, installing new packages (including `npx`,
-  `pnpm dlx`, `uvx` downloads) or cloning, touching credentials or secrets, irrecoverable deletes, payments,
-  permission changes (Claude Code's settings files included), and production changes;
+- the permanent exceptions — force-pushes, outgoing messages, cloning (along with installing an editor or agent
+  extension and piping a fetched script into a shell), touching credentials or secrets, irrecoverable deletes,
+  payments, permission changes (Claude Code's settings files included), and production changes;
 - every route that lands changes on `main`, `master`, or the remote's default branch without `gh pr merge`
   (direct pushes, `gh api` merge and ref endpoints, `gh pr merge --admin`, MCP merge tools);
 - `gh pr merge` itself in `bypassPermissions` and `auto` mode, where nobody would confirm it.
 
-Restoring dependencies from a lockfile (`npm ci`, `pnpm install --frozen-lockfile`) and running a project-local bin
-with `npx` are allowed. To run a blocked command, run it in your own terminal. To turn the guard off, set it in the
-`env` of your Claude Code settings (the agent cannot write those files):
+Installing packages (`npm install`, `npx`, `pip install`, `brew install` and the like) is allowed. To run a blocked
+command, run it in your own terminal. To turn the guard off, set it in the `env` of your Claude Code settings (the
+agent cannot write those files):
 
 ```json
 {

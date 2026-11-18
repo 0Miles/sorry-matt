@@ -123,12 +123,9 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 
 ### 永久例外
 
-force-push、對外發訊（郵件、聊天、社群貼文）與第三方溝通、安裝新套件或 clone、碰憑證或機密、
+force-push、對外發訊（郵件、聊天、社群貼文）與第三方溝通、clone、碰憑證或機密、
 刪掉救不回的資料、金流、改權限（含 Claude Code 的權限設定），以及動正式環境的設定、規則、
 權限或刪正式資料。任何指示都不能授權，一律進人工作業清單。
-
-安裝新套件包括在 manifest 加相依，以及用 `npx`、`pnpm dlx`、`uvx` 這類工具下載執行套件；照
-lockfile 還原相依不算，一律用 `npm ci`、`pnpm install --frozen-lockfile` 這類凍結寫法。
 
 plugin 的 `hooks/hooks.json` 以 PreToolUse 擋下這些呼叫，以及繞過 `gh pr merge` 把變更送上受保護
 分支的寫法。被 hook 擋下就記進人工作業清單，不換寫法重試；hook 認不出的寫法，或使用者關掉

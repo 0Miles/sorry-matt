@@ -2,8 +2,8 @@
 // protected branch around `gh pr merge`, and which ones merge a PR. `classify` is the whole
 // interface: a PreToolUse event in, a verdict out. Whether a verdict is denied is decision.mjs's call.
 import { tmpdir, homedir } from 'node:os';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parse, unwrap, commandName } from './shell.mjs';
 
@@ -12,7 +12,7 @@ export const CATEGORIES = {
   merge: 'merging a pull request',
   'merge-bypass': 'landing changes on a protected branch outside `gh pr merge`',
   'outgoing-message': 'outgoing message',
-  'install-or-clone': 'installing a package or cloning',
+  'clone-or-extension': 'cloning, installing an editor/agent extension, or running a fetched script',
   credentials: 'touching credentials or secrets',
   'irrecoverable-delete': 'deleting data that cannot be recovered',
   payments: 'payments',
@@ -138,7 +138,7 @@ function classifySegment(seg, prev, cwd) {
 
   // Fetch-and-run: `curl ... | sh`.
   if (SHELL_SINKS.has(name) && seg.op === '|' && FETCHERS.has(commandName(unwrap(prev.argv).argv[0]))) {
-    return hit('install-or-clone', `${unwrap(prev.argv).argv.join(' ')} | ${line}`);
+    return hit('clone-or-extension', `${unwrap(prev.argv).argv.join(' ')} | ${line}`);
   }
 
   const byTool = commandRule(name, args, line, seg, cwd);
@@ -183,86 +183,27 @@ function commandRule(name, args, line, seg, cwd) {
     case 'gh':
       return ghRule(args, line, seg, cwd);
     case 'hg':
-      return args[0] === 'clone' ? hit('install-or-clone', line) : null;
+      return args[0] === 'clone' ? hit('clone-or-extension', line) : null;
     case 'svn':
-      return /^(checkout|co|export)$/.test(args[0] ?? '') ? hit('install-or-clone', line) : null;
+      return /^(checkout|co|export)$/.test(args[0] ?? '') ? hit('clone-or-extension', line) : null;
     case 'npm':
     case 'cnpm':
-      if (args[0] === 'exec' || args[0] === 'x') return downloadsPackage(args.slice(1), cwd) ? hit('install-or-clone', line) : null;
-      return packageRule(name, args, line, ['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add'], [], ['publish']);
     case 'pnpm':
-      if (args[0] === 'dlx') return hit('install-or-clone', line);
-      return packageRule(name, args, line, ['install', 'i'], ['add'], ['publish']);
-    case 'npx':
-    case 'bunx':
-      return downloadsPackage(args, cwd) ? hit('install-or-clone', line) : null;
-    case 'uvx':
-      return hit('install-or-clone', line);
-    case 'yarn':
-      if ((args[0] === 'global' && args[1] === 'add') || args[0] === 'dlx') return hit('install-or-clone', line);
-      return packageRule(name, args, line, ['install'], ['add'], ['publish', 'npm']);
     case 'bun':
-      return packageRule(name, args, line, ['install', 'i'], ['add', 'a'], ['publish']);
-    case 'pip':
-    case 'pip3':
-      return pipRule(args, line);
-    case 'python':
-    case 'python3':
-    case 'py': {
-      const m = args.indexOf('-m');
-      if (m !== -1 && /^pip3?$/.test(args[m + 1] ?? '')) return pipRule(args.slice(m + 2), line);
-      return null;
-    }
-    case 'uv':
-      if (args[0] === 'pip') return pipRule(args.slice(1), line);
-      if (args[0] === 'add' || (args[0] === 'tool' && /^(install|run)$/.test(args[1] ?? ''))) return hit('install-or-clone', line);
-      return null;
-    case 'pipx':
-      return args[0] === 'install' || args[0] === 'run' ? hit('install-or-clone', line) : null;
+      return args[0] === 'publish' ? hit('production', line) : null;
+    case 'yarn':
+      return args[0] === 'publish' || args[0] === 'npm' ? hit('production', line) : null;
     case 'cargo':
-      if (args[0] === 'add' || (args[0] === 'install' && !hasLong(args, '--path'))) return hit('install-or-clone', line);
       return args[0] === 'publish' ? hit('production', line) : null;
     case 'gem':
-      if (args[0] === 'install') return hit('install-or-clone', line);
       return args[0] === 'push' ? hit('production', line) : null;
-    case 'go':
-      if (args[0] === 'get') return hit('install-or-clone', line);
-      return args[0] === 'install' && positionals(args.slice(1)).some((p) => !p.startsWith('.')) ? hit('install-or-clone', line) : null;
-    case 'poetry':
-    case 'pdm':
-    case 'bundle':
-      return args[0] === 'add' ? hit('install-or-clone', line) : null;
-    case 'conda':
-    case 'mamba':
-    case 'brew':
-    case 'apt':
-    case 'apt-get':
-    case 'yum':
-    case 'dnf':
-    case 'zypper':
-    case 'snap':
-    case 'winget':
-    case 'choco':
-    case 'scoop':
-    case 'port':
-    case 'apk':
-      return ['install', 'add', 'reinstall', 'upgrade'].includes(positionals(args)[0]) ? hit('install-or-clone', line) : null;
-    case 'pacman':
-      return /^-S[a-z]*$/.test(args[0] ?? '') && !/^-S[sig]/.test(args[0]) ? hit('install-or-clone', line) : null;
-    case 'composer':
-      return args[0] === 'require' ? hit('install-or-clone', line) : null;
     case 'dotnet':
-      if ((args[0] === 'add' && args.includes('package')) || (args[0] === 'tool' && args[1] === 'install')) return hit('install-or-clone', line);
       return args[0] === 'nuget' && args[1] === 'push' ? hit('production', line) : null;
-    case 'install-module':
-    case 'install-package':
-    case 'install-script':
-      return hit('install-or-clone', line);
     case 'code':
-      return hasLong(args, '--install-extension') ? hit('install-or-clone', line) : null;
+      return hasLong(args, '--install-extension') ? hit('clone-or-extension', line) : null;
     case 'claude':
-      if ((args[0] === 'plugin' || args[0] === 'plugins') && (args[1] === 'install' || (args[1] === 'marketplace' && args[2] === 'add'))) return hit('install-or-clone', line);
-      return args[0] === 'mcp' && args[1]?.startsWith('add') ? hit('install-or-clone', line) : null;
+      if ((args[0] === 'plugin' || args[0] === 'plugins') && (args[1] === 'install' || (args[1] === 'marketplace' && args[2] === 'add'))) return hit('clone-or-extension', line);
+      return args[0] === 'mcp' && args[1]?.startsWith('add') ? hit('clone-or-extension', line) : null;
     case 'twine':
       return args[0] === 'upload' ? hit('production', line) : null;
     case 'vsce':
@@ -330,45 +271,6 @@ function commandRule(name, args, line, seg, cwd) {
   if (/^mkfs/.test(name)) return hit('irrecoverable-delete', line);
   if (FETCHERS.has(name)) return fetchRule(args, line);
   return null;
-}
-
-// npm/pnpm/yarn/bun: restoring from the lockfile is fine; naming a package, or a global install, is not.
-const PACKAGE_VALUED = new Set(['--registry', '--prefix', '--workspace', '-w', '--omit', '--include', '--cache', '--userconfig', '--tag', '--loglevel', '--filter', '--cwd', '-C', '--dir']);
-function packageRule(name, args, line, installs, adds, publishes) {
-  const sub = args[0] ?? '';
-  const rest = args.slice(1);
-  if (publishes.includes(sub)) return hit('production', line);
-  if (adds.includes(sub)) return hit('install-or-clone', line);
-  if (installs.includes(sub)) {
-    const global = shortFlags(rest).has('g') || hasLong(rest, '--global') || rest.includes('--location=global');
-    if (global || positionals(rest, PACKAGE_VALUED).length) return hit('install-or-clone', line);
-  }
-  return null;
-}
-
-// `npx`/`bunx`/`npm exec` run a bin from node_modules when the project has it, and download the
-// package otherwise. `--package`/`-p` always names a package to fetch.
-const NPX_VALUED = new Set(['-c', '--call', '--prefix', '--workspace', '-w', '--registry', '--cache']);
-function downloadsPackage(args, cwd) {
-  if (args.some((a) => a === '-p' || a.startsWith('--package'))) return true;
-  const target = positionals(args, NPX_VALUED)[0];
-  if (!target) return false;
-  if (/^(\.|\/|[a-z]:[\\/])/i.test(target)) return false; // a local path
-  // `pkg`, `@scope/pkg`: run the local bin if there is one. A version (`pkg@2`), URL, or git spec downloads.
-  const m = /^(?:@[\w.-]+\/)?([\w.-]+)$/.exec(target);
-  if (!m) return true;
-  const bin = m[1];
-  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
-    if (['', '.cmd', '.ps1'].some((ext) => existsSync(join(dir, 'node_modules', '.bin', bin + ext)))) return false;
-    if (dirname(dir) === dir) return true;
-  }
-}
-
-const PIP_VALUED = new Set(['-r', '--requirement', '-c', '--constraint', '-e', '--editable', '-i', '--index-url', '--extra-index-url', '-t', '--target', '--prefix', '-f', '--find-links', '--root', '--python']);
-function pipRule(args, line) {
-  if (args[0] !== 'install') return null;
-  const packages = positionals(args.slice(1), PIP_VALUED).filter((p) => !/^(\.|\/|[a-z]:[\\/])/i.test(p) && !/\.(whl|tar\.gz|zip)$/i.test(p));
-  return packages.length ? hit('install-or-clone', line) : null;
 }
 
 function deleteRule(name, args, line, cwd) {
@@ -452,9 +354,9 @@ function gitRule(args, line, cwd) {
       return named.some((t) => t && isProtected(t)) ? hit('merge-bypass', line) : null;
     }
     case 'clone':
-      return hit('install-or-clone', line);
+      return hit('clone-or-extension', line);
     case 'submodule':
-      return rest[0] === 'add' ? hit('install-or-clone', line) : null;
+      return rest[0] === 'add' ? hit('clone-or-extension', line) : null;
     case 'reset':
       return hasLong(rest, '--hard') ? hit('irrecoverable-delete', line) : null;
     case 'clean': {
@@ -498,7 +400,7 @@ function ghRule(args, line, seg, cwd) {
       if (verb !== 'merge') return null;
       return hasLong(rest, '--admin') ? hit('merge-bypass', line) : hit('merge', line);
     case 'repo':
-      if (verb === 'clone' || (verb === 'fork' && hasLong(rest, '--clone') && !rest.includes('--clone=false'))) return hit('install-or-clone', line);
+      if (verb === 'clone' || (verb === 'fork' && hasLong(rest, '--clone') && !rest.includes('--clone=false'))) return hit('clone-or-extension', line);
       if (verb === 'delete') return hit('irrecoverable-delete', line);
       if (verb === 'edit' && hasLong(rest, '--visibility')) return hit('permissions', line);
       return null;
@@ -515,7 +417,7 @@ function ghRule(args, line, seg, cwd) {
       return /^(add|delete)$/.test(verb ?? '') ? hit('credentials', line) : null;
     case 'extension':
     case 'ext':
-      return verb === 'install' ? hit('install-or-clone', line) : null;
+      return verb === 'install' ? hit('clone-or-extension', line) : null;
     case 'workflow':
       return verb === 'run' && PROD.test(all.join(' ')) ? hit('production', line) : null;
     default:
