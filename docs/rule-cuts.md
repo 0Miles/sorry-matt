@@ -35,12 +35,10 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 
 ## 待腳本或 hook 落地的規則
 
-這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字（`#8` 已落地，見文末）：
+這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字（`#8`、`#11` 已落地，見文末）：
 
 | 標記 | 位置 | 規則 |
 | --- | --- | --- |
-| `#11` | `get-to-work` 第 0 節凍結第 2 步 | 讀 blocker 邊、劃分線 |
-| `#11` | `get-to-work` 開輪 | frontier 的定義 |
 | `#16` | `ASKING.md` 第 7 節 ledger 第 9 欄 | 計量（只記錄、不據此停下） |
 
 ## 刪掉或搬走的規則
@@ -166,3 +164,19 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   merge 端點、MCP 的 merge 與 push 工具都擋。
 - `bypassPermissions` 與 `auto` 模式下沒有人確認，hook 連 `gh pr merge` 都擋。
 - 使用者可在 Claude Code settings 的 `env` 設 `SORRY_MATT_GUARD=off` 關掉 hook；skill 文字照樣不做。
+
+## #11：可開工的票改由腳本計算
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 第 0 節凍結第 2 步「依 tracker 契約讀取 blocker 邊並劃分線……需要排鏈時呼叫 `issue-chain`」 | 改為執行 `get-to-work/scripts/frontier.mjs`，以輸出的 `blockedBy`、`line` 為準 | 每輪靠 LLM 重讀票面推邊，結果不保證每次一樣。`issue-chain` 留給需要給人看的排鏈。 |
+| `get-to-work` 開輪「frontier 是尚未完成、blocker 均已解除的票」 | 改為每次開輪重跑腳本，frontier 就是輸出的 `frontier`；GitHub 傳 `--done`／`--stuck`，Local Markdown 每線帶 `--ref` | 同上。 |
+| `get-to-work` 收輪「Local Markdown 的 blocker 只在同一整合分支可讀到完整 `sorry-matt completion` 且 criteria 全勾後解除」 | 刪 | 由腳本判定，`scripts/frontier.test.mjs` 有測。 |
+| `get-to-work` 收輪「卡住票的下游 tickets 保持阻塞」與收輪完成判準的 completion 契約子句 | 刪 | 由腳本判定：卡住票以 `--stuck` 傳入或票檔有 `sorry-matt blocker`，下游的 `ready` 就是 false。 |
+
+新增：
+
+- `get-to-work/scripts/frontier.mjs`（零依賴）：GitHub 用原生 issue dependencies，Local Markdown 解析票檔的
+  Blocked by 與 `sorry-matt completion`，兩者輸出同格式的 JSON（`sorry-matt/frontier@1`，格式寫在檔頭）。
+  測試在 `scripts/frontier.test.mjs`，GitHub 經 `gh` seam 用 fixture，不打真的 API；CI 一起跑。
+- `scripts/check-structure.mjs`：skill 內的 `scripts/` 與 metadata 一樣，src 與 dist 要逐位元組相同（LF 正規化）。

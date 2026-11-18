@@ -24,9 +24,15 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 1. 引數可指定 ticket 編號、URL 或本地檔案路徑。有引數時，初始票集就是指定的 tickets；
    沒有引數時，只收錄本 session 中有發布紀錄的
    tickets，Local Markdown 的發布路徑也算紀錄。找不到任何票時，向使用者索取清單。
-2. 依 tracker 契約讀取 blocker **邊**並劃分**線**：相連 tickets 同線，孤立 tickets 各自成線。
-   需要排鏈時，呼叫 Skill tool 帶入 `issue-chain` 並明確傳入凍結票集，讓背景工作留在
-   票集之外。<!-- pending #11 -->
+2. 對凍結票集執行本 skill 的 `scripts/frontier.mjs`（`${CLAUDE_SKILL_DIR}` 是本 skill 載入時
+   標示的 base directory），以輸出的 `blockedBy` 為 blocker **邊**、`line` 為**線**，不自己讀票面推：
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" github --repo <owner>/<repo> <n>...
+   node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" local <票檔路徑>...
+   ```
+
+   輸出格式寫在腳本檔頭。`state` 為 `missing` 的 blocker 是對不到票的參照，該票列為**待裁決**。
 3. **排除他線佔用**：以 `git worktree list`、未合併整合分支上的 commits、open PR 的 head，
    以及本 session 已知的其他 session，推出正在被別人動的檔案。檔案與之重疊的票不凍進本次
    票集，改列為**待裁決**並寫出佔用來源與解除條件。
@@ -47,7 +53,13 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 ### 開輪
 
-**Frontier** 是初始票集中尚未完成，且所有 blocker 均已解除的 tickets。<!-- pending #11 -->
+每次開輪先重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
+
+- **GitHub**：本 run 已整併的票在 GitHub 上仍是 open，依 ledger 對帳表以 `--done <n,...>`
+  傳入；卡住的票以 `--stuck <n,...>` 傳入，它的下游就保持阻塞。
+- **Local Markdown**：每條線各跑一次，加 `--ref <該線整合分支>`；完成與卡住由該分支票檔上的
+  `sorry-matt completion`／`sorry-matt blocker` 判定，`ready-for-human` 不算完成。
+
 跨線工作通常可平行；同線或修改同一批檔案的**互斥** tickets 必須分輪。
 
 對每張 frontier ticket：
@@ -93,21 +105,17 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 中途事項走 `ASKING.md` 第 4 節的三條出路。獨立執行而沒有裁決點時，答不出來的事累積到
 下一次開輪前一次問完。
 
-Local Markdown 的 blocker 只在同一整合分支可讀到前置票的完整 `sorry-matt completion`，且
-其 acceptance criteria 全部勾選後解除；`ready-for-human` 單獨出現仍是未完成。
-
 兩輪修正後仍未通過驗收，或 conflict 無法安全解決時，將票標為**卡住**：
 
 - **GitHub**：另開 raw issue 記錄失敗，body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：在整合分支的原 ticket 追加 `## sorry-matt blocker`，列出原因、已做嘗試
   與相關分支；將 `Status` 改為 `ready-for-human` 後 commit。
 
-完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支；卡住票的下游 tickets 保持阻塞。
+完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支。
 
 完成判準：本輪每張票都恰好經過一次獨立審查、針對性檢查回到綠，並有通過驗收的模式原生
 交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；每張票的接續紀錄都寫到
-最新；成功票已整併並清理 ticket worktree 與本地分支；Local Markdown 只有符合 completion
-契約的前置票會解除 blocker。
+最新；成功票已整併並清理 ticket worktree 與本地分支。
 
 ### 期間開票
 

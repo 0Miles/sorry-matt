@@ -8,9 +8,12 @@
 - `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,或多個 skill
   共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
   `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀)
+- `src/skills/<name>/scripts/` — skill 執行(不載入)的零依賴腳本,由 `SKILL.md` 以
+  `${CLAUDE_SKILL_DIR}/scripts/<file>` 呼叫;測試放 repo 根目錄的 `scripts/*.test.mjs` 並掛進 CI
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
+- `skills/<name>/scripts/` — 與 src 逐位元組相同的腳本(不翻譯)
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
 - `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(永久例外與繞過 `gh pr merge`
   的合併);不分 src/dist,測試在 `scripts/guard.test.mjs`
