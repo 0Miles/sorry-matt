@@ -46,6 +46,7 @@ const DENIED = {
     'gh api repos/o/r/merges -f base=main -f head=feature',
     `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`,
     `gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "x"}) { clientMutationId } }'`,
+    `gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: "x"}) { mergeQueueEntry { id } } }'`,
     'curl -X PUT -H "Authorization: token x" https://api.github.com/repos/o/r/pulls/12/merge',
     'gh pr merge 12 --admin --squash',
     'git push origin feature:main',
@@ -179,6 +180,8 @@ const ALLOWED = [
   'gh pr create --base main --head feature --title t --body b',
   'gh api repos/o/r/pulls/12/merge',
   'gh api repos/o/r/pulls/12',
+  `gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){url}}}' -f owner=o -f name=r -f branch=main`,
+  'gh api repos/o/r/rules/branches/main',
   'gh api -X PATCH repos/o/r/issues/comments/1 -F body=@status.md',
   'gh api repos/o/r/git/refs -f ref=refs/heads/x -f sha=abc',
   'gh issue create --title t --body b',
@@ -270,6 +273,10 @@ test('MCP tools that send messages or move money are denied', () => {
   assert.equal(withInput('mcp__github__merge_pull_request', { pull_number: 1 }), 'merge-bypass');
   assert.equal(withInput('mcp__github__push_files', { branch: 'main', files: [] }), 'merge-bypass');
   assert.equal(withInput('mcp__github__create_or_update_file', { path: 'a' }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__enqueue_pull_request', { pull_number: 1 }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__enqueuePullRequest', { pull_number: 1 }), 'merge-bypass');
+  assert.equal(withInput('mcp__gitlab__enqueue_pr', {}), 'merge-bypass');
+  assert.equal(withInput('mcp__gitlab__enqueue_pipeline', {}), null);
   assert.equal(withInput('mcp__github__push_files', { branch: 'feature', files: [] }), null);
   assert.equal(withInput('mcp__sheets__merge_cells', {}), null);
 });
@@ -315,6 +322,42 @@ test('gh pr merge is left to permissions in attended modes and denied where nobo
   // A merge never hides a harder deny in the same command.
   assert.match(decide(event('gh pr merge 12 && git push -f', 'default')).hookSpecificOutput.permissionDecisionReason, /force-push/);
   assert.equal(bash('gh pr merge 12 --squash'), 'merge');
+});
+
+test('a merge queue is entered through gh pr merge, under the same permission model', () => {
+  const event = (command, permission_mode) => JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: CWD, permission_mode });
+  // On a branch that requires a merge queue, gh pr merge (with or without --auto) adds the PR to the queue.
+  for (const command of ['gh pr merge 12', 'gh pr merge 12 --auto']) {
+    assert.equal(bash(command), 'merge', command);
+    assert.equal(decide(event(command, 'default')), null, command);
+    for (const mode of ['bypassPermissions', 'auto']) {
+      assert.match(decide(event(command, mode)).hookSpecificOutput.permissionDecisionReason, /nobody confirms a merge/, `${command} ${mode}`);
+    }
+  }
+  // Jumping the queue, or enqueuing through the API, skips the permission check on gh pr merge.
+  assert.equal(bash('gh pr merge 12 --admin'), 'merge-bypass');
+  assert.equal(bash(`gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{id}}}' -f id=x`), 'merge-bypass');
+  assert.equal(pwsh(`gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: "x", jump: true}) { clientMutationId } }'`), 'merge-bypass');
+});
+
+test('a GraphQL body read from a file is checked like an inline one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-guard-'));
+  try {
+    writeFileSync(join(dir, 'enqueue.graphql'), 'mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){clientMutationId}}');
+    writeFileSync(join(dir, 'body.json'), JSON.stringify({ query: 'mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }' }));
+    writeFileSync(join(dir, 'queue.graphql'), 'query{repository(owner:"o",name:"r"){mergeQueue(branch:"main"){url}}}');
+    const at = (command) => classify({ tool_name: 'Bash', tool_input: { command }, cwd: dir })?.category ?? null;
+    assert.equal(at('gh api graphql -F query=@enqueue.graphql -f id=x'), 'merge-bypass');
+    assert.equal(at(`gh api graphql --field query=@${join(dir, 'enqueue.graphql').replace(/\\/g, '/')}`), 'merge-bypass');
+    assert.equal(at('gh api graphql --input body.json'), 'merge-bypass');
+    assert.equal(at('gh api graphql --input=body.json'), 'merge-bypass');
+    assert.equal(at('gh api graphql -F query=@queue.graphql'), null);
+    // A raw field is sent as written, never read from a file.
+    assert.equal(at('gh api graphql -f query=@enqueue.graphql'), null);
+    assert.equal(at('gh api graphql -F query=@missing.graphql'), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the user can turn the guard off through the environment', () => {

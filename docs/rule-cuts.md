@@ -284,3 +284,28 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 - 雙方回給主持人的訊息只含路徑與狀態；agent-grillee 在回報列出待支線題號與支線類型，主持人依此開支線，不必讀答案檔。
 - 自動流程的上限改以檔案計數：問題檔三份、`side-*` 目錄兩個。
 - 每題最多一條支線：支線回來後證據仍不足、或結束／到上限時支線未回的題目，直接進待裁決。原本這兩種情況沒有出路。
+
+## #10：收官前併入最新基底
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 第 2 節「線級的兩道關」（精簡 → 完整驗證） | 改為三道關，中間加**併入基底**：`git fetch origin <基底分支>` 後合併 `origin/<基底分支>`（Local Markdown 沒有 remote 時合併本地基底），基底 SHA 記進 ledger 第 4 欄（`ASKING.md` 第 7 節同步補上） | 整合分支只在第 0 節建一次，run 期間主線前進時，唯一有效的綠燈跑在舊基底上，總 PR 可能衝突或語意衝突。放在精簡之後、完整驗證之前，讓併入與驗證之間沒有其他改動；所以解完 conflict 不另跑針對性檢查，緊接的完整驗證已涵蓋。 |
+| 併入時的 conflict | 引用第 1 節收輪步驟 4 的整併 agent 與判準，不另寫；兩邊定為「線（票面與 commit message）」與「基底（`<merge-base>..<基底 ref>` 的 commit message）」，取捨進自答清單 | 同一套判準只留一份正本。 |
+| 解不了的基底 conflict | `git merge --abort`，該線標**未併入**：ledger 記嘗試的基底 SHA 與「未併入」，照樣在未併入的樹上跑完整驗證，報告寫明；不送 `gh pr merge`、不進 merge queue，一律留給人合併，關票走「留給人合併」 | 線級 conflict 不屬於任何一張票，不能套票級的「卡住」，所以給一個不阻擋交付的出口；但沒驗過最新基底的線不能由 agent 合併。 |
+| 第 2 節完整驗證 | 補「跑在步驟 2 之後的整合分支上，報告寫出基底 SHA」；完成判準與最終輸出同步 | 驗收要求報告可追溯當時的基底。 |
+| 證據失效規則的改動來源 | 補「併入基底」 | 併入基底同樣會改到票碰過的檔案。規則的簡化留給 #12。 |
+| 第 2 節 `gh pr merge` 送出合併 | 新增 merge queue 段：以 `gh api graphql` 查 `repository.mergeQueue(branch:)`，不是 null 才走 queue；走 queue 仍是同一個 `gh pr merge <PR>`（不帶策略、不帶 `--admin`），沒有啟用時行為不變 | gh 在要求 merge queue 的分支上會自動排隊，指令不變，#8 的權限模型（授權來自 permissions、bypass／auto 一律擋）原樣適用。偵測不用 `gh pr view --json`：gh 2.91 沒有 merge queue 欄位；rulesets 的 `rules/branches/<b>` 也可查，但 GraphQL 一個欄位直接回答。 |
+| queue 的檢查會不會跑 | 基底 ref 上有 workflow 含 `merge_group`（`git grep`）就送；沒有、也沒有必要檢查（rulesets 與 branch protection 的聯集）也送；沒有卻有必要檢查就不送，列人工作業清單；任何查詢失敗都不送、列人工作業清單 | queue 只在 `merge_group` 事件上跑檢查，沒有觸發時 PR 會停在 queue 直到逾時。必要檢查可能來自第三方 CI，它回不回應 `merge_group` 從 repo 看不到，所以不猜。 |
+
+guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 MCP 的 `enqueue_?(pull_?request|pr)` 動作（不分大小寫，
+涵蓋 camelCase）歸為 `merge-bypass`，一律擋 —— 它們把 PR 排進 queue 卻繞過 `gh pr merge` 的權限檢查；`enqueue_pipeline` 這類
+無關動作不擋。`gh pr merge`／`gh pr merge --auto` 仍是 `merge`，交給權限設定；`--admin` 跳過 queue 原本就擋。`gh api` 以
+`-F key=@file`、`--field key=@file`、`--input file` 從檔案帶 body 時，guard 讀進該檔（上限 1 MiB）一起比對；`-f`（raw field）
+照字面送，不讀檔。`mergeQueue` 查詢與 `rules/branches/<b>` 讀取不受影響。測試在 `scripts/guard.test.mjs`。
+
+已知缺口：`gh api --input -` 的 body 來自另一個指令的管線（不是 heredoc）時看不到；curl 的 `-d @file` 不讀檔。
+
+偵測的實跑證據（2026-11-18，本 repo）：`mergeQueue(branch:"main")` 回 `null`、`rules/branches/main` 回 `[]`、
+`branches/main` 的 `protection.required_status_checks.contexts` 回 `[]`、`git grep -l merge_group HEAD -- .github/workflows`
+結束代碼 1 —— 未啟用 merge queue（它只開放給組織擁有的公開 repo 或 Enterprise Cloud 的組織私有 repo），本 repo 的收官
+行為不變。

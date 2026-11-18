@@ -2,7 +2,7 @@
 // protected branch around `gh pr merge`, and which ones merge a PR. `classify` is the whole
 // interface: a PreToolUse event in, a verdict out. Whether a verdict is denied is decision.mjs's call.
 import { tmpdir, homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parse, unwrap, commandName } from './shell.mjs';
@@ -181,7 +181,7 @@ function commandRule(name, args, line, seg, cwd) {
     case 'git':
       return gitRule(args, line, cwd);
     case 'gh':
-      return ghRule(args, line, seg);
+      return ghRule(args, line, seg, cwd);
     case 'hg':
       return args[0] === 'clone' ? hit('install-or-clone', line) : null;
     case 'svn':
@@ -486,12 +486,12 @@ function gitRule(args, line, cwd) {
 const GH_API_VALUED = new Set(['-H', '--header', '-q', '--jq', '-t', '--template', '--hostname', '-p', '--preview', '--cache']);
 const GH_API_FIELD = new Set(['-f', '-F', '--field', '--raw-field']);
 
-function ghRule(args, line, seg) {
+function ghRule(args, line, seg, cwd) {
   const [group, verb, ...rest] = args;
   const all = args.slice(1);
   switch (group) {
     case 'api':
-      return ghApi(args.slice(1), line, seg);
+      return ghApi(args.slice(1), line, seg, cwd);
     case 'pr':
       if (verb !== 'merge') return null;
       return hasLong(rest, '--admin') ? hit('merge-bypass', line) : hit('merge', line);
@@ -521,11 +521,29 @@ function ghRule(args, line, seg) {
   }
 }
 
-function ghApi(args, line, seg) {
+// What gh sends from a file: `-F key=@path` and `--input path`. Unreadable or large files add nothing.
+function fileBody(path, cwd) {
+  if (!path || path === '-') return '';
+  try {
+    const full = resolve(cwd, path);
+    return statSync(full).size <= 1 << 20 ? readFileSync(full, 'utf8') : '';
+  } catch {
+    return '';
+  }
+}
+
+function ghApi(args, line, seg, cwd) {
   let method = '';
   let endpoint = '';
   let hasBody = false;
   const body = [seg.heredoc];
+  // A typed field (-F, --field) whose value starts with @ is read from that file; a raw one is sent as written.
+  const field = (flag, value) => {
+    body.push(value);
+    const file = /^[^=]*=@(.+)$/.exec(value)?.[1];
+    if (file && (flag === '-F' || flag === '--field')) body.push(fileBody(file, cwd));
+    hasBody = true;
+  };
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
     const eq = /^(--method|--field|--raw-field|--input)=(.*)$/.exec(a);
@@ -533,16 +551,16 @@ function ghApi(args, line, seg) {
     else if (/^-X./.test(a)) method = a.slice(2);
     else if (eq?.[1] === '--method') method = eq[2];
     else if (GH_API_FIELD.has(a)) {
-      body.push(args[++k] ?? '');
+      field(a, args[++k] ?? '');
+    } else if (eq?.[1] === '--input') {
+      body.push(fileBody(eq[2], cwd));
       hasBody = true;
     } else if (eq) {
-      body.push(eq[2]);
-      hasBody = true;
+      field(eq[1], eq[2]);
     } else if (/^-[fF]./.test(a)) {
-      body.push(a.slice(2));
-      hasBody = true;
+      field(a.slice(0, 2), a.slice(2));
     } else if (a === '--input') {
-      k++;
+      body.push(fileBody(args[++k], cwd));
       hasBody = true;
     } else if (GH_API_VALUED.has(a)) k++;
     else if (!a.startsWith('-') && !endpoint) endpoint = a;
@@ -562,7 +580,7 @@ export function apiRule(method, rawEndpoint, body, line) {
   if (new RegExp(`^${OWNER_REPO}/pulls/[^/]+/merge$`).test(endpoint) && !reading) return hit('merge-bypass', line);
   if (new RegExp(`^${OWNER_REPO}/merges$`).test(endpoint) && !reading) return hit('merge-bypass', line);
   if (endpoint === 'graphql') {
-    if (/\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
+    if (/\b(mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
     if (/\b(deleteRepository|deleteIssue)\b/.test(body)) return hit('irrecoverable-delete', line);
     if (/\b(updateRefs?)\b/.test(body) && /\bforce\s*:\s*true\b/.test(body)) return hit('force-push', line);
     if (/\bcreateCommitOnBranch\b/.test(body) && /(branchName|qualifiedBranchName)["']?\s*:\s*["']?(refs\/heads\/)?(main|master)\b/.test(body)) return hit('merge-bypass', line);
@@ -636,14 +654,15 @@ const PAYMENT_ACTION = /(^|_)(create|confirm|capture|refund|pay|transfer|payout|
 
 const GIT_SERVER = /(git|github|gitlab|bitbucket|gitea|forgejo)/i;
 const MERGE_ACTION = /(^|_)merge_(pull_request|pr|request|branch)($|_)/i;
+const ENQUEUE_ACTION = /(^|_)enqueue_?(pull_?request|pr)($|_)/i;
 const PUSH_ACTION = /(^|_)(push_files|push|create_or_update_file|update_file|delete_file|create_commit|commit_files)($|_)/i;
 
 function classifyMcp(tool, input = {}) {
   const [, server = '', action = ''] = /^mcp__(.+?)__(.+)$/.exec(tool) || [];
   if ((MESSAGING_SERVER.test(server) || MESSAGING_SERVER.test(action)) && MESSAGING_ACTION.test(action)) return hit('outgoing-message', tool);
   if (PAYMENT_SERVER.test(server) && PAYMENT_ACTION.test(action)) return hit('payments', tool);
-  // Merges go through `gh pr merge` only; pushes may not land on a protected branch.
-  if (MERGE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)merge($|_)/i.test(action))) return hit('merge-bypass', tool);
+  // Merges, merge queue entries included, go through `gh pr merge` only; pushes may not land on a protected branch.
+  if (MERGE_ACTION.test(action) || ENQUEUE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)merge($|_)/i.test(action))) return hit('merge-bypass', tool);
   if (GIT_SERVER.test(server) && PUSH_ACTION.test(action)) {
     const branch = String(input.branch || input.ref || '');
     if (!branch || PROTECTED_BRANCH.test(branch)) return hit('merge-bypass', `${tool} ${branch || '(default branch)'}`.trim());
