@@ -128,11 +128,14 @@ one result, classified in this order, the first match winning; record the result
 
 ### Budget and breaker
 
-The limits and their usage live in ledger field 9 (`ASKING.md` section 7). Every open-round starts with these, in
-order:
+The limits and their usage live in ledger field 9 (`ASKING.md` section 7). Usage is updated at two points: first
+thing at every open-round (the three steps below), and at the end of every closed round when the ledger is written
+current (step 1 only; progress and the limits are judged only at open-round).
 
 1. **Update usage:** read spawns from `spawns` in `<run>.counters.json` next to the ledger (without that file, use the
-   count the host keeps itself); compute elapsed time from the start time to now.
+   count the host keeps itself); compute elapsed time as field 9 defines it — now minus the start time, minus
+   waiting time. Record the start time at the first open-round; when taking over a ledger without one, record the
+   takeover time and note that earlier time is not counted.
 2. **Judge progress:** "once" means one open-round. A `/loop` wake-up that finds agents still running and neither
    closes nor opens a round does not count. Compare against the progress snapshot recorded at the last open-round —
    each line's integration-branch tip SHA, and each ticket's state in the reconciliation table: when neither
@@ -154,7 +157,8 @@ not route around it. Agents already dispatched close the round as usual; tickets
 previous paragraph, and the next open-round stops at step 3. When a finishing step needs a spawn and is blocked, put
 it on the human-work list per `ASKING.md` section 4.
 
-Done when: every open-round first updated field 9's usage and judged progress and all four limits; when stopping,
+Done when: every open-round first updated field 9's usage and judged progress and all four limits, and every closed
+round updated usage at its end; when stopping,
 nothing was dispatched that time, every undelivered ticket is awaiting ruling with the limit that stopped the run,
 and field 9 has the stop reason; no spawn blocked on budget was retried or routed around.
 

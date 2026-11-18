@@ -35,11 +35,11 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 
 ## 待腳本或 hook 落地的規則
 
-這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字（`#8`、`#11` 已落地，見文末）：
+這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字（`#8`、`#11`、`#16` 已落地，見文末）。
+目前已無待落地項目。
 
 | 標記 | 位置 | 規則 |
 | --- | --- | --- |
-| `#16` | `ASKING.md` 第 7 節 ledger 第 9 欄 | 計量（只記錄、不據此停下） |
 
 ## 刪掉或搬走的規則
 
@@ -346,3 +346,22 @@ guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 M
 
 guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`master` 與 remote 預設分支，`git push -u origin <run>/<line-slug>`
 不受影響；`gh run list`／`view`／`watch`／`rerun` 與 `git revert -m 1` 也不擋。這幾條寫進 `scripts/guard.test.mjs` 的放行清單。
+
+## #16：run 預算與無進展斷路器
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `ASKING.md` 第 7 節第 9 欄「計量」（只記錄、不據此停下，`<!-- pending #16 -->`） | 改為「計量與預算」：上限（一行一項 `budget: <名稱> <整數>`，預設 `spawns 200`、`rounds 30`、`hours 12`、`no-progress 3`）、用量、停止原因；標記刪除 | 整個 run 沒有任何上限，計量記了也不會讓 run 停下。 |
+| `ASKING.md` 第 4 節裁決點（新增一條） | 上限只有使用者能調：裁決點前依票數估 spawn（每票約 15 個），超過預設就列為一題；中途不代答調高 | 代答調高等於沒有上限。 |
+| `get-to-work` 第 1 節（新增「預算與斷路」） | 每次開輪先更新用量、判進展、判四個上限；「一次」是一次開輪，進展是任一線整合分支 tip SHA 或對帳表任一票狀態改變，ticket 分支上的 commit 不算；停下時不派票、未交付票標待裁決、照第 2 節收官 | 以喚醒計數會把等 agents 的喚醒誤判為無進展；沒整併的嘗試沒有改變交付。 |
+| `get-to-work` loop 停止條件、收官輸出，`have-it-all-done` 交棒的計量項 | 加上「預算與斷路停下」與停止原因 | 停下要交棒並寫出卡在哪裡。 |
+
+新增：
+
+- `hooks/budget.mjs`（邏輯）與 `hooks/spawns.mjs`（入口）：SubagentStart 依 `agent_id` 去重計數（resume 也會觸發，
+  它擋不了 spawn）；PreToolUse 比對 `Agent`，計數達到 `budget: spawns` 就 deny。只在有進行中的 run 時生效。
+- 計數檔 `<run>.counters.json`（ledger 旁），只由 hook 寫：O_EXCL lock 檔加暫存檔 rename，不與主持人寫 ledger 競態；
+  讀取遇 Windows 暫時鎖檔重試，仍鎖住就放行並警告，內容損壞才 fail closed。
+- 使用者 opt-out `SORRY_MATT_BUDGET=off`，與 guard 的 `SORRY_MATT_GUARD` 分開；誤傷範圍寫在 README「Run budget」。
+- README 的 headless 硬上限：`claude -p --max-turns --max-budget-usd`。
+- 測試 `scripts/budget.test.mjs`，CI 一起跑。PreToolUse deny 對 `Agent` 的實跑驗證尚未做（依 hooks 文件佐證）。

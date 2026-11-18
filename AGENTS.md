@@ -148,6 +148,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 上限/用量 | limit / usage |
 | 停止原因 | stop reason |
 | 進度快照 | progress snapshot |
+| 等人時間 | waiting time |
 | 併入基底 | sync the base |
 | 未併入 | unsynced |
 | 還在跑 | still running |

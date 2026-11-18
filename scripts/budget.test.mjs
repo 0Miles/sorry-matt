@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { parseBudget, countersPath, readCounters, recordSpawn, withLock, decideSpawn, countSpawn, handle } from '../hooks/budget.mjs';
+import { parseBudget, countersPath, readCounters, recordSpawn, withLock, decideSpawn, countSpawn, handle, CorruptCounters } from '../hooks/budget.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'hooks/spawns.mjs');
@@ -25,6 +25,7 @@ const ledgerText = (limit, marker = 'active') =>
 const agentCall = (cwd = '.') => ({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x', subagent_type: 'general-purpose' }, cwd });
 const started = (agent_id, cwd = '.') => ({ hook_event_name: 'SubagentStart', agent_id, agent_type: 'general-purpose', cwd });
 const reasonOf = (out) => out.hookSpecificOutput.permissionDecisionReason;
+const decision = (...args) => decideSpawn(...args).decision;
 
 test('parseBudget: budget lines with a name and an integer, bullets and backticks allowed, first one wins', () => {
   const text = [
@@ -73,6 +74,44 @@ test('readCounters: a corrupt file throws instead of reading as zero', () => {
     assert.throws(() => readCounters(path));
     writeFileSync(path, '{"spawns": -1, "agents": []}');
     assert.throws(() => readCounters(path), /not a sorry-matt counters file/);
+  } finally {
+    f.done();
+  }
+});
+
+test('readCounters: retries a transient file lock, then reads; corrupt content is CorruptCounters', () => {
+  let calls = 0;
+  const busy = (code, times, text) => () => {
+    calls++;
+    if (calls <= times) throw Object.assign(new Error(code), { code });
+    return text;
+  };
+  for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+    calls = 0;
+    assert.equal(readCounters('/x.counters.json', { read: busy(code, 3, '{"spawns": 4, "agents": []}'), retry: { delay: 1 } }).spawns, 4, code);
+    assert.equal(calls, 4);
+  }
+  calls = 0;
+  assert.throws(() => readCounters('/x.counters.json', { read: busy('EBUSY', 99, ''), retry: { attempts: 2, delay: 1 } }), (e) => e.code === 'EBUSY' && !(e instanceof CorruptCounters));
+  assert.equal(calls, 3);
+  assert.throws(() => readCounters('/x.counters.json', { read: () => '{ half' }), CorruptCounters);
+  assert.throws(() => readCounters('/x.counters.json', { read: () => 'null' }), CorruptCounters);
+});
+
+test('decideSpawn: a counters file still locked after the retries lets the spawn through with a warning', () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.runs, 'r.md'), ledgerText(0));
+    const locked = () => {
+      throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+    };
+    const { decision: out, warnings } = decideSpawn(agentCall(), { git: f.git, env: {}, read: locked });
+    assert.equal(out, null);
+    assert.match(warnings[0], /could not read the spawn count .*EBUSY.*let through/);
+    const other = () => {
+      throw Object.assign(new Error('EISDIR'), { code: 'EISDIR' });
+    };
+    assert.equal(decideSpawn(agentCall(), { git: f.git, env: {}, read: other }).decision, null);
   } finally {
     f.done();
   }
@@ -136,11 +175,11 @@ test('decideSpawn: lets spawns through below the limit and denies at it', () => 
     const ledger = join(f.runs, 'r.md');
     writeFileSync(ledger, ledgerText(2));
     const deps = { git: f.git, env: {} };
-    assert.equal(decideSpawn(agentCall(), deps), null);
+    assert.equal(decision(agentCall(), deps), null);
     countSpawn(started('a1'), deps);
-    assert.equal(decideSpawn(agentCall(), deps), null);
+    assert.equal(decision(agentCall(), deps), null);
     countSpawn(started('a2'), deps);
-    const out = decideSpawn(agentCall(), deps);
+    const out = decision(agentCall(), deps);
     assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(reasonOf(out), /has spawned 2 subagents and its limit is 2/);
@@ -149,7 +188,7 @@ test('decideSpawn: lets spawns through below the limit and denies at it', () => 
     assert.match(reasonOf(out), /SORRY_MATT_BUDGET=off/);
 
     writeFileSync(ledger, ledgerText(3));
-    assert.equal(decideSpawn(agentCall(), deps), null, 'the hook re-reads the limit on every call');
+    assert.equal(decision(agentCall(), deps), null, 'the hook re-reads the limit on every call');
   } finally {
     f.done();
   }
@@ -159,25 +198,25 @@ test('no run in progress, an ended run, no spawn limit, or the opt-out: nothing 
   const f = fixture();
   try {
     const deps = { git: f.git, env: {} };
-    assert.equal(decideSpawn(agentCall(), { git: () => ({ status: 128, stdout: '' }), env: {} }), null);
-    assert.equal(decideSpawn(agentCall(), deps), null, 'no ledger at all');
+    assert.equal(decision(agentCall(), { git: () => ({ status: 128, stdout: '' }), env: {} }), null);
+    assert.equal(decision(agentCall(), deps), null, 'no ledger at all');
     assert.deepEqual(countSpawn(started('a1'), deps), []);
 
     const ledger = join(f.runs, 'r.md');
     writeFileSync(ledger, ledgerText(0, 'ended'));
-    assert.equal(decideSpawn(agentCall(), deps), null);
+    assert.equal(decision(agentCall(), deps), null);
     assert.deepEqual(countSpawn(started('a1'), deps), []);
     assert.ok(!existsSync(countersPath(ledger)));
 
     writeFileSync(ledger, ledgerText(undefined));
-    assert.equal(decideSpawn(agentCall(), deps), null, 'no `budget: spawns` line');
+    assert.equal(decision(agentCall(), deps), null, 'no `budget: spawns` line');
     assert.equal(countSpawn(started('a1'), deps)[0].spawns, 1, 'usage is still counted for field 9');
 
     writeFileSync(ledger, ledgerText(0));
-    assert.ok(decideSpawn(agentCall(), deps));
-    assert.equal(decideSpawn(agentCall(), { ...deps, env: { SORRY_MATT_BUDGET: 'OFF' } }), null);
+    assert.ok(decision(agentCall(), deps));
+    assert.equal(decision(agentCall(), { ...deps, env: { SORRY_MATT_BUDGET: 'OFF' } }), null);
     assert.deepEqual(countSpawn(started('a2'), { ...deps, env: { SORRY_MATT_BUDGET: 'off' } }), []);
-    assert.equal(decideSpawn(agentCall(), { ...deps, env: { SORRY_MATT_GUARD: 'off' } }) === null, false, 'the guard opt-out is separate');
+    assert.equal(decision(agentCall(), { ...deps, env: { SORRY_MATT_GUARD: 'off' } }) === null, false, 'the guard opt-out is separate');
   } finally {
     f.done();
   }
@@ -190,7 +229,7 @@ test('more than one run in progress: each counts the spawn, and any run at its l
     writeFileSync(join(f.runs, 'a.md'), ledgerText(5));
     writeFileSync(join(f.runs, 'b.md'), ledgerText(1));
     assert.deepEqual(countSpawn(started('x'), deps).map((c) => c.spawns), [1, 1]);
-    assert.ok(reasonOf(decideSpawn(agentCall(), deps)).includes(join(f.runs, 'b.md')));
+    assert.ok(reasonOf(decision(agentCall(), deps)).includes(join(f.runs, 'b.md')));
   } finally {
     f.done();
   }
@@ -202,10 +241,13 @@ test('a corrupt counters file blocks the spawn of a run with a limit and says so
     const ledger = join(f.runs, 'r.md');
     writeFileSync(ledger, ledgerText(5));
     writeFileSync(countersPath(ledger), 'not json');
-    const out = decideSpawn(agentCall(), { git: f.git, env: {} });
+    const out = decision(agentCall(), { git: f.git, env: {} });
     assert.match(reasonOf(out), /could not read the spawn count/);
     assert.match(reasonOf(out), /do not edit or delete the counters file yourself/);
     assert.match(countSpawn(started('a'), { git: f.git, env: {} })[0].error, /JSON/);
+    const counted = handle(JSON.stringify(started('b')), { git: f.git, env: {} });
+    assert.equal(counted.decision, null);
+    assert.match(counted.warnings[0], /could not count this subagent for .*r.md: .*not JSON/);
   } finally {
     f.done();
   }
@@ -216,10 +258,10 @@ test('handle: only Agent calls are judged, other events and unreadable input pas
   try {
     writeFileSync(join(f.runs, 'r.md'), ledgerText(0));
     const deps = { git: f.git, env: {} };
-    assert.ok(handle(JSON.stringify(agentCall()), deps));
-    assert.equal(handle(JSON.stringify({ ...agentCall(), tool_name: 'Bash' }), deps), null);
-    assert.equal(handle('not json', deps), null);
-    assert.equal(handle(JSON.stringify(started('z')), deps), null);
+    assert.ok(handle(JSON.stringify(agentCall()), deps).decision);
+    assert.deepEqual(handle(JSON.stringify({ ...agentCall(), tool_name: 'Bash' }), deps), { decision: null, warnings: [] });
+    assert.deepEqual(handle('not json', deps), { decision: null, warnings: [] });
+    assert.deepEqual(handle(JSON.stringify(started('z')), deps), { decision: null, warnings: [] });
     assert.equal(readCounters(countersPath(join(f.runs, 'r.md'))).spawns, 1);
   } finally {
     f.done();

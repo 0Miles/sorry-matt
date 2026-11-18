@@ -9,8 +9,11 @@
 // counted again); PreToolUse on Agent denies the spawn once the count has reached the limit.
 // Writes take an exclusive lock file (`<counters>.lock`, created with O_EXCL) and replace the counters
 // through a temporary file and a rename, so parallel SubagentStart hooks neither lose a count nor leave
-// a half-written file. No run in progress, or a run without a spawn limit, means the hook stays out of
-// the way.
+// a half-written file. Reads take no lock: a rename never exposes a half-written file.
+// Failure modes: no run in progress, or a run without a spawn limit, means the hook stays out of the way.
+// A counters file that is not JSON or not in this format fails closed (the spawn is denied); a read that
+// keeps failing on a file lock (Windows antivirus and the like) after the retries fails open, since the
+// count itself is still kept by SubagentStart and the next call reads it again.
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { activeLedgerTexts, commonDir } from './runs.mjs';
@@ -29,27 +32,58 @@ export function parseBudget(text) {
 
 export const countersPath = (ledger) => ledger.replace(/\.md$/i, '.counters.json');
 
-/** The counters next to a ledger; a missing file is zero. A corrupt one throws. */
-export function readCounters(path) {
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// Errors Windows raises while another process (antivirus, indexer, a rename in flight) holds the file.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/** Run fn, retrying while it fails with a transient file-lock error. */
+export function retrying(fn, { attempts = 20, delay = 25 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (error) {
+      if (attempt >= attempts || !TRANSIENT.has(error.code)) throw error;
+      pause(delay);
+    }
+  }
+}
+
+/** A counters file that exists but is not JSON or not in the counters format. */
+export class CorruptCounters extends Error {}
+
+/**
+ * The counters next to a ledger; a missing file is zero. A corrupt one throws CorruptCounters;
+ * a read still failing after the transient-error retries throws the original error.
+ */
+export function readCounters(path, { read = readFileSync, retry = {} } = {}) {
   let text;
   try {
-    text = readFileSync(path, 'utf8');
+    text = retrying(() => read(path, 'utf8'), retry);
   } catch (error) {
     if (error.code === 'ENOENT') return { spawns: 0, agents: [] };
     throw error;
   }
-  const data = JSON.parse(text);
-  if (!Number.isInteger(data.spawns) || data.spawns < 0 || !Array.isArray(data.agents)) {
-    throw new Error(`${path} is not a sorry-matt counters file`);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new CorruptCounters(`${path} is not JSON (${error.message})`);
+  }
+  if (!data || !Number.isInteger(data.spawns) || data.spawns < 0 || !Array.isArray(data.agents)) {
+    throw new CorruptCounters(`${path} is not a sorry-matt counters file`);
   }
   return data;
 }
 
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-
 /**
  * Run fn while holding `<path>.lock`. A lock older than `stale` ms is left over from a killed hook
  * (a hook holds it for milliseconds) and is removed. Throws when the lock cannot be taken within `wait` ms.
+ *
+ * Removing a stale lock re-checks its inode and mtime right before the unlink, so a lock another hook has
+ * just replaced is left alone. A window remains between that re-check and the unlink; losing it means two
+ * hooks write at once and one count is lost — an undercount by one, accepted because it needs a hook killed
+ * while holding the lock and a second one racing to clear it within the same microseconds.
  */
 export function withLock(path, fn, { wait = 5000, stale = 2000, now = Date.now } = {}) {
   const lock = `${path}.lock`;
@@ -59,12 +93,8 @@ export function withLock(path, fn, { wait = 5000, stale = 2000, now = Date.now }
     try {
       fd = openSync(lock, 'wx');
     } catch (error) {
-      if (error.code !== 'EEXIST' && error.code !== 'EPERM') throw error;
-      try {
-        if (now() - statSync(lock).mtimeMs > stale) unlinkSync(lock);
-      } catch {
-        // gone already, or another hook is removing it
-      }
+      if (error.code !== 'EEXIST' && !TRANSIENT.has(error.code)) throw error;
+      clearStale(lock, stale, now);
       if (now() > deadline) throw new Error(`could not lock ${path}`);
       pause(10);
       continue;
@@ -82,25 +112,31 @@ export function withLock(path, fn, { wait = 5000, stale = 2000, now = Date.now }
   }
 }
 
+function clearStale(lock, stale, now) {
+  try {
+    const seen = statSync(lock);
+    if (now() - seen.mtimeMs <= stale) return;
+    const again = statSync(lock);
+    if (again.ino !== seen.ino || again.mtimeMs !== seen.mtimeMs) return;
+    unlinkSync(lock);
+  } catch {
+    // gone already, or another hook is removing it
+  }
+}
+
 /** Replace a file through a temporary file and a rename; retry the rename while Windows has it open. */
 export function writeAtomic(path, text) {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, text);
-  for (let attempt = 0; ; attempt++) {
+  try {
+    retrying(() => renameSync(tmp, path));
+  } catch (error) {
     try {
-      renameSync(tmp, path);
-      return;
-    } catch (error) {
-      if (attempt >= 20 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
-        try {
-          unlinkSync(tmp);
-        } catch {
-          // nothing to clean up
-        }
-        throw error;
-      }
-      pause(25);
+      unlinkSync(tmp);
+    } catch {
+      // nothing to clean up
     }
+    throw error;
   }
 }
 
@@ -139,26 +175,35 @@ const deny = (text) => ({
 /**
  * PreToolUse on Agent: deny once an active run's spawn count has reached its `budget: spawns` limit.
  * @param {object} event the parsed hook event
+ * @returns {{ decision: object | null, warnings: string[] }}
  */
-export function decideSpawn(event, { env = process.env, git = spawnSync } = {}) {
-  if (off(env)) return null;
+export function decideSpawn(event, { env = process.env, git = spawnSync, read } = {}) {
+  const warnings = [];
+  if (off(env)) return { decision: null, warnings };
   for (const { ledger, text } of ledgersFor(event, git)) {
     const limit = parseBudget(text).spawns;
     if (limit === undefined) continue;
     let spawns;
     try {
-      spawns = readCounters(countersPath(ledger)).spawns;
+      spawns = readCounters(countersPath(ledger), { read }).spawns;
     } catch (error) {
-      return deny(`sorry-matt budget could not read the spawn count of the run in ${ledger} (${error.message}), so this spawn is blocked. Report it to the user as a budget hook error; do not edit or delete the counters file yourself.`);
+      if (error instanceof CorruptCounters) {
+        return {
+          decision: deny(`sorry-matt budget could not read the spawn count of the run in ${ledger} (${error.message}), so this spawn is blocked. Report it to the user as a budget hook error; do not edit or delete the counters file yourself.`),
+          warnings,
+        };
+      }
+      warnings.push(`sorry-matt budget could not read the spawn count for ${ledger} (${error.message}); this spawn was let through`);
+      continue;
     }
-    if (spawns >= limit) return deny(denyReason(ledger, spawns, limit));
+    if (spawns >= limit) return { decision: deny(denyReason(ledger, spawns, limit)), warnings };
   }
-  return null;
+  return { decision: null, warnings };
 }
 
 /**
- * SubagentStart: count the subagent against every run in progress. Never blocks (it cannot);
- * returns the counts written, for tests.
+ * SubagentStart: count the subagent against every run in progress. Never blocks (it cannot).
+ * @returns {{ ledger: string, spawns?: number, error?: string }[]}
  */
 export function countSpawn(event, { env = process.env, git = spawnSync } = {}) {
   if (off(env)) return [];
@@ -175,26 +220,32 @@ export function countSpawn(event, { env = process.env, git = spawnSync } = {}) {
 }
 
 /**
- * The hook's answer to one raw event: a PreToolUse deny decision, or null.
- * An event it cannot read identifies no run, so it is let through.
+ * The hook's whole answer to one raw event: `decision` is what goes to stdout (a PreToolUse deny, or null
+ * for nothing), `warnings` what goes to stderr. An event it cannot read identifies no run, so it is let through.
+ * @returns {{ decision: object | null, warnings: string[] }}
  */
 export function handle(raw, deps = {}) {
   let event;
   try {
     event = JSON.parse(raw);
   } catch {
-    return null;
+    return { decision: null, warnings: [] };
   }
   if (event.hook_event_name === 'SubagentStart') {
-    countSpawn(event, deps);
-    return null;
+    const warnings = countSpawn(event, deps)
+      .filter((c) => c.error)
+      .map(({ ledger, error }) => `sorry-matt budget could not count this subagent for ${ledger}: ${error}`);
+    return { decision: null, warnings };
   }
   if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Agent') {
     try {
       return decideSpawn(event, deps);
     } catch (error) {
-      return deny(`sorry-matt budget failed on this spawn (${error.message}), so it is blocked. Report it to the user as a budget hook error.`);
+      return {
+        decision: deny(`sorry-matt budget failed on this spawn (${error.message}), so it is blocked. Report it to the user as a budget hook error.`),
+        warnings: [],
+      };
     }
   }
-  return null;
+  return { decision: null, warnings: [] };
 }

@@ -90,8 +90,23 @@ While a run is in progress, two more hooks share one entry (`hooks/hooks.json` â
 - **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9;
   the default is 200). The limit is re-read on every call, so editing that line takes effect immediately.
 
-With no run in progress, or no `budget: spawns` line, neither hook counts against anything or blocks anything. The
-other limits (`rounds`, `hours`, `no-progress`) and the no-progress breaker are enforced by `get-to-work` itself at
+With no run in progress, or no `budget: spawns` line, neither hook counts against anything or blocks anything. While
+a run is in progress, know how far it reaches:
+
+- **Every session in the repo counts.** The hooks cannot tell which session a subagent belongs to, so any session
+  working in the same repository (any worktree) adds to an active run's count, not just the run's own host.
+- **A run at its limit blocks every session in the repo.** With several runs in progress, each one counts every
+  spawn, and any one at its limit denies spawns everywhere in that repo.
+- **A run that ended abnormally keeps blocking.** If a run stops without reaching its handoff (a crash, a closed
+  terminal), its ledger still starts with `<!-- sorry-matt:run active -->`. Change that first line to
+  `<!-- sorry-matt:run ended -->` by hand; the deny message names the ledger.
+- **Parallel spawns can overshoot.** Agent calls sent in one message are each checked before any of them starts, so
+  a batch can take the count past the limit; the next spawn after it is denied.
+- **Failures.** A counters file that is not JSON, or not in the counters format, denies spawns until it is fixed (the
+  deny says so). A read still blocked by a file lock (antivirus, indexer) after the retries lets the spawn through
+  with a warning; the count itself is still kept.
+
+The other limits (`rounds`, `hours`, `no-progress`) and the no-progress breaker are enforced by `get-to-work` itself at
 every open-round. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
 
 ```json

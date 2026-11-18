@@ -202,19 +202,22 @@ is exactly the active marker, with no blank line before it. Ten fields:
 9. **Run metrics and budget**, in three parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is
      created, and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns),
-     `budget: rounds 30` (attempts; each open-round is one), `budget: hours 12` (elapsed time, counted from the
-     start time), and `budget: no-progress 3` (consecutive no-progress rounds before the breaker trips). Changing a
+     `budget: rounds 30` (attempts; each open-round is one), `budget: hours 12` (elapsed time, computed as under
+     usage), and `budget: no-progress 3` (consecutive no-progress rounds before the breaker trips). Changing a
      limit is the user's call; the host never answers on their behalf to raise one (see section 4). The plugin's
      hook collects every `budget:` line in the whole ledger, so no other field starts a line with `budget:`.
-   - **Usage:** the start time (ISO 8601, recorded at creation), spawns, open-rounds run, elapsed time, the
+   - **Usage:** the start time (ISO 8601, recorded at the first open-round, so time spent waiting on the user before
+     the ruling point does not count; when taking over a ledger without one, record the takeover time and note that
+     earlier time is not counted), waiting time (from then on, the total from sending each question to the user to
+     receiving the answer), elapsed time (now minus the start time, minus waiting time), spawns, open-rounds run, the
      consecutive no-progress count with the progress snapshot from the last open-round (judged per `get-to-work`
      section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per verdict
      `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-the-round pushes
      does not count), compactions and handovers. Spawns come from `spawns` in `<run>.counters.json`, which the hook
      writes next to the ledger; the host reads it and never writes it. No such file means the hook is not loaded,
      and the host keeps the count itself. Token counts are unknown unless the runtime itself reports them; never
-     estimate them from duration or agent count. Update usage at every open-round and at the end of every closed
-     round.
+     estimate them from duration or agent count. Update usage when `get-to-work` section 1, budget and breaker, says:
+     first thing at every open-round, and at the end of every closed round.
    - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
      and where the run is stuck; "none" when it has not stopped.
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
