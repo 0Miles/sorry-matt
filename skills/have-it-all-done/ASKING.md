@@ -160,8 +160,8 @@ rule snippet or the command to run; nothing this run wrote a settings file.
 - **The polish pass is for the two kinds of text a human reads:** the aggregate PR body, and issues waiting for a
   human to triage or act on (raw issues filed along the way, raw issues recording a stuck ticket). Call the Skill
   tool with `speak-human`, then call the Skill tool with `no-bullshit`.
-- Everything else written to the tracker — specs, tickets, ticket PR bodies, status records, tracker comments — and
-  the run ledger are read by the next agent and skip the polish pass.
+- Everything else written to the tracker or to Git — specs, tickets, commit messages, status records, tracker
+  comments — and the run ledger are read by the next agent and skip the polish pass.
 - All outbound text states the conclusion and the direction only: no asking the reader for their preferences, no
   pleasantries, no closing invitation.
 

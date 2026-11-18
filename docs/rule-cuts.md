@@ -183,3 +183,19 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   不打真的 API；CI 一起跑。
 - `get-to-work` 凍結第 3 步排除他線佔用後重跑一次腳本，排除可能讓線分裂。
 - `scripts/check-structure.mjs`：skill 內的 `scripts/` 與 metadata 一樣，src 與 dist 要逐位元組相同（LF 正規化）。
+
+## #13：取消票級 PR，關票交給總 PR
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 收輪第 4 步「票級 PR（GitHub only）：push ticket 分支，建立以線整合分支為 base 的 PR，body 含 `Closes #N` 與驗收摘要」 | 刪；摘要改寫進該票 commit message 的 body（`IMPLEMENTER.md` 第 2 節） | GitHub 只在 PR 指向預設分支時解析關閉關鍵字，指向整合分支的 `Closes #N` 合併後不關票；每支 PR 還要另外建立、可能觸發 CI，人最後審的仍是總 PR。 |
+| `get-to-work` 收輪完成交付「保留已因整併顯示為 merged 的票級 PR 作為審查紀錄」 | 刪 | 票級 PR 不存在了；審查紀錄在接續紀錄與 commit message。 |
+| `get-to-work` 收官總 PR「Body 收錄票級 PR」 | 改為每張完成票一節：摘要（取自 commit message）與 `Closes #N` | 同上。 |
+| `ASKING.md` 第 6 節不潤稿清單的「票級 PR body」 | 改為「commit message」 | 票級 PR 不存在了；摘要改寫在 commit message，讀者是主持人。 |
+
+新增：
+
+- `IMPLEMENTER.md` 第 2 節：每個 commit 的 subject 帶票 ID，實作 commit 的 body 寫摘要；不寫關閉關鍵字，關票只走總 PR 一條路。
+- `get-to-work` 收官「關票」：總 PR 合併後確認完成票已關閉；基底不是預設分支時關鍵字不生效，由主持人依 tracker 契約
+  關票。總 PR 留給人合併時（`gh pr merge` 被權限設定擋下或被拒，見 #8），關票指令進人工作業清單。
+- `frontier.mjs` 不變：整併後票仍是 open，GitHub 模式照舊由主持人以 `--done` 傳入。

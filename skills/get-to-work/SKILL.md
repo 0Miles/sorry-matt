@@ -1,6 +1,6 @@
 ---
 name: get-to-work
-description: Clear a prepared ticket set round by round, implementing and reviewing in blocker order before delivering GitHub PRs or local integration branches
+description: Clear a prepared ticket set round by round, implementing and reviewing in blocker order before delivering one aggregate GitHub PR or local integration branch per line
 disable-model-invocation: true
 ---
 
@@ -61,8 +61,8 @@ point, so write the ledger current before that round ends.
 
 Every open-round starts by re-running `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
 
-- **GitHub:** tickets integrated into their line integration branch are still open on GitHub, so take the
-  integrated tickets from the ledger's reconciliation table and pass them with `--done <n,...>`; pass stuck tickets
+- **GitHub:** tickets integrated into their line integration branch are still open on GitHub (closing waits for the
+  aggregate PR's merge), so take the integrated tickets from the ledger's reconciliation table and pass them with `--done <n,...>`; pass stuck tickets
   with `--stuck <n,...>`.
 - **Local Markdown:** run once per line, passing the whole frozen set with `--ref <that line's integration branch>`
   and `--line <that line's line>` (the value from the freeze); the frontier is the union of each line's `frontier`.
@@ -107,22 +107,20 @@ finishing the run.
    treated as a real failure: find the root cause, and fix the test when it lies there or fix the product and
    file a defect ticket when it lies there. Re-running, loosening a wait, adding a retry and raising a timeout
    all leave it unfixed. If two correction rounds do not find the root cause, mark the ticket stuck.
-4. **Ticket PR (GitHub only):** push the ticket branch and create a PR against the line integration branch.
-   Its body must include `Closes #N` and the review summary.
-5. **Integrate:** merge the ticket branch in the integration worktree. Where there are conflicts, give them to a
+4. **Integrate:** merge the ticket branch in the integration worktree. Where there are conflicts, give them to a
    **merge agent** to resolve hunk by hunk: it gets the integration worktree, both sides' ticket text and commit
    messages, and this test — the choice is between two intents rather than two blocks of text, so trace each side
    to its primary source (the ticket text and the commit message), keep both where they are compatible, and where
    they are not, take the side that matches this merge's goal, with what lands limited to behaviour one side
    actually wrote. It reports the trade-off per hunk, and the host records those trade-offs in the self-answer
    log. Then run the targeted checks for the affected surface.
-6. **Complete delivery:**
-   - **GitHub:** push the integration branch and retain the ticket PR, now merged by ancestry, as the review
-     record.
+5. **Complete delivery:**
+   - **GitHub:** push the integration branch. The ticket stays open; closing it is the aggregate PR's job
+     (section 2). This ticket's summary lives in its commit message (`IMPLEMENTER.md` section 2).
    - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket,
      set `Status` to `ready-for-human`, and append `## sorry-matt completion` with the implementation commit,
      integration branch, and passed checks. Commit this delivery record.
-7. Remove the ticket worktree and local ticket branch.
+6. Remove the ticket worktree and local ticket branch.
 
 Anything that comes up mid-run takes the three exits in `ASKING.md` section 4. Running standalone, with no ruling
 point, whatever cannot be answered accumulates until the next open-round and is asked there in one go.
@@ -177,9 +175,10 @@ reserved for a new fix, a failure, or an unresolved risk.
 
 Then deliver each line according to its mode:
 
-- **GitHub:** create one aggregate PR from the line integration branch into the base branch. Link the ticket
-  PRs and use `Closes #N` only for completed tickets; list stuck and awaiting-ruling tickets as gaps. Polish the
-  aggregate PR body per `ASKING.md` section 6.
+- **GitHub:** create one aggregate PR from the line integration branch into the base branch. Its body gives each
+  completed ticket a section: the summary (taken from the body of that ticket's commit message) and `Closes #N`;
+  stuck and awaiting-ruling tickets are listed as **gaps**, with no `Closes`. Polish the aggregate PR body per
+  `ASKING.md` section 6; every `Closes #N` line must survive the polish.
 - **Local Markdown:** leave the line integration branch for human review and merge. Record its branch name and
   tip SHA, then remove the integration worktree. Ticket state travels with the implementation on that branch;
   do not simulate a PR or close operation.
@@ -189,6 +188,15 @@ after cleanup; Claude Code's permission settings decide whether it is let throug
 `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through, report the merge; when it is
 blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
 would let it through. Do not open a question for it.
+
+**Closing tickets.** GitHub reads `Closes` only in a PR that targets the repository's default branch
+(`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`):
+
+- Aggregate PR merged: confirm every completed ticket is closed. When the base is not the default branch, or a
+  ticket is still open after the merge, the host closes it per the tracker contract's Close, with a comment
+  pointing at the aggregate PR.
+- Aggregate PR left for a human to merge, with a base that is not the default branch: the human-work list carries
+  the close commands to run after the merge.
 
 Once a line is delivered, clean up: call the Skill tool with `clean-it-up` and let its evidence rules retire the
 ticket worktrees and merged local branches this run created. **Deliverables awaiting human review are out of
@@ -201,7 +209,9 @@ and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (
 filed along the way with a recommendation that the user run `/triage`.
 
 Done when: every line went through one line-level simplify and one full verification and ended green, and has
-exactly one human-mergeable delivery, or was merged after the permission settings let it through and reported; the
+exactly one human-mergeable delivery, or was merged after the permission settings let it through and reported; every
+completed ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human and the keyword
+does not apply, the human-work list carries the close commands; the
 reconciliation table covers the frozen set exactly once, every row pointing at that ticket's status record; every
 ticket worktree and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
 branches remain; the output lists the authorization outcomes and this run's metrics.
