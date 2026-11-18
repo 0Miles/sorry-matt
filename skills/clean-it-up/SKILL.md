@@ -48,7 +48,7 @@ For every absolute path from `git worktree list --porcelain`, run
 revert, or bisect. Record:
 
 - The primary worktree, current worktree, locked worktrees, and each checked-out branch or detached SHA.
-- Staged, unstaged, or untracked content and any Git operation in each worktree.
+- Staged, unstaged, or untracked content and any in-progress Git operation in each worktree.
 - Every local branch's full ref, tip SHA, upstream, and worktree occupancy.
 - Administration records the dry run says can be pruned. A temporarily inaccessible path is not stale.
 
@@ -68,8 +68,8 @@ A local branch is **merged** only when one of these proofs passes:
 
 If the authenticated provider CLI or API cannot supply every part of the second proof, preserve the branch.
 An old merged PR does not cover commits added to the branch afterward. None of these prove a merge: upstream
-`gone`, a missing remote branch, similar commit messages, old age, a ticket-like name, or an apparently empty
-diff.
+`gone`, a missing remote branch, similar commit messages, old age, a ticket-like name, or a diff that looks
+identical.
 
 Even with merge proof, protect the merge target, local and remote default branches, a branch with an unmerged
 tip, any branch used by a dirty, locked, or operation-in-progress worktree, and every user-named keep branch.

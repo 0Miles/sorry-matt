@@ -9,10 +9,18 @@
   共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
   `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀;
   `build-the-ui-right/FRONTEND.md` 由五支前端 skill 共讀)
+- `src/skills/<name>/scripts/` — skill 執行(不載入)的零依賴腳本,由 `SKILL.md` 以
+  `${CLAUDE_SKILL_DIR}/scripts/<file>` 呼叫;測試放 repo 根目錄的 `scripts/*.test.mjs` 並掛進 CI
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
+- `skills/<name>/scripts/` — 與 src 逐位元組相同的腳本(不翻譯)
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
+- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
+  含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
+- `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
+  由 `.github/workflows/check.yml` 在 PR 上執行
+- `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
 
 ## 開發規則
 
@@ -29,6 +37,11 @@
 - 僅適用於原作者的細節要一般化或移除(如個人的輸出語言偏好、個人環境路徑)
 - frontmatter 的 `name` 兩版相同;`description` 用英文重寫
 
+### 待落地標記
+
+之後會改由腳本或 hook 執行的規則,在 src 與 dist 的同一處加 `<!-- pending #N -->`(N 是負責落地的票)。
+那張票落地後刪掉規則文字與標記。結構對帳腳本會比對兩版的標記是否一致。
+
 ## 跨 skill 組合
 
 Model 只能用 Skill tool 呼叫 **model-invoked**(frontmatter 沒有
@@ -37,7 +50,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 自己模擬。skill 內文引用其他 skill 時:
 
 - 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`speak-human`、`no-bullshit`、
-  `clean-it-up`、`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
+  `clean-it-up`、`prove-it`、`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
   `make-the-ui-fast`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
   `disable-model-invocation: true`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
@@ -51,6 +64,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
     直接要求全文讀取。若它本來就是獨立的人為步驟,請使用者執行
 - 要「人」執行的指令(`/setup-matt-pocock-skills`、`/triage`、`/implement` 等
   下一步建議)措辭必須是「請使用者執行」,不能寫成 agent 的動作
+
+- 不寫「載入上游全文,再覆寫其中幾行」:要改上游的行為,就寫自有流程取代它,或只填上游留的
+  參數位置。決定與理由記進 `docs/matt-skills.md`
+- 交給 subagent 的內容要自足:它問不到使用者,也讀不到主持人的 skill 檔。它要遵守的規則都寫在
+  交付內容裡(如 `get-to-work/IMPLEMENTER.md`),要讀的檔案給絕對路徑
 
 以上只約束 **operative** 指令 —— skill 自己的步驟要 agent 現在就去跑另一個 skill。純粹列給人
 挑選的 router 散文(`ask-miles`、README 表格)沒有在呼叫任何東西,`/name` 在那裡是標籤,照原樣寫。
@@ -72,7 +90,6 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 互斥 | mutually exclusive |
 | 線(票的分組) | line |
 | 整合分支 | integration branch |
-| 收輪/開輪 | close the round / open the round |
 | 對帳表 | reconciliation table |
 | 語義帳本 | semantic ledger |
 | 母語重寫 | native rewrite |
@@ -106,7 +123,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 反轉成本 | cost to reverse |
 | 環境事實 | environment facts |
 | 專案例外 | project exception |
-| 永久例外 | permanent exception |
+| 需要確認的動作 | actions needing confirmation |
+| 兩段確認 | two-step confirmation |
+| 確認一次 | single confirmation |
+| 災難級操作 | catastrophic actions |
 | 硬停 | hard stop |
 | 確認呼叫 | prompting call |
 | 精簡 | simplify pass |
@@ -127,6 +147,89 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 流水線 | pipeline |
+| 派票 | dispatch |
+| 派票點 | dispatch point |
+| 收票 | close-out |
+| 補派 | refill |
+| 在途 | in flight |
+| 候選（票） | candidate |
+| 終局 | end state |
+| 整併佇列 | integration queue |
+| 預計檔案 | predicted files |
+| 檔案重疊 | file overlap |
+| 退回重做 | send back for a redo |
+| 退回紀錄 | send-back record |
+| 退回次數 | send-back count |
+| 階段 | stage |
+| 展開中 | expanding |
+| 實作中 | implementing |
+| 審查中 | in review |
+| 修正中 | fixing |
+| 待整併 | queued |
+| 整併中 | integrating |
+| 喚醒 | wake-up |
+| 上游撤回 | upstream reverted |
+| 預算與斷路 | budget and breaker |
+| 無進展斷路 | no-progress breaker |
+| 上限/用量 | limit / usage |
+| 停止原因 | stop reason |
+| 進度快照 | progress snapshot |
+| 等人時間 | waiting time |
+| 併入基底 | sync the base |
+| 未併入 | unsynced |
+| 逐票導覽 | per-ticket guide |
+| 線級 commit | line-level commit |
+| 審查門檻 | review threshold |
+| 還在跑 | still running |
+| 沒有 run | no run |
+| 查詢失敗 | query failed |
+| 被取消 | cancelled |
+| CI 不涵蓋整合分支 | CI does not cover the integration branch |
+| 讀 CI | reading CI |
+| 紅/綠(CI 結果) | red / green |
+| 紅燈處置 | red-light handling |
+| 最早的紅 SHA | earliest red SHA |
+| 對不到票 | maps to no ticket |
+| 撤回 | revert |
+| 驗證未過 | failed verification |
+| 本機驗證 | local verification |
+| 恢復 | resuming |
+| 規則檔 | rule files |
+| 狀態標記 | state marker |
+| 總 PR | aggregate PR |
+| 缺口 | gap |
+| 對打目錄 | exchange directory |
+| 問題檔/答案檔 | question file / answer file |
+| 補完答案 | completed answer |
+| 關票 | closing tickets |
+| 放行 | let through |
+| 擋下 | blocked |
+| 權限規則片段 | permission rule snippet |
+| 需授權動作的結果 | authorization outcomes |
+| 以後都這樣 | from now on |
+| 開場 | opening |
+| 共用契約 | shared contract |
+| 交付說明 | brief |
+| 潤稿 | polish pass |
+| 原樣使用/自有流程取代/只傳參數 | used as-is / replaced by own flow / parameters only |
+| 審查用 worktree | review worktree |
+| 初審/複驗 | initial review / recheck |
+| 驗收對照 | acceptance check |
+| 範圍蔓延 | scope creep |
+| 修法方向 | fix direction |
+| 突變紀錄 | mutation record |
+| 存活/殺掉(mutant) | survived / killed |
+| 等價 mutant | equivalent mutant |
+| 基準(實跑) | baseline |
+| 上限(突變) | cap |
+| 成立/不成立(裁決) | confirmed / invalid |
+| 展開 agent | expansion agent |
+| 展開區塊 | expansion block |
+| 驗收快照 | acceptance snapshot |
+| 驗收比對 | acceptance diff |
+| 出處(驗收項) | source |
+| 驗收只讀 | read-only acceptance criteria |
 | 前端契約 | frontend contract |
 | 仲裁順序 | precedence |
 | 狀態矩陣 | state matrix |
@@ -157,6 +260,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 對一次。它不在 runtime 被讀取 —— 規則已寫進 skill 本文 —— 所以不進 `references/upstream/`,
 也不需要 pin 與 hash。
 
+被自有流程取代的 matt skills(`implement`、`tdd`、`to-spec`、`to-tickets`、`research`、`code-review`)同理:
+不在 runtime 被讀取,對帳用的上游路徑與取代時的 hash 記在 `docs/matt-skills.md`。
+
 五支前端 skill 的知識來源是兩個第三方 model-invoked skill:`master-design`
 (`master-co/design`,MIT)與 `modern-web-guidance`(`GoogleChrome/modern-web-guidance`,
 Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不進 `references/upstream/`;
@@ -165,6 +271,10 @@ Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不
 (寫入時為 0.3.7),上游改了就回來對一次。
 
 ## 收尾檢查
+
+`node scripts/check-structure.mjs`、`node scripts/check-vendored.mjs` 與 `claude plugin validate .`
+機械檢查第 2、3、4(hash)、5、7 項,以及第 1 項的結構部分(檔案、標題、完成判準數、引用的檔名);
+語義是否一致仍要人看。
 
 1. 動過的每個 `src/skills/<name>/` 都有對應重寫過的 `skills/<name>/`
 2. 每個 dist skill 都有 `agents/openai.yaml`,且與 src 對應檔一致

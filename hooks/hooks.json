@@ -1,0 +1,34 @@
+{
+  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; while a run is in progress, count its subagents and deny a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs\"" }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/spawns.mjs\"" }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/spawns.mjs\"" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/reread.mjs\"" }
+        ]
+      }
+    ]
+  }
+}

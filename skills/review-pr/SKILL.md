@@ -41,8 +41,8 @@ Assign each lens to an independent finder subagent and dispatch them together in
 For a tiny diff of one file and no more than a few dozen lines, one finder may apply every lens.
 
 - **Line by line**: for every line in every hunk, ask which input, state, timing, or platform could make it fail.
-  Check especially for inverted conditions, off-by-one errors, falsy zero, missing `await`, copy-pasted variable names,
-  and swallowed errors.
+  Check especially for inverted conditions, off-by-one errors, falsy zero, missing `await`, a wrong variable left
+  by copy-paste, and errors swallowed by `catch`.
 - **Removed behavior**: identify the invariant each deleted or rewritten block used to preserve, then locate where
   the new code restores it. If nowhere does, report a candidate.
 - **Cross-file contract**: trace callers and callees of changed functions. Check whether new preconditions, return
@@ -76,11 +76,12 @@ The Verifier prompt must be self-contained and contain only the absolute reposit
 the candidate's four fields, and the rules below. Exclude the Finder's reasoning to prevent anchoring.
 
 Try to **disprove** the candidate first by finding and citing code that invalidates it. For uncertain technical facts—
-API compatibility, regular-expression behavior, CSS interaction, or package syntax—run a disposable Node or Python
+API compatibility, regular-expression behavior, CSS cascade, or package syntax—run a disposable Node or Python
 probe, or consult caniuse and source code. Only after disproof fails, test these gates:
 
 1. **Traced**: cite a `file:line` the Verifier actually opened as evidence.
-2. **Introduced by this PR**: run the same check on the base branch. The gate passes only when base is sound and the PR fails.
+2. **Introduced by this PR**: run the same check on the base branch. The gate passes only when base works and the
+   PR fails.
 3. **Concrete failure scenario**: the path is reachable and its consequence is visible to the user.
 
 There are exactly three rulings, each with `file:line` evidence: **confirmed** when all gates pass, **pre-existing**
@@ -143,7 +144,7 @@ on the suggestions.
 
 Assign every suggestion to its own independent subagent and dispatch them in parallel. The prompt must
 be self-contained and contain the absolute repository path, `pr-<n>` ref, the finding's `failure_scenario`, and the
-suggestion's full content and line range. Exclude the author's reasoning to prevent anchoring.
+suggestion's full content and line range. Exclude the suggestion writer's reasoning to prevent anchoring.
 
 Try to disprove the fix first, answering all four with `file:line`:
 
@@ -154,13 +155,13 @@ Try to disprove the fix first, answering all four with `file:line`:
    back inverted next round.
 4. Does applying it break any other caller?
 
-There are exactly two rulings: **sound**, or **unsound** — withdraw the suggestion, name the correct fix where one
-exists, and otherwise demote the finding to a body observation.
+There are exactly two rulings: **passes**, or **invalid fix** — withdraw the suggestion, name the correct fix where
+one exists, and otherwise demote the finding to a body observation.
 
 ### Conflicts within the round
 
 Each Fix Verifier sees only its own suggestion, never the others. Once every ruling is back, and before the live run,
-compare the round's surviving suggestions pairwise. Three kinds of conflict, each with its own resolution:
+the host compares the round's surviving suggestions pairwise. Three kinds of conflict, each with its own resolution:
 
 - **Overlapping ranges**: two `start_line..line` ranges intersect in the same file. GitHub applies each suggestion
   independently, so intersecting ones produce wrong content whichever order the author commits them in. Merge them into
@@ -200,8 +201,8 @@ Mutate once more after applying the suggestions, to answer whether this round's 
 Done when: every suggestion has one Fix Verifier ruling with `file:line` evidence; the round's surviving suggestions
 have been compared pairwise, with no intersecting ranges, incompatible pairs cut to one, and dependent ones named and
 re-cut against the applied content; every script that exists ran once before and once after, and the run after is all
-green; every finding has a mutation result; and every suggestion ruled unsound or turning the run red has been
-withdrawn or repaired.
+green; every finding has a mutation result; and every suggestion ruled an invalid fix or turning the run red has
+been withdrawn or repaired.
 
 ## 7. Reconcile before submitting
 
@@ -226,8 +227,8 @@ self-assessment.
 **Honesty.** Check item by item:
 
 - The finding count claimed in the body matches the length of the `comments` array.
-- Every sentence in the body's non-blocking sections is backed by named Verifier or Fix Verifier evidence. Delete any
-  statement resting on a Finder's word alone, or demote it to open.
+- Every sentence in the body's non-blocking sections is backed by named Verifier or Fix Verifier evidence. Delete
+  any statement resting on a Finder's word alone, or demote it to pending investigation.
 
 Done when: every suggestion overlapping history is labeled extends, reverses, or flip-flops; every reversal carries
 evidence the earlier round did not have and is stated in both the comment and the body; every flip-flop has been

@@ -32,7 +32,7 @@ creative or persuasive writing; edit only the problem the user placed in scope.
 When the source supports multiple reasonable readings, record the full range in the ledger. Rewrite only when the
 new wording preserves that range. Otherwise, retain the source wording and add the ambiguity to the output.
 
-Done when: the target language, locale, audience, purpose, and output branch are fixed; every source claim and its
+Done when: the target language, locale, audience, purpose, and output type are fixed; every source claim and its
 scope, certainty, and responsibility appear exactly once in the ledger.
 
 ## 2. Perform the native rewrite
@@ -42,8 +42,8 @@ Discard the source syntax and compose from the semantic ledger in the target lan
 - Use current, common, neutral vocabulary, collocations, word order, pronouns, omissions, tense or aspect,
   modality, honorifics, and punctuation for the locale. Prefer the user's wording when it is already natural and
   correct.
-- Give each entity, state, or action one stable name. Use pronouns and omissions where the referent stays unique
-  and the target language naturally permits them.
+- Give each entity, state, or action one stable name. Use pronouns and omissions only where the referent stays
+  unique and the target language naturally permits them.
 - When the source names no speaker, actor, responsible party, or beneficiary, use a natural actorless, impersonal,
   or event construction. Make a role explicit only when the source entails it and doing so removes a material
   ambiguity.
@@ -51,15 +51,15 @@ Discard the source syntax and compose from the semantic ledger in the target lan
   target language's natural voice instead of automatically adding subjects or using active voice.
 - Put one main assertion or action in each discourse unit. Keep inseparable simultaneous actions and immediate
   results together; split or list the rest.
-- Put prerequisites before the action that depends on them. Give every exception, negation, and fallback one clear
-  scope.
+- Put the conditions the reader must know before the action that depends on them. Scope every exception, negation,
+  and fallback to only what it restricts.
 - Prefer a natural verb or predicate when it expresses the action directly. Replace empty nominalizations and
   support verbs, such as `perform an analysis`, with `analyze` or the target language's natural equivalent.
 - Use literal, compositional wording in precision text. Ordinary conversation may keep familiar idioms with one
   clear reading for the audience.
-- Keep necessary technical terms, define them naturally on first use, and follow the domain glossary afterward.
-  Keep one term per concept rather than rotating synonyms for style.
-- Remove preambles, redundant synonyms, stacked hedges, and unsupported promotion when they have no ledger entry.
+- Keep necessary technical terms, define them naturally on first use, and follow the established glossary
+  afterward. Keep one term per concept rather than rotating synonyms for style.
+- Delete boilerplate, tautology, stacked hedges, and unsupported promotion outright when they have no ledger entry.
   Keep words that carry real uncertainty, constraints, or social politeness.
 - Give each paragraph one topic. Use lists or tables for steps, parallel conditions, options, and complex
   enumerations.

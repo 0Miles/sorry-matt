@@ -1,0 +1,39 @@
+name: check
+
+on:
+  pull_request:
+  # Every branch but the PR heads `claude/**` (pull_request already covers those), so a
+  # get-to-work integration branch `<run>/<line-slug>` gets a run on each push.
+  push:
+    branches: ['**', '!claude/**']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test the check scripts, the hooks and the skill scripts
+        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs
+
+      - name: src/dist structure
+        run: node scripts/check-structure.mjs
+
+      - name: Vendored SHA-256
+        run: node scripts/check-vendored.mjs
+
+      - name: claude plugin validate
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.325
+          claude plugin validate .

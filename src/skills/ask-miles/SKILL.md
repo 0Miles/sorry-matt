@@ -11,9 +11,10 @@ disable-model-invocation: true
 - **想釐清需求計畫或決策，但懶得親自回答問題** → `/grill-them`。讓兩個 subagent 對打，
   輸出限於結論與待裁決事項，停在規劃階段。
 - **要開始新任務，或剛完成 grill-me／grill-with-docs，還沒有 spec 或 tickets** →
-  `/take-this`。承接既有 grilling；沒有時才執行 grill-them，再完成 to-spec → to-tickets。
-- **Tickets 已備妥，現在要完成它們** → `/get-to-work`。依 tracker 設定逐輪實作與驗收，
-  交付 GitHub PR 或 Local Markdown 整合分支，直到初始票集完成或明確卡住。
+  `/take-this`。承接既有 grilling；沒有時從證據建立需求脈絡，只有重大分歧才開 grill-them，
+  再寫成 spec 與 tickets。
+- **Tickets 已備妥，現在要完成它們** → `/get-to-work`。依 tracker 設定逐票平行實作與驗收，
+  每條線交付一支 GitHub 總 PR 或 Local Markdown 整合分支，直到初始票集完成或明確卡住。
 - **想把既有 grilling、規劃到實作整段交出去，且範圍可控、需求足以收斂並有可靠驗收** →
   `/have-it-all-done`。通過風險閘門後自主跑完 take-this → get-to-work，只在單一裁決點
   問你要裁的事。
@@ -21,6 +22,9 @@ disable-model-invocation: true
   tracker 整理成線性工作鏈並指出唯一下一步；全程只讀。
 - **有人送來 GitHub PR 要審查** → `/review-pr <PR>`。審查 PR 包含的改動，並在 GitHub 發布
   建議與修改要求。
+- **想單獨重審 sorry-matt 流程裡的一張票（不發 PR 評語）** → `/prove-it <票>`。以整合分支為 fixed
+  point，用證據鏈、實跑與只限本票 diff 的突變審 ticket 分支，結論寫進該票的接續紀錄；
+  `get-to-work` 收票會自己呼叫它。
 - **當 Agent 不講人話時** → `/speak-human`。保留事實、條件、責任與不確定程度，
   改成目標語言與地區中自然、常用的說法。
 - **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。

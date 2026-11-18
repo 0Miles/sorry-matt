@@ -8,8 +8,8 @@ Run the complete evidence chain again, changing only candidate sources and close
   Every prior blocking comment is a mandatory candidate: has the original problem been fixed, and did the fix introduce
   a new one?
 - **Once the author has replied, the burden is on you.** Handle such a comment in one of two ways: **accept it and
-  withdraw**, or **rebut in the same thread with new evidence**. Resubmitting a comment the author explicitly declined
-  reads as never having read the reply.
+  withdraw**, or **rebut in the same thread with new evidence**. Resubmitting, unchanged, a comment the author
+  explicitly declined to fix amounts to never having read the reply.
 - In Step 2, focus Finders on incremental commits and the area around each fix. The claims-versus-implementation lens
   still scans the complete `gh pr diff` to catch unclaimed changes bundled into fix commits, such as lockfiles or
   opportunistic edits.
