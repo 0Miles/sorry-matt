@@ -101,9 +101,11 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    按 `headSha` 彙整，每個 SHA 照上面判；沿 `git log --first-parent --format=%H origin/<整合分支>` 由新往舊，
    找出最早的紅 SHA —— 它之前最近一個有結論的 SHA 是綠。
 2. **對到票**：`git log --merges --first-parent --format='%H %s' <前一個綠 SHA>..<最早的紅 SHA>` 列出這段的
-   merge commit。subject 帶 ticket 分支名（`Merge branch '<run>/<NN>-<slug>'`）的就是那張票；完成紀錄、
-   卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張票（中間的 push 沒有結論）
-   從最早的開始。沒有 ticket 分支的 merge —— 紅燈來自主持人 commit、精簡或併入基底 —— 就**對不到票**。
+   merge commit，照 `scripts/review-guide.mjs` 檔頭的規則對票：SHA 記在 ledger 對帳表某張票的 merge SHA 裡，
+   就是那張票；沒記 SHA 的票才看 subject（先 `Merge branch '<ticket 分支>'`，再 `Merge <票 ID>` 與它的
+   `(+<票 ID>)` 別名）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
+   票（中間的 push 沒有結論）從最早的開始。沒有 merge 對到票 —— 紅燈來自主持人 commit、精簡或併入基底 —— 就
+   **對不到票**。
 3. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。
 4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗
    摘要），在從整合分支新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收票步驟 3 的集中修正
@@ -261,13 +263,15 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
 4. **整併**：審查通過的票排進所屬線的**整併佇列**：一條線一次整併一張，照進佇列的順序；紅燈處置中的線
    佇列暫停（「讀 CI」）。輪到時階段改為整併中，在整合 worktree 以 `git merge --no-ff --no-edit <ticket 分支>`
-   合併，一張票一個 merge commit，message 用 git 預設的 `Merge branch '<ticket 分支>'`：紅燈對票與收官的
-   **逐票導覽**都靠它認出是哪張票。這個 merge 的第二親代範圍 `<merge>^1..<merge>^2` 就是這張票的 commit。
+   合併，一張票一個 merge commit，message 用 git 預設的 `Merge branch '<ticket 分支>'`。merge 完成後把它的 SHA
+   （`git rev-parse HEAD`）記進 ledger 對帳表該票的 merge SHA，紅燈修正的 `-ci` merge 也記：紅燈對票與收官的
+   **逐票導覽**都以它為準，subject 只是沒記 SHA 時的退路。這個 merge 的第二親代範圍 `<merge>^1..<merge>^2` 就是
+   這張票的 commit。
    有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
    以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與 commit
    message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。解法只留在
-   這個 merge commit 裡（`git commit --no-edit` 收尾），不改寫 ticket 分支；`git show --remerge-diff <merge>`
-   只顯示解法那部分。它逐塊回報取捨摘要，主持人把取捨記進自答清單。解完執行受影響範圍的針對性檢查；還要再改
+   這個 merge commit 裡（`git commit --no-edit` 收尾），不改寫 ticket 分支；本機的
+   `git show --remerge-diff <merge>`（git 2.36 以上）只顯示解法那部分，GitHub 網頁看不到。它逐塊回報取捨摘要，主持人把取捨記進自答清單。解完執行受影響範圍的針對性檢查；還要再改
    就在整合分支另做一個 commit，subject 不帶票 ID。整併 agent 回報無法安全解決時 `git merge --abort`，
    該票**退回重做**（下方），佇列換下一張。
 5. **完成交付**：
@@ -310,7 +314,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 `stuck` 不算），每輪修正後各有一次 `recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；
 針對性檢查回到綠，並有通過驗收的模式原生交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；
 每條線同一時間至多一張票在整併，紅燈處置中的線沒有整併佇列裡的票被整併；每次整併都是帶 git 預設 message 的
-`--no-ff` merge commit，衝突解法只在 merge commit 裡，ticket 分支沒有被改寫；每次整併之後都做了派票點；
+`--no-ff` merge commit，SHA 記進了對帳表，衝突解法只在 merge commit 裡，ticket 分支沒有被改寫；每次整併之後都做了派票點；
 每張退回的票都有 `sent-back` ref、接續紀錄裡的退回紀錄、對帳表的退回次數與加寬的預計檔案，且至多退回一次；
 每張票的接續紀錄都寫到最新；成功票已整併並清理 ticket worktree 與本地分支；有 `origin` 的線，每次整併都各
 push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合分支同一個 SHA。
@@ -379,11 +383,12 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
 
   計畫檔與輸出（同名的 `.json`）跟 ledger 同在共用目錄，格式寫在腳本檔頭：`base` 是併入的基底 ref
   （`origin/<基底分支>`），`web` 取 `gh repo view --json url --jq .url`，`tickets` 是對帳表中整併過這條線的每張票
-  （含後來成為缺口的），帶 ticket 分支、票名、凍結時 frontier 輸出的 `blockedBy` 與接續紀錄的連結。腳本沿
-  `git log --first-parent` 以 merge 的 message 認出每張票的 merge，票的 commit 就是 `<merge>^1..<merge>^2`；其他
-  first-parent commit（精簡、併入基底、主持人 commit、對不到票的修正、撤回）是**線級 commit**。結束代碼 3 表示
-  `missing` 裡的票在線上找不到 merge：照 ledger 核對它的分支名，修正計畫檔重跑；仍找不到就在該票那節寫明
-  「commit 範圍對不到」，不猜範圍。
+  （含後來成為缺口的），帶對帳表記的 merge SHA（`merges`）、ticket 分支、票名、凍結時 frontier 輸出的
+  `blockedBy` 與接續紀錄的連結。腳本沿 `git log --first-parent` 認出每張票的 merge —— 有 `merges` 的票只認
+  SHA，沒有的才退回認 subject —— 票的 commit 就是 `<merge>^1..<merge>^2`；其他 first-parent commit（精簡、
+  併入基底、主持人 commit、對不到票的修正、撤回）是**線級 commit**。結束代碼 3 表示 `missing` 裡的票在線上
+  找不到 merge，`warnings` 列出不在線上的 SHA：照 ledger 核對它的 merge SHA 與分支名，修正計畫檔重跑；仍找
+  不到就在該票那節寫明「commit 範圍對不到」，不猜範圍。
 
   Body 依輸出寫，順序固定：
 
@@ -396,12 +401,14 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
      - 改了什麼：主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
        `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`；
      - 驗收證據：接續紀錄的連結；
-     - `resolved` 為 true 的 merge 寫明含衝突解法並附它的 `remergeDiff` 指令；退回重做過的票註明退回次數；
+     - `resolved` 為 true 的 merge 寫明含衝突解法並附它的 `remergeDiff` 指令，註明只能在本機
+       （git 2.36 以上）看、GitHub 網頁看不到；退回重做過的票註明退回次數；
      - 節末 `Closes #N`。
-  3. **線級 commit**：`lineCommits` 逐項附連結與用途；含衝突解法的附 `remergeDiff` 指令。
+  3. **線級 commit**：`lineCommits` 逐項附連結與用途；含衝突解法的附 `remergeDiff` 指令，同樣註明只能在本機看。
   4. **缺口**：卡住與待裁決的票，不寫 `Closes`；在線上有 merge 的（上游撤回、被撤回）附它的 commit 範圍。
 
-  總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後門檻提醒、每個 commit 連結與每行 `Closes #N` 仍要在。
+  總 PR body 依 `ASKING.md` 第 6 節潤稿；潤稿後門檻提醒仍在 body 開頭，每個 commit 連結與每行 `Closes #N`
+  仍要在。
 - **Local Markdown**：保留線整合分支供人審查與合併；記錄 branch name 與 tip SHA，再移除
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
 

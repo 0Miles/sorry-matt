@@ -198,7 +198,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, and its send-back count. The stage is candidate, expanding, implementing, in review,
+   its responsible agent's id, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration,
+   red-light fix merges included). The stage is candidate, expanding, implementing, in review,
    fixing, queued or integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work`
    section 1); resuming relies on it and the agent id to pick back up every ticket short of an end state.
 9. **Run metrics and budget**, in three parts:
