@@ -54,11 +54,11 @@ tip.
 
 ## 1. Advance the pipeline with `/loop`
 
-Every startable ticket runs its own **pipeline**: dispatch → implementation → close-out (review, fix, integration).
-Tickets do not move in rounds and do not wait on each other: tickets are **mutually exclusive** only when their
-predicted files overlap, never merely for sharing a line, and overlap is judged across the lines of one repository
-too; a ticket is closed out as soon as it is done, and every integration immediately recomputes the frontier and
-dispatches whatever has become startable.
+Every startable ticket runs its own **pipeline**: dispatch → implementation → close-out (review, fix,
+integration). Tickets do not move in rounds and do not wait on each other: tickets are **mutually exclusive** only
+when their predicted files overlap, never merely for sharing a line, and overlap is judged across the lines of one
+repository too; a ticket is closed out as soon as it is done, and every integration immediately recomputes the
+frontier and dispatches whatever has become startable.
 
 Every ticket has a **stage** in the reconciliation table: candidate → expanding (waiting on the expansion agent) →
 implementing → in review → fixing → queued (waiting in the integration queue) → integrating → an end state
@@ -116,8 +116,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
 
 1. **Earliest red SHA:** aggregate `gh run list --branch <integration branch> --limit 200 --json
    headSha,status,conclusion` by `headSha`, classifying each SHA as above; walking
-   `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red SHA —
-   the nearest SHA before it with a verdict is green.
+   `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red
+   SHA — the nearest SHA before it with a verdict is green.
 2. **Map it to a ticket:** `git log --merges --first-parent --format='%H %s' <previous green SHA>..<earliest red SHA>`
    lists that stretch's merge commits; map them by the rules in the header of `scripts/review-guide.mjs`: a merge
    whose SHA is among a ticket's merge SHAs in the ledger's reconciliation table is that ticket; only tickets with
@@ -135,8 +135,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
    integrating without queueing. When it maps to no ticket, the host or the agent that ran that step fixes it in the
    integration worktree, commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies.
    Every fix round ends with a push, and the next CI read gives its result.
-5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and take
-   back its completion record:
+5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and
+   take back its completion record:
    - **GitHub:** file the stuck record's raw issue per close-out; later dispatch points move the ticket from
      `--done` to `--stuck`.
    - **Local Markdown:** `git revert` the commit holding the completion record, then append `## sorry-matt blocker`
@@ -328,7 +328,7 @@ integration branch, CI runs in the background, the host does not wait, and the n
    and hand it to the review all the same, with `check.changed` true. Then call the Skill tool with `prove-it` in
    mode `initial`, passing the ticket (identifier, the original ticket text and the expansion block), the paths of
    the acceptance snapshot and of the acceptance diff output, the fixed point (the line integration branch), the
-   ticket branch, and the targeted-check results from step 1. The reviewer does the live run and mutation limited
+   ticket branch, and the targeted-check results from step 1. The reviewer does the live run, and mutation limited
    to this ticket's diff, and it writes a fixed-format `pass` / `fix` / `stuck` verdict and finding list into the
    ticket's status record. `pass` goes on to integration, `fix` to the batched fix, and `stuck` is cleared using the
    condition it states: a `stuck` before the review opens does not count as a review, so once cleared run `initial`
@@ -388,8 +388,8 @@ integration. Do not force the resolution: the ticket is redone from the latest i
    `git update-ref refs/sorry-matt/<run>/<NN>-<slug>/sent-back-<k> <ticket branch>` (`<k>` counts the send-backs);
    add a send-back record to the ticket's status record — that ref and its SHA, the conflicting files, the
    integration branch's SHA at the time, and the files the old attempt touched that the predicted files did not
-   cover;
-   in the ledger's reconciliation table, add one to the row's send-back count and set its stage back to candidate.
+   cover; in the ledger's reconciliation table, add one to the row's send-back count and set its stage back to
+   candidate.
 2. **Widen the prediction:** add the conflicting files and the files the old attempt touched to the ticket's
    predicted files.
 3. Remove the ticket worktree, and `git branch -D` the local ticket branch — its content is kept in the ref above.
@@ -487,8 +487,8 @@ Every line passes **three line-level gates** first, in this order:
 
 **The evidence-expiry rule.** A green holds only for the SHA it ran on. Every new commit on the integration branch —
 another ticket integrating, a conflict resolution, a fix for a red CI, the line-level simplify, the base sync —
-expires the earlier greens, ticket-level acceptance greens included; only the result for the integration branch's latest
-SHA holds.
+expires the earlier greens, ticket-level acceptance greens included; only the result for the integration branch's
+latest SHA holds.
 
 Then deliver each line according to its mode:
 
@@ -550,10 +550,10 @@ explicit authority for this request; do not open a question for it.
 
 Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`; an unsynced line, or one
 that failed verification, sends nothing and does not enter a merge queue, and its aggregate PR is left for a human
-to merge. It is a prompting call, sent after cleanup; Claude Code's permission settings decide whether it is let through, and in
-`bypassPermissions` and `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through,
-report the merge; when it is blocked or refused, the delivery stays with the human and the output carries the
-permission rule snippet that would let it through. Do not open a question for it.
+to merge. It is a prompting call, sent after cleanup; Claude Code's permission settings decide whether it is let
+through, and in `bypassPermissions` and `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is
+let through, report the merge; when it is blocked or refused, the delivery stays with the human and the output
+carries the permission rule snippet that would let it through. Do not open a question for it.
 
 **Merge queue.** Before sending, check whether the base branch has a merge queue:
 
@@ -614,8 +614,8 @@ verified SHA and the base SHA; an unsynced line names its conflicting files and 
 on its unsynced tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or
 was merged after the permission settings let it through (through the merge queue when the base has one) and
 reported; every completed ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human
-and the keyword does not apply, the human-work list carries the close commands; the reconciliation table covers the frozen set exactly
-once, every row pointing at that ticket's status record; every ticket worktree and local ticket branch is removed;
-Local Markdown integration worktrees are removed while their integration branches remain; the output lists the
-authorization outcomes and this run's metrics and budget; running standalone, the ledger's first line is the
-ended marker.
+and the keyword does not apply, the human-work list carries the close commands; the reconciliation table covers
+the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree and local
+ticket branch is removed; Local Markdown integration worktrees are removed while their integration branches remain;
+the output lists the authorization outcomes and this run's metrics and budget; running standalone, the ledger's
+first line is the ended marker.

@@ -13,8 +13,8 @@ answered on the user's behalf.
 
 ## 0. Autonomy
 
-Once the risk gate clears it (step 1), this run aims to reach the handoff calling the user back at exactly two
-points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
+Once the risk gate clears it (step 1), this run aims to reach the handoff, calling the user back only at step 2's
+ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
 
 - **Make reversible internal decisions yourself.** Local files, commits on local branches, worktrees, tests, and
   merges or deploys the permission settings let through: decide, record it per `ASKING.md` section 3, and continue.
@@ -22,7 +22,8 @@ points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold th
   follow that text and retry. It counts as stuck only when no such route exists, or following it still gets
   denied.
 - **Hard stops go on the list; keep working on everything else.** Put each permanent exception from `ASKING.md`
-  section 5, and each action the permissions block, on the **human-work list**, then carry on with every other thing that can be done.
+  section 5, and each action the permissions block, on the **human-work list**, then carry on with every other
+  thing that can be done.
 - **Run prompting calls last, back to back.** A call that raises a confirmation prompt by itself — a hook ask,
   the built-in delete check — is a **prompting call**, and it waits for the end even when the user approved it
   long ago ("send it when it's done"), so the interruption lands once, at the end.
@@ -51,8 +52,8 @@ ruling with the fact that could not be found.
 Starting from the base directory stated when this skill was loaded, read the sibling [`ASKING.md`](ASKING.md) in
 full, run its section 0 opening, and take over or create the run ledger per its section 7. Whether creating or
 taking it over, field 10 must list the absolute paths of this skill's `SKILL.md`, `ASKING.md`, and the sibling
-`../get-to-work/SKILL.md`; add whichever is missing.
-`ASKING.md` is the contract shared with `take-this` and `get-to-work`, and it applies throughout.
+`../get-to-work/SKILL.md`; add whichever is missing. `ASKING.md` is the contract shared with `take-this` and
+`get-to-work`, and it applies throughout.
 
 Select exactly one task in this order:
 
@@ -79,11 +80,11 @@ and evidence. The alternatives stay available but are not the recommendation: as
 take part in planning, `/grill-me`, `/grill-with-docs`, or `/grill-them` to clarify first, or `/wayfinder` for a
 large unresolved task. Continue after explicit approval; proceed directly when all are green.
 
-Done when: the tracker configuration, one task, and the grilling source are recorded; the
-run ledger is picked up or created; all three lights have a red-or-green result; every red light has an explicit
-user approval record and a proposal that opened at full scope.
+Done when: the tracker configuration, one task, and the grilling source are recorded; the run ledger is picked up
+or created; all three lights have a red-or-green result; if any light was red, the user's explicit approval is on
+record and the proposal opened at full scope.
 
-## 2. Prepare the tickets (skip when they already exist)
+## 2. Complete the kickoff (skip when tickets already exist)
 
 The whole opening goes to a **kickoff agent**. Resolve the absolute paths of the sibling `../take-this/SKILL.md`
 and `ASKING.md` from this skill's base directory, hand them over with the ledger path, and have it read both in

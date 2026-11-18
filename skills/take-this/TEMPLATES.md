@@ -1,8 +1,8 @@
 # TEMPLATES: the spec and ticket templates
 
 Used when `take-this` publishes in steps 3 and 4. Template headings stay in English, because `issue-chain`,
-`get-to-work`, and the tracker conventions read them. Adapted from `mattpocock/skills` `to-spec` and `to-tickets` (MIT; source
-and license in [`references/upstream/NOTICE.md`](references/upstream/NOTICE.md)).
+`get-to-work`, and the tracker conventions read them. Adapted from `mattpocock/skills` `to-spec` and `to-tickets`
+(MIT; source and license in [`references/upstream/NOTICE.md`](references/upstream/NOTICE.md)).
 
 ## Spec
 
@@ -29,7 +29,7 @@ decisions, schema changes, API contracts, specific interactions. No specific fil
 ## Testing Decisions
 
 - What makes a good test: only external behavior, never implementation details
-- Seams: which seams to test at (the result of `take-this` step 3)
+- Seams: which seams to test at (as answered on the user's behalf in `take-this` step 3)
 - Modules to test, and prior art for similar tests in the codebase
 
 ## Out of Scope

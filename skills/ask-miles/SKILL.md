@@ -15,13 +15,13 @@ branch is the next step for the user to run.
   Carry forward existing grilling; when none exists, build the requirements context from evidence, open
   grill-them only on a material disagreement, then write the spec and tickets.
 - **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them ticket by ticket in
-  parallel according to the tracker configuration, delivering one aggregate GitHub PR or Local Markdown integration branch per line
-  until the initial ticket set is complete or explicitly stuck.
+  parallel according to the tracker configuration, delivering one aggregate GitHub PR or Local Markdown
+  integration branch per line until the initial ticket set is complete or explicitly stuck.
 - **Delegate existing grilling, planning, and implementation end to end, with controlled scope, convergent
-  requirements, and reliable acceptance checks** → `/have-it-all-done`. Pass its risk gate, then run
-  take-this → get-to-work autonomously, with one ruling point for what only you can decide.
-- **Order tracker tickets and local work scattered across the repository** → `/issue-chain`. Use the configured
-  tracker to build a linear work chain and identify exactly one next action; this branch is read-only.
+  requirements, and reliable acceptance checks** → `/have-it-all-done`. After clearing its risk gate, it runs
+  take-this → get-to-work autonomously and asks you what needs your ruling only at a single ruling point.
+- **Order tracker tickets and local work that are scattered all over** → `/issue-chain`. Use the configured
+  tracker to build a linear work chain and identify exactly one next action; read-only throughout.
 - **Review an incoming GitHub PR** → `/review-pr <PR>`. Review the changes in the PR and publish suggestions and
   change requests on GitHub.
 - **Re-review one ticket inside a sorry-matt run on its own (no PR comments)** → `/prove-it <ticket>`. Reviews the
@@ -33,9 +33,9 @@ branch is the next step for the user to run.
 - **The agent is padding and burying the point** → `/no-bullshit`.
 - **Safely retire local branches and extra worktrees after the work is merged** → `/clean-it-up`. Remove only
   clean items backed by merge evidence; remote branches require separate explicit authority.
-- **The situation calls for triage, bug diagnosis, wayfinding, or prototyping** → `/ask-matt`; it is the router
+- **The situation calls for triage, bug diagnosis, wayfinder, or prototyping** → `/ask-matt`; it is the router
   for matt skills.
 
-Done when: exactly one skill is recommended, the matching branch is explained, and the response includes an
-invocation the user can copy directly. When the information is insufficient to choose uniquely, identify and ask for
-the one smallest missing decision; after the ruling, return a single route.
+Done when: exactly one skill, the best fit for the situation, is recommended, the matching branch is explained,
+and the response includes an invocation the user can copy directly. When the information is insufficient to choose
+uniquely, name the gap and ask the user to fill the single smallest one; after the ruling, return a single route.

@@ -33,9 +33,9 @@ all the rules you follow, and none of them points at a file or section you canno
    else before you started; the expansion block's `rulings` are binding rulings, just like the ticket text. Do not
    edit, delete, or reword them, and do not write a replacement copy on the tracker or in the ticket file. When a
    criterion cannot be met, contradicts another, or needs changing, report it as **awaiting ruling**, naming the
-   criterion and why. When the ticket has no criteria
-   at all, do not write your own; report that as awaiting ruling. The host saved an acceptance snapshot before you
-   started and the review compares against it: changed criteria fail the review.
+   criterion and why. When the ticket has no criteria at all, do not write your own; report that as awaiting
+   ruling. The host saved an acceptance snapshot before you started and the review compares against it: changed
+   criteria fail the review.
 4. **Redo after a send-back.** When the send-back record is not none, this ticket's previous attempt ran into
    another ticket's changes at integration and was sent back. The worktree has been rebuilt from the integration
    branch's latest tip; the old attempt is at that ref, and you may read it and cherry-pick what still applies, but

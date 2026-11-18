@@ -14,7 +14,7 @@ modes; inspect only the configured provider in a given run.
 The optional argument may be a milestone, lane, set of ticket identifiers, or local path. Without one, cover
 the entire repository. When the configuration says the workspace spans several repositories, the scope is all of
 them and the output is segmented per repository — the chain may order across repositories, branches and
-deliveries never do. Also read the applicable `CLAUDE.md` or general `AGENTS.md` for ordering, triage, and
+deliverables never do. Also read the applicable `CLAUDE.md` or general `AGENTS.md` for ordering, triage, and
 delivery rules.
 
 Done when: the provider, scope, repositories covered, and sources of applicable repository rules are explicit.
@@ -96,5 +96,5 @@ first executable action in the chain. **A ticket held by another line does not c
 and state the source of the hold. If no ticket can move, ask for the one smallest decision needed by the
 highest-priority awaiting-ruling item.
 
-Done when: exactly one next action is immediately executable and not held by another line, and every output item
-traces back to snapshot evidence.
+Done when: exactly one next action is proposed, it is immediately executable and not held by another line, and
+every output item traces back to snapshot evidence.

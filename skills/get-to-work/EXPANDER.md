@@ -1,10 +1,10 @@
 # EXPANDER: the expansion agent's brief
 
-At a dispatch point the host fills in the `{…}` placeholders and hands everything below the rule to the expansion agent as
-its prompt. This file is self-contained on purpose. Where its rules for answering on the user's behalf overlap
-`IMPLEMENTER.md` section 3 or `ASKING.md` section 3, change them together; change the expansion block format
-together with the header of `scripts/acceptance.mjs`, `IMPLEMENTER.md` section 1, and `prove-it` section 1; change
-how criteria are written together with the ticket templates in
+At a dispatch point the host fills in the `{…}` placeholders and hands everything below the rule to the expansion
+agent as its prompt. This file is self-contained on purpose. Where its rules for answering on the user's behalf
+overlap `IMPLEMENTER.md` section 3 or `ASKING.md` section 3, change them together; change the expansion block
+format together with the header of `scripts/acceptance.mjs`, `IMPLEMENTER.md` section 1, and `prove-it` section 1;
+change how criteria are written together with the ticket templates in
 [`../take-this/TEMPLATES.md`](../take-this/TEMPLATES.md).
 
 ---

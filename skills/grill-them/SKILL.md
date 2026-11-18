@@ -7,12 +7,12 @@ description: Run an autonomous iterative interview between two agents to refine 
 
 Hand the griller/respondent exchange from `/grill-me` to two subagents. **agent-griller**, the griller, presses the
 questions. **agent-grillee**, the respondent, inspects the project and answers. The two exchange questions and answers
-through files in an **exchange directory**. You are the moderator: prepare the topic card, pass file paths, open side
+through files in an **duel directory**. You are the moderator: prepare the topic card, pass file paths, open side
 quests, and assemble the conclusions. Do not answer for either side or make the human's final ruling.
 
 Optional argument: the plan, decision, or idea to grill. With no argument, use the current subject of the conversation.
 
-## 1. Make the topic card and the exchange directory
+## 1. Make the topic card and the duel directory
 
 Turn the subject into a **self-contained topic card** containing only:
 
@@ -23,7 +23,7 @@ Turn the subject into a **self-contained topic card** containing only:
 State the information neutrally without implying an answer. Start both agents in clean contexts that do not inherit the
 current conversation, and give each only this card.
 
-Create one **exchange directory** for this duel, outside the repository, and keep it after the close:
+Create one **duel directory** for this duel, outside the repository, and keep it after the close:
 
 - When the environment provides a scratchpad directory (for example, a path the harness lists in the system prompt),
   create `grill-them-<timestamp>/` inside it.
@@ -49,15 +49,15 @@ file):
 
 A file is never rewritten once written, and the moderator never edits a file either side wrote.
 
-Done when: the card is understandable without the current conversation, includes every essential fact and hard
-constraint, and contains no answer-leading or partisan wording; the exchange directory is outside the repository and
-expressed as an absolute path, and `topic.md` is written.
+Done when: the card is understandable without the current conversation, includes all essential background and
+every hard constraint, and contains no answer-leading or partisan wording; the duel directory is outside the
+repository and expressed as an absolute path, and `topic.md` is written.
 
 ## 2. Seat both sides
 
-Spawn agent-griller first, then agent-grillee. Each receives only the exchange directory's absolute path, the file-name
+Spawn agent-griller first, then agent-grillee. Each receives only the duel directory's absolute path, the file-name
 rules above, and its own role instructions, and reads the topic card from `topic.md`. Neither changes the repository or
-external state; each writes only its own files in the exchange directory. The moderator may write to the repository only
+external state; each writes only its own files in the duel directory. The moderator may write to the repository only
 during the distillation in Step 4.
 
 What either side sends back to the moderator is only the paths it wrote and its status, never the content: agent-griller
@@ -80,7 +80,7 @@ agent-grillee across the whole project — and where the two sides' facts confli
 cites its source.
 
 Done when: agent-griller has written `round-01-questions.md` from the topic card; agent-grillee has completed the
-necessary inspection and can answer with evidence and tradeoffs; both received only the exchange directory, the
+necessary inspection and can answer with evidence and tradeoffs; both received only the duel directory, the
 file-name rules, and their role instructions; and neither changed the repository or external state.
 
 ## 3. Run the duel
@@ -136,20 +136,20 @@ states the caps up front in both sides' role instructions: three rounds (three q
 **awaiting ruling** instead of earning another round — an interrogation exists to kill disagreement, not to exhaust the
 questions.
 
-Done when: every question in every question file has a complete answer under the same number in that round's answer
-file, or was parked and has a matching `round-<r>-answer-<n>.md`, except questions whose evidence was still
-insufficient after the side quest or whose side quest had not returned at the stop, all of which are under awaiting
-ruling; every returned side quest's `side-<r>-<n>/result.md` reached agent-grillee and is reflected in the completed
-answer; every message the moderator sent either side held only paths and
-the round, and during the duel the moderator neither read nor edited either side's files nor cherry-picked;
-agent-griller recorded the reason for stopping in `verdict.md`; and where an automated workflow composed this skill,
-rounds and side quests stayed within the caps, with anything past them sent to awaiting ruling.
+Done when: every question in every question file has a complete answer under the same number in that round's
+answer file, or was parked and has a matching `round-<r>-answer-<n>.md`, except questions whose evidence was still
+insufficient after the side quest or whose side quest had not returned at the stop, all of which are under
+awaiting ruling; every returned side quest's `side-<r>-<n>/result.md` reached agent-grillee and is reflected in
+the completed answer; every message the moderator sent either side held only paths and the round, and during the
+duel the moderator neither read nor edited either side's files nor cherry-picked; agent-griller recorded the
+reason for stopping in `verdict.md`; and where an automated workflow composed this skill, rounds and side quests
+stayed within the caps, with anything past them sent to awaiting ruling.
 
 ## 4. Close and distill
 
 `verdict.md` is agent-griller's **final verdict**: the reason for stopping; a ruling on each question, identified by
 round and number, as accepted, punctured, or uncertain; which claims held, which were punctured, and how the proposal
-should change. The moderator then reads every file in the exchange directory and delivers exactly four sections:
+should change. The moderator then reads every file in the duel directory and delivers exactly four sections:
 
 - **Topic card**: the original question and hard constraints.
 - **Duel summary**: one row per question, labeled with its round, giving the question, agent-grillee's final position,

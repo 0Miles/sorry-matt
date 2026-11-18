@@ -34,10 +34,10 @@ prior grilling output, and everything required by the remaining steps.
 
 **Carry forward first:** find completed `grill-me`, `grill-with-docs`, or `grill-them` output that clearly
 belongs to this task. It may come from the current session, the argument, or a handoff. Reuse a matching
-result directly. If several results could match, ask the user to identify the intended one (when composed, follow the two-contexts
-rule in step 1).
+result directly. If several results could match, ask the user to identify the intended one (when composed,
+follow the two-contexts rule in step 1).
 
-Where no reusable result exists, **the default is not to open an interrogation**: build the requirements context
+Where no reusable result exists, **the default is not to open an interview**: build the requirements context
 yourself out of the evidence in the tracker, the repository files, and git history, answering what is uncertain on
 their behalf per `ASKING.md` section 3. Call the Skill tool with `grill-them` only on a **material disagreement** —
 an interface across modules, the data model, externally visible behaviour, or a decision that is hard to reverse
@@ -48,9 +48,9 @@ Normalize the selected source into one **requirements context**:
 
 - From `grill-me`, capture the user-confirmed shared understanding, decisions, constraints, rejected options
   and rationales, and unresolved questions.
-- From `grill-with-docs`, capture the same material plus every ADR, glossary, or other document created or
-  changed during the grilling. Those documents are inputs to the spec, and the decisions they contain still get
-  reconciled.
+- From `grill-with-docs`, capture the same material plus the paths of every ADR, glossary, or other document
+  created or changed during the grilling. Those documents are inputs to the spec, and the decisions they contain
+  still get reconciled.
 - From `grill-them`, capture the topic card, duel summary, ruling, awaiting-ruling items, and distillation
   documents. When the agent-grillee already took an explicit position on an awaiting-ruling item, adopt it;
   otherwise retain the item as an open question.
@@ -86,22 +86,22 @@ With the newly published spec as input, cut **tracer-bullet** vertical slices:
 - Each ticket cuts a narrow but complete path through every layer (schema, API, UI, tests), is demoable or
   verifiable on its own, and fits in a single fresh context window. Prefactoring goes first: make the change easy,
   then make the easy change.
-- **Wide refactors are the exception:** when one mechanical change (renaming a column, retyping a shared symbol)
+- **Wide refactors are the exception:** when one mechanical change (renaming a field, changing a shared type)
   fans across the whole codebase and no vertical slice can land green, sequence it as **expand–contract**. First
   add the new form beside the old (expand); then migrate call sites in batches sized by blast radius, each batch
   its own ticket blocked by the expand and green because the old form still exists; finally delete the old form
   (contract), blocked by every batch. When even the batches cannot stay green alone, keep the sequence but let
-  them share an integration branch that all block a final integrate-and-verify ticket; green is promised only
-  there.
+  them share one integration branch, with all of them blocking a final integrate-and-verify ticket; green is
+  promised only there.
 - Each ticket lists its **blocker edges**: the tickets that must complete before it can start. A ticket with no
   blockers can start immediately.
 - Granularity, blocker edges, and any merging or splitting are answered on the user's behalf per `ASKING.md`
   section 3, not asked ticket by ticket.
 - Depth reaches only as far as the next executable ticket: frontier tickets get their acceptance criteria written
-  now, while blocked tickets carry scope, blocker edges, and open questions until they are about to enter the
-  frontier, when `get-to-work`'s expansion agent fills in, at dispatch, their criteria before implementation starts —
-  never the implementation agent. Upstream implementation rewrites the facts the downstream tickets rest on; details written early are
-  the details that get rewritten.
+  now, while blocked tickets carry scope, blocker edges, and open questions; their criteria wait until they are
+  about to enter the frontier, when `get-to-work`'s expansion agent fills them in at dispatch, before
+  implementation starts — never the implementation agent. Upstream implementation rewrites the facts the
+  downstream tickets rest on; details written early are the details that get rewritten.
 - Neither tickets nor the spec name specific file paths or code snippets; they go stale fast. The exception: where
   a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer,
   schema, type shape), excerpt only the decision-rich part and say where it came from.
@@ -127,7 +127,8 @@ to reverse crosses tickets come here), and one immediately executable **next act
 `/get-to-work` to clear the tickets, and `/issue-chain` when the full picture must be rebuilt.
 
 That log doubles as the ruling point's question pool: when `have-it-all-done` composes this skill, it takes the
-highest items by cost to reverse from this log and asks them alongside section 2's four classes, all at once.
+highest items by cost to reverse from this log and asks them alongside the pending items in `ASKING.md`
+section 2's four classes, all at once.
 
 Done when: every published ticket appears in the output with a provider-native identifier that downstream
 skills can read directly; the frontier agrees with the blocker edges, and the next action points at an

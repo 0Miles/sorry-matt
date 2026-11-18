@@ -74,9 +74,9 @@ not an adjective.
 
 Each self-answer is written once, in one of two layers: an implementation detail that affects one ticket only and
 is reversible inside that ticket's worktree goes in that ticket's status record (or, when made while expanding the
-ticket before work starts, in its expansion block); only the self-answers whose cost
-to reverse crosses tickets or deliveries enter the run-level **self-answer log**. Decisions the user made in person
-during an earlier grilling are requirements, not self-answers.
+ticket before work starts, in its expansion block); only the self-answers whose cost to reverse crosses tickets or
+deliveries enter the run-level **self-answer log**. Decisions the user made in person during an earlier grilling
+are requirements, not self-answers, and are not listed.
 
 Done when: every non-class decision after the risk gate is recorded in one of the layers, with all five columns
 filled.
@@ -190,8 +190,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
 2. The task scope and where the adopted grilling source lives.
 3. The risk gate's three lights and the clearance record.
 4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
-   `get-to-work` section 1, reading CI); the base SHA `get-to-work` merged in when finishing the run (when
-   unsynced, the SHA it tried and "unsynced").
+   `get-to-work` section 1, reading CI); the base SHA `get-to-work` synced in when finishing the run (when
+   unsynced, the base SHA it tried and "unsynced").
 5. Authorization outcomes: every action sent and Claude Code's verdict on it, with a permission rule snippet for
    each blocked one.
 6. The run-level self-answer log.
@@ -199,16 +199,17 @@ is exactly the active marker, with no blank line before it. Ten fields:
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
    its responsible agent's id, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration,
-   red-light fix merges included). The stage is candidate, expanding, implementing, in review,
-   fixing, queued or integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work`
-   section 1); resuming relies on it and the agent id to pick back up every ticket short of an end state.
+   red-light fix merges included). The stage is candidate, expanding, implementing, in review, fixing, queued or
+   integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming
+   relies on it and the agent id to pick back up every ticket short of an end state.
 9. **Run metrics and budget**, in three parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is
      created, and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns),
      `budget: rounds 40` (dispatch points, `get-to-work` section 1, dispatch; the name is kept from before),
      `budget: hours 12` (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive
-     count for the no-progress breaker). Changing a limit is the user's call; the host never answers on their behalf to raise one (see section 4). The plugin's
-     hook collects every `budget:` line in the whole ledger, so no other field starts a line with `budget:`.
+     count for the no-progress breaker). Changing a limit is the user's call; the host never answers on their
+     behalf to raise one (see section 4). The plugin's hook collects every `budget:` line in the whole ledger, so
+     no other field starts a line with `budget:`.
    - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user
      before the ruling point does not count; when taking over a ledger without one, record the takeover time and
      note that earlier time is not counted), waiting time (from then on, the total from sending each question to the
@@ -217,10 +218,11 @@ is exactly the active marker, with no blank line before it. Ten fields:
      per `get-to-work` section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per
      verdict `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out
      pushes does not count), send-backs for a redo, compactions and handovers. Spawns come from `spawns` in
-     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No such file means the hook is not loaded,
-     and the host keeps the count itself. Token counts are unknown unless the runtime itself reports them; never
-     estimate them from duration or agent count. Update usage when `get-to-work` section 1, budget and breaker, says:
-     first thing at every dispatch point, and at the end of every ticket's close-out.
+     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
+     such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
+     the runtime itself reports them; never estimate them from duration or agent count. Update usage when
+     `get-to-work` section 1, budget and breaker, says: first thing at every dispatch point, and at the end of
+     every ticket's close-out.
    - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
      and where the run is stuck; "none" when it has not stopped.
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
@@ -235,10 +237,10 @@ When the common directory is not writable, or the current directory is not insid
 the final report becomes the source of truth; say so in the report, and do not stop over it. Write the ledger
 current at the end of every step and every `get-to-work` wake-up.
 
-**Resuming:** after a compaction, a `/loop` wake-up, or any other resuming, the first action is to re-read the ledger,
-then every rule file its field 10 lists, in full, and only then follow field 1 — never infer from a summary in
-context. After a compaction the plugin's SessionStart hook prints the in-progress ledger and its rule file paths into
-context; the rule applies whether or not that reminder appears.
+**Resuming:** after a compaction, a `/loop` wake-up, or any other resuming, the first action is to re-read the
+ledger, then every rule file its field 10 lists, in full, and only then follow field 1 — never infer from a summary
+in context. After a compaction the plugin's SessionStart hook prints the in-progress ledger and its rule file paths
+into context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
@@ -246,6 +248,6 @@ when it needs detail, it pulls just those lines with a command.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
 "none", field 9 has the four `budget:` limits and current usage, and field 10 has listed the rule files' absolute
-paths since creation; resuming always starts by re-reading
-the ledger and the rule files it lists; where there is no common directory, the report says the source of truth
-moved to it; the host's context holds no raw diffs, test logs, or agent reports.
+paths since creation; resuming always starts by re-reading the ledger and the rule files it lists; where there is
+no common directory, the report says the source of truth moved to it; the host's context holds no raw diffs, test
+logs, or agent reports.
