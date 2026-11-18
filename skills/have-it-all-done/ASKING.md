@@ -96,6 +96,12 @@ filled.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
   flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
   report body.
+- Only the user changes the run-level limits (section 7, field 9). Before the ruling point, estimate spawns from
+  the number of tickets the kickoff published — about 15 per ticket: implementation, expansion, `prove-it`'s
+  finders and verifiers, merging. When that exceeds the default, make the change one question, sorted by cost to
+  reverse with the others; when it does not make the cut, or a standalone `get-to-work` has no ruling point, run on
+  the defaults. When a limit runs short mid-run, never answer on the user's behalf to raise it; stop as
+  `get-to-work` section 1, budget and breaker, says.
 - Eyes-on acceptance (`have-it-all-done` step 5) is an acceptance procedure, not a ruling, and this section does not
   limit it.
 
@@ -193,11 +199,27 @@ is exactly the active marker, with no blank line before it. Ten fields:
 8. **Reconciliation table:** one row per ticket — ticket ID, deliverable, verification result, where that
    ticket's status record lives, and the `sha256` of its acceptance snapshot (recorded by `get-to-work` at
    open-round).
-9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs (one per verdict `get-to-work` reaches
-   while finishing the run, from CI or local alike; CI triggered by close-the-round pushes does not count),
-   compactions and handovers. Token
-   counts are unknown unless the runtime itself reports them; never estimate them from duration or agent count.
-   <!-- pending #16 -->
+9. **Run metrics and budget**, in three parts:
+   - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is
+     created, and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns),
+     `budget: rounds 30` (attempts; each open-round is one), `budget: hours 12` (elapsed time, computed as under
+     usage), and `budget: no-progress 3` (consecutive no-progress rounds before the breaker trips). Changing a
+     limit is the user's call; the host never answers on their behalf to raise one (see section 4). The plugin's
+     hook collects every `budget:` line in the whole ledger, so no other field starts a line with `budget:`.
+   - **Usage:** the start time (ISO 8601, recorded at the first open-round, so time spent waiting on the user before
+     the ruling point does not count; when taking over a ledger without one, record the takeover time and note that
+     earlier time is not counted), waiting time (from then on, the total from sending each question to the user to
+     receiving the answer), elapsed time (now minus the start time, minus waiting time), spawns, open-rounds run, the
+     consecutive no-progress count with the progress snapshot from the last open-round (judged per `get-to-work`
+     section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per verdict
+     `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-the-round pushes
+     does not count), compactions and handovers. Spawns come from `spawns` in `<run>.counters.json`, which the hook
+     writes next to the ledger; the host reads it and never writes it. No such file means the hook is not loaded,
+     and the host keeps the count itself. Token counts are unknown unless the runtime itself reports them; never
+     estimate them from duration or agent count. Update usage when `get-to-work` section 1, budget and breaker, says:
+     first thing at every open-round, and at the end of every closed round.
+   - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
+     and where the run is stuck; "none" when it has not stopped.
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
     `rule: <absolute path>`, filled in when the ledger is created and completed when an existing ledger is taken
     over (for example, `have-it-all-done` taking over a ledger that a standalone `get-to-work` created). List the
@@ -220,6 +242,7 @@ and files that hold them; the host takes fixed-format summaries (fifteen lines a
 when it needs detail, it pulls just those lines with a command.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
-"none", and field 10 has listed the rule files' absolute paths since creation; resuming always starts by re-reading
+"none", field 9 has the four `budget:` limits and current usage, and field 10 has listed the rule files' absolute
+paths since creation; resuming always starts by re-reading
 the ledger and the rule files it lists; where there is no common directory, the report says the source of truth
 moved to it; the host's context holds no raw diffs, test logs, or agent reports.

@@ -130,7 +130,8 @@ It includes:
   **reconciliation table**.
 - Raw tickets created through filing along the way, a recommendation that the user run `/triage`, and every
   awaiting-ruling item.
-- **This run's metrics** (the ledger's ninth field).
+- **This run's metrics and budget** (the ledger's ninth field): limits and usage; when the run stopped on a limit or
+  the no-progress breaker, which one stopped it and where it is stuck.
 
 Once the report is out, if step 5 will not run, change the ledger's first line to `<!-- sorry-matt:run ended -->`.
 
