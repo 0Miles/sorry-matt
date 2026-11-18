@@ -226,4 +226,18 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 - `ASKING.md` 第 3 節：展開時的票級代答記在展開區塊。
 
 機械強制的邊界：腳本證明的是「快照之後驗收沒變」。「不是實作 agent 寫的」靠順序：快照在 spawn 實作 agent 之前存，
-快照裡的每一項都早於它。快照檔本身沒有防寫，只靠實作 agent 的交付說明不提它的位置；主持人照流程不覆寫。
+快照裡的每一項都早於它。
+
+審查後的修正：
+
+- 快照路徑推得出來，實作 agent 可以同時改 tracker 與快照，讓比對看起來沒變。主持人在 spawn 前把快照的 `sha256` 記進
+  ledger 對帳表（`ASKING.md` 第 7 節第 8 欄），比對時以 `--sha` 傳入；腳本從快照的 items 重算 hash，不符就
+  `snapshotIntact: false`、`changed: true`、結束代碼 3。ledger 也在共用目錄，但實作 agent 的交付說明不提它，要同時改
+  tracker、快照與 ledger 三處才蓋得過去。
+- 不做 guard hook 擋 `sorry-matt/runs/*/acceptance/` 的寫入：hook 分不出呼叫者是主持人還是實作 agent，主持人自己存
+  快照也會被擋；`--sha` 已經讓改快照被抓到。
+- GitHub 的展開區塊是留言，不在票面全文裡：`IMPLEMENTER.md` 加「展開區塊」佔位，由主持人從驗收快照的
+  `expansions[].text` 填入（腳本輸出新增這個欄位）。
+- 腳本解析：展開區塊裡只有 `by`、`run`、`round`、`acceptance`、`rulings` 是 key，其他 `word: …` 行是一般文字（原本會
+  被當成 key，後面的驗收項默默丟掉）；任何層級的 `Comments`／`sorry-matt …` 節都不算原票驗收，放在 `## Acceptance`
+  底下的 `### sorry-matt expansion` 不會被重複計成 original。`EXPANDER.md` 規定展開節一律用 `##`。

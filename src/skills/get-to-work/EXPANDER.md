@@ -52,8 +52,8 @@ rulings:
 
 - **GitHub**：每張票一則留言，body 就是這個區塊，第一行是標記
   （`gh issue comment <n> --repo <owner>/<repo> --body-file <file>`）。不改票面、不改其他留言。
-- **Local Markdown**：在該線整合 worktree 的票檔末尾加 `## sorry-matt expansion` 一節，內容是這個
-  區塊；只動票檔，commit 到整合分支，subject 帶票檔名。
+- **Local Markdown**：在該線整合 worktree 的票檔末尾加 `## sorry-matt expansion` 一節（標題一律 `##`，
+  不放在其他節底下），內容是這個區塊；只動票檔，commit 到整合分支，subject 帶票檔名。
 
 寫展開區塊不算對外發訊。展開所需的事實查不到，那張票不寫區塊，回報為**待裁決**並寫出缺的那個
 事實。

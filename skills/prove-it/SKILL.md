@@ -21,7 +21,7 @@ The caller supplies:
 - **Ticket:** the tracker-native identifier, the full original ticket text, and the expansion block that starts
   with `<!-- sorry-matt:expansion -->`, if there is one.
 - **Acceptance snapshot and check:** the acceptance snapshot saved before implementation started, and the output of
-  checking against it after delivery (both `sorry-matt/acceptance@1`; the check output adds `check`). The snapshot's
+  checking against it after delivery (both `sorry-matt/acceptance@1`; the acceptance diff output adds `check`). The snapshot's
   `items` are this review's acceptance criteria, each with its source: `from: original` came from the original
   ticket, `from: expansion` was added at expansion, with `by`, `run` and `round`.
 - **Fixed point:** the line integration branch.
@@ -37,11 +37,12 @@ which one:
 - `git rev-parse` resolves the fixed point and the ticket branch, and `git diff <fixed point>...<ticket branch>`
   is non-empty.
 - The targeted checks are green. A red light belongs to the implementation agent; review only takes green tickets.
-- The acceptance snapshot and the check output are both present, their `id` is this ticket, and the snapshot holds
+- The acceptance snapshot and the acceptance diff output are both present, their `id` is this ticket, and the snapshot holds
   at least one criterion.
 
-**Changed acceptance criteria fail the review.** When the check output's `check.changed` is true, record one
-blocking finding (lens `acceptance`) directly, without Finders or Verifiers: the evidence is the check output's path
+**Changed acceptance criteria fail the review.** When the acceptance diff output's `check.changed` is true (including
+`check.snapshotIntact` false: the snapshot itself was edited), record one
+blocking finding (lens `acceptance`) directly, without Finders or Verifiers: the evidence is the acceptance diff output's path
 and its `removed` / `added`, and the fix direction is to restore the criteria on the tracker to the snapshot, with
 the implementation agent reporting any criterion it needs changed as awaiting ruling. The review carries on as usual,
 and the acceptance check always works from the snapshot, never from the changed version.
@@ -236,7 +237,7 @@ review: <round>  mode: initial | recheck
 verdict: pass | fix | stuck
 base: <fixed point>@<sha>  head: <ticket branch>@<sha>
 stuck: <reason and how to clear it, or none>
-acceptance: unchanged | changed (<check output path>)  original=<n> expansion=<n> (<by>, round <n>)
+acceptance: unchanged | changed (<acceptance diff path>)  original=<n> expansion=<n> (<by>, round <n>)
 
 reviewer: primary
 findings:
@@ -255,7 +256,7 @@ mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mu
 restored: yes | no
 ```
 
-An empty list is written `none`. An `acceptance` finding's location is the check output's path, not a `file:line`.
+An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a `file:line`.
 With a second reviewer, each gets its own `reviewer:` section, and findings stay
 separate, never merged or reranked; `verdict` follows from every reviewer's findings.
 
@@ -294,7 +295,7 @@ Rebuild the review worktree per section 1 at the fixed ticket branch tip.
 2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added.
 3. **Mutation:** mutate only the lines the findings concern, under the rules of section 3 (one per line, cap 10),
    with a new ledger for this round. If a previously surviving mutant's line is unchanged, rerun the same mutant; this time it must be killed.
-4. **Acceptance diff:** read the new check output the caller attached. The `acceptance` finding is closed only when
+4. **Acceptance diff:** read the new acceptance diff output the caller attached. The `acceptance` finding is closed only when
    `check.changed` is false; when it is true the finding stays open, and if there was none before, record one as a
    new finding in this round per section 1.
 
@@ -303,5 +304,5 @@ no change, and no new blocking finding → `pass`; otherwise `fix`. The caller c
 `mode: recheck`, and each earlier finding's `summary` is prefixed `closed` or `open`.
 
 Done when: every earlier finding has one Fix Verifier ruling with evidence (an `acceptance` finding is ruled on by the
-new check output); the live run and mutation touched only
+new acceptance diff output); the live run and mutation touched only
 the lines the findings concern; the verdict and block are written into the status record per section 6.

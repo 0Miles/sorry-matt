@@ -95,13 +95,17 @@ the one who has to pass them, so the implementation agent only reads the criteri
    dropped from the frontier at later open-rounds.
 2. **Acceptance snapshot:** save the script's output for every ticket about to be dispatched as
    `sorry-matt/runs/<run>/acceptance/<ticket>.json`, where `<ticket>` is the ticket number or file name (in the
-   shared directory beside the ledger; in the scratchpad when there is no ledger), and never overwrite it once saved. It is the baseline the round's close
-   compares against to tell whether the criteria were changed.
+   shared directory beside the ledger; in the scratchpad when there is no ledger), and never overwrite it once
+   saved. It is the baseline the round's close compares against to tell whether the criteria were changed. Record
+   the output's `sha256` in that ticket's row of the ledger's reconciliation table as well: the snapshot's path can
+   be worked out, so the acceptance diff uses this value to prove the snapshot itself was not edited.
 3. From its line integration branch, create `<run>/<NN>-<slug>` and a ticket worktree. With Local Markdown the
    expansion block is already committed on the integration branch, and the ticket branch is cut after it.
 4. Read the sibling [`IMPLEMENTER.md`](IMPLEMENTER.md), fill in its placeholders, and spawn one implementation
-   agent with the filled-in text as its prompt, adding no rules of your own. The **status record** it defines is
-   that ticket's own source of truth; everywhere else cites it.
+   agent with the filled-in text as its prompt, adding no rules of your own. Fill the expansion-block placeholder
+   from `expansions[].text` in that ticket's acceptance snapshot: on GitHub the expansion block is a comment, so the
+   ticket text does not contain it. The **status record** it defines is that ticket's own source of truth;
+   everywhere else cites it.
 
 Done when: every ticket dispatched this round had acceptance criteria and an acceptance snapshot before its
 implementation agent was spawned, and every criterion added by expansion came from the expansion agent and states
@@ -117,11 +121,14 @@ finishing the run.
 
 1. **Targeted checks:** confirm the affected-surface checks the agent reported are green. Red goes back to that
    agent first and comes to review green.
-2. **Independent review:** first check the acceptance criteria — re-read the ticket with `acceptance.mjs` plus
-   `--against <acceptance snapshot>` (for Local Markdown, with `--ref <ticket branch>`) and save the output. Then
-   call the Skill tool with `prove-it` in mode `initial`, passing the ticket (identifier, the original ticket text
-   and the expansion block), the paths of the acceptance snapshot and of the check output, the fixed point (the
-   line integration branch), the ticket branch, and the targeted-check results from step 1. The reviewer does the live run and mutation limited to this ticket's diff, and it writes a fixed-format
+2. **Independent review:** first run the acceptance diff — re-read the ticket with `acceptance.mjs` plus
+   `--against <acceptance snapshot> --sha <the sha256 in the reconciliation table>` (for Local Markdown, with
+   `--ref <ticket branch>`) and save the output. Exit code 3 means the snapshot itself was edited; save the output
+   and hand it to the review all the same, with `check.changed` true. Then call the Skill tool with `prove-it` in
+   mode `initial`, passing the ticket (identifier, the original ticket text and the expansion block), the paths of
+   the acceptance snapshot and of the acceptance diff output, the fixed point (the line integration branch), the
+   ticket branch, and the targeted-check results from step 1. The reviewer does the live run and mutation limited
+   to this ticket's diff, and it writes a fixed-format
    `pass` / `fix` / `stuck` verdict and finding list into the ticket's status record. `pass` goes on to integration,
    `fix` to the batched fix, and `stuck` is cleared using the condition it states: a `stuck` before the review
    opens does not count as a review, so once cleared run `initial` again; a `stuck` mid-review, once cleared,
@@ -131,7 +138,7 @@ finishing the run.
 3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
    round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface and the
    acceptance diff, then call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block
-   and the new check output: it reruns the live
+   and the new acceptance diff output: it reruns the live
    run and mutation only on the lines the findings concern, and is not a second review. At most two correction
    rounds.
 
@@ -169,7 +176,7 @@ After recording the stuck state, also remove the ticket worktree and local ticke
 
 Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`; a
 `stuck` before the review opens does not count), each
-correction round had one `recheck`, every call came with that call's check output against the acceptance snapshot,
+correction round had one `recheck`, every call came with that call's acceptance diff output against the acceptance snapshot,
 and every verdict is in the status record; its targeted checks are back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are

@@ -85,11 +85,13 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
    不再派，之後開輪從 frontier 剔除。
 2. **驗收快照**：把每張要派的票的腳本輸出存成 `sorry-matt/runs/<run>/acceptance/<ticket>.json`
    （`<ticket>` 是票號或票檔名；與 ledger 同在共用目錄，沒有 ledger 時存在 scratchpad），存了就不再覆寫。它是收輪比對驗收
-   有沒有被改過的基準。
+   有沒有被改過的基準。輸出的 `sha256` 同時記進 ledger 對帳表該票那一列：快照路徑推得出來，比對時以
+   這個值驗快照本身沒被改過。
 3. 從所屬線的整合分支建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。Local Markdown 的展開區塊
    已 commit 在整合分支上，ticket 分支從它之後切出。
 4. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
-   spawn 一個實作 agent，不另加規則。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
+   spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
+   的展開區塊在留言裡，票面全文裡沒有。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
 
 完成判準：本輪派出的每張票在 spawn 實作 agent 之前都已有驗收項與驗收快照，展開補上的驗收項都出自
 展開 agent 並標明 `by`、`run`、`round`；本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent，
@@ -103,8 +105,9 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 1. **針對性檢查**：確認 agent 回報的受影響範圍檢查是綠的。紅燈先交回原 agent 修到綠，
    審查只收綠燈的票。
-2. **獨立審查**：先比對驗收 —— 以 `acceptance.mjs` 加 `--against <驗收快照>` 重讀該票（Local
-   Markdown 改用 `--ref <ticket 分支>`），輸出存檔。再呼叫 Skill tool 帶入 `prove-it`，模式
+2. **獨立審查**：先比對驗收 —— 以 `acceptance.mjs` 加 `--against <驗收快照> --sha <對帳表記的 sha256>`
+   重讀該票（Local Markdown 改用 `--ref <ticket 分支>`），輸出存檔。結束代碼 3 表示快照本身被改過，
+   輸出照樣存檔交給審查，`check.changed` 為 true。再呼叫 Skill tool 帶入 `prove-it`，模式
    `initial`，傳入票（識別碼、原票票面與展開區塊）、驗收快照與比對輸出的路徑、fixed point（該線
    整合分支）、ticket 分支與步驟 1 的針對性檢查結果。它由審查方做實跑與只限
    本票 diff 的突變，輸出 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單，並寫進該票的

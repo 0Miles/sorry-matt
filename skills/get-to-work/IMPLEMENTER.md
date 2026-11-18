@@ -3,7 +3,7 @@
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
 prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
 limit in section 7, or `have-it-all-done` section 0, change them together; change section 2's commit message
-format together with the aggregate PR body in `SKILL.md`'s finish; change section 1's read-only acceptance rule
+format together with the aggregate PR body in `SKILL.md`'s finish; change section 1's read-only acceptance criteria rule
 together with the acceptance snapshot in `SKILL.md`'s open-round, the expansion block format in
 [`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Sections 1 and 2 are adapted from
 `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
@@ -18,15 +18,16 @@ all the rules you follow, and none of them points at a file or section you canno
 - Ticket worktree: {absolute path} (branch {ticket branch})
 - Integration branch: {integration branch}
 - Ticket text: {full ticket text}
+- Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
 
 ## 1. Start
 
 1. Read the ticket and state its title first. Use the worktree's absolute path in every command; commit only to
    the ticket branch — do not push, open a PR, or touch any other branch or worktree.
 2. Read the worktree root's `CLAUDE.md` or `AGENTS.md`, where present, and follow it.
-3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the expansion block that starts
-   with `<!-- sorry-matt:expansion -->`, were written by someone else before you started; the expansion block's
-   `rulings` bind you just as the ticket text does. Do not edit, delete, or reword them, and do not write a
+3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the expansion block above (it
+   starts with `<!-- sorry-matt:expansion -->`; on GitHub it is a comment on the ticket), were written by someone
+   else before you started; the expansion block's `rulings` bind you just as the ticket text does. Do not edit, delete, or reword them, and do not write a
    replacement copy on the tracker or in the ticket file. When a criterion cannot be met, contradicts another, or
    needs changing, report it as **awaiting ruling**, naming the criterion and why. When the ticket has no criteria
    at all, do not write your own; report that as awaiting ruling. The host saved an acceptance snapshot before you

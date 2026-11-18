@@ -80,7 +80,7 @@ test('github: original criteria come from the acceptance section, expansion crit
     { ...expansion, text: 'A cell with a comma is quoted' },
   ]);
   assert.deepEqual(out.expansions, [
-    { by: 'expansion-agent', run: 'issue-4-automation', round: '2', at: `https://github.com/${REPO}/issues/7#issuecomment-2` },
+    { by: 'expansion-agent', run: 'issue-4-automation', round: '2', at: `https://github.com/${REPO}/issues/7#issuecomment-2`, text: EXPANSION.trim() },
   ]);
   assert.equal(out.format, 'sorry-matt/acceptance@1');
   assert.equal(out.id, '#7');
@@ -143,24 +143,24 @@ test('local: checkboxes outside the sorry-matt sections are original; the expans
       ['expansion', 'A cell with a comma is quoted'],
     ],
   );
-  assert.deepEqual(out.expansions, [{ by: 'expansion-agent', run: 'issue-4-automation', round: '2', at: '## sorry-matt expansion' }]);
+  assert.deepEqual(out.expansions, [{ by: 'expansion-agent', run: 'issue-4-automation', round: '2', at: '## sorry-matt expansion', text: EXPANSION.trim() }]);
   assert.equal(out.title, '03: Export');
 });
 
 test('compare: ticking a box is not a change; rewording, dropping, adding and reordering are', () => {
   const at = (text) => localAcceptance({ path: 't.md', text, source: 'worktree' });
   const before = at('- [ ] A\n- [ ] B\n');
-  assert.equal(compare(at('- [x] A\n- [X] B\n'), before, 's.json').changed, false);
+  assert.equal(compare(at('- [x] A\n- [X] B\n'), before, 's.json', before.sha256).changed, false);
 
-  const reworded = compare(at('- [ ] A\n- [ ] B, mostly\n'), before, 's.json');
+  const reworded = compare(at('- [ ] A\n- [ ] B, mostly\n'), before, 's.json', before.sha256);
   assert.equal(reworded.changed, true);
   assert.deepEqual(reworded.removed, [{ from: 'original', text: 'B' }]);
   assert.deepEqual(reworded.added, [{ from: 'original', text: 'B, mostly' }]);
 
-  assert.deepEqual(compare(at('- [ ] A\n'), before, 's.json').removed, [{ from: 'original', text: 'B' }]);
-  assert.deepEqual(compare(at('- [ ] A\n- [ ] B\n- [ ] B\n'), before, 's.json').added, [{ from: 'original', text: 'B' }]);
+  assert.deepEqual(compare(at('- [ ] A\n'), before, 's.json', before.sha256).removed, [{ from: 'original', text: 'B' }]);
+  assert.deepEqual(compare(at('- [ ] A\n- [ ] B\n- [ ] B\n'), before, 's.json', before.sha256).added, [{ from: 'original', text: 'B' }]);
 
-  const reordered = compare(at('- [ ] B\n- [ ] A\n'), before, 's.json');
+  const reordered = compare(at('- [ ] B\n- [ ] A\n'), before, 's.json', before.sha256);
   assert.deepEqual([reordered.changed, reordered.removed, reordered.added], [true, [], []]);
 });
 
@@ -171,7 +171,7 @@ test('compare: moving a criterion from the expansion into the ticket body is a c
   });
   const before = githubAcceptance({ repo: REPO, ticket: '7', gh });
   const after = { ...githubAcceptance({ repo: REPO, ticket: '17', gh }), id: '#7' };
-  const result = compare(after, before, 's.json');
+  const result = compare(after, before, 's.json', before.sha256);
   assert.equal(result.changed, true);
   assert.deepEqual(result.removed.map((i) => i.from), ['expansion']);
   assert.deepEqual(result.added.map((i) => i.from), ['original']);
@@ -185,7 +185,10 @@ test('cli: bad arguments and a snapshot of another ticket exit 2; an unreadable 
   assert.equal(main(['local', '--repo', REPO, 't.md'], deps).code, 2);
   assert.equal(main(['github', '--repo', REPO, '--ref', 'main', '7'], deps).code, 2);
   assert.equal(main(['github', '--repo', REPO, 'https://github.com/other/repo/issues/7'], deps).code, 2);
-  const other = main(['github', '--repo', REPO, '7', '--against', 's.json'], deps);
+  assert.equal(main(['github', '--repo', REPO, '7', '--against', 's.json'], deps).code, 2);
+  assert.equal(main(['github', '--repo', REPO, '7', '--sha', '0'.repeat(64)], deps).code, 2);
+  assert.equal(main(['github', '--repo', REPO, '7', '--against', 's.json', '--sha', 'abc'], deps).code, 2);
+  const other = main(['github', '--repo', REPO, '7', '--against', 's.json', '--sha', '0'.repeat(64)], deps);
   assert.equal(other.code, 2);
   assert.match(other.err, /snapshot of github #8/);
   assert.equal(main(['github', '--repo', REPO, '99'], deps).code, 1);
@@ -210,24 +213,101 @@ test('cli local: a snapshot taken on the integration branch is checked against t
     const snap = main(['local', '--ref', 'line', file], deps);
     assert.equal(snap.code, 0, snap.err);
     writeFileSync(join(dir, 'snap.json'), snap.out);
+    const sha = JSON.parse(snap.out).sha256;
 
     // The implementer writes its status record and ticks a box: not a change.
     writeFileSync(join(dir, file), `${LOCAL.replace('- [ ] Export writes', '- [x] Export writes')}- [ ] more notes\n`);
     git('commit', '-q', '-am', 'status');
-    const same = JSON.parse(main(['local', '--ref', 'ticket', file, '--against', 'snap.json'], deps).out);
+    const same = JSON.parse(main(['local', '--ref', 'ticket', file, '--against', 'snap.json', '--sha', sha], deps).out);
     assert.equal(same.check.changed, false);
     assert.equal(same.source, 'ticket');
 
     // The implementer drops an expansion criterion it could not meet: a change.
     writeFileSync(join(dir, file), LOCAL.replace('- [ ] A cell with a comma is quoted\n', ''));
     git('commit', '-q', '-am', 'drop');
-    const dropped = JSON.parse(main(['local', '--ref', 'ticket', file, '--against', 'snap.json'], deps).out);
+    const dropped = JSON.parse(main(['local', '--ref', 'ticket', file, '--against', 'snap.json', '--sha', sha], deps).out);
     assert.equal(dropped.check.changed, true);
     assert.deepEqual(dropped.check.removed.map((i) => i.text), ['A cell with a comma is quoted']);
+
+    // Rewriting the snapshot to match the edited ticket does not hide the edit: its items no longer match --sha.
+    const edited = main(['local', '--ref', 'ticket', file], deps).out;
+    writeFileSync(join(dir, 'snap.json'), edited);
+    const forged = main(['local', '--ref', 'ticket', file, '--against', 'snap.json', '--sha', sha], deps);
+    assert.equal(forged.code, 3);
+    assert.match(forged.err, /does not match --sha/);
+    const forgedOut = JSON.parse(forged.out);
+    assert.deepEqual([forgedOut.check.snapshotIntact, forgedOut.check.changed, forgedOut.check.removed, forgedOut.check.added], [false, true, [], []]);
 
     // Without --ref the working tree is read.
     assert.equal(JSON.parse(main(['local', file], deps).out).source, 'worktree');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('fenced code is not a criterion, in the acceptance section or in the checkbox fallback', () => {
+  const at = (text) => localAcceptance({ path: 't.md', text, source: 'worktree' }).items.map((i) => i.text);
+  assert.deepEqual(at('## Acceptance criteria\n\n- [ ] Real one\n\n```markdown\n- [ ] Example inside a fence\n```\n'), ['Real one']);
+  assert.deepEqual(at('# 01: X\n\n~~~\n- [ ] Fenced\n~~~\n\n- [ ] Real\n'), ['Real']);
+});
+
+test('compare: an expansion criterion re-attributed to another round or author is a change', () => {
+  const at = (by, round) =>
+    localAcceptance({
+      path: 't.md',
+      text: `## sorry-matt expansion\n\n<!-- sorry-matt:expansion -->\nby: ${by}\nrun: r\nround: ${round}\n\nacceptance:\n- [ ] Same text\n`,
+      source: 'worktree',
+    });
+  const before = at('expansion-agent', '2');
+  for (const after of [at('expansion-agent', '3'), at('implementer', '2')]) {
+    const result = compare(after, before, 's.json', before.sha256);
+    assert.equal(result.changed, true);
+    assert.deepEqual([result.removed.length, result.added.length], [1, 1]);
+  }
+});
+
+test('expansion: only by, run, round, acceptance and rulings are keys; other "word:" lines stay text', () => {
+  const block = [
+    '<!-- sorry-matt:expansion -->',
+    'by: expansion-agent',
+    'run: r',
+    'round: 1',
+    '',
+    'acceptance:',
+    '- [ ] Export rejects a table with no columns,',
+    'note: with exit code 2',
+    '- [ ] A second criterion after the folded line',
+    '',
+    'rulings:',
+    '- [ ] not a criterion',
+  ].join('\n');
+  const { gh } = fakeGh({ 7: { title: 'Export', body: '## What to build\n\nScope.\n', comments: [block] } });
+  const out = githubAcceptance({ repo: REPO, ticket: '7', gh });
+  assert.deepEqual(
+    out.items.map((i) => i.text),
+    ['Export rejects a table with no columns, note: with exit code 2', 'A second criterion after the folded line'],
+  );
+  assert.equal(out.expansions[0].text, block);
+});
+
+test('an expansion section nested under the acceptance heading is counted once, as expansion', () => {
+  const text = [
+    '# 03: Export',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [ ] Original one',
+    '',
+    '### sorry-matt expansion',
+    '',
+    '<!-- sorry-matt:expansion -->',
+    'by: expansion-agent',
+    'run: r',
+    'round: 1',
+    '',
+    'acceptance:',
+    '- [ ] Added one',
+  ].join('\n');
+  const out = localAcceptance({ path: 't.md', text, source: 'worktree' });
+  assert.deepEqual(out.items.map((i) => [i.from, i.text]), [['original', 'Original one'], ['expansion', 'Added one']]);
 });

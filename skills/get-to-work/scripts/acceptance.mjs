@@ -3,13 +3,14 @@
 // No dependencies: runs on a bare Node 20+.
 //
 // Usage
-//   node acceptance.mjs github --repo <owner>/<repo> <n|#n|issue URL> [--against <snapshot.json>]
-//   node acceptance.mjs local [--ref <git-ref>] <ticket-file> [--against <snapshot.json>]
+//   node acceptance.mjs github --repo <owner>/<repo> <n|#n|issue URL> [--against <snapshot.json> --sha <hex>]
+//   node acceptance.mjs local [--ref <git-ref>] <ticket-file> [--against <snapshot.json> --sha <hex>]
 //
 // Where criteria come from
-//   original   The ticket body (GitHub issue body; Local Markdown ticket file). When it has an acceptance heading
-//              (`Acceptance criteria`, `Acceptance` or `驗收…`, any level), the list items of that section; else
-//              every checkbox item (`- [ ]`, `- [x]`) outside the `## Comments` and `## sorry-matt …` sections.
+//   original   The ticket body (GitHub issue body; Local Markdown ticket file), leaving out fenced code and every
+//              section titled `Comments` or `sorry-matt …` (any level, down to the next heading of that level or
+//              higher). When what is left has an acceptance heading (`Acceptance criteria`, `Acceptance` or `驗收…`,
+//              any level), the list items of that section; else every checkbox item (`- [ ]`, `- [x]`).
 //   expansion  An expansion block, written by someone other than the implementer before the ticket starts:
 //
 //                <!-- sorry-matt:expansion -->
@@ -24,13 +25,18 @@
 //                ...
 //
 //              GitHub: an issue comment whose first non-blank line is the marker. Local Markdown: the
-//              `## sorry-matt expansion` section of the ticket file. The list items after `acceptance:` up to
-//              the next `<key>:` line are the criteria.
-//   A criterion's text is its list item with continuation lines joined and whitespace collapsed. A checkbox's
-//   state is not part of it: ticking a box is not changing a criterion.
+//              `## sorry-matt expansion` section of the ticket file. The keys are exactly by, run, round, acceptance
+//              and rulings, each at the start of a line; any other `word: …` line is ordinary text. The list items
+//              between `acceptance:` and the next key line are the criteria.
+//   A criterion's text is its list item with continuation lines (indented, or lazy ones directly below) joined and
+//   whitespace collapsed. A checkbox's state is not part of it: ticking a box is not changing a criterion.
 //
 // --against  Compare with a snapshot this script wrote earlier (its output saved to a file at spawn time). Any
-//            criterion removed, added, reworded, reordered or moved to another source counts as a change.
+//            criterion removed, added, reworded, reordered or moved to another source (`from`, `by`, `run`, `round`)
+//            counts as a change.
+// --sha      Required with --against: the snapshot's sha256 as recorded when it was saved. The script recomputes the
+//            hash from the snapshot's items; when it differs, the snapshot itself was edited, which counts as a
+//            change (check.snapshotIntact false, exit 3).
 // --ref      Local Markdown only: read the ticket file from that commit instead of the working tree.
 //
 // Output (stdout, JSON, format "sorry-matt/acceptance@1"; fields are only ever added, never renamed)
@@ -42,15 +48,17 @@
 //     "title":          "...",
 //     "items":          [{ "from": "original", "text": "..." },
 //                        { "from": "expansion", "by": "expansion-agent", "run": "r1", "round": "2", "text": "..." }],
-//     "expansions":     [{ "by": "...", "run": "...", "round": "...", "at": "<comment URL | ## sorry-matt expansion>" }],
+//     "expansions":     [{ "by": "...", "run": "...", "round": "...", "at": "<comment URL | ## sorry-matt expansion>",
+//                          "text": "<the block, marker line included>" }],
 //     "needsExpansion": true,       // no criteria from any source
 //     "sha256":         "<hex>",    // over the items, in order
-//     "check":          { "against": "<path>", "changed": false, "removed": [item...], "added": [item...] }
-//                                   // only with --against
+//     "check":          { "against": "<path>", "snapshotIntact": true, "changed": false,
+//                         "removed": [item...], "added": [item...] }      // only with --against
 //   }
 //
-// Exit codes: 0 output written (a change is reported in "check", not in the exit code); 1 tracker, git or
-// snapshot read failed; 2 bad arguments, or the snapshot belongs to another ticket.
+// Exit codes: 0 output written (a change in the ticket is reported in "check", not in the exit code); 1 tracker,
+// git or snapshot read failed; 2 bad arguments, or the snapshot belongs to another ticket; 3 output written, but the
+// snapshot's items do not match --sha.
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -63,12 +71,14 @@ export const MARKER = '<!-- sorry-matt:expansion -->';
 class UsageError extends Error {}
 
 const ACCEPTANCE_HEADING = /^(acceptance criteria|acceptance|驗收\S*)$/i;
+const SKIPPED_SECTION = /^(comments|sorry-matt\b)/i;
 const LIST_ITEM = /^\s*[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$/;
 const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s+(.*)$/;
-const KEY_LINE = /^([a-z][a-z -]*):\s*(.*)$/;
+const KEY_LINE = /^(by|run|round|acceptance|rulings):\s*(.*)$/;
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 
-// List items of `lines`, each with its indented continuation lines; `pick` decides which lines start an item.
+// List items of `lines`, each with its continuation lines; `pick` decides which lines start an item. A blank line,
+// a heading, or a list item that `pick` rejects ends the item.
 function listItems(lines, pick = LIST_ITEM) {
   const items = [];
   let open = false;
@@ -77,7 +87,7 @@ function listItems(lines, pick = LIST_ITEM) {
     if (m) {
       items.push(m[1]);
       open = true;
-    } else if (open && /^\s+\S/.test(line) && !LIST_ITEM.test(line)) {
+    } else if (open && line.trim() && !LIST_ITEM.test(line) && !/^\s*#{1,6}\s/.test(line)) {
       items[items.length - 1] += ` ${line}`;
     } else {
       open = false;
@@ -102,37 +112,40 @@ function scan(text) {
   });
 }
 
-// The lines under the first heading matching `test`, up to the next heading of the same or a higher level.
-function section(text, test) {
-  const rows = scan(text);
+// The rows under the first heading matching `test`, up to the next heading of the same or a higher level.
+function section(rows, test) {
   const start = rows.findIndex((r) => r.level && test(r.title));
   if (start < 0) return null;
   const out = [];
   for (const r of rows.slice(start + 1)) {
     if (r.level && r.level <= rows[start].level) break;
-    out.push(r.fenced ? '' : r.line);
+    out.push(r);
   }
   return out;
 }
 
+const text = (rows) => rows.map((r) => (r.fenced ? '' : r.line));
+
 export function originalCriteria(body) {
-  const own = section(body, (t) => ACCEPTANCE_HEADING.test(t));
-  if (own) return listItems(own);
-  const lines = [];
-  let skip = false;
-  for (const r of scan(body)) {
-    if (r.level === 2) skip = /^(comments|sorry-matt\b)/i.test(r.title);
-    lines.push(skip || r.fenced ? '' : r.line);
-  }
-  return listItems(lines, CHECKBOX);
+  // Blank out fenced code and the Comments / sorry-matt sections, whatever their level, so an expansion section
+  // nested under the acceptance heading is never counted twice.
+  let skipBelow = null;
+  const rows = scan(body).map((r) => {
+    if (r.level && skipBelow !== null && r.level <= skipBelow) skipBelow = null;
+    if (r.level && skipBelow === null && SKIPPED_SECTION.test(r.title)) skipBelow = r.level;
+    return skipBelow !== null || r.fenced ? { line: '' } : r;
+  });
+  const own = section(rows, (t) => ACCEPTANCE_HEADING.test(t));
+  return own ? listItems(text(own)) : listItems(text(rows), CHECKBOX);
 }
 
 // Every expansion block in `text`: each starts at a marker line and runs to the next marker or the end.
-export function expansionBlocks(text, at) {
-  const lines = text.split(/\r?\n/);
+export function expansionBlocks(blockText, at) {
+  const lines = blockText.split(/\r?\n/);
   const starts = lines.flatMap((l, i) => (l.trim() === MARKER ? [i] : []));
   return starts.map((s, k) => {
-    const block = lines.slice(s + 1, k + 1 < starts.length ? starts[k + 1] : lines.length);
+    const end = k + 1 < starts.length ? starts[k + 1] : lines.length;
+    const block = lines.slice(s + 1, end);
     const meta = { by: null, run: null, round: null };
     const criteria = [];
     let inAcceptance = false;
@@ -145,16 +158,18 @@ export function expansionBlocks(text, at) {
       }
       if (inAcceptance) criteria.push(line);
     }
-    return { ...meta, at, criteria: listItems(criteria) };
+    const raw = lines.slice(s, end).join('\n').trim();
+    return { ...meta, at, text: raw, criteria: listItems(criteria) };
   });
 }
 
 const itemKey = (item) => JSON.stringify([item.from, item.by ?? null, item.run ?? null, item.round ?? null, item.text]);
+export const itemsHash = (items) => createHash('sha256').update(JSON.stringify(items.map(itemKey))).digest('hex');
 
 function assemble({ tracker, source, id, title, body, blocks }) {
   const items = [
-    ...originalCriteria(body).map((text) => ({ from: 'original', text })),
-    ...blocks.flatMap((b) => b.criteria.map((text) => ({ from: 'expansion', by: b.by, run: b.run, round: b.round, text }))),
+    ...originalCriteria(body).map((t) => ({ from: 'original', text: t })),
+    ...blocks.flatMap((b) => b.criteria.map((t) => ({ from: 'expansion', by: b.by, run: b.run, round: b.round, text: t }))),
   ];
   return {
     format: FORMAT,
@@ -163,19 +178,20 @@ function assemble({ tracker, source, id, title, body, blocks }) {
     id,
     title,
     items,
-    expansions: blocks.map(({ by, run, round, at }) => ({ by, run, round, at })),
+    expansions: blocks.map(({ by, run, round, at, text: raw }) => ({ by, run, round, at, text: raw })),
     needsExpansion: items.length === 0,
-    sha256: createHash('sha256').update(JSON.stringify(items.map(itemKey))).digest('hex'),
+    sha256: itemsHash(items),
   };
 }
 
-export function compare(current, snapshot, against) {
+export function compare(current, snapshot, against, sha) {
   if (!snapshot || snapshot.format !== FORMAT || !Array.isArray(snapshot.items)) {
     throw new UsageError(`${against} is not a ${FORMAT} snapshot`);
   }
   if (snapshot.id !== current.id || snapshot.tracker !== current.tracker) {
     throw new UsageError(`${against} is the snapshot of ${snapshot.tracker} ${snapshot.id}, not ${current.tracker} ${current.id}`);
   }
+  const snapshotIntact = itemsHash(snapshot.items) === String(sha).toLowerCase();
   // Multiset difference, so a duplicated or dropped copy of the same criterion still counts.
   const left = new Map();
   for (const item of snapshot.items) left.set(itemKey(item), [...(left.get(itemKey(item)) || []), item]);
@@ -187,7 +203,7 @@ export function compare(current, snapshot, against) {
   }
   const removed = [...left.values()].flat();
   const reordered = snapshot.items.map(itemKey).join('\n') !== current.items.map(itemKey).join('\n');
-  return { against, changed: removed.length > 0 || added.length > 0 || reordered, removed, added };
+  return { against, snapshotIntact, changed: !snapshotIntact || removed.length > 0 || added.length > 0 || reordered, removed, added };
 }
 
 // ---------- trackers ----------
@@ -211,11 +227,11 @@ export function githubAcceptance({ repo, ticket, gh }) {
   return assemble({ tracker: 'github', source: repo, id: `#${n}`, title: issue.title, body: issue.body || '', blocks });
 }
 
-export function localAcceptance({ path, text, source }) {
-  const own = section(text, (t) => /^sorry-matt expansion$/i.test(t));
-  const blocks = own ? expansionBlocks(own.join('\n'), '## sorry-matt expansion') : [];
-  const title = (/^#\s+(.*)$/m.exec(text) || [])[1] || path;
-  return assemble({ tracker: 'local', source, id: path, title: title.trim(), body: text, blocks });
+export function localAcceptance({ path, text: body, source }) {
+  const own = section(scan(body), (t) => /^sorry-matt expansion$/i.test(t));
+  const blocks = own ? expansionBlocks(own.map((r) => r.line).join('\n'), '## sorry-matt expansion') : [];
+  const title = (/^#\s+(.*)$/m.exec(body) || [])[1] || path;
+  return assemble({ tracker: 'local', source, id: path, title: title.trim(), body, blocks });
 }
 
 // ---------- CLI ----------
@@ -232,6 +248,7 @@ function parseArgs(argv) {
     if (a === '--repo') opts.repo = value();
     else if (a === '--ref') opts.ref = value();
     else if (a === '--against') opts.against = value();
+    else if (a === '--sha') opts.sha = value();
     else if (a.startsWith('--')) throw new UsageError(`unknown option ${a}`);
     else opts.positional.push(a);
   }
@@ -239,6 +256,8 @@ function parseArgs(argv) {
   if (opts.positional.length !== 1) throw new UsageError('give exactly one ticket');
   if (tracker === 'local' && opts.repo) throw new UsageError('--repo is github only');
   if (tracker === 'github' && opts.ref) throw new UsageError('--ref is local only');
+  if (Boolean(opts.against) !== Boolean(opts.sha)) throw new UsageError('--against and --sha go together');
+  if (opts.sha && !/^[0-9a-f]{64}$/i.test(opts.sha)) throw new UsageError('--sha must be a 64-digit hex sha256');
   return { tracker, ticket: opts.positional[0], ...opts };
 }
 
@@ -270,9 +289,11 @@ export function main(argv, deps = defaultDeps()) {
     if (args.tracker === 'github') {
       result = githubAcceptance({ repo: args.repo, ticket: args.ticket, gh: deps.gh });
     } else {
-      const { path, text } = readLocal(deps, args.ticket, args.ref);
-      result = localAcceptance({ path, text, source: args.ref || 'worktree' });
+      const { path, text: body } = readLocal(deps, args.ticket, args.ref);
+      result = localAcceptance({ path, text: body, source: args.ref || 'worktree' });
     }
+    let code = 0;
+    let err = '';
     if (args.against) {
       let snapshot;
       try {
@@ -280,9 +301,13 @@ export function main(argv, deps = defaultDeps()) {
       } catch (e) {
         throw new Error(`cannot read snapshot ${args.against}: ${e.message}`);
       }
-      result.check = compare(result, snapshot, args.against);
+      result.check = compare(result, snapshot, args.against, args.sha);
+      if (!result.check.snapshotIntact) {
+        code = 3;
+        err = `acceptance: ${args.against} does not match --sha: the snapshot was edited after it was saved\n`;
+      }
     }
-    return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
+    return { code, out: `${JSON.stringify(result, null, 2)}\n`, err };
   } catch (e) {
     const usage = e instanceof UsageError;
     const detail = (e.stderr && String(e.stderr).trim()) || e.message;

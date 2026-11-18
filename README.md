@@ -104,7 +104,8 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   SHA-256 against its `NOTICE.md`.
 - `hooks/` holds the guard hook; `scripts/guard.test.mjs` tests it in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
-  (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`) run in the same CI run.
+  (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
+  `scripts/acceptance.test.mjs`) run in the same CI run.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the
