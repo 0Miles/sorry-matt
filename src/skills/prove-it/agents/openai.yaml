@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prove It"
+  short_description: "Review one sorry-matt ticket with evidence"
+  default_prompt: "Use $prove-it to review this sorry-matt ticket branch against its line integration branch."

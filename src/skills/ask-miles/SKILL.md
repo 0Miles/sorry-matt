@@ -22,6 +22,9 @@ disable-model-invocation: true
   tracker 整理成線性工作鏈並指出唯一下一步；全程只讀。
 - **有人送來 GitHub PR 要審查** → `/review-pr <PR>`。審查 PR 包含的改動，並在 GitHub 發布
   建議與修改要求。
+- **想單獨重審 sorry-matt 流程裡的一張票（不發 PR 評語）** → `/prove-it <票>`。以整合分支為 fixed
+  point，用證據鏈、實跑與只限本票 diff 的突變審 ticket 分支，結論寫進該票的接續紀錄；
+  `get-to-work` 收輪會自己呼叫它。
 - **當 Agent 不講人話時** → `/speak-human`。保留事實、條件、責任與不確定程度，
   改成目標語言與地區中自然、常用的說法。
 - **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。

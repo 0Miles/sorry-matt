@@ -33,7 +33,8 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改。第 1、
 - 一次一個切片：先寫一個會失敗的測試，再寫剛好讓它通過的程式，重複。
 - 只跑受影響範圍的**針對性檢查**：typecheck、這張票碰到的測試檔、相關的 lint。完整套件由
   主持人在收官跑一次。
-- 不呼叫 `code-review`：獨立審查由主持人在收輪做一次，審自己剛寫的程式沒有獨立性。
+- 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收輪
+  做一次，審自己剛寫的程式沒有獨立性。
 - 完成後把成果 commit 到 ticket 分支。每個 commit 的 subject 帶票 ID（GitHub 為 `#N`，Local
   Markdown 為票檔名）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足哪幾項
   驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整總 PR 的摘要。不寫

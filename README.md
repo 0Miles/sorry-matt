@@ -16,6 +16,7 @@ grill them
 | `have-it-all-done` | Take over one complete task, carrying prior grilling through planning and implementation to something a human can merge |
 | `issue-chain` | Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action |
 | `review-pr` | Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes. |
+| `prove-it` | Ticket-level independent review for the sorry-matt workflow: an evidence chain, a live run, and mutation limited to the ticket's diff, ending in a pass / fix / stuck verdict in the ticket's status record. Called by `get-to-work`; posts no PR comments. |
 | `speak-human` | Rewrite stiff, bureaucratic, ambiguous, translated, or AI-sounding text into clear, natural language for the target locale without semantic drift. |
 | `no-bullshit` | Cut the crap. Get to the point. |
 | `clean-it-up` | Safely remove merged local branches and obsolete worktrees after a Git task is finished; remote branches require explicit opt-in. |
@@ -102,6 +103,8 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
 - `hooks/` holds the guard hook; `scripts/guard.test.mjs` tests it in the same CI run.
+- Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
+  (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`) run in the same CI run.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the
