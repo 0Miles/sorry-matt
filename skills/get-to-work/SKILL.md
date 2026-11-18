@@ -34,12 +34,12 @@ Then **freeze** the initial ticket set:
    node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" local <ticket-file>...
    ```
 
-   The script's header documents the output format. A blocker whose `state` is `missing` is a reference that
-   matches no ticket; list that ticket as **awaiting ruling**.
+   The script's header documents the output format.
 3. **Exclude what another line holds.** From `git worktree list`, the commits on unmerged integration branches,
    the heads of open PRs, and whatever other sessions this session knows about, derive the files somebody else is
    working in. Tickets overlapping those files are not frozen into this set: list them as **awaiting ruling**
-   with the source of the hold and its clearing condition.
+   with the source of the hold and its clearing condition. When any ticket is excluded, re-run the script over the
+   remaining set and take the lines from that run's `line` — an exclusion can split a line.
 4. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
    per line. Accumulate that line's results there round by round.
 
@@ -61,12 +61,16 @@ point, so write the ledger current before that round ends.
 
 Every open-round starts by re-running `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
 
-- **GitHub:** tickets this run has integrated are still open on GitHub, so pass them from the ledger's
-  reconciliation table with `--done <n,...>`; pass stuck tickets with `--stuck <n,...>`, which keeps their
-  downstream blocked.
-- **Local Markdown:** run once per line with `--ref <that line's integration branch>`; done and stuck come from
-  the `sorry-matt completion` / `sorry-matt blocker` records in the ticket files on that branch, and
-  `ready-for-human` does not count as done.
+- **GitHub:** tickets integrated into their line integration branch are still open on GitHub, so take the
+  integrated tickets from the ledger's reconciliation table and pass them with `--done <n,...>`; pass stuck tickets
+  with `--stuck <n,...>`.
+- **Local Markdown:** run once per line, passing the whole frozen set with `--ref <that line's integration branch>`
+  and `--line <that line's line>` (the value from the freeze); the frontier is the union of each line's `frontier`.
+  Done and stuck come from the `sorry-matt completion` / `sorry-matt blocker` records in the ticket files on that
+  branch, and `ready-for-human` does not count as done.
+
+A ticket whose `stalled` is not null (`cycle`, `missing`, `blocked-external`, `blocked-upstream`) cannot become
+startable within this run: list it as **awaiting ruling** with the reason and the blockers involved.
 
 Work across lines is usually parallel; tickets on the same line or touching the same files are **mutually exclusive**
 and must run in separate rounds.

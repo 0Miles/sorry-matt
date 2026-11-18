@@ -32,10 +32,11 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
    node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" local <票檔路徑>...
    ```
 
-   輸出格式寫在腳本檔頭。`state` 為 `missing` 的 blocker 是對不到票的參照，該票列為**待裁決**。
+   輸出格式寫在腳本檔頭。
 3. **排除他線佔用**：以 `git worktree list`、未合併整合分支上的 commits、open PR 的 head，
    以及本 session 已知的其他 session，推出正在被別人動的檔案。檔案與之重疊的票不凍進本次
-   票集，改列為**待裁決**並寫出佔用來源與解除條件。
+   票集，改列為**待裁決**並寫出佔用來源與解除條件。有票被排除時，對剩下的票集重跑一次腳本，
+   以重跑輸出的 `line` 定線 —— 排除可能讓一條線分裂。
 4. 從目前分支尖端，為每條線建立 `<run>/<line-slug>` **整合分支**與整合 worktree；同線成果
    逐輪累積於此。
 
@@ -55,10 +56,15 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 每次開輪先重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
 
-- **GitHub**：本 run 已整併的票在 GitHub 上仍是 open，依 ledger 對帳表以 `--done <n,...>`
-  傳入；卡住的票以 `--stuck <n,...>` 傳入，它的下游就保持阻塞。
-- **Local Markdown**：每條線各跑一次，加 `--ref <該線整合分支>`；完成與卡住由該分支票檔上的
-  `sorry-matt completion`／`sorry-matt blocker` 判定，`ready-for-human` 不算完成。
+- **GitHub**：已整併進線整合分支的票在 GitHub 上仍是 open，取 ledger 對帳表中已整併的票以
+  `--done <n,...>` 傳入；卡住的票以 `--stuck <n,...>` 傳入。
+- **Local Markdown**：每條線各跑一次，傳整個凍結票集，加 `--ref <該線整合分支>` 與
+  `--line <該線的 line>`（凍結時輸出的值）；frontier 是各線輸出 `frontier` 的聯集。完成與
+  卡住由該分支票檔上的 `sorry-matt completion`／`sorry-matt blocker` 判定，`ready-for-human`
+  不算完成。
+
+`stalled` 不為 null 的票（`cycle`、`missing`、`blocked-external`、`blocked-upstream`）在本 run
+內不會變成可開工，列為**待裁決**並寫出原因與相關 blocker。
 
 跨線工作通常可平行；同線或修改同一批檔案的**互斥** tickets 必須分輪。
 

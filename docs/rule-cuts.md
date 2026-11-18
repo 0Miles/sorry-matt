@@ -170,13 +170,16 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 | 規則 | 處置 | 理由 |
 | --- | --- | --- |
 | `get-to-work` 第 0 節凍結第 2 步「依 tracker 契約讀取 blocker 邊並劃分線……需要排鏈時呼叫 `issue-chain`」 | 改為執行 `get-to-work/scripts/frontier.mjs`，以輸出的 `blockedBy`、`line` 為準 | 每輪靠 LLM 重讀票面推邊，結果不保證每次一樣。`issue-chain` 留給需要給人看的排鏈。 |
-| `get-to-work` 開輪「frontier 是尚未完成、blocker 均已解除的票」 | 改為每次開輪重跑腳本，frontier 就是輸出的 `frontier`；GitHub 傳 `--done`／`--stuck`，Local Markdown 每線帶 `--ref` | 同上。 |
+| `get-to-work` 開輪「frontier 是尚未完成、blocker 均已解除的票」 | 改為每次開輪重跑腳本，frontier 就是輸出的 `frontier`；GitHub 傳 `--done`／`--stuck`，Local Markdown 每線帶 `--ref` 與 `--line`、取聯集 | 同上。每線只報自己的票：別線已完成的票在本線分支上讀起來仍是 open，會被重派。 |
 | `get-to-work` 收輪「Local Markdown 的 blocker 只在同一整合分支可讀到完整 `sorry-matt completion` 且 criteria 全勾後解除」 | 刪 | 由腳本判定，`scripts/frontier.test.mjs` 有測。 |
-| `get-to-work` 收輪「卡住票的下游 tickets 保持阻塞」與收輪完成判準的 completion 契約子句 | 刪 | 由腳本判定：卡住票以 `--stuck` 傳入或票檔有 `sorry-matt blocker`，下游的 `ready` 就是 false。 |
+| `get-to-work` 收輪「卡住票的下游 tickets 保持阻塞」與收輪完成判準的 completion 契約子句 | 刪；改為 `stalled` 不為 null 的票列為待裁決 | 由腳本判定：卡住票以 `--stuck` 傳入或票檔有 `sorry-matt blocker`，下游的 `stalled` 是 `blocked-upstream`。循環與集合外未完成的 blocker 同樣標出，否則這些票永遠不 ready 又不算卡住，loop 收不了尾。 |
 
 新增：
 
-- `get-to-work/scripts/frontier.mjs`（零依賴）：GitHub 用原生 issue dependencies，Local Markdown 解析票檔的
-  Blocked by 與 `sorry-matt completion`，兩者輸出同格式的 JSON（`sorry-matt/frontier@1`，格式寫在檔頭）。
-  測試在 `scripts/frontier.test.mjs`，GitHub 經 `gh` seam 用 fixture，不打真的 API；CI 一起跑。
+- `get-to-work/scripts/frontier.mjs`（零依賴）：GitHub 用原生 issue dependencies，並與票面 `Blocked by:` 行（tracker
+  契約的 fallback）取聯集，兩者不一致時輸出 warning；closed 一律算完成，含 not planned，與 GitHub 自己的 open blocker
+  計數及 tracker 契約一致。Local Markdown 解析票檔的 Blocked by 與 `sorry-matt completion`。兩者輸出同格式的 JSON
+  （`sorry-matt/frontier@1`，格式寫在檔頭）。測試在 `scripts/frontier.test.mjs`，GitHub 經 `gh` seam 用 fixture，
+  不打真的 API；CI 一起跑。
+- `get-to-work` 凍結第 3 步排除他線佔用後重跑一次腳本，排除可能讓線分裂。
 - `scripts/check-structure.mjs`：skill 內的 `scripts/` 與 metadata 一樣，src 與 dist 要逐位元組相同（LF 正規化）。

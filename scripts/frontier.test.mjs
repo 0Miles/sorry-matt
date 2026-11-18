@@ -12,16 +12,31 @@ import { githubFrontier, localFrontier, main, defaultDeps } from '../src/skills/
 const REPO = 'acme/app';
 const API = `https://api.github.com/repos/${REPO}`;
 
-// `issues` maps a number to { state, title, blockedBy: [{ number, state, repo? }] }.
-function fakeGh(issues) {
+// `issues` maps a number to { state, title, body?, blockedBy: [{ number, state, repo? }] };
+// `others` maps "owner/repo#n" to the state of an issue that is only fetched on its own.
+function fakeGh(issues, others = {}) {
   const calls = [];
   const gh = (path) => {
     calls.push(path);
+    const other = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(path);
+    if (other && other[1] !== REPO) {
+      const key = `${other[1]}#${other[2]}`;
+      if (!(key in others)) {
+        const e = new Error('Command failed: gh api');
+        e.stderr = 'gh: Not Found (HTTP 404)';
+        throw e;
+      }
+      return { number: Number(other[2]), state: others[key], title: key };
+    }
     const dep = /^repos\/acme\/app\/issues\/(\d+)\/dependencies\/blocked_by\?per_page=100$/.exec(path);
     const one = /^repos\/acme\/app\/issues\/(\d+)$/.exec(path);
     const n = Number((dep || one || [])[1]);
-    if (!issues[n]) throw new Error(`unexpected gh api ${path}`);
-    if (one) return { number: n, state: issues[n].state, title: issues[n].title, repository_url: API };
+    if (!issues[n]) {
+      const e = new Error('Command failed: gh api');
+      e.stderr = 'gh: Not Found (HTTP 404)';
+      throw e;
+    }
+    if (one) return { number: n, state: issues[n].state, title: issues[n].title, body: issues[n].body ?? null, repository_url: API };
     return issues[n].blockedBy.map((b) => ({
       number: b.number,
       state: b.state,
@@ -48,7 +63,7 @@ test('github: blockers come from native dependencies; frontier is open tickets w
     tracker: 'github',
     source: REPO,
     tickets: [
-      { id: '#5', title: 'Five', state: 'done', trackerState: 'closed', blockedBy: [], line: '#5', ready: false },
+      { id: '#5', title: 'Five', state: 'done', trackerState: 'closed', blockedBy: [], line: '#5', ready: false, stalled: null },
       {
         id: '#6',
         title: 'Six',
@@ -57,6 +72,7 @@ test('github: blockers come from native dependencies; frontier is open tickets w
         blockedBy: [{ id: '#5', state: 'done', inSet: true }],
         line: '#5',
         ready: true,
+        stalled: null,
       },
       {
         id: '#7',
@@ -69,6 +85,7 @@ test('github: blockers come from native dependencies; frontier is open tickets w
         ],
         line: '#5',
         ready: false,
+        stalled: null,
       },
       {
         id: '#8',
@@ -78,11 +95,13 @@ test('github: blockers come from native dependencies; frontier is open tickets w
         blockedBy: [{ id: 'acme/lib#30', state: 'open', inSet: false }],
         line: '#8',
         ready: false,
+        stalled: 'blocked-external',
       },
-      { id: '#10', title: 'Ten', state: 'open', trackerState: 'open', blockedBy: [], line: '#10', ready: true },
+      { id: '#10', title: 'Ten', state: 'open', trackerState: 'open', blockedBy: [], line: '#10', ready: true, stalled: null },
     ],
     lines: [['#5', '#6', '#7'], ['#8'], ['#10']],
     frontier: ['#6', '#10'],
+    warnings: [],
   });
   assert.ok(calls.every((c) => c.startsWith(`repos/${REPO}/issues/`)));
 });
@@ -110,6 +129,61 @@ test('github: --done clears a ticket integrated this run; --stuck keeps it and i
     ],
   );
   assert.deepEqual(stuck.tickets[2].blockedBy, [{ id: '#7', state: 'stuck', inSet: true }]);
+});
+
+test('github: a body Blocked by line is the fallback edge, unioned with native ones and warned when they differ', () => {
+  const issues = {
+    6: { state: 'open', title: 'Six', blockedBy: [] },
+    7: { state: 'open', title: 'Seven', body: 'Blocked by: #6, acme/lib#3\n\n## What to build\n', blockedBy: [] },
+    8: { state: 'open', title: 'Eight', body: '## Blocked by\n\n- #6\n- #40 (gone)\n', blockedBy: [{ number: 5, state: 'closed' }] },
+    9: { state: 'open', title: 'Nine', body: '## Blocked by\n\n- None (can start immediately)\n', blockedBy: [{ number: 5, state: 'closed' }] },
+    10: { state: 'open', title: 'Ten', body: 'Blocked by: #5\n', blockedBy: [{ number: 5, state: 'closed' }] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['6', '7', '8', '9', '10'], gh: fakeGh(issues, { 'acme/lib#3': 'closed' }).gh });
+  const by = Object.fromEntries(out.tickets.map((t) => [t.id, t]));
+  assert.deepEqual(by['#7'].blockedBy, [
+    { id: '#6', state: 'open', inSet: true },
+    { id: 'acme/lib#3', state: 'done', inSet: false },
+  ]);
+  assert.deepEqual(by['#8'].blockedBy, [
+    { id: '#5', state: 'done', inSet: false },
+    { id: '#6', state: 'open', inSet: true },
+    { id: '#40', state: 'missing', inSet: false },
+  ]);
+  assert.equal(by['#8'].stalled, 'missing');
+  assert.deepEqual(out.frontier, ['#6', '#9', '#10']);
+  assert.deepEqual(out.lines, [['#6', '#7', '#8'], ['#9'], ['#10']]);
+  assert.deepEqual(out.warnings, ['#8: body Blocked by (#6, #40) differs from native dependencies (#5); using both']);
+});
+
+test('github: an issue URL from another repository is refused', () => {
+  const r = main(['github', '--repo', REPO, 'https://github.com/acme/other/issues/6'], { gh: () => assert.fail('gh called') });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /is not in --repo acme\/app/);
+  assert.equal(githubFrontier({ repo: REPO, numbers: ['https://github.com/ACME/App/issues/6'], gh: fakeGh(ISSUES).gh }).tickets[0].id, '#6');
+});
+
+test('github: cycles, open blockers outside the set and stalled upstreams are marked stalled', () => {
+  const issues = {
+    20: { state: 'open', title: 'A', blockedBy: [{ number: 21, state: 'open' }] },
+    21: { state: 'open', title: 'B', blockedBy: [{ number: 20, state: 'open' }] },
+    22: { state: 'open', title: 'C', blockedBy: [{ number: 21, state: 'open' }] },
+    23: { state: 'open', title: 'D', blockedBy: [{ number: 99, state: 'open' }] },
+    24: { state: 'open', title: 'E', blockedBy: [{ number: 23, state: 'open' }] },
+    25: { state: 'open', title: 'F', blockedBy: [{ number: 98, state: 'closed' }] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['20', '21', '22', '23', '24', '25'], gh: fakeGh(issues).gh });
+  assert.deepEqual(
+    out.tickets.map((t) => [t.id, t.ready, t.stalled]),
+    [
+      ['#20', false, 'cycle'],
+      ['#21', false, 'cycle'],
+      ['#22', false, 'blocked-upstream'],
+      ['#23', false, 'blocked-external'],
+      ['#24', false, 'blocked-upstream'],
+      ['#25', true, null],
+    ],
+  );
 });
 
 const ISSUE_DIR = '.scratch/feat/issues';
@@ -190,16 +264,19 @@ test('local: Blocked by and sorry-matt completion decide state and frontier; Sta
     blockedBy: [{ id: `${ISSUE_DIR}/01-schema.md`, state: 'done', inSet: false }],
     line: `${ISSUE_DIR}/02-api.md`,
     ready: true,
+    stalled: null,
   });
   assert.deepEqual(by['03-ui.md'].blockedBy, [
     { id: `${ISSUE_DIR}/01-schema.md`, state: 'done', inSet: false },
     { id: `${ISSUE_DIR}/02-api.md`, state: 'open', inSet: true },
   ]);
   assert.equal(by['03-ui.md'].trackerState, 'ready-for-agent');
-  assert.equal(by['03-ui.md'].ready, false);
+  assert.deepEqual([by['03-ui.md'].ready, by['03-ui.md'].stalled], [false, null]);
   assert.deepEqual([by['04-docs.md'].blockedBy, by['04-docs.md'].ready], [[], true]);
   assert.deepEqual([by['05-half.md'].state, by['05-half.md'].ready], ['open', true]);
   assert.deepEqual(by['07-after-stuck.md'].blockedBy, [{ id: `${ISSUE_DIR}/06-stuck.md`, state: 'stuck', inSet: false }]);
+  assert.equal(by['07-after-stuck.md'].stalled, 'blocked-external');
+  assert.equal(by['08-dangling.md'].stalled, 'missing');
   assert.deepEqual(by['08-dangling.md'].blockedBy, [
     { id: '99', state: 'missing', inSet: false },
     { id: 'Some title', state: 'missing', inSet: false },
@@ -268,41 +345,67 @@ test('cli: github writes the JSON to out; a gh failure exits 1', () => {
   assert.deepEqual([failing.code, failing.err], [1, 'frontier: gh: Not Found (HTTP 404)\n']);
 });
 
-test('cli: local reads the working tree by default and the given commit with --ref', () => {
+test('cli: local reads the working tree by default, a commit with --ref, and one line with --line', () => {
   const root = mkdtempSync(join(tmpdir(), 'sorry-matt-frontier-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const write = (p, text) => {
     mkdirSync(dirname(join(root, p)), { recursive: true });
     writeFileSync(join(root, p), text);
   };
+  const ticket = (nn, title, blockedBy) => `# ${nn}: ${title}\n\n**Blocked by:** ${blockedBy}\n\n- [ ] Works\n`;
+  const deliver = (nn, slug, title, blockedBy) =>
+    write(`${ISSUE_DIR}/${nn}-${slug}.md`, `${ticket(nn, title, blockedBy).replace('- [ ]', '- [x]')}\n## sorry-matt completion\n\n- commit: 1\n`);
+  const at = (p) => `${ISSUE_DIR}/${p}`;
   try {
     git('init', '-q', '-b', 'base');
     git('config', 'user.email', 'test@example.invalid');
     git('config', 'user.name', 'test');
     git('config', 'core.autocrlf', 'false');
-    write(`${ISSUE_DIR}/01-schema.md`, '# 01: Schema\n\n**Blocked by:** None\n\n- [ ] Tables\n');
-    write(`${ISSUE_DIR}/02-api.md`, '# 02: API\n\n**Blocked by:** 01\n\n- [ ] Endpoint\n');
+    // Two lines: 01 -> 02 and 03 -> 04. Each line's integration branch delivers its own first ticket.
+    write(at('01-schema.md'), ticket('01', 'Schema', 'None'));
+    write(at('02-api.md'), ticket('02', 'API', '01'));
+    write(at('03-docs.md'), ticket('03', 'Docs', 'None'));
+    write(at('04-guide.md'), ticket('04', 'Guide', '#3'));
     git('add', '-A');
     git('commit', '-q', '-m', 'tickets');
-    git('checkout', '-q', '-b', 'run/line');
-    write(`${ISSUE_DIR}/01-schema.md`, '# 01: Schema\n\n**Blocked by:** None\n\n- [x] Tables\n\n## sorry-matt completion\n\n- commit: 1\n');
+    git('checkout', '-q', '-b', 'run/a');
+    deliver('01', 'schema', 'Schema', 'None');
     git('commit', '-q', '-am', 'deliver 01');
+    git('checkout', '-q', '-b', 'run/b', 'base');
+    deliver('03', 'docs', 'Docs', 'None');
+    git('commit', '-q', '-am', 'deliver 03');
     git('checkout', '-q', 'base');
 
-    const argv = ['local', `${ISSUE_DIR}/01-schema.md`, join(root, ISSUE_DIR, '02-api.md')];
-    const base = main(argv, defaultDeps(root));
-    assert.equal(base.code, 0, base.err);
-    assert.deepEqual(JSON.parse(base.out).frontier, [`${ISSUE_DIR}/01-schema.md`]);
-    assert.equal(JSON.parse(base.out).source, 'worktree');
+    const all = ['01-schema.md', '02-api.md', '03-docs.md', '04-guide.md'];
+    const json = (argv, cwd = root) => {
+      const r = main(argv, defaultDeps(cwd));
+      assert.equal(r.code, 0, r.err);
+      return JSON.parse(r.out);
+    };
 
-    const line = main(['local', '--ref', 'run/line', ...argv.slice(1)], defaultDeps(root));
-    assert.equal(line.code, 0, line.err);
-    assert.deepEqual(JSON.parse(line.out).frontier, [`${ISSUE_DIR}/02-api.md`]);
-    assert.deepEqual(JSON.parse(line.out).lines, [[`${ISSUE_DIR}/01-schema.md`, `${ISSUE_DIR}/02-api.md`]]);
+    const base = json(['local', ...all.map(at).slice(0, 3), join(root, at('04-guide.md'))]);
+    assert.equal(base.source, 'worktree');
+    assert.deepEqual(base.frontier, [at('01-schema.md'), at('03-docs.md')]);
+    assert.deepEqual(base.lines, [[at('01-schema.md'), at('02-api.md')], [at('03-docs.md'), at('04-guide.md')]]);
 
-    const missingRef = main(['local', '--ref', 'no-such-branch', `${ISSUE_DIR}/01-schema.md`], defaultDeps(root));
+    // Without --line, line b's delivered 03 reads as open on run/a and would be dispatched again.
+    assert.deepEqual(json(['local', '--ref', 'run/a', ...all.map(at)]).frontier, [at('02-api.md'), at('03-docs.md')]);
+
+    // From a subdirectory, with relative paths: --ref still resolves the ticket directory from the repo root.
+    const sub = join(root, '.scratch');
+    const rel = all.map((f) => `feat/issues/${f}`);
+    const a = json(['local', '--ref', 'run/a', '--line', at('01-schema.md'), ...rel], sub);
+    const b = json(['local', '--ref', 'run/b', '--line', at('03-docs.md'), ...rel], sub);
+    assert.deepEqual(a.tickets.map((t) => t.id), [at('01-schema.md'), at('02-api.md')]);
+    assert.deepEqual([a.lines, a.frontier], [[[at('01-schema.md'), at('02-api.md')]], [at('02-api.md')]]);
+    assert.deepEqual([b.lines, b.frontier], [[[at('03-docs.md'), at('04-guide.md')]], [at('04-guide.md')]]);
+    assert.deepEqual(b.tickets[1].blockedBy, [{ id: at('03-docs.md'), state: 'done', inSet: true }]);
+
+    const noLine = main(['local', '--line', at('02-api.md'), ...all.map(at)], defaultDeps(root));
+    assert.deepEqual([noLine.code, /names no line/.test(noLine.err)], [1, true]);
+    const missingRef = main(['local', '--ref', 'no-such-branch', at('01-schema.md')], defaultDeps(root));
     assert.equal(missingRef.code, 1);
-    const missingFile = main(['local', `${ISSUE_DIR}/09-nope.md`], defaultDeps(root));
+    const missingFile = main(['local', at('09-nope.md')], defaultDeps(root));
     assert.deepEqual([missingFile.code, /cannot read ticket file/.test(missingFile.err)], [1, true]);
   } finally {
     rmSync(root, { recursive: true, force: true });
