@@ -131,6 +131,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 仲裁順序 | precedence |
 | 狀態矩陣 | state matrix |
 | 無障礙底線 | accessibility floor |
+| 證據等級 | evidence grade |
 | 實測/推導/判斷 | measured / derived / judged |
 | 未驗證 | unverified |
 | 主張 | claim |
@@ -140,6 +141,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 假設 | assumption |
 | 前後對照 | before/after pair |
 | 給人看的清單 | eyes-on list |
+| 觀看條件 | viewing conditions |
+| 量測條件 | measurement conditions |
 | 基準值 | baseline |
 | 雜訊 | noise |
 | 瓶頸 | bottleneck |
@@ -157,8 +160,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 五支前端 skill 的知識來源是兩個第三方 model-invoked skill:`master-design`
 (`master-co/design`,MIT)與 `modern-web-guidance`(`GoogleChrome/modern-web-guidance`,
 Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不進 `references/upstream/`;
-缺席時的行為寫在 `build-the-ui-right/FRONTEND.md` 第 1 節。`FRONTEND.md` 的狀態矩陣、無障礙底線
-與證據三級對帳 Master Design 的 `principles.md`、`accessibility.md` 與 `evidence.md`
+缺席時的行為寫在 `build-the-ui-right/FRONTEND.md` 的「仲裁順序」一節。`FRONTEND.md` 的狀態矩陣、
+無障礙底線與證據等級對帳 Master Design 的 `principles.md`、`accessibility.md` 與 `evidence.md`
 (寫入時為 0.3.7),上游改了就回來對一次。
 
 ## 收尾檢查
