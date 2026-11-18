@@ -22,8 +22,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Test the check scripts, the guard hook and the skill scripts
-        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs
+      - name: Test the check scripts, the hooks and the skill scripts
+        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/reread.test.mjs
 
       - name: src/dist structure
         run: node scripts/check-structure.mjs

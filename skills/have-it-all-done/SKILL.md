@@ -49,8 +49,10 @@ ruling with the fact that could not be found.
 ## 1. Pick up the handoff and pass the risk gate
 
 Starting from the base directory stated when this skill was loaded, read the sibling [`ASKING.md`](ASKING.md) in
-full, run its section 0 opening, and take over or create the run ledger per its section 7. It is the contract
-shared with `take-this` and `get-to-work`, and it applies throughout.
+full, run its section 0 opening, and take over or create the run ledger per its section 7. Whether creating or
+taking it over, field 10 must list the absolute paths of this skill's `SKILL.md`, `ASKING.md`, and the sibling
+`../get-to-work/SKILL.md`; add whichever is missing.
+`ASKING.md` is the contract shared with `take-this` and `get-to-work`, and it applies throughout.
 
 Select exactly one task in this order:
 
@@ -130,10 +132,13 @@ It includes:
   awaiting-ruling item.
 - **This run's metrics** (the ledger's ninth field).
 
+Once the report is out, if step 5 will not run, change the ledger's first line to `<!-- sorry-matt:run ended -->`.
+
 Done when: all seven categories are present; the authorization outcomes match the actions actually sent, row by row;
 every line has a traceable deliverable and acceptance evidence that lets someone outside the run decide whether
 to merge its aggregate PR or local integration branch; every human-work item has followable steps or a wizard; no
-section of the report duplicates text that is of record elsewhere.
+section of the report duplicates text that is of record elsewhere; when step 5 does not run, the ledger's first
+line is the ended marker.
 
 ## 5. Eyes-on acceptance (conditional)
 
@@ -143,7 +148,8 @@ the operating steps and a URL or window the user can open directly, waiting for 
 It is an acceptance procedure rather than a ruling, so the one-ruling-point limit does not apply.
 
 Feed each result back into the reconciliation table. A ticket that fails is marked stuck under `get-to-work`'s
-rules; no code changes here.
+rules; no code changes here. After the last result is fed back, change the ledger's first line to
+`<!-- sorry-matt:run ended -->`.
 
 Done when: every criterion that cannot be verified mechanically has the user's per-item response and a landing
-place, or is explicitly recorded as not applicable.
+place, or is explicitly recorded as not applicable; the ledger's first line is the ended marker.

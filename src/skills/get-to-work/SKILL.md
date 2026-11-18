@@ -11,7 +11,8 @@ disable-model-invocation: true
 以本 skill 載入時標示的 base directory 為起點，讀同層的
 [`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md) 全文，依它第 0 節開場。它是
 共用契約，全程適用，無論本 skill 是被使用者直接執行還是由 `have-it-all-done` 組合。由
-`have-it-all-done` 組合時沿用它的 run ledger；獨立執行時依 `ASKING.md` 第 7 節自建。
+`have-it-all-done` 組合時沿用它的 run ledger；獨立執行時依 `ASKING.md` 第 7 節自建或接手，第 10 欄
+要有本 skill 的 `SKILL.md` 與 `ASKING.md` 的絕對路徑，缺的補上。
 
 確認 git repo 與 working tree 乾淨；tracker 設定為 GitHub 時另確認 `gh` 已登入。Local
 Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節。
@@ -48,8 +49,11 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 ## 1. 用 `/loop` 推進輪次
 
-進入不帶間隔、可自我調速的 `/loop`，prompt 設為「get-to-work：收輪／開輪」。Agents 尚在
-執行時，使用較長 fallback 等候通知。收輪邊界是唯一的交接點，所以把 ledger 寫到最新才結束
+進入不帶間隔、可自我調速的 `/loop`，prompt 設為「get-to-work：重讀 `<ledger 絕對路徑>` 與它
+第 10 欄列出的規則檔，再收輪／開輪」；沒有 ledger 時改為重讀本 skill 的 `SKILL.md` 與 `ASKING.md`
+的絕對路徑。每次喚醒都帶著這句，恢復（`ASKING.md` 第 7 節）不靠記憶。
+
+Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯一的交接點，所以把 ledger 寫到最新才結束
 那一輪。
 
 ### 開輪
@@ -211,9 +215,11 @@ GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是�
 
 最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
 第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
+獨立執行時，輸出後把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done`
+組合時不改，留給它的交棒。
 
 完成判準：每條線都跑過一次線級精簡與一次完整驗證並收在綠燈，且恰有一項可供人合併的交付，
 或已經權限設定放行而合併並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
 人工作業清單有關票指令；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
-分支仍保留；輸出已列出需授權動作的結果與本輪計量。
+分支仍保留；輸出已列出需授權動作的結果與本輪計量；獨立執行時 ledger 第一行已是 ended 標記。

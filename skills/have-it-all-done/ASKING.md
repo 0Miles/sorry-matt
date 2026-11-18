@@ -170,9 +170,15 @@ Done when: every question and every piece of outbound text this run follows all 
 
 ## 7. The run ledger and the context budget
 
-The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the common
-directory. When the same task already has one, take it over rather than rebuilding from the conversation's
-compaction summary; otherwise create one. Nine fields:
+The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the **common
+directory** (`git rev-parse --path-format=absolute --git-common-dir`). When the same task already has one, take it
+over rather than rebuilding from the conversation's compaction summary; otherwise create one.
+
+Its first line is a state marker: `<!-- sorry-matt:run active -->` when created, changed to
+`<!-- sorry-matt:run ended -->` when the run's last step ends — when composed, after `have-it-all-done`'s handoff
+(if step 5 does not run) or its eyes-on acceptance; after the wrap-up when `get-to-work` runs standalone. Each of
+those steps spells this out. The plugin's SessionStart hook only recognizes a ledger whose first line (a BOM aside)
+is exactly the active marker, with no blank line before it. Ten fields:
 
 1. **Next action:** one line to follow on resuming.
 2. The task scope and where the adopted grilling source lives.
@@ -188,15 +194,28 @@ compaction summary; otherwise create one. Nine fields:
 9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs, compactions and handovers. Token
    counts are unknown unless the runtime itself reports them; never estimate them from duration or agent count.
    <!-- pending #16 -->
+10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
+    `rule: <absolute path>`, filled in when the ledger is created and completed when an existing ledger is taken
+    over (for example, `have-it-all-done` taking over a ledger that a standalone `get-to-work` created). List the
+    `SKILL.md` loaded through the Skill tool too: compaction re-attaches only its first 5,000 tokens. Files read only
+    at one step to fill in a hand-off (`EXPANDER.md`, `IMPLEMENTER.md`, `TEMPLATES.md`, and the like) are not
+    listed: the step that uses one reads it again anyway. The hook collects every `rule: <absolute path>` line in
+    the whole ledger, so no other field starts a line with `rule:`.
 
 When the common directory is not writable, or the current directory is not inside a git repo, there is no ledger —
 the final report becomes the source of truth; say so in the report, and do not stop over it. Write the ledger
-current at the end of every step and every closed round; after a compaction, a `/loop` wake-up, or any resumption,
-the first action is to re-read it rather than inferring from a summary in context.
+current at the end of every step and every closed round.
+
+**Resuming:** after a compaction, a `/loop` wake-up, or any other resuming, the first action is to re-read the ledger,
+then every rule file its field 10 lists, in full, and only then follow field 1 — never infer from a summary in
+context. After a compaction the plugin's SessionStart hook prints the in-progress ledger and its rule file paths into
+context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
 when it needs detail, it pulls just those lines with a command.
 
-Done when: all nine ledger fields hold content or say "none", and where there is no common directory, the report
-says the source of truth moved to it; the host's context holds no raw diffs, test logs, or agent reports.
+Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
+"none", and field 10 has listed the rule files' absolute paths since creation; resuming always starts by re-reading
+the ledger and the rule files it lists; where there is no common directory, the report says the source of truth
+moved to it; the host's context holds no raw diffs, test logs, or agent reports.
