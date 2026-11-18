@@ -17,7 +17,8 @@
 //         `Blocked by:` line (or a `## Blocked by` list): `NN`, `#NN`, a file name or a repo-relative path,
 //         comma-separated; "None ..." means no blockers. A ticket is done when it has a non-empty
 //         `## sorry-matt completion` section and no unchecked `- [ ]` outside the `## Comments` and
-//         `## sorry-matt ...` sections; it is stuck when it has `## sorry-matt blocker` and is not done.
+//         `## sorry-matt ...` sections, and no `## sorry-matt blocker` after the completion (get-to-work appends
+//         one when it reverts the merge); it is stuck when it has `## sorry-matt blocker` and is not done.
 //         `Status:` alone (ready-for-human included) never makes it done. Without --ref the files are read
 //         from the working tree; with --ref they are read from that commit.
 // --line  Report only the tickets of that line (an id from `line`). With Local Markdown, done and stuck live on
@@ -313,9 +314,11 @@ export function parseTicket(text) {
   const secs = sections(text);
   const ownText = secs.filter(ownSection).map((s) => s.body.join('\n')).join('\n');
   const completion = secs.find((s) => /^sorry-matt completion$/i.test(s.heading));
+  const blockerAt = secs.findLastIndex((s) => /^sorry-matt blocker$/i.test(s.heading));
   const unchecked = secs.filter(ownSection).some((s) => s.body.some((l) => /^\s*[-*]\s+\[ \]/.test(l)));
-  const done = Boolean(completion && completion.body.some((l) => l.trim()) && !unchecked);
-  const stuck = !done && secs.some((s) => /^sorry-matt blocker$/i.test(s.heading));
+  // A blocker after the completion record (a reverted merge) undoes it.
+  const done = Boolean(completion && completion.body.some((l) => l.trim()) && !unchecked && blockerAt < secs.indexOf(completion));
+  const stuck = !done && blockerAt >= 0;
   return {
     title: (/^#\s+(.*)$/m.exec(text) || [])[1]?.trim() ?? null,
     status: field(ownText, 'Status'),

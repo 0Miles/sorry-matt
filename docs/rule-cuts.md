@@ -309,3 +309,40 @@ guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 M
 `branches/main` 的 `protection.required_status_checks.contexts` 回 `[]`、`git grep -l merge_group HEAD -- .github/workflows`
 結束代碼 1 —— 未啟用 merge queue（它只開放給組織擁有的公開 repo 或 Enterprise Cloud 的組織私有 repo），本 repo 的收官
 行為不變。
+
+## #12：每次整併後 push 整合分支，全套交給 CI
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 收輪「完整驗證只在收官做一次」 | 改為每次整併後 push 整合分支（新的步驟 6，兩種模式；GitHub 原本在完成交付裡的 push 移過來），CI 在背景跑全套，主持人不等 | 整合時壞掉的東西原本要到收官才發現，之後疊上去的票都得重做。CI 跑全套不花 agent 的 token。 |
+| 收輪「整併」 | 指定 `git merge --no-ff`，一張票一個 merge commit；每次整併各 push 一次，不攢著推 | 紅燈要對得到是哪次整併：最早轉紅的 SHA 指向一張票，撤回時 `git revert -m 1` 有對象。 |
+| 開輪（新增） | 派票前以 `gh run list --branch <b> --commit <sha> --json databaseId,workflowName,status,conclusion` 讀 `origin/<整合分支>` 的 CI，分六種：查詢失敗、沒有 run、紅、還在跑、被取消、綠，依序判斷 | 「還在跑」與「查詢失敗」不等不輪詢，照常開輪、下一次開輪再讀 —— 每個 run 跑全套，較新的 SHA 涵蓋較舊的。「被取消」不是失敗，`gh run rerun` 後當還在跑。只讀 GitHub Actions：log（`--log-failed`）與等待（`gh run watch`）都有現成指令；其他 CI 讀不到，退回本機跑，不猜。 |
+| 開輪轉紅 | 該線不派新票；找最早轉紅的 SHA 對到票，交回原 agent 走集中修正與 `recheck`，兩輪修不好就 `git revert -m 1` 撤回該次整併、該票標卡住 | 不撤回的話整條線卡在紅燈上，後面的票都疊在壞的基礎上。撤回可逆，不屬永久例外。 |
+| 「沒有 run」 | 這條線較早 push 過的 SHA 有過 run 時當還在跑；都沒有才記為「CI 不涵蓋整合分支」 | 剛 push 的 SHA 要幾秒才登記，一次空清單不代表不涵蓋。 |
+| 第 2 節完整驗證「在整合分支上跑一次 repo 完整的自動檢查」 | 改為以整合分支最新 SHA 的 CI 為準，`gh run watch <id> --exit-status` 等結束；沒有 `origin`、CI 不涵蓋整合分支、或查詢失敗時才在本機跑一次，報告寫明原因與驗證的 SHA | 有 CI 的 repo 不再於本機重跑全套。收官沒有下一次開輪可等，所以這裡用一次阻塞呼叫，不輪詢。 |
+| 證據失效規則「只要它碰到的檔案又被改動……仍然有效的只有線級完整驗證」與「重跑範圍依實際改動的影響面決定：預設只重跑受影響範圍的針對性檢查，只有新的修正、失敗，或未解的風險才再跑一次完整驗證」 | 改為「綠燈只對它跑過的 SHA 有效，有效的只有整合分支最新 SHA 的結果」；重跑範圍一段刪掉 | 每次 push 都在新 SHA 上跑全套，不必再判斷改動碰到哪些檔、該重跑多少。改動來源清單保留（含 #10 補的「併入基底」），加上「CI 紅燈的修正」。 |
+| `ASKING.md` 第 7 節 ledger 第 4 欄 | 補「最近一次讀到的 CI 結果與它的 SHA」 | 恢復時要知道哪條線是紅的，不從記憶推。 |
+| `IMPLEMENTER.md` 第 2 節「完整套件由主持人在收官跑一次」 | 改為「主持人整併後交給 CI 跑」 | 跟著收輪的新步驟 6。 |
+
+獨立審查後的修正（同票第二個 commit）：
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 讀 CI 的指令與判法寫在開輪裡 | 搬到第 1 節新的「讀 CI」小節，開輪與收官都引用它 | 收官也要讀同一套判法，一份正本。 |
+| `gh run list` 沒有 `--limit` | 單一 SHA 用 `--limit 100`、找最早紅 SHA 用 `--limit 200`，按 `headSha` 彙整 | 預設只回 20 筆，多 workflow 時會截掉。 |
+| 「對到那次整併的票」沒有寫怎麼對 | `git log --merges --first-parent <前一個綠 SHA>..<最早的紅 SHA>`，以 ticket 分支名的 merge subject 認票；主持人的非 merge commit 夾在中間不影響；沒有 ticket merge（主持人 commit、精簡、併入基底）就是對不到票 | 完成紀錄、卡住紀錄、期間開票的 commit 會夾在兩次 push 之間。 |
+| 撤回只寫 `git revert -m 1` | 一併撤掉完成紀錄：GitHub 開卡住 raw issue、從 `--done` 移到 `--stuck`；Local Markdown revert 完成紀錄 commit 再追加 blocker；`frontier.mjs` 把完成紀錄之後的 blocker 判為卡住（`scripts/frontier.test.mjs` 有測試）；對帳表改卡住、總 PR 列缺口 | 只撤 merge 時完成紀錄還在，frontier 判 done 優先於 blocker，被撤回的票仍算完成、下游照派。 |
+| 撤回後的下游 | 依賴它而已整併的票改為缺口：merge 不撤、對帳表標「上游撤回」、移到 `--stuck`（Local 追加 blocker），總 PR 不寫 `Closes`；日後重新整併先 revert 撤回的 commit | 下游的程式建立在被撤回的改動上，不能當完成票關掉；不先 revert-of-revert，git 會把再次合併當成已併入。 |
+| 收官紅燈「交回那段改動的原 agent」 | 改套紅燈處置：對到票走修正與撤回，對不到票由主持人或做那一步的 agent 修，兩輪上限；仍紅就整條線**驗證未過**，不送 `gh pr merge`、留給人合併 | 最後一輪之後沒有下一次開輪，原寫法沒有上限也沒有出口。 |
+| 「較早 push 的 SHA 有過 run」沒有指令 | `gh run list --branch <b> --limit 1 --json databaseId`；空清單先當還在跑，連續兩次開輪都空且分支從來沒有 run 才定案為 CI 不涵蓋，定案沿用到收官 | 首次 push 讀到空清單不代表不涵蓋。 |
+| 收官「對每個未完成的 run 執行 `gh run watch`」與「一次阻塞呼叫」 | 改為每個 run 各一次阻塞呼叫 | 原句自相矛盾。 |
+| 改在本機跑的條件寫在多處 | 收官步驟 3 的**本機驗證**是唯一正本，收輪步驟 6 與完成判準引用它 | 條件只留一份。 |
+| `ASKING.md` 第 9 欄「完整驗證次數」 | 寫明計法：收官每得出一個結論算一次，CI 或本機都算；收輪 push 觸發的 CI 不算 | 驗證改由 CI 跑後，原本的計數對象不清楚。 |
+
+本 repo 的 CI（不是 skill 規則）：`.github/workflows/check.yml` 的 `push` 從只有 `main` 改為 `['**', '!claude/**']`。整合分支
+`<run>/<line-slug>` 的 run 名稱不固定，窄的 pattern 會漏；`claude/**` 是開 PR 的 session 分支，`pull_request` 已涵蓋，排除它們避免
+同一個 SHA 跑兩次（matrix 含 Windows，private repo 的 Actions 分鐘數要算）。總 PR 開出後，整合分支的 push 會同時觸發 `push` 與
+`pull_request`，這幾次重複接受。
+
+guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`master` 與 remote 預設分支，`git push -u origin <run>/<line-slug>`
+不受影響；`gh run list`／`view`／`watch`／`rerun` 與 `git revert -m 1` 也不擋。這幾條寫進 `scripts/guard.test.mjs` 的放行清單。

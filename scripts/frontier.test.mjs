@@ -304,6 +304,28 @@ test('local: a stuck ticket is not ready, and a done ticket is not ready again',
   assert.deepEqual(out.frontier, []);
 });
 
+test('local: a blocker appended after the completion record makes the ticket stuck again', () => {
+  // get-to-work reverts a merge whose CI stays red and appends a blocker; a completion record the revert missed must
+  // not keep the ticket done. A completion after the blocker still means done.
+  const files = {
+    [`${ISSUE_DIR}/09-reverted.md`]:
+      '# 09: Reverted\n\n**Blocked by:** None\n\n- [x] One\n\n## sorry-matt completion\n\ncommit abc\n\n## sorry-matt blocker\n\nreason: CI red, merge reverted\n',
+    [`${ISSUE_DIR}/10-after-reverted.md`]: '# 10: After reverted\n\n**Blocked by:** 09\n',
+    [`${ISSUE_DIR}/11-blocker-then-done.md`]:
+      '# 11: Blocker then done\n\n**Blocked by:** None\n\n- [x] One\n\n## sorry-matt blocker\n\nreason: conflict\n\n## sorry-matt completion\n\ncommit def\n',
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(
+    out.tickets.map((t) => [t.state, t.ready, t.stalled]),
+    [
+      ['stuck', false, null],
+      ['open', false, 'blocked-upstream'],
+      ['done', false, null],
+    ],
+  );
+  assert.deepEqual(out.frontier, []);
+});
+
 test('both trackers emit the same shape', () => {
   const keys = (o) => [Object.keys(o), Object.keys(o.tickets[0]), Object.keys(o.tickets[0].blockedBy[0])];
   const gh = githubFrontier({ repo: REPO, numbers: ['6'], gh: fakeGh(ISSUES).gh });

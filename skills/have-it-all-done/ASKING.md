@@ -183,7 +183,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
 1. **Next action:** one line to follow on resuming.
 2. The task scope and where the adopted grilling source lives.
 3. The risk gate's three lights and the clearance record.
-4. Lines, integration branches, and tip SHAs; the base SHA `get-to-work` merged in when finishing the run (when
+4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
+   `get-to-work` section 1, reading CI); the base SHA `get-to-work` merged in when finishing the run (when
    unsynced, the SHA it tried and "unsynced").
 5. Authorization outcomes: every action sent and Claude Code's verdict on it, with a permission rule snippet for
    each blocked one.
@@ -192,7 +193,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
 8. **Reconciliation table:** one row per ticket — ticket ID, deliverable, verification result, where that
    ticket's status record lives, and the `sha256` of its acceptance snapshot (recorded by `get-to-work` at
    open-round).
-9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs, compactions and handovers. Token
+9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs (one per verdict `get-to-work` reaches
+   while finishing the run, from CI or local alike; CI triggered by close-the-round pushes does not count),
+   compactions and handovers. Token
    counts are unknown unless the runtime itself reports them; never estimate them from duration or agent count.
    <!-- pending #16 -->
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as

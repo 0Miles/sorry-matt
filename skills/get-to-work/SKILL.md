@@ -62,9 +62,77 @@ resuming (`ASKING.md` section 7) never depends on memory.
 While agents are running, use a longer fallback and wait for notifications. A closed round is the only handover
 point, so write the ledger current before that round ends.
 
+### Reading CI
+
+Both the open-round and finishing the run go by **the CI result for the integration branch's latest SHA**. The
+latest SHA is `git rev-parse origin/<integration branch>`; when it differs from the local integration branch, push
+first per close the round step 6, then read:
+
+```bash
+gh run list --branch <integration branch> --commit <SHA> --limit 100 --json databaseId,workflowName,status,conclusion
+```
+
+Only GitHub Actions is read; any other CI is invisible here and counts as no run. All of one SHA's runs together give
+one result, classified in this order, the first match winning; record the result and its SHA in ledger field 4:
+
+- **Query failed:** `gh` exits non-zero. Do not guess: record why, and read again next time.
+- **No run:** the list is empty. A just-pushed SHA may not be registered yet, so treat it as still running first. Only
+  when two open-rounds in a row read an empty list, and `gh run list --branch <integration branch> --limit 1 --json
+  databaseId` is empty too (the branch has never had a run), is the line settled as **CI does not cover the
+  integration branch**; that holds through finishing the run, and the line's CI is not read again.
+- **Red:** some run's `conclusion` is `failure`, `timed_out`, `startup_failure`, `action_required` or `stale`. Go
+  through the red-light handling below.
+- **Still running:** some run's `status` is not `completed`. Do not wait and do not poll; next time, read the
+  then-latest SHA — every run covers the full suite, so a newer SHA covers the older ones.
+- **Cancelled:** some run is `cancelled`. `gh run rerun <databaseId>`, and treat it as still running.
+- **Green:** anything else — every run is `completed`, with `conclusion` `success`, `skipped` or `neutral`.
+
+**Red-light handling.**
+
+1. **Earliest red SHA:** aggregate `gh run list --branch <integration branch> --limit 200 --json
+   headSha,status,conclusion` by `headSha`, classifying each SHA as above; walking
+   `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red SHA —
+   the nearest SHA before it with a verdict is green.
+2. **Map it to a ticket:** `git log --merges --first-parent --format='%H %s' <previous green SHA>..<earliest red SHA>`
+   lists that stretch's merge commits. One whose subject carries a ticket branch name
+   (`Merge branch '<run>/<NN>-<slug>'`) is that ticket; the host's commits — completion records, stuck records,
+   tickets filed along the way — are not merges, so landing in between changes nothing. With several tickets (the
+   pushes between them have no verdict), start from the earliest. With no ticket-branch merge — the red came from a
+   host commit, the simplify pass or the base sync — it **maps to no ticket**.
+3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
+   lines.
+4. **Fix, two rounds at most:** when it maps to a ticket, hand it back to that ticket's original agent (if it is gone,
+   spawn a new one per `IMPLEMENTER.md` with the failure summary attached to the ticket text), to fix on a
+   `<run>/<NN>-<slug>-ci` branch freshly cut from the integration branch: the CI failure is the finding, and it goes
+   through close the round step 3's batched fix (`recheck` attaching that ticket's previous review block) and steps
+   4–7. When it maps to no ticket, the host or the agent that ran that step fixes it in the integration worktree,
+   commits and pushes. The flaky-red hard rail applies. Every fix round ends with a push, and the next CI read
+   gives its result.
+5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and take
+   back its completion record:
+   - **GitHub:** file the stuck record's raw issue per close the round; later open-rounds move the ticket from
+     `--done` to `--stuck`.
+   - **Local Markdown:** `git revert` the commit holding the completion record, then append `## sorry-matt blocker`
+     per close the round, giving the red CI and the reverted commit as the reason. The frontier reads a blocker
+     after the completion record as stuck, so a completion record the revert missed still does not count as done.
+
+   Its row in the ledger's reconciliation table becomes stuck, and the aggregate PR lists it as a gap. Integrated
+   tickets that depend on it become gaps as well: their merges stay, their reconciliation rows say "upstream
+   reverted", GitHub moves them from `--done` to `--stuck`, and Local Markdown appends a blocker to each naming the
+   upstream; the aggregate PR writes no `Closes` for any of them. Push, then read CI as usual. To integrate the
+   reverted ticket again later, first undo the revert with `git revert <the revert commit>`; otherwise Git considers
+   it already merged and brings none of its changes back.
+6. **Still red after two rounds, mapped to no ticket:** the line has **failed verification**: send no `gh pr merge`,
+   enter no merge queue, say so in the aggregate PR and leave it for a human to merge, with the failing jobs in the
+   human-work list.
+
 ### Open the round
 
-Every open-round starts by re-running `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
+Every open-round starts by reading CI, per reading CI, for each line that has been pushed and is not settled as not
+covered by CI. A red line goes through the red-light handling and dispatches nothing new until it is green or the
+culprit is reverted; any other result opens the round as usual.
+
+Then re-run `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
 
 - **GitHub:** tickets integrated into their line integration branch are still open on GitHub (closing waits for the
   aggregate PR's merge), so take the integrated tickets from the ledger's reconciliation table and pass them with
@@ -112,7 +180,9 @@ the one who has to pass them, so the implementation agent only reads the criteri
    ticket text does not contain it. The **status record** it defines is that ticket's own source of truth;
    everywhere else cites it.
 
-Done when: every ticket dispatched this round had acceptance criteria and an acceptance snapshot before its
+Done when: every line due a CI read had its latest SHA's result read and recorded in the ledger, a red line
+dispatched nothing new until it was green or reverted, and a reverted ticket and the integrated tickets depending on
+it are out of `--done`, their reconciliation rows marked stuck or gap; every ticket dispatched this round had acceptance criteria and an acceptance snapshot before its
 implementation agent was spawned, and every criterion added by expansion came from the expansion agent and states
 `by`, `run` and `round`; every frontier ticket in the round has an independent branch, worktree, and responsible
 agent, or is listed as awaiting ruling; every implementation agent's prompt is the full `IMPLEMENTER.md` text with its
@@ -121,8 +191,9 @@ placeholders filled; same-line or file-overlapping tickets are absent from the s
 ### Close the round
 
 After every agent in the round reports, take each ticket through these gates. The order is fixed — **targeted checks
-→ one independent review → one batched fix → re-check by affected surface**; full verification happens once, while
-finishing the run.
+→ one independent review → one batched fix → re-check by affected surface**. The full suite belongs to CI: every
+integration pushes the integration branch, CI runs in the background, the host does not wait, and the next
+open-round reads the result.
 
 1. **Targeted checks:** confirm the affected-surface checks the agent reported are green. Red goes back to that
    agent first and comes to review green.
@@ -151,7 +222,8 @@ finishing the run.
    treated as a real failure: find the root cause, and fix the test when it lies there or fix the product and
    file a defect ticket when it lies there. Re-running, loosening a wait, adding a retry and raising a timeout
    all leave it unfixed. If two correction rounds do not find the root cause, mark the ticket stuck.
-4. **Integrate:** merge the ticket branch in the integration worktree. Where there are conflicts, give them to a
+4. **Integrate:** in the integration worktree, merge with `git merge --no-ff <ticket branch>`, one merge commit per
+   ticket. Where there are conflicts, give them to a
    **merge agent** to resolve hunk by hunk: it gets the integration worktree, both sides' ticket text and commit
    messages, and this test — the choice is between two intents rather than two blocks of text, so trace each side
    to its primary source (the ticket text and the commit message), keep both where they are compatible, and where
@@ -159,13 +231,15 @@ finishing the run.
    actually wrote. It reports the trade-off per hunk, and the host records those trade-offs in the self-answer
    log. Then run the targeted checks for the affected surface.
 5. **Complete delivery:**
-   - **GitHub:** push the integration branch. The ticket stays open; closing it is the aggregate PR's job
-     (section 2). This ticket's summary lives in its commit message (`IMPLEMENTER.md` section 2).
+   - **GitHub:** the ticket stays open; closing it is the aggregate PR's job (section 2). This ticket's summary lives in its commit message (`IMPLEMENTER.md` section 2).
    - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket
      (the expansion block's included),
      set `Status` to `ready-for-human`, and append `## sorry-matt completion` with the implementation commit,
      integration branch, and passed checks. Commit this delivery record.
-6. Remove the ticket worktree and local ticket branch.
+6. **Push:** with an `origin`, `git push -u origin <integration branch>`, in both modes; Local Markdown with no
+   remote skips it, and finishing the run takes section 2 step 3's local verification. Push once per integration, never batching
+   several tickets into one push: a red light has to point at one integration. Do not wait for CI after pushing.
+7. Remove the ticket worktree and local ticket branch.
 
 Anything that comes up mid-run takes the three exits in `ASKING.md` section 4. Running standalone, with no ruling
 point, whatever cannot be answered accumulates until the next open-round and is asked there in one go.
@@ -177,7 +251,8 @@ it **stuck**:
 - **Local Markdown:** append `## sorry-matt blocker` to the original ticket on the integration branch with the
   reason, attempted remedies, and relevant branch; set `Status` to `ready-for-human` and commit it.
 
-After recording the stuck state, also remove the ticket worktree and local ticket branch.
+After recording the stuck state, also remove the ticket worktree and local ticket branch. Push the host's other
+commits on the integration branch (stuck records, tickets filed along the way) before the round closes.
 
 Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`; a
 `stuck` before the review opens does not count), each
@@ -185,7 +260,9 @@ correction round had one `recheck`, every call came with that call's acceptance 
 and every verdict is in the status record; its targeted checks are back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are
-integrated and their ticket worktrees and local branches removed.
+integrated and their ticket worktrees and local branches removed; on a line with an `origin`, every integration
+was pushed on its own, and when the round closes `origin/<integration branch>` and the local integration branch are
+the same SHA.
 
 ### Filing along the way
 
@@ -223,16 +300,27 @@ Every line passes **three line-level gates** first, in this order:
    conflict it cannot resolve safely, run `git merge --abort`; the line is then **unsynced**: ledger field 4 records
    the base SHA it tried and "unsynced", the delivery and the human-work list name the conflicting files, and the
    delivery is always left for a human to merge (see the merge paragraph below).
-3. **Full verification:** run the repository's full checks once on the integration branch as step 2 left it, and
-   report the merged base SHA; an unsynced line still runs them, on its unsynced tree, and the report gives the base
-   SHA it tried and "unsynced". On red, hand that stretch of changes back to its original agent and re-run; this
-   single pass is the only green that counts this run.
+3. **Full verification:** the CI result for the integration branch's latest SHA is what counts. Push the
+   integration branch as steps 1–2 left it, per close the round step 6, and read it per section 1, reading CI.
+   While it is still running, run `gh run watch <databaseId> --exit-status` once for each unfinished run to wait it
+   out — one blocking call per run, no repeated polling, in the background where the environment allows. With no
+   run, read once more a little later. On red, go through section 1's red-light handling: after the last round
+   there is no next open-round, so read again right here after every fix round's push, and after a revert; mapped
+   to no ticket and still red after two rounds, the line has **failed verification**.
 
-**The evidence-expiry rule.** Once a ticket has passed its ticket-level review, any later change on the integration
-branch to the files it touched — another ticket integrating, a conflict resolution, the line-level simplify, the
-base sync — expires that ticket's green, and only the line-level full verification still holds. What to re-run
-follows the real blast radius of that change: by default only the targeted checks for the affected surface, with
-another full verification reserved for a new fix, a failure, or an unresolved risk.
+   **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`,
+   a line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second
+   read), run the repository's full checks locally once on this SHA instead, and the report says which case it
+   was. A local red is fixed per points 4–6 of the red-light handling, and re-run after each fix.
+
+   The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
+   line is verified all the same, on its unsynced tree, and the report gives the base SHA it tried and "unsynced".
+   The only green that counts this run is the result for that last SHA.
+
+**The evidence-expiry rule.** A green holds only for the SHA it ran on. Every new commit on the integration branch —
+another ticket integrating, a conflict resolution, a fix for a red CI, the line-level simplify, the base sync —
+expires the earlier greens, ticket-level review greens included; only the result for the integration branch's latest
+SHA holds.
 
 Then deliver each line according to its mode:
 
@@ -252,7 +340,7 @@ scope for cleanup:** Local Markdown line integration branches and the source bra
 are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
 explicit authority for this request; do not open a question for it.
 
-Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`; an unsynced line sends
+Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`; an unsynced line, or one that failed verification, sends
 nothing and does not enter a merge queue, and its aggregate PR is left for a human to merge. It is a prompting
 call, sent after cleanup; Claude Code's permission settings decide whether it is let through, and in
 `bypassPermissions` and `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through,
@@ -299,15 +387,17 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 - Aggregate PR left for a human to merge, with a base that is not the default branch: the human-work list carries
   the close commands to run after the merge.
 
-Report each line's aggregate PR or integration branch with its merged base SHA (or marked unsynced), the
+Report each line's aggregate PR or integration branch, its merged base SHA (or marked unsynced), and the full
+verification's SHA and source (CI, or local with the reason), the
 **reconciliation table** covering the entire initial set and this run's **metrics** (`ASKING.md` section 7), the
 authorization outcomes (section 5), and every raw ticket filed along the way with a recommendation that the user
 run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run ended -->` after this
 output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
 
-Done when: every line went through one line-level simplify, one base sync and one full verification and ended
-green, with the full verification run on the integration branch synced to the latest base and its report naming
-the base SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified on its unsynced
+Done when: every line went through one line-level simplify, one base sync and one full verification, ending green
+or marked as failed verification and left for a human to merge; the full verification is the CI result for the
+latest SHA of the integration branch synced to the latest base, or, under step 3's local-verification conditions, a
+local run on that same SHA with the reason reported, and its report naming the verified SHA and the base SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified on its unsynced
 tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or was merged after the
 permission settings let it through (through the merge queue when the base has one) and reported; every completed
 ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human and the keyword does not

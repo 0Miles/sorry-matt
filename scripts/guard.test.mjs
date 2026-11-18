@@ -170,6 +170,13 @@ const ALLOWED = [
   'git push -u origin feature',
   'git push origin feature',
   'git push origin HEAD',
+  // get-to-work: push the integration branch after each merge, read and rerun its CI, revert a red merge.
+  'git push -u origin issue-4-automation/line',
+  'gh run list --branch issue-4-automation/line --commit abc123 --json databaseId,workflowName,status,conclusion',
+  'gh run view 42 --log-failed',
+  'gh run watch 42 --exit-status',
+  'gh run rerun 42',
+  'git revert -m 1 abc123',
   'git push --follow-tags origin feature',
   'git push -o ci.skip origin feature',
   'git push origin --delete old-feature',

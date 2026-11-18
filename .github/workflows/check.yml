@@ -2,8 +2,10 @@ name: check
 
 on:
   pull_request:
+  # Every branch but the PR heads `claude/**` (pull_request already covers those), so a
+  # get-to-work integration branch `<run>/<line-slug>` gets a run on each push.
   push:
-    branches: [main]
+    branches: ['**', '!claude/**']
 
 permissions:
   contents: read
