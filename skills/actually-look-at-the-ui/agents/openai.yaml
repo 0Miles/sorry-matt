@@ -1,0 +1,4 @@
+interface:
+  display_name: "Actually Look at the UI"
+  short_description: "Verify UI changes in a real browser"
+  default_prompt: "Use $actually-look-at-the-ui to open this change in a real browser and record evidence for every claim."

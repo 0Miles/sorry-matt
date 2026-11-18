@@ -1,0 +1,6 @@
+interface:
+  display_name: "Make This Shit Pretty"
+  short_description: "Rework existing UI, behavior unchanged"
+  default_prompt: "Use $make-this-shit-pretty to rework this existing UI in small verified steps without changing its behavior."
+policy:
+  allow_implicit_invocation: false

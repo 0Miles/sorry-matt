@@ -1,0 +1,4 @@
+interface:
+  display_name: "Make the UI Fast"
+  short_description: "Measure, fix one bottleneck, measure again"
+  default_prompt: "Use $make-the-ui-fast to measure this page, name the bottleneck, and keep only changes the numbers support."

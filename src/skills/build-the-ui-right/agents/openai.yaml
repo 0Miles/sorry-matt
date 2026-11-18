@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build the UI Right"
+  short_description: "Build frontend with every state covered"
+  default_prompt: "Use $build-the-ui-right to implement this UI with guidance checked and every state covered."
