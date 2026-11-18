@@ -1,0 +1,6 @@
+interface:
+  display_name: "Set Up UI Skills"
+  short_description: "Map a project's components for the UI skills"
+  default_prompt: "Use $set-up-ui-skills to create docs/agents/ui.md and the UI subsection of the instructions file for this frontend project."
+policy:
+  allow_implicit_invocation: false

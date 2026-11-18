@@ -1,0 +1,122 @@
+---
+name: set-up-ui-skills
+description: 為前端專案建立 docs/agents/ui.md（元件庫、tokens、共用元件、慣例、機械檢查），並在指示檔的 Agent skills 區塊加 UI 小節；前端 skills 開工前先跑一次
+disable-model-invocation: true
+---
+
+# Set up UI skills：建立前端 skills 讀的元件地圖
+
+為前端 skills 建立專案參數 `docs/agents/ui.md`：專案採用的**元件庫**（可以是「無」）、tokens、
+**共用元件**、慣例與機械檢查；並在專案**指示檔**（`CLAUDE.md` 或 `AGENTS.md`）的
+`## Agent skills` 區塊加一個 `### UI` 小節指向它。
+
+`ui.md` 是地圖不是 API：只記「有什麼、在哪、何時用、不適用時改用什麼」，不抄 props 或 variant ——
+那些每次從原始碼讀。
+
+流程五步：探查 → 一次提出發現與問題 → 確認草稿 → 寫入 → 回報。只有第 2、3 步等使用者。
+
+## 1. 探查
+
+不預設任何事：每一項都從 repo 讀出來，讀不到就記「沒有」。monorepo 時對每個前端 package 各查一次。
+
+- **依賴與版本**：`package.json` 的 dependencies 與 devDependencies，以及 lockfile 實際解析的版本。
+  從中找出**元件庫**，即提供現成元件的套件（含 headless 元件，如 MUI、Ant Design、Radix、
+  Headless UI、Vuetify、Master UI）；只提供 utility class 或 icon 的套件不算，記進 tokens 或慣例的發現。
+- **元件庫設定檔**：如 `components.json`、theme provider、元件庫自己的設定檔；從中讀出載入方式
+  （import 路線、樣式與 provider 的載入點）。
+- **元件庫自帶的 agent skill**：對每個偵測到的元件庫，查目前的可用 skill 清單裡有沒有屬於它的
+  skill（名稱或描述指向該庫，如 Master UI 的 `master-ui`）。只以可用 skill 清單判定。
+- **共用元件目錄**：常見位置如 `src/components/`、`components/ui/`、`src/shared/`、`app/components/`、
+  `packages/ui/`；以 repo 實際存在的為準。
+- **barrel 匯出**：共用目錄的 `index.ts`、`index.js` 重新匯出了哪些元件。
+- **import 次數**：每個候選元件被多少個不同檔案 import，分佈在幾個頁面或功能。
+- **重複實作**：同名或同用途的元件出現在兩處以上（如兩個 `Button`）。
+- **Storybook**：`.storybook/` 是否存在，哪些元件有 `*.stories.*`。
+- **tokens／theme 檔**：design tokens、theme 物件、CSS 自訂屬性的定義檔、utility 框架的 theme 設定；
+  記位置與命名規則。
+- **wrapper 慣例**：共用元件是否包住元件庫元件，以及包裝層的命名與位置。
+- **限制 import 的 lint 規則**：如 `no-restricted-imports`、`no-restricted-syntax`，或禁止深層 import
+  與直接 import 元件庫的 boundaries 類規則。
+- **機械檢查**：`package.json` scripts 裡的 lint、typecheck、test、storybook 指令。
+- **既有輸出**：`docs/agents/ui.md` 是否存在；repo 根目錄的 `CLAUDE.md` 與 `AGENTS.md` 各自是否存在、
+  哪一份有 `## Agent skills` 區塊、區塊裡是否已有 `### UI` 小節。
+
+完成判準：上列每一項都有發現或明記「沒有」；每個共用元件候選都有 import 次數；每則發現都附來源
+檔案路徑。
+
+## 2. 一次提出發現與問題
+
+把發現與題目放進同一則訊息，一次交給使用者裁決：先列發現，再列題目。每題附**建議答案**與一行
+依據，讓使用者能只回「照建議」。題目只來自下列規則；規則說不問的就不問。
+
+**A 元件庫。**
+
+- 偵測不到 → 記「無」，不問。
+- 偵測到一套 → 照證據記，不問。
+- 偵測到兩套以上 → 問新程式碼用哪套。建議答案：有限制 import 的 lint 規則或遷移註記時取它指向的
+  那套，否則取 import 次數多的那套。其餘記為「既有、不再新用」。
+
+**B 共用元件。** 依 import 次數列出候選，這是發現、不是題目。只收真正共用的：被兩個以上不同頁面或
+功能用到的元件；只在單一頁面用到的不列。唯一的題目是重複實作：每組問一題「哪份是正本、哪份勝出」。
+建議答案取 import 次數多的那份；次數相近時取位在共用目錄、有 story 或有 barrel 匯出的那份。
+
+**C 慣例。** wrapper 慣例、新共用元件放哪、要附什麼（barrel 匯出、型別、story）、機械檢查指令：
+有證據就照證據寫，不問。只有證據分歧時才問（如兩個共用目錄都在新增元件、一半元件有 story 一半沒有），
+建議答案取近期 commit 採用的做法。
+
+**既有 `ui.md`。** 重跑時以它為基底比對：與證據一致的、或證據沒提到的內容（多半是手動修改）原樣保留，
+不列題目；與證據矛盾的內容（如記載的元件檔案已不存在）每處列一題，建議答案附證據。
+
+**指示檔。** `CLAUDE.md` 與 `AGENTS.md` 都不存在時，問要建立哪一份；建議答案是目前執行環境原生讀取
+的那一份。任一份存在時不問。
+
+沒有任何題目時，明說「沒有要裁決的題目」，並在同一則訊息接著出示第 3 步的草稿。
+
+完成判準：發現與全部題目在同一則訊息裡交出；每題都有建議答案與依據；題目清單裡沒有規則說不問的題
+（偵測不到或只有一套元件庫、沒有重複實作的元件、沒有分歧的慣例、已存在的指示檔）。
+
+## 3. 確認草稿
+
+依 [`UI-TEMPLATE.md`](UI-TEMPLATE.md) 與使用者的裁決，出示兩份草稿：
+
+- `docs/agents/ui.md` 全文；重跑時另附與既有版本的差異。
+- 要寫進指示檔的 `### UI` 小節，註明寫進哪一份、是新增還是就地更新：
+
+```markdown
+### UI
+
+<一行摘要：元件庫（或「無」）與共用元件位置>。詳見 `docs/agents/ui.md`。
+```
+
+使用者可以直接改草稿；改了就以改過的版本為準，重新出示，直到使用者認可。
+
+完成判準：使用者已明確認可兩份草稿的最終版本。
+
+## 4. 寫入
+
+**`ui.md`**：寫到 `docs/agents/ui.md`，目錄不存在就建立。已存在時就地更新：只改草稿裡有變更的
+段落與表格列，其餘原文（含手動修改）逐字不動，不在檔尾附加第二份。
+
+**指示檔**：
+
+- `CLAUDE.md` 存在就改它。
+- 否則 `AGENTS.md` 存在就改它。
+- 兩者都不存在時，建立使用者在第 2 步選的那一份。
+
+已有一份時，絕不建立另一份。在選定檔案的 `## Agent skills` 區塊裡：已有 `### UI` 小節就就地更新它；
+沒有就加在區塊最後。沒有 `## Agent skills` 區塊時，在檔尾新增區塊與小節。區塊外的內容與區塊內其他
+小節都不動。
+
+不 commit；何時 commit 由使用者決定。
+
+完成判準：`docs/agents/ui.md` 五段齊全且與認可的草稿一致；指示檔裡恰有一個 `## Agent skills` 區塊、
+其中恰有一個 `### UI` 小節；草稿以外的原有內容逐字未變。
+
+## 5. 回報
+
+- 寫入或更新了哪些檔案，改的是哪一份指示檔。
+- 會讀 `ui.md` 的前端 skills：`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
+  `make-the-ui-fast`、`make-this-shit-pretty`。
+- 之後可以直接編輯 `ui.md`；只有要從頭重來時才需要重跑本 skill。
+
+完成判準：回報列出寫入的檔案路徑與那五支前端 skill，並說明可直接編輯 `ui.md`、重跑只在要重來時需要。
