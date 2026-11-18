@@ -166,8 +166,8 @@ GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是�
 （`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
 權限規則片段，不為此另開提問。
 
-**關票。** GitHub 只在 PR 指向 repo 預設分支（`gh repo view --json defaultBranchRef --jq
-.defaultBranchRef.name`）時解析 `Closes`：
+**關票。** GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；預設分支以
+`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
 
 - 總 PR 已合併：確認每張完成票都已關閉。基底不是預設分支，或合併後仍 open 的票，由主持人依
   tracker 契約的 Close 逐張關閉，留言指向總 PR。

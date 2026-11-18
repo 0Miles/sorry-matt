@@ -189,8 +189,8 @@ after cleanup; Claude Code's permission settings decide whether it is let throug
 blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
 would let it through. Do not open a question for it.
 
-**Closing tickets.** GitHub reads `Closes` only in a PR that targets the repository's default branch
-(`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`):
+**Closing tickets.** GitHub reads `Closes` only in a PR that targets the repository's default branch; find that
+branch with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
 
 - Aggregate PR merged: confirm every completed ticket is closed. When the base is not the default branch, or a
   ticket is still open after the merge, the host closes it per the tracker contract's Close, with a comment
