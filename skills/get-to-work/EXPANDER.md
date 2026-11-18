@@ -64,8 +64,8 @@ rulings:
   (`gh issue comment <n> --repo <owner>/<repo> --body-file <file>`). Do not edit the ticket text or any other
   comment.
 - **Local Markdown:** append a `## sorry-matt expansion` section (always a `##` heading, never nested under another
-  section) holding this block to the ticket file in that line's integration worktree; touch only the ticket file, and commit it to the integration branch with the ticket file name
-  in the subject.
+  section) holding this block to the end of the ticket file in that line's integration worktree. Touch only the
+  ticket file, and commit it to the integration branch with the ticket file name in the subject.
 
 Writing the expansion block is not an outgoing message. When a fact the expansion needs cannot be established, write
 no block for that ticket and report it as **awaiting ruling**, naming the missing fact.

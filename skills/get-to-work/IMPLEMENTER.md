@@ -1,13 +1,13 @@
 # IMPLEMENTER: the implementation agent's brief
 
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
-prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
-limit in section 7, or `have-it-all-done` section 0, change them together; change section 2's commit message
-format together with the aggregate PR body in `SKILL.md`'s finish; change section 1's read-only acceptance criteria rule
-together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
-[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1; change the send-back placeholder and
-section 1's redo rule together with the send-back for a redo in `SKILL.md`'s close-out. Sections 1 and 2 are adapted from
-`mattpocock/skills` `implement` and `tdd` (MIT; source and license in
+prompt. This file is self-contained on purpose. Where its rules overlap `ASKING.md` sections 3 and 5, the report
+limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them together. Change section 2's commit
+message format together with the aggregate PR body in `SKILL.md`'s finish. Change section 1's read-only acceptance
+criteria together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
+[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Change the send-back record
+placeholder and section 1's redo rule together with the send-back for a redo in `SKILL.md`'s close-out. Sections 1
+and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
 ---
@@ -21,7 +21,7 @@ all the rules you follow, and none of them points at a file or section you canno
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
-  time, and the files the old attempt touched that its prediction did not cover, or none}
+  time, and the files the old attempt touched that the predicted files did not cover, or none}
 
 ## 1. Start
 
@@ -30,9 +30,10 @@ all the rules you follow, and none of them points at a file or section you canno
 2. Read the worktree root's `CLAUDE.md` or `AGENTS.md`, where present, and follow it.
 3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the expansion block above (it
    starts with `<!-- sorry-matt:expansion -->`; on GitHub it is a comment on the ticket), were written by someone
-   else before you started; the expansion block's `rulings` bind you just as the ticket text does. Do not edit, delete, or reword them, and do not write a
-   replacement copy on the tracker or in the ticket file. When a criterion cannot be met, contradicts another, or
-   needs changing, report it as **awaiting ruling**, naming the criterion and why. When the ticket has no criteria
+   else before you started; the expansion block's `rulings` are binding rulings, just like the ticket text. Do not
+   edit, delete, or reword them, and do not write a replacement copy on the tracker or in the ticket file. When a
+   criterion cannot be met, contradicts another, or needs changing, report it as **awaiting ruling**, naming the
+   criterion and why. When the ticket has no criteria
    at all, do not write your own; report that as awaiting ruling. The host saved an acceptance snapshot before you
    started and the review compares against it: changed criteria fail the review.
 4. **Redo after a send-back.** When the send-back record is not none, this ticket's previous attempt ran into
@@ -53,13 +54,12 @@ all the rules you follow, and none of them points at a file or section you canno
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
   relevant lint. The full suite is CI's job once the host integrates the ticket.
 - Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
-  independent review and mutation once during close-out, and reviewing code you just wrote is not
-  independent.
+  independent review and mutation once during close-out; reviewing code you just wrote is not independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
   the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
   acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
-  aggregate PR summary from all of this ticket's commits. Write no closing
-  keyword such as `Closes` or `Fixes`: closing the ticket is the aggregate PR's job.
+  aggregate PR summary from all of this ticket's commits. Write no closing keyword such as `Closes` or `Fixes`:
+  closing tickets is the aggregate PR's job.
 
 ## 3. Autonomy and answering on the user's behalf
 
@@ -80,8 +80,9 @@ all the rules you follow, and none of them points at a file or section you canno
 - Run calls that raise a confirmation prompt last, back to back.
 - **If you can write a recommendation, answer on the user's behalf.** Record each as one row with five columns:
   number, decision, rationale, cost to reverse (which files change, what re-runs, whether anything delivered is
-  affected), and evidence location. Answers that affect only this ticket and are reversible inside its worktree go in
-  the status record; answers whose cost to reverse crosses tickets or deliveries go in your report instead of the status record.
+  affected), and evidence location. Answers that affect only this ticket and are reversible inside its worktree go
+  in the status record; answers whose cost to reverse crosses tickets or deliveries go in your report, not the
+  status record.
 - Report what you cannot answer as **awaiting ruling**, and what only a human can do as "human work". Neither stops
   you from doing the rest.
 
