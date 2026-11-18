@@ -179,8 +179,10 @@ While a run is in progress, two more hooks share one entry (`hooks/hooks.json` â
   its `agent_id` and is not counted again). Only the hook writes that file, under an exclusive lock file and through
   a temporary file and a rename, so it never races with the host writing the ledger. SubagentStart cannot block a
   spawn; it only counts.
-- **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9;
-  the default is 200). The limit is re-read on every call, so editing that line takes effect immediately.
+- **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9:
+  200 when the ledger is created, rewritten to `30 Ã— tickets + 50` once the ticket count is known). It is a last
+  resort; a single stuck agent is caught by `get-to-work`'s stage time limits first. The limit is re-read on every
+  call, so editing that line takes effect immediately.
 
 With no run in progress, or no `budget: spawns` line, neither hook counts against anything or blocks anything. While
 a run is in progress, know how far it reaches:
@@ -199,7 +201,10 @@ a run is in progress, know how far it reaches:
   with a warning; the count itself is still kept.
 
 The other limits (`rounds`, which counts dispatch points, `hours`, `no-progress`) and the no-progress breaker are
-enforced by `get-to-work` itself at every dispatch point. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
+enforced by `get-to-work` itself at every dispatch point. The stage time limits (`budget: timeout-implement 30`,
+`timeout-fix 20`, `timeout-expand 15`, `timeout-merge 15`, in minutes) are checked by `get-to-work` at every
+wake-up: an overdue agent whose worktree moved is extended once, otherwise it is stopped with `TaskStop` and the
+ticket is reassigned, marked stuck or left awaiting ruling. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
 
 ```json
 {

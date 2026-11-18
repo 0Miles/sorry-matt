@@ -43,6 +43,8 @@ Then **freeze** the initial ticket set:
    remaining set and take the lines from that run's `line` — an exclusion can split a line.
 4. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
    per line. Accumulate that line's results there ticket by ticket.
+5. When running standalone, rewrite `budget: spawns` in ledger field 9 from the frozen ticket count per
+   `ASKING.md` section 4. When composed by `have-it-all-done`, it was set before the ruling point; leave it.
 
 **Hard rail:** tickets discovered or filed during the run remain context; the initial set never expands after
 the freeze.
@@ -50,7 +52,7 @@ the freeze.
 Done when: the tracker mode is selected and verified; every initial ticket has a publication source,
 provider-native identifier, line, and blocker map; every ticket excluded as held by another line has the source of
 the hold and a clearing condition; every line has an integration branch and worktree created from the same base
-tip.
+tip; when running standalone, `budget: spawns` has been set from the frozen ticket count.
 
 ## 1. Advance the pipeline with `/loop`
 
@@ -71,16 +73,18 @@ rule files its field 10 lists, then advance the pipeline`; with no ledger, the p
 this skill's `SKILL.md` and `ASKING.md` to re-read instead. Every wake-up carries that sentence, so the resuming
 (`ASKING.md` section 7) never depends on memory.
 
-Implementation, expansion, fix and merge agents always run in the background; while any is running, use a longer
-fallback and wait for notifications. Every wake-up does, in order:
+Implementation, expansion, fix and merge agents always run in the background, each under a **stage time limit**
+(time limits). Every wake-up does, in order:
 
 1. When a line is in red-light handling, read that line per reading CI.
 2. Handle the agents that reported: a ticket whose implementation or fix agent reported moves on through
    close-out; an expansion or merge agent's report goes back to the step waiting on it.
-3. Integrate reviewed tickets through each line's **integration queue** (close-out steps 4–8).
-4. When a **dispatch point** has been triggered, run one at the end (dispatch).
-5. Write the ledger current before the wake-up ends. There is no batch boundary: the end of every wake-up is the
-   handover point.
+3. **Deadline scan:** handle overdue agents in flight per time limits.
+4. Integrate reviewed tickets through each line's **integration queue** (close-out steps 4–8).
+5. When a **dispatch point** has been triggered, run one at the end (dispatch).
+6. Write the ledger current. There is no batch boundary: the end of every wake-up is the handover point.
+7. While any agent is still in flight, schedule a **fallback wake-up** (time limits), and only then end the
+   wake-up.
 
 ### Reading CI
 
@@ -206,6 +210,94 @@ ticket's close-out updated usage at its end; after stopping nothing more was dis
 awaiting ruling with the limit that stopped the run, and field 9 has the stop reason; no spawn blocked on budget was
 retried or routed around.
 
+### Time limits
+
+Claude Code cannot put a time limit on a subagent, so the host scans for one at every wake-up. An **assignment** gives
+work to a background agent: spawning an implementation, expansion or merge agent, or handing a batched fix, a
+red-light fix or a send-back record back to the original agent with SendMessage. `prove-it`'s finders and verifiers
+run to completion inside the host's own turn, and the host is not woken while it waits on them, so they are outside
+this section.
+
+The **stage time limits** are four `budget:` lines in ledger field 9, in minutes (`ASKING.md` section 7):
+`timeout-implement` (implementing), `timeout-fix` (fixing, red-light fixes included), `timeout-expand` (expanding)
+and `timeout-merge` (the merge agent while integrating).
+
+**At every assignment**, record in that ticket's row of the reconciliation table (for an expansion agent, in the row
+of every ticket it covers):
+
+- The agent id, the assigned time, the stage time limit and the deadline. Times are always UTC, in the format of
+  `date -u +%Y-%m-%dT%H:%M:%SZ`, and the deadline is the assigned time plus the stage time limit; times in this
+  format compare correctly as strings. Record extended as `no`.
+- The **progress fingerprint**: the HEAD and a content hash of the worktree the agent works in. For implementation
+  and fixes that is the ticket worktree (for a red-light fix, the `-ci` branch's worktree); for merging, the
+  integration worktree:
+
+  ```bash
+  git -C <worktree> rev-parse HEAD
+  { git -C <worktree> status --porcelain; git -C <worktree> diff; } | git hash-object --stdin
+  ```
+
+  An expansion agent works in no worktree; record instead the `expansions` count `acceptance.mjs` reads for each
+  ticket it covers.
+
+Once the agent reports, set that row's deadline to `—`.
+
+**Deadline scan:** every wake-up — a `/loop` wake-up, an agent notification and a fallback wake-up all count — runs
+it after handling the agents that reported. Take the current time (same format); an agent whose deadline is before
+it is **overdue**. For each overdue agent:
+
+1. **Judge progress:** recompute the progress fingerprint with the same commands as at the assignment. A different
+   HEAD (new commits) or a different hash (uncommitted changes, a conflict half resolved) is progress; for an
+   expansion agent, it is any ticket's `expansions` count going up.
+2. **Progress, and this assignment not yet extended → extend once:** set the deadline to now plus the same stage time
+   limit, and record extended as `yes`. An extended agent that is overdue again always goes to the next step,
+   without judging progress.
+3. **No progress, or already extended → stop it:** `TaskStop` the agent; if it happens to have finished already,
+   close it out under wake-up step 2, "handle the agents that reported", instead. Once stopped, depending on the case:
+   - The cause needs a person — the ticket's status record names, under blockers, a decision for a person, a
+     missing permission or a fact that cannot be found → mark it **awaiting ruling** with the cause.
+   - **Integrating** → `git -C <integration worktree> merge --abort`, and the ticket is **sent back for a redo** per
+     close-out; the queue moves on to the next ticket.
+   - The ticket has not been reassigned for a timeout yet → **reassign** it once: for implementing and fixing, spawn
+     a new implementation agent per `IMPLEMENTER.md` on the same worktree and branch, attaching a note to the ticket
+     text — the previous agent was stopped for running over its time limit, its commits and uncommitted changes are
+     left for the new agent to judge whether to build on, and an existing status record is taken over and updated in
+     place; for fixing, also attach that round's findings or CI failure summary. For expanding, give the tickets it
+     covered that still have no expansion block to a new expansion agent. A reassignment is a new assignment: record
+     it as above, replace the agent id in the reconciliation table with the new one, and add one to the timeout
+     reassignment count. When the budget blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
+   - The ticket was already reassigned for a timeout → for implementing and fixing, **mark it stuck**, giving the
+     two timeouts as the reason; expanding tickets are marked **awaiting ruling**.
+4. **Keep a record:** for every extension or stop, write a timeout-handling entry in that ticket's status record —
+   the agent id, the stage, the assigned time and deadline, the progress fingerprints at the assignment and now, and
+   the handling — and add a row to the run-level self-answer log (the five columns of `ASKING.md` section 3). Add
+   one to field 9's timeout extensions or timeout stops.
+
+Marking a ticket stuck or awaiting ruling, or sending it back for a redo, triggers a dispatch point per dispatch; a
+reassignment does not, and the ticket stays at its stage.
+
+**Fallback wake-up:** whenever a wake-up ends with agents still in flight, schedule the next wake-up for the earliest
+deadline, so that the host wakes when the first time limit runs out even if no agent ever reports. A wake-up that
+assigned any work always ends with an agent in flight, so every assignment is followed by one. The delay is the
+earliest deadline minus now, in seconds:
+
+- **`ScheduleWakeup`** (available in the dynamic `/loop` mode that section 1 enters): the delay must be between 60
+  and 3600 seconds. Below 60, schedule 60; above 3600, schedule 3600, and when that wake-up finds nothing overdue,
+  schedule again per this paragraph.
+- Without `ScheduleWakeup`: run `sleep <seconds>` in the background with Bash (no upper bound); the notification
+  when it ends is the wake-up.
+- When a background `sleep` is not available either: re-enter section 1's `/loop` in interval mode, with the same
+  prompt and the shortest stage time limit as the interval.
+
+With no agent in flight, `/loop` paces itself as before.
+
+Done when: every assignment recorded the agent id, assigned time, stage time limit, deadline and progress
+fingerprint in the reconciliation table; every wake-up scanned the agents in flight after handling reports; every
+overdue agent had its progress judged by its fingerprint and was extended at most once per assignment, and every other
+one was `TaskStop`ped and reassigned, sent back for a redo, marked stuck or marked awaiting ruling, with no ticket
+reassigned for a timeout more than once; every handling is in the ticket's status record and the self-answer log;
+every wake-up that ended with agents in flight scheduled a fallback wake-up.
+
 ### Dispatch
 
 A **dispatch point** is triggered at these moments and runs once, at the end of that wake-up, at most one per
@@ -303,7 +395,8 @@ candidate, in order:
    ticket's own source of truth; everywhere else cites it. For a ticket dispatched again after being sent back:
    when the original agent is still there, give it the send-back record and the rebuilt worktree with SendMessage
    instead of spawning; only when it is gone, spawn a new one per `IMPLEMENTER.md` with the send-back record in its
-   placeholder. The reconciliation table records each ticket's stage and its responsible agent's id.
+   placeholder. The reconciliation table records each ticket's stage and its responsible agent's id, along with the
+   assignment record from time limits.
 
 Done when: every dispatch point first judged the limits per budget and breaker, then read the lines due a read per
 reading CI, before dispatching anything; every dispatched ticket had acceptance criteria, an acceptance snapshot and

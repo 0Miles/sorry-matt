@@ -2,7 +2,8 @@
 // skills/have-it-all-done/ASKING.md section 7; this module reads two things from them:
 //   - in progress: the first line is `<!-- sorry-matt:run active -->` (runs.mjs)
 //   - field 9, limits: one line per limit, `budget: <name> <integer>` (a list bullet and backticks allowed);
-//     the hook enforces only `budget: spawns <N>`, the others are for the host
+//     the hook enforces only `budget: spawns <N>`; the others (`rounds`, `hours`, `no-progress`, and the stage time
+//     limits `timeout-<stage>` in minutes) are for the host
 // The spawn count lives next to the ledger in `<run>.counters.json`, written only by the hook:
 //   { "spawns": <int>, "agents": [<agent_id>, ...], "updated": "<ISO time>" }
 // SubagentStart adds one per new agent_id (it also fires when a subagent is resumed, so a seen id is not

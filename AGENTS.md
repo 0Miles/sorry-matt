@@ -252,6 +252,19 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 行為基準 | behavior baseline |
 | 整段旅程 | whole journey |
 | 中斷情境 | interruption |
+| 時限 | time limit |
+| 階段時限 | stage time limit |
+| 派送 | assignment |
+| 派送時間 | assigned time |
+| 到期時間 | deadline |
+| 超時 | overdue |
+| 延長（時限） | extend |
+| 進度指紋 | progress fingerprint |
+| 時限掃描 | deadline scan |
+| 改派 | reassign |
+| 超時改派次數 | timeout reassignment count |
+| 時限處置 | timeout handling |
+| fallback 喚醒 | fallback wake-up |
 
 ## 外部語義來源
 

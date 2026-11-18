@@ -459,3 +459,32 @@ CI 一起跑。`SORRY_MATT_GUARD=off` 全關開關保留；budget 與 reread hoo
 - 不再問：`--dry-run`、明確指向非正式環境的部署、`ssh prod <唯讀指令>`、送往訊息服務的純 GET。
 - merge 偵測讀合併後的 workflow（PR head，取不到就 base 並註明；push 讀要推的 ref），合併 release-please／changesets 自己的
   release PR 時視為立即發布，認得更多部署訊號，名稱像部署但認不出確切動作時當作無法判斷而詢問。
+
+## #40：subagent 限時，超時由主持人判斷
+
+spawn 上限（#16）只管總數，單一 agent 卡住時它沒有作用：#4 的 run 裡，#11 的 Windows 修正 agent 跑了近一小時，worktree
+沒有任何改動，最後由主持人手動 `TaskStop` 再改派。Claude Code 沒有給 subagent 設時限的原生機制，所以由主持人在喚醒時掃描。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 第 1 節「有 agent 在跑時使用較長 fallback 等候通知」 | 改為新節「時限」：派送（spawn 或 SendMessage 交回原 agent）時在對帳表記 agent id、派送時間、階段時限、到期時間（UTC，`date -u +%Y-%m-%dT%H:%M:%SZ` 格式）與**進度指紋**；每次喚醒在處理回報之後掃描，超時的有進展就延長一次，沒有進展或已延長過就 `TaskStop`，再改派（每票一次）、退回重做（整併中）、標卡住或待裁決；處置寫進接續紀錄與自答清單 | 「較長 fallback」沒有數字，也沒有醒來之後要做什麼。到期時間記成同格式的 UTC 字串，比大小是字串比較，主持人不用做時間運算；記在 ledger，壓縮或恢復後照樣掃得到。 |
+| 喚醒步驟 | 加第 3 步「時限掃描」（處理回報之後、整併佇列之前）與第 7 步「排 fallback 喚醒」 | 先收已回報的，才不會把剛好做完的 agent 當成超時停掉；停下或退回產生的派票點仍在同一次喚醒的最後做。 |
+| 有進展的判定 | `git -C <worktree> rev-parse HEAD` 與 `{ git status --porcelain; git diff; } \| git hash-object --stdin`，跟派送時記下的比；展開 agent 比 `acceptance.mjs` 的 `expansions` 數 | 只看 `status --porcelain` 時，整併 agent 編輯還沒 `git add` 的衝突檔不會改變輸出（一直是 `UU`）；加上 `git diff` 的雜湊才看得到。只看 HEAD 會漏掉還沒 commit 的進度。 |
+| 延長次數 | 一次派送只延長一次，延長後再超時不再判進展 | 一直在改卻一直沒做完，跟沒進展一樣需要人或新的 agent 看；不限次數等於沒有時限。 |
+| 停下後的去向 | 要人裁的（接續紀錄的阻擋寫了決定、權限或查不到的事實）→ 待裁決；整併中 → `merge --abort` 走退回重做；其餘第一次改派新 agent 接手同一個 worktree，第二次實作／修正標卡住、展開標待裁決 | 整併 agent 卡住就是衝突解不安全，退回重做本來就是那條路（它自己只退一次）。改派沿用 worktree：延長過才停的 agent 可能已有 commit，丟掉可惜，由新 agent 判斷要不要沿用。 |
+| 不設時限的階段 | 審查中（`prove-it`）不設 | finder 與 verifier 在主持人自己的回合裡跑，主持人等它們回來的期間不會被喚醒，掃描做不到；要涵蓋得先把它們改成背景派送，那是 `prove-it` 的改動，不在本票範圍。 |
+| fallback 喚醒 | 每次喚醒結束時還有在途 agent，就以最早到期時間排下一次：`ScheduleWakeup`（`/loop` 動態模式，60–3600 秒，超過 3600 就分段排）；不能用時背景 `sleep <秒>`；也不能用時以 interval 模式重進 `/loop`，間隔取最短的階段時限 | 所有 agent 都不回報時，只靠 agent 通知的主持人永遠不會醒來，時限就沒人判。排在每次喚醒的結尾而不是派送當下：派送過的喚醒結尾一定有在途 agent，而沒有派送、仍有在途 agent 的喚醒也要排，否則延長後就沒有下一次喚醒。 |
+| `ASKING.md` 第 7 節第 8 欄 | 對帳表加派送時間、階段時限、到期時間、是否已延長、進度指紋、超時改派次數 | 恢復後要能接著掃描；票的改派次數決定第二次超時是卡住。 |
+| `ASKING.md` 第 7 節第 9 欄 | 加「階段時限」：`budget: timeout-implement 30`、`timeout-fix 20`、`timeout-expand 15`、`timeout-merge 15`（分鐘）；用量加超時延長與停止次數；完成判準改為四行上限加四行時限 | 沿用 `budget: <名稱> <整數>`，hook 的解析不用改（`parseBudget` 已收任意小寫名稱；新增測試釘住）；hook 只依 `spawns` 擋 spawn。預設取自票上的例子；整併 agent 只解衝突，展開 agent 只讀票寫驗收，各 15 分。 |
+| `ASKING.md` 第 4 節「裁決點前估算 spawn 數，超過預設時列為一題」 | 改為 `budget: spawns` 依票數計：`30 × 票數 + 50`，裁決點前（獨立執行時在凍結票集時，`get-to-work` 第 0 節新增步驟 5）改寫該行；上限與時限預設不列題，有具體理由預期不夠時才列；中途不夠時不代答調高，時限照「時限」延長一次或停下 | 見下方 spawn 上限的重新評估。 |
+
+**spawn 上限的重新評估。** 原本的 `spawns 200` 是固定值，要同時防單一 agent 卡住與整個 run 失控。有了時限，單一 agent
+卡住由時限在一個階段時限（加一次延長）內處理；spawn 上限只剩下「整個 run 一直 spawn 卻做不完」這個最後保險。固定值對
+兩張票的 run 太寬、對三十張票的 run 太窄，所以改依票數算：每張票典型約 15 個 spawn（實作、展開、`prove-it` 的 finder 與
+verifier、整併），取兩倍作為保險，涵蓋退回重做與超時改派；常數 50 涵蓋規劃階段（`grill-them`、開局 agent）與收官。13 張
+票得 440，3 張票得 140。建立 ledger 時仍寫 `budget: spawns 200`，涵蓋票數未定前的規劃。格式不變，所以 `hooks/budget.mjs`
+不改邏輯，只更新檔頭註解；README「Run budget」改寫預設值的說明。
+
+**沒有改的。** `budget: rounds 40` 不跟著改：它的理由（#17）以 `spawns 200` 約可跑 13 張票推得，現在超過 13 張票的 run 會先
+停在 `rounds`。要不要也改成依票數計（例如 `3 × 票數 + 1`）留給之後的票。時限判定不做腳本：比大小是字串比較，進展是兩個
+git 指令，寫成指令比多一支腳本與測試簡單。
