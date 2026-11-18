@@ -6,7 +6,7 @@
 //   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet and backticks allowed);
 //     every such line in the ledger counts, which ASKING says by keeping `rule:` lines to field 10
 // Anything it cannot find or read means "no run in progress": it prints nothing.
-// budget.mjs finds the runs in progress through commonDir and activeLedgerTexts here.
+// budget.mjs finds the runs in progress through ledgersForEvent here.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
@@ -65,13 +65,21 @@ export function activeLedgerTexts(common) {
   return found;
 }
 
+/** Every ledger in progress, with its text, for the repo of a hook event's cwd (else this process's cwd). */
+export function ledgersForEvent(event, git = spawnSync) {
+  const cwd = typeof event.cwd === 'string' && event.cwd ? event.cwd : process.cwd();
+  const common = commonDir(cwd, git);
+  return common ? activeLedgerTexts(common) : [];
+}
+
 /** Every ledger in progress under <common dir>/sorry-matt/runs, sorted by path. */
-export function activeLedgers(common) {
-  return activeLedgerTexts(common).map(({ ledger, text }) => ({
+export const activeLedgers = (common) => withRules(activeLedgerTexts(common));
+
+const withRules = (found) =>
+  found.map(({ ledger, text }) => ({
     ledger,
     rules: parseLedger(text).rules.map((path) => ({ path, exists: existsSync(path) })),
   }));
-}
 
 /** The text added to context, or null when there is nothing to re-read. */
 export function reminder(ledgers) {
@@ -97,11 +105,7 @@ export function reminder(ledgers) {
  */
 export function respond(raw, { git = spawnSync } = {}) {
   try {
-    const event = JSON.parse(raw);
-    const cwd = typeof event.cwd === 'string' && event.cwd ? event.cwd : process.cwd();
-    const common = commonDir(cwd, git);
-    if (!common) return null;
-    return reminder(activeLedgers(common));
+    return reminder(withRules(ledgersForEvent(JSON.parse(raw), git)));
   } catch {
     return null;
   }

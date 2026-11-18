@@ -69,12 +69,10 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { UsageError, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/review-guide@1';
 export const DEFAULT_THRESHOLD = 400;
-
-class UsageError extends Error {}
 
 const BRANCH_SUBJECT = /^Merge branch '([^']+)'/;
 const ID_SUBJECT = /^Merge (\S+?)(?=[\s:(]|$)(?:\s*\(([^)]*)\))?/;
@@ -176,12 +174,12 @@ export function buildGuide(plan, git) {
       return { status: e.status, out: String(e.stdout ?? '') };
     }
   };
-  const resolution = (merge, parents) => {
+  const resolution = ({ sha: merge, tree, parents }) => {
     let resolved = null;
     if (parents.length === 2) {
       const auto = probe(['merge-tree', '--write-tree', '--no-messages', parents[0], parents[1]]);
       if (auto.status <= 1) {
-        resolved = auto.status === 1 || auto.out.split('\n')[0].trim() !== run(['rev-parse', `${merge}^{tree}`]).trim();
+        resolved = auto.status === 1 || auto.out.split('\n')[0].trim() !== tree;
       }
     }
     return { resolved, remergeDiff: resolved ? `git show --remerge-diff ${merge}` : null };
@@ -189,8 +187,8 @@ export function buildGuide(plan, git) {
   // `git log` output as tab-separated fields per record.
   const records = (args) => run(args).split('\n').filter(Boolean).map((r) => r.split('\t'));
 
-  const firstParent = records(['log', '--first-parent', '--reverse', '--format=%H%x09%P%x09%s', `${baseSha}..${lineSha}`]).map(
-    ([h, p, ...s]) => ({ sha: h, parents: p.split(' ').filter(Boolean), subject: s.join('\t') }),
+  const firstParent = records(['log', '--first-parent', '--reverse', '--format=%H%x09%T%x09%P%x09%s', `${baseSha}..${lineSha}`]).map(
+    ([h, tree, p, ...s]) => ({ sha: h, tree, parents: p.split(' ').filter(Boolean), subject: s.join('\t') }),
   );
 
   // Rule 1: recorded merge SHAs.
@@ -240,7 +238,7 @@ export function buildGuide(plan, git) {
           subject: s.join('\t'),
           url: url(h),
         })),
-        ...resolution(c.sha, c.parents),
+        ...resolution(c),
       };
       for (const t of match.owners) {
         merges.get(t.id).push(merge);
@@ -250,7 +248,7 @@ export function buildGuide(plan, git) {
     }
     const fromBase = probe(['merge-base', '--is-ancestor', c.parents[1], baseSha]);
     if (fromBase.status > 1) throw new Error(`git merge-base --is-ancestor failed for ${c.sha}`);
-    lineCommits.push({ kind: fromBase.status === 0 ? 'base-merge' : 'merge', ...entry, ...resolution(c.sha, c.parents) });
+    lineCommits.push({ kind: fromBase.status === 0 ? 'base-merge' : 'merge', ...entry, ...resolution(c) });
   });
 
   const warnings = [];
@@ -300,15 +298,8 @@ export function main(argv, deps = defaultDeps()) {
     const err = guide.missing.length ? `review-guide: no merge on the line for ${guide.missing.join(', ')}\n` : '';
     return { code: guide.missing.length ? 3 : 0, out: `${JSON.stringify(guide, null, 2)}\n`, err };
   } catch (e) {
-    const usage = e instanceof UsageError;
-    const detail = (e.stderr && String(e.stderr).trim()) || e.message;
-    return { code: usage ? 2 : 1, out: '', err: `review-guide: ${detail}\n${usage ? 'usage: see the header of review-guide.mjs\n' : ''}` };
+    return failure('review-guide', e);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { code, out, err } = main(process.argv.slice(2));
-  process.stdout.write(out);
-  process.stderr.write(err);
-  process.exitCode = code;
-}
+runIfEntry(import.meta.url, main);

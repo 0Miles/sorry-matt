@@ -59,16 +59,13 @@
 // Exit codes: 0 output written (a change in the ticket is reported in "check", not in the exit code); 1 tracker,
 // git or snapshot read failed; 2 bad arguments, or the snapshot belongs to another ticket; 3 output written, but the
 // snapshot's items do not match --sha.
-import { readFileSync, realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
 export const MARKER = '<!-- sorry-matt:expansion -->';
-
-class UsageError extends Error {}
 
 const ACCEPTANCE_HEADING = /^(acceptance criteria|acceptance|驗收\S*)$/i;
 const SKIPPED_SECTION = /^(comments|sorry-matt\b)/i;
@@ -261,9 +258,6 @@ function parseArgs(argv) {
   return { tracker, ticket: opts.positional[0], ...opts };
 }
 
-const run = (cmd, args, cwd) =>
-  execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
-
 export function defaultDeps(cwd = process.cwd()) {
   return {
     gh: (path) => JSON.parse(run('gh', ['api', path], cwd)),
@@ -272,18 +266,6 @@ export function defaultDeps(cwd = process.cwd()) {
     cwd,
   };
 }
-
-// A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
-// text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
-// path when it exists, else through the real base.
-const realOr = (p, fallback) => {
-  try {
-    return realpathSync.native(p);
-  } catch {
-    return fallback;
-  }
-};
-const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
 
 function readLocal(deps, file, ref) {
   const root = canonical(deps.git(['rev-parse', '--show-toplevel']).trim());
@@ -321,15 +303,8 @@ export function main(argv, deps = defaultDeps()) {
     }
     return { code, out: `${JSON.stringify(result, null, 2)}\n`, err };
   } catch (e) {
-    const usage = e instanceof UsageError;
-    const detail = (e.stderr && String(e.stderr).trim()) || e.message;
-    return { code: usage ? 2 : 1, out: '', err: `acceptance: ${detail}\n${usage ? 'usage: see the header of acceptance.mjs\n' : ''}` };
+    return failure('acceptance', e);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { code, out, err } = main(process.argv.slice(2));
-  process.stdout.write(out);
-  process.stderr.write(err);
-  process.exitCode = code;
-}
+runIfEntry(import.meta.url, main);

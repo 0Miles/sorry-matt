@@ -52,14 +52,11 @@
 //   tickets inside the set. A blocker outside the set keeps its tracker state.
 //
 // Exit codes: 0 output written; 1 tracker or git read failed, or --line names no line; 2 bad arguments.
-import { readFileSync, readdirSync, existsSync, realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, relative, sep, posix } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/frontier@1';
-
-class UsageError extends Error {}
 
 // ---------- shared ----------
 
@@ -340,6 +337,11 @@ export function localFrontier({ paths, read, list, line, source = 'worktree' }) 
     }
     return parsed.get(p);
   };
+  const listed = new Map();
+  const names = (dir) => {
+    if (!listed.has(dir)) listed.set(dir, list(dir));
+    return listed.get(dir);
+  };
 
   const resolveRef = (ticket, ref) => {
     const dir = posix.dirname(ticket);
@@ -350,7 +352,7 @@ export function localFrontier({ paths, read, list, line, source = 'worktree' }) 
     }
     const m = /^#?(\d+)\b/.exec(token);
     if (!m) return null;
-    const hits = list(dir).filter((f) => {
+    const hits = names(dir).filter((f) => {
       const nn = /^(\d+)-.*\.md$/i.exec(f);
       return nn && Number(nn[1]) === Number(m[1]);
     });
@@ -402,9 +404,6 @@ function parseArgs(argv) {
   return { tracker, ...opts };
 }
 
-const run = (cmd, args, cwd) =>
-  execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
-
 export function defaultDeps(cwd = process.cwd()) {
   return {
     gh: (path) => JSON.parse(run('gh', ['api', path], cwd)),
@@ -413,18 +412,6 @@ export function defaultDeps(cwd = process.cwd()) {
     cwd,
   };
 }
-
-// A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
-// text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
-// path when it exists, else through the real base.
-const realOr = (p, fallback) => {
-  try {
-    return realpathSync.native(p);
-  } catch {
-    return fallback;
-  }
-};
-const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
 
 function localDeps(deps, ref) {
   const root = canonical(deps.git(['rev-parse', '--show-toplevel']).trim());
@@ -471,15 +458,8 @@ export function main(argv, deps = defaultDeps()) {
     }
     return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
   } catch (e) {
-    const usage = e instanceof UsageError;
-    const detail = (e.stderr && String(e.stderr).trim()) || e.message;
-    return { code: usage ? 2 : 1, out: '', err: `frontier: ${detail}\n${usage ? 'usage: see the header of frontier.mjs\n' : ''}` };
+    return failure('frontier', e);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { code, out, err } = main(process.argv.slice(2));
-  process.stdout.write(out);
-  process.stderr.write(err);
-  process.exitCode = code;
-}
+runIfEntry(import.meta.url, main);

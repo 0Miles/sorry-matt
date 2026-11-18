@@ -16,7 +16,7 @@
 // count itself is still kept by SubagentStart and the next call reads it again.
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { activeLedgerTexts, commonDir } from './runs.mjs';
+import { ledgersForEvent } from './runs.mjs';
 
 const BUDGET = /^\s*(?:[-*+]\s+)?`?budget:\s*`?([a-z][a-z-]*)\s+(\d+)`?\s*$/;
 
@@ -158,12 +158,6 @@ export function recordSpawn(ledger, agentId, { now = () => new Date() } = {}) {
 
 const off = (env) => String(env.SORRY_MATT_BUDGET || '').toLowerCase() === 'off';
 
-const ledgersFor = (event, git) => {
-  const cwd = typeof event.cwd === 'string' && event.cwd ? event.cwd : process.cwd();
-  const common = commonDir(cwd, git);
-  return common ? activeLedgerTexts(common) : [];
-};
-
 export function denyReason(ledger, spawns, limit) {
   return `sorry-matt budget blocked this spawn: the run in ${ledger} has spawned ${spawns} subagents and its limit is ${limit} (\`budget: spawns ${limit}\`). Do not spawn another subagent or try another route. Dispatch no more tickets and hand off as get-to-work's budget rule says, writing which limit stopped the run; only the user raises a limit, by editing that ledger line. If that run is no longer running, its first line should be \`<!-- sorry-matt:run ended -->\`. (The user can turn this check off by setting SORRY_MATT_BUDGET=off under "env" in their Claude Code settings.)`;
 }
@@ -180,7 +174,7 @@ const deny = (text) => ({
 export function decideSpawn(event, { env = process.env, git = spawnSync, read } = {}) {
   const warnings = [];
   if (off(env)) return { decision: null, warnings };
-  for (const { ledger, text } of ledgersFor(event, git)) {
+  for (const { ledger, text } of ledgersForEvent(event, git)) {
     const limit = parseBudget(text).spawns;
     if (limit === undefined) continue;
     let spawns;
@@ -209,7 +203,7 @@ export function countSpawn(event, { env = process.env, git = spawnSync } = {}) {
   if (off(env)) return [];
   const agentId = typeof event.agent_id === 'string' && event.agent_id ? event.agent_id : null;
   const counted = [];
-  for (const { ledger } of ledgersFor(event, git)) {
+  for (const { ledger } of ledgersForEvent(event, git)) {
     try {
       counted.push({ ledger, spawns: recordSpawn(ledger, agentId) });
     } catch (error) {

@@ -398,7 +398,9 @@ function gitSub(args) {
   return { sub: args[k] ?? '', rest: args.slice(k + 1) };
 }
 
-const PROTECTED_BRANCH = /^(refs\/heads\/)?(main|master)$/;
+const MAIN_NAMES = ['main', 'master'];
+const MAIN = MAIN_NAMES.join('|');
+const PROTECTED_BRANCH = new RegExp(`^(refs/heads/)?(${MAIN})$`);
 
 const git = (dir, ...args) => {
   try {
@@ -409,7 +411,7 @@ const git = (dir, ...args) => {
 };
 // main, master, and the remote's default branch when the clone knows it.
 function protectedBranches(dir, remote) {
-  const names = new Set(['main', 'master']);
+  const names = new Set(MAIN_NAMES);
   if (/^[\w.-]+$/.test(remote || 'origin')) {
     const head = git(dir, 'symbolic-ref', '--short', '-q', `refs/remotes/${remote || 'origin'}/HEAD`);
     if (head) names.add(head.slice(head.indexOf('/') + 1));
@@ -583,16 +585,16 @@ export function apiRule(method, rawEndpoint, body, line) {
     if (/\b(mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
     if (/\b(deleteRepository|deleteIssue)\b/.test(body)) return hit('irrecoverable-delete', line);
     if (/\b(updateRefs?)\b/.test(body) && /\bforce\s*:\s*true\b/.test(body)) return hit('force-push', line);
-    if (/\bcreateCommitOnBranch\b/.test(body) && /(branchName|qualifiedBranchName)["']?\s*:\s*["']?(refs\/heads\/)?(main|master)\b/.test(body)) return hit('merge-bypass', line);
+    if (/\bcreateCommitOnBranch\b/.test(body) && new RegExp(String.raw`(branchName|qualifiedBranchName)["']?\s*:\s*["']?(refs/heads/)?(${MAIN})\b`).test(body)) return hit('merge-bypass', line);
     return null;
   }
   if (reading) return null;
   if (new RegExp(`^${OWNER_REPO}/git/refs/`).test(endpoint) && /\bforce["']?\s*[=:]\s*["']?true\b/.test(body)) return hit('force-push', line);
   // Writing a protected branch's ref, or committing to it through the contents API, skips the PR.
-  if (new RegExp(`^${OWNER_REPO}/git/refs/heads/(main|master)$`).test(endpoint)) {
+  if (new RegExp(`^${OWNER_REPO}/git/refs/heads/(${MAIN})$`).test(endpoint)) {
     return hit(method === 'DELETE' ? 'irrecoverable-delete' : 'merge-bypass', line);
   }
-  if (new RegExp(`^${OWNER_REPO}/git/refs$`).test(endpoint) && /refs\/heads\/(main|master)\b/.test(body)) return hit('merge-bypass', line);
+  if (new RegExp(`^${OWNER_REPO}/git/refs$`).test(endpoint) && new RegExp(String.raw`refs/heads/(${MAIN})\b`).test(body)) return hit('merge-bypass', line);
   if (new RegExp(`^${OWNER_REPO}/contents/`).test(endpoint)) {
     const branch = /\bbranch["']?\s*[=:]\s*["']?([\w./-]+)/.exec(body)?.[1];
     if (!branch || PROTECTED_BRANCH.test(branch)) return hit('merge-bypass', line);

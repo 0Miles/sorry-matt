@@ -41,11 +41,9 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { UsageError, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/overlap@1';
-
-class UsageError extends Error {}
 
 /** A repo-relative path in canonical form; '' is the whole repository. */
 export function normalize(path) {
@@ -177,15 +175,8 @@ export function main(argv, deps = defaultDeps()) {
     const result = overlapPlan(readPlan(resolve(argv[0]), deps.read), deps.git);
     return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
   } catch (e) {
-    const usage = e instanceof UsageError;
-    const detail = (e.stderr && String(e.stderr).trim()) || e.message;
-    return { code: usage ? 2 : 1, out: '', err: `overlap: ${detail}\n${usage ? 'usage: see the header of overlap.mjs\n' : ''}` };
+    return failure('overlap', e);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { code, out, err } = main(process.argv.slice(2));
-  process.stdout.write(out);
-  process.stderr.write(err);
-  process.exitCode = code;
-}
+runIfEntry(import.meta.url, main);
