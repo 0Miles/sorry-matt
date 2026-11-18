@@ -1,10 +1,20 @@
-# ASKING: the contract for asking the user
+# ASKING: the shared contract for asking and run state
 
-`have-it-all-done`, `get-to-work`, and `take-this` read this file in full when they open. Where it conflicts with
-the asking language already in those skills, this file wins; it changes none of their deliverables.
+`have-it-all-done`, `get-to-work`, and `take-this` read this file in full when they open, and it applies throughout.
 
 In one line: **if you can write a recommendation, answer on their behalf; ask everything that genuinely needs a
 human in one go.**
+
+## 0. Opening
+
+After this file, read three more, in order:
+
+1. `docs/agents/issue-tracker.md`: the provider and its conventions. If it is missing, ask the user to run
+   `/setup-matt-pocock-skills`, and continue once it is set up.
+2. `sorry-matt/authority.md` under the **common directory** that
+   `git rev-parse --path-format=absolute --git-common-dir` reports, for the **standing authority** (section 5).
+   When it is missing, run on the defaults — do not stop.
+3. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
 
 ## 1. Pre-ask check
 
@@ -56,51 +66,45 @@ per section 3.
 ## 3. What to answer on their behalf
 
 **Being able to write a recommendation means being able to answer.** Anything outside the four classes in
-section 2 is answered on their behalf, not asked first. Record each one in the **self-answer log**:
+section 2 is answered on their behalf, not asked first. Record each one as a row:
 
 | # | Decision | Rationale | Cost to reverse | Evidence location |
 | --- | --- | --- | --- | --- |
 
-The log is **two-layered**, and each self-answer is written once: an implementation detail that affects one ticket
-only and is reversible inside that ticket's worktree goes in that ticket's status record; only the self-answers
-whose cost to reverse crosses tickets or deliveries enter the run-level log, and the review pass draws its slate
-from the run level alone.
-
 Cost to reverse states which files have to change, what has to be re-run, and whether anything already delivered
-is affected. It is the ordering key for the review pass, not an adjective; where a count exists, give the count.
+is affected; where a count exists, give the count. It is the ordering key for the ruling point and the review pass,
+not an adjective.
 
-Answering on their behalf covers **judgment**, never **authority**. Actions that need authority follow section 5
-and are never self-answered.
+Each self-answer is written once, in one of two layers: an implementation detail that affects one ticket only and
+is reversible inside that ticket's worktree goes in that ticket's status record; only the self-answers whose cost
+to reverse crosses tickets or deliveries enter the run-level **self-answer log**. Decisions the user made in person
+during an earlier grilling are requirements, not self-answers.
 
-Done when: every non-class decision after the risk gate is in the self-answer log with all five columns filled.
+Done when: every non-class decision after the risk gate is recorded in one of the layers, with all five columns
+filled.
 
 ## 4. The ruling point and throttling
 
 - After the risk gate, the whole run has **exactly one ruling point**, placed after planning is delivered and
   before implementation starts.
 - The ruling point **asks everything at once**: one question call, several questions or multi-select, each with a
-  recommendation.
-- The tool caps it at four questions. With more than four pending, sort by **cost to reverse** descending, ask the
-  top four, and answer the rest on their behalf.
+  recommendation. The tool caps it at four questions; with more than four pending, sort by cost to reverse
+  descending, ask the top four, and answer the rest on their behalf.
 - Between the ruling point and the final report, anything that comes up mid-run takes one of these three exits,
   and there is no fourth:
   1. Answerable → answer it, log it, keep going.
   2. Not answerable → mark it **awaiting ruling**, let that ticket go stuck, keep going on the others.
   3. Only a human can do it → put it on the **human-work list**, keep going on the others.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
-  flipped?", offering the four with the highest cost to reverse. The complete self-answer log goes in the report
-  body.
-
-**Eyes-on acceptance is the only exception.** When a ticket's acceptance criterion cannot be verified
-mechanically, confirm them one at a time while closing the round: one item per turn, with the operating steps and
-a URL or window the user can open directly, and wait for the response before the next one. It is an acceptance
-procedure, not a ruling, so the one-ruling-point limit does not apply; where no such criterion exists, record
-that it does not apply.
+  flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
+  report body.
+- Eyes-on acceptance (`have-it-all-done` step 5) is an acceptance procedure, not a ruling, and this section does not
+  limit it.
 
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
 it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list.
 
-## 5. The three layers of authority
+## 5. The three layers of authority <!-- pending #8 -->
 
 Authority is **never version-controlled** and never self-answered. It has three layers, and the default is the
 shortest-lived one.
@@ -112,14 +116,8 @@ and "from now on"; without "from now on", it counts for this time only.
 
 ### L1 project (written only when the user says "from now on")
 
-It lands in git's **common directory**, not the working tree:
-
-```bash
-git rev-parse --path-format=absolute --git-common-dir
-```
-
-Write the grant to `sorry-matt/authority.md` under that directory: from any linked worktree the path resolves to
-the same file, and it sits outside the working tree, so it is never committed or pushed.
+Write it on the spot to `sorry-matt/authority.md` under the common directory: from any linked worktree the path
+resolves to the same file, and it sits outside the working tree, so it is never committed or pushed.
 
 Five columns per row; a row missing any one of them does not exist:
 
@@ -141,26 +139,60 @@ Nothing under `.git` shows up in a diff, so nobody reviews it. Therefore:
 
 1. **Every row carries its source:** the user's own words, the date, and the session. A row without a source does
    not exist — ask again.
-2. **Every run's final report prints the authority actually used**, with the absolute path of that file.
+2. **Every run's final report prints this run's authority table:** each grant actually used, one row each with the
+   action, level, the user's own words, and the date, plus the absolute path of that file; where no standing
+   authority was used, say "none".
 3. **A new row may only come from what the user said this round.** Never derive one from the other rows, never
    widen an existing row's reach, never add one because "we did it last round".
-4. **Permanent exceptions, ungrantable at any layer:** outgoing messages (mail, chat, social posts) and
-   third-party communication, installing packages or cloning, anything touching credentials or secrets, deleting
-   data that cannot be recovered, payments, permission changes, and production changes to config, rules or
-   permissions or that delete production data. Every one goes on the human-work list.
+4. **Permanent exceptions, ungrantable at any layer:** force-pushes, outgoing messages (mail, chat, social posts)
+   and third-party communication, installing packages or cloning, anything touching credentials or secrets,
+   deleting data that cannot be recovered, payments, permission changes, and production changes to config, rules
+   or permissions or that delete production data. Every one goes on the human-work list.
 
 Done when: every action this run that needed authority points at one source in L0, L1, or L2; every row written to
 L1 carries the user's own words from this round; the final report prints the authority table and the file's
 absolute path.
 
-## 6. Language and outbound register
+## 6. Language and outbound text
 
 - Questions, options, and closing questions all use the language the user is writing in this conversation.
-- Outbound text — tracker comments, issue bodies, PR bodies, a query sent to a third party — goes through the
-  Skill tool with `speak-human`, then through the Skill tool with `no-bullshit`. State the conclusion and the
-  direction only: no asking the reader for their preferences, no pleasantries, no closing invitation.
-- **Status records and the run ledger are not outbound text.** They are machine records for the next agent to
-  read, and complete fields are enough. They skip `speak-human` and `no-bullshit` — running both on every update
-  spends the cost that was just saved. That holds even where they live on the tracker.
+- **The polish pass is for the two kinds of text a human reads:** the aggregate PR body, and issues waiting for a
+  human to triage or act on (raw issues filed along the way, raw issues recording a stuck ticket). Call the Skill
+  tool with `speak-human`, then call the Skill tool with `no-bullshit`.
+- Everything else written to the tracker — specs, tickets, ticket PR bodies, status records, tracker comments — and
+  the run ledger are read by the next agent and skip the polish pass.
+- All outbound text states the conclusion and the direction only: no asking the reader for their preferences, no
+  pleasantries, no closing invitation.
 
-Done when: every question and every piece of outbound text this run follows all three rules.
+Done when: every question and every piece of outbound text this run follows all four rules.
+
+## 7. The run ledger and the context budget
+
+The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the common
+directory. When the same task already has one, take it over rather than rebuilding from the conversation's
+compaction summary; otherwise create one. Nine fields:
+
+1. **Next action:** one line to follow on resuming.
+2. The task scope and where the adopted grilling source lives.
+3. The risk gate's three lights and the clearance record.
+4. Lines, integration branches, and tip SHAs.
+5. This run's authority table.
+6. The run-level self-answer log.
+7. The human-work list.
+8. **Reconciliation table:** one row per ticket — ticket ID, deliverable, verification result, and where that
+   ticket's status record lives.
+9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs, compactions and handovers. Token
+   counts are unknown unless the runtime itself reports them; never estimate them from duration or agent count.
+   <!-- pending #16 -->
+
+When the common directory is not writable, or the current directory is not inside a git repo, there is no ledger —
+the final report becomes the source of truth; say so in the report, and do not stop over it. Write the ledger
+current at the end of every step and every closed round; after a compaction, a `/loop` wake-up, or any resumption,
+the first action is to re-read it rather than inferring from a summary in context.
+
+**The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
+and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
+when it needs detail, it pulls just those lines with a command.
+
+Done when: all nine ledger fields hold content or say "none", and where there is no common directory, the report
+says the source of truth moved to it; the host's context holds no raw diffs, test logs, or agent reports.
