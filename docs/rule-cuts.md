@@ -396,3 +396,27 @@ guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`ma
 `scripts/overlap.test.mjs`（同線不重疊的候選同時開工、在途預測與實際改動佔檔、跨線在途的票各以自己的線為 base 佔檔、候選依序互佔、`/` 與路徑正規化、
 壞計畫、在途 worktree 以 merge-base 計實際改動而不算基底之後的改動），CI 一起跑。實際改動以 merge-base 為準：整合
 分支在票開工後前進，直接 `git diff <base>` 會把別張票的改動算到這張票頭上。
+
+## #18：總 PR 可以逐票審
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 收票整併「`git merge --no-ff <ticket 分支>`，一張票一個 merge commit」 | 加 `--no-edit`，message 固定用 git 預設的 `Merge branch '<ticket 分支>'`；寫明票的 commit 就是 `<merge>^1..<merge>^2` | 紅燈對票本來就靠這個 subject；逐票導覽也靠它認票。整併後 ticket 分支已刪，只剩 merge message 記得是哪張票。 |
+| 整併的衝突解法（沒規定落在哪） | 只留在該次 merge commit 裡，`git commit --no-edit` 收尾、不改寫 ticket 分支；解完還要改就另做 commit，subject 不帶票 ID | 票的 commit 範圍因此不含別人的改動；`git show --remerge-diff <merge>` 只顯示解法。subject 不帶 `#N`，收官彙整摘要的 `--grep` 才不會把它算成票的 commit。 |
+| 整併的 merge 怎麼對回票（審查追加） | 整併後把 merge SHA（`git rev-parse HEAD`，含 `-ci` merge）記進 ledger 對帳表（`ASKING.md` 第 7 節第 8 欄加欄）；逐票導覽與紅燈對票都以 SHA 為準，沒記 SHA 才退回認 subject：先 `Merge branch '<分支>'`，再 `Merge <票 ID>` 與 `(+<票 ID>)` 別名 | 只認 git 預設 message 時，本 run（#4 線）的 13 個 merge 全是主持人手寫的 `Merge #N: ...`、`Merge #5 (+#6): ...`、`Merge #11 fix: ...`，#5–#17 全部對不到票。SHA 不受 message 寫法影響；subject 退路讓沒記 SHA 的舊 ledger 也能用。修正後對本線實跑（不給 SHA）#5–#17 全部對到、沒有線級 commit 被誤收。 |
+| 收官精簡「直接套用修法」 | 套用的修法收成一個獨立 commit（不帶票 ID，沒有修法不 commit），不 amend 進任何 merge 或票的 commit | 精簡跨票，混進任何一張票都會讓那張票的範圍看起來改了不屬於它的東西。 |
+| 收官併入基底 | 帶 `--no-edit`；衝突解法同樣只留在這個 merge commit | 同上。 |
+| 紅燈對不到票時主持人的修正 commit | subject 不帶票 ID | 同上，避免被算進某張票的摘要。 |
+| 總 PR body「每張完成票一節：摘要與 `Closes #N`」 | 改為以新的 `scripts/review-guide.mjs` 輸出寫：開頭的審查門檻提醒（`size.over`）→ 逐票導覽（依阻擋邊拓撲序；每節有 compare 連結、commit 數與增刪、摘要、接續紀錄連結、衝突解法的 `remergeDiff` 指令、退回次數、`Closes #N`）→ 線級 commit → 缺口；潤稿後門檻提醒與連結也要在 | 取消票級 PR（#13）之後，總 PR 是唯一的審查單位，一條線很容易超過一千行。哪段 commit 屬於哪張票、依什麼順序讀、diff 多大，都是可以從 git 算出來的，交給腳本，不讓主持人推（同 #11 的理由）。 |
+| 審查門檻（新增） | 預設 400 行，算法是 `git diff --shortstat <基底>...<線整合分支>` 的增刪合計（從 merge base 算，等同 GitHub PR 的 diff；二進位檔不計行），超過才提醒 | SmartBear：一次審 200–400 行可找到 70–90% 的缺陷；Google eng-practices：1000 行通常太大。 |
+
+新增：`get-to-work/scripts/review-guide.mjs`（零依賴，需 git 2.38+，src/dist 逐位元組相同，輸出 `sorry-matt/review-guide@1`）與
+`scripts/review-guide.test.mjs`（以真的 git repo 照 get-to-work 的方式建一條線：`--no-ff` 整併、`-ci` 紅燈修正分支、在 merge 裡解的衝突、
+精簡 commit、併入基底；驗票與 merge 的對應、commit 範圍與連結、線級 commit 的分類、衝突解法的偵測、門檻邊界、閱讀順序與環、
+找不到 merge 的結束代碼 3、壞計畫），CI 一起跑。
+
+`--remerge-diff` 只能在本機看（git 2.36 以上），GitHub 網頁看不到，導覽照實寫明。
+
+衝突解法放在 merge commit 而不是另一個一般 commit：要把解法拆成獨立的一般 commit，得先 commit 帶衝突標記的樹或改寫 ticket 分支，
+前者讓中間的 SHA 壞掉、後者讓票的範圍混進解法。merge commit 本身不屬於票的範圍，`--remerge-diff` 又能只看解法，腳本也標出哪些
+merge 帶解法（`resolved`，比對 merge commit 的樹與 `git merge-tree --write-tree` 的自動合併結果）。
