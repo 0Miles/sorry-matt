@@ -50,7 +50,7 @@ share the failure shape and put them in the options.
 ### (c) Another repo, or someone else's area
 
 Do not ask, and do not offer to fix it. File a ticket, link back to the source evidence, and keep it out of this
-round's schedule.
+run's schedule.
 
 ### (d) Design rulings
 
@@ -198,25 +198,25 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, and its send-back count. The stage is candidate, implementing, in review, fixing or
-   queued, or one of the end states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming relies
-   on it and the agent id to pick the tickets in flight back up.
+   its responsible agent's id, and its send-back count. The stage is candidate, expanding, implementing, in review,
+   fixing, queued or integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work`
+   section 1); resuming relies on it and the agent id to pick back up every ticket short of an end state.
 9. **Run metrics and budget**, in three parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is
      created, and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns),
-     `budget: rounds 30` (dispatch points, `get-to-work` section 1, dispatch; the name is kept from before), `budget: hours 12` (elapsed time, computed as under
-     usage), and `budget: no-progress 3` (consecutive no-progress dispatch points before the breaker trips). Changing a
-     limit is the user's call; the host never answers on their behalf to raise one (see section 4). The plugin's
+     `budget: rounds 40` (dispatch points, `get-to-work` section 1, dispatch; the name is kept from before),
+     `budget: hours 12` (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive
+     count for the no-progress breaker). Changing a limit is the user's call; the host never answers on their behalf to raise one (see section 4). The plugin's
      hook collects every `budget:` line in the whole ledger, so no other field starts a line with `budget:`.
-   - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user before
-     the ruling point does not count; when taking over a ledger without one, record the takeover time and note that
-     earlier time is not counted), waiting time (from then on, the total from sending each question to the user to
-     receiving the answer), elapsed time (now minus the start time, minus waiting time), spawns, dispatch points run, the
-     consecutive no-progress count with the progress snapshot from the last dispatch point (judged per `get-to-work`
-     section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per verdict
-     `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out pushes
-     does not count), send-backs for a redo, compactions and handovers. Spawns come from `spawns` in `<run>.counters.json`, which the hook
-     writes next to the ledger; the host reads it and never writes it. No such file means the hook is not loaded,
+   - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user
+     before the ruling point does not count; when taking over a ledger without one, record the takeover time and
+     note that earlier time is not counted), waiting time (from then on, the total from sending each question to the
+     user to receiving the answer), elapsed time (now minus the start time, minus waiting time), spawns, dispatch
+     points run, the consecutive no-progress count with the progress snapshot from the last dispatch point (judged
+     per `get-to-work` section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per
+     verdict `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out
+     pushes does not count), send-backs for a redo, compactions and handovers. Spawns come from `spawns` in
+     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No such file means the hook is not loaded,
      and the host keeps the count itself. Token counts are unknown unless the runtime itself reports them; never
      estimate them from duration or agent count. Update usage when `get-to-work` section 1, budget and breaker, says:
      first thing at every dispatch point, and at the end of every ticket's close-out.

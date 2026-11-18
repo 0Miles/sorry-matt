@@ -169,11 +169,12 @@ hook 時，同樣不做。
 6. run 層自答清單。
 7. 人工作業清單。
 8. **對帳表**：一列一票 —— 票 ID、階段、交付物、驗證結果、該票接續紀錄的位置、驗收快照的 `sha256`
-   （`get-to-work` 派票時記）、負責 agent 的 id、退回次數。階段是候選、實作中、審查中、修正中、待整併，
-   或終局的已交付、卡住、待裁決（`get-to-work` 第 1 節）；恢復時靠它與 agent id 接回在途的票。
+   （`get-to-work` 派票時記）、負責 agent 的 id、退回次數。階段是候選、展開中、實作中、審查中、修正中、
+   待整併、整併中，或終局的已交付、卡住、待裁決（`get-to-work` 第 1 節）；恢復時靠它與 agent id 接回每張
+   沒到終局的票。
 9. **計量與預算**，三部分：
    - **上限**：一行一項 `budget: <名稱> <整數>`，建立 ledger 時寫入預設值，接手沒有這幾行的 ledger 時補上：
-     `budget: spawns 200`（spawn 數）、`budget: rounds 30`（派票點次數，`get-to-work` 第 1 節「派票」；名稱沿用舊稱）、`budget: hours 12`
+     `budget: spawns 200`（spawn 數）、`budget: rounds 40`（派票點次數，`get-to-work` 第 1 節「派票」；名稱沿用舊稱）、`budget: hours 12`
      （經過時間，算法見用量）、`budget: no-progress 3`（無進展斷路的連續次數）。調整上限是使用者的事，
      主持人不代答調高，見第 4 節。plugin 的 hook 收整份 ledger 裡每一行 `budget:`，所以其他欄不要以
      `budget:` 開頭寫行。

@@ -46,7 +46,7 @@ test('a candidate overlapping a running prediction waits and names the holder an
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.start, ['#7'], 'a sibling with the same prefix is not inside the directory');
   assert.deepEqual(r.json.wait, [{ id: '#6', overlaps: [{ with: '#5', paths: ['src/skills/get-to-work/SKILL.md'] }] }]);
-  assert.deepEqual(r.json.running, [{ id: '#5', predicted: ['src/skills/get-to-work'], actual: [], unpredicted: [] }]);
+  assert.deepEqual(r.json.running, [{ id: '#5', base: 'run/line', predicted: ['src/skills/get-to-work'], actual: [], unpredicted: [] }]);
 });
 
 test('candidates are taken in order: an earlier start holds its files against later candidates', (t) => {
@@ -80,7 +80,9 @@ test('bad plans exit 2: empty list, absolute or parent paths, duplicate ids, wor
     [{ candidates: [{ id: '#1', files: 'abs.txt' }] }, /repo-relative/],
     [{ candidates: [{ id: '#1', files: 'up.txt' }] }, /"\.\." is not allowed/],
     [{ candidates: [{ id: '#1', files: 'ok.txt' }, { id: '#1', files: 'ok.txt' }] }, /listed twice/],
-    [{ running: [{ id: '#1', files: 'ok.txt', worktree: dir }] }, /base is required/],
+    [{ running: [{ id: '#1', files: 'ok.txt', worktree: dir }] }, /#1 has a worktree but no base/],
+    [{ base: '', candidates: [] }, /base is a non-empty string/],
+    [{ candidates: [{ id: '#1', files: 'ok.txt', base: 'x' }] }, /only running tickets/],
     [{ candidates: [{ id: '#1', files: 'ok.txt', worktree: dir }] }, /only running tickets/],
     [{ candidates: [{ id: '#1' }] }, /no files list/],
   ];
@@ -100,6 +102,22 @@ test('a missing list file exits 1', (t) => {
   const r = run(dir, { candidates: [{ id: '#1', files: 'missing.txt' }] });
   assert.equal(r.code, 1);
   assert.match(r.err, /^overlap: /);
+});
+
+test('tickets in flight on other lines hold their files too, each read against its own line', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    {
+      running: [{ id: '#20', files: 'a.txt', base: 'run/line-a' }, { id: '#30', files: 'b.txt', base: 'run/line-b' }],
+      candidates: [{ id: '#21', files: 'c.txt' }, { id: '#31', files: 'd.txt' }],
+    },
+    { 'a.txt': 'src/a\n', 'b.txt': 'src/b\n', 'c.txt': 'src/b/x.md\n', 'd.txt': 'docs\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.running.map((x) => x.base), ['run/line-a', 'run/line-b']);
+  assert.deepEqual(r.json.start, ['#31']);
+  assert.deepEqual(r.json.wait, [{ id: '#21', overlaps: [{ with: '#30', paths: ['src/b/x.md'] }] }]);
 });
 
 test('a running worktree holds what it changed since branching, not what the base gained since', (t) => {
@@ -127,22 +145,28 @@ test('a running worktree holds what it changed since branching, not what the bas
   // The line moves on after the ticket branched: c.md is not the ticket's.
   writeFileSync(join(repo, 'c.md'), 'merged elsewhere\n');
   git(repo, 'commit', '-q', '-am', 'another ticket merged');
+  // A second line, cut from the first commit, with its own ticket in flight on d.md.
+  const wt2 = join(dir, 'wt2');
+  git(repo, 'branch', 'other', 'HEAD~1');
+  git(repo, 'worktree', 'add', '-q', '-b', 'ticket2', wt2, 'other');
+  writeFileSync(join(wt2, 'd.md'), 'other line\n');
 
   const r = run(
     dir,
     {
       base: 'line',
-      running: [{ id: '#8', files: 'p8.txt', worktree: wt }],
-      candidates: [{ id: '#9', files: 'p9.txt' }, { id: '#10', files: 'p10.txt' }, { id: '#11', files: 'p11.txt' }],
+      running: [{ id: '#8', files: 'p8.txt', worktree: wt }, { id: '#12', files: 'p12.txt', worktree: wt2, base: 'other' }],
+      candidates: [{ id: '#9', files: 'p9.txt' }, { id: '#10', files: 'p10.txt' }, { id: '#11', files: 'p11.txt' }, { id: '#13', files: 'p13.txt' }],
     },
-    { 'p8.txt': 'a.md\n', 'p9.txt': 'fresh.md\n', 'p10.txt': 'c.md\n', 'p11.txt': 'old.md\n' },
+    { 'p8.txt': 'a.md\n', 'p9.txt': 'fresh.md\n', 'p10.txt': 'c.md\n', 'p11.txt': 'old.md\n', 'p12.txt': 'e.md\n', 'p13.txt': 'd.md\n' },
   );
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.running, [
-    { id: '#8', predicted: ['a.md'], actual: ['a.md', 'b.md', 'fresh.md', 'new.md', 'old.md'], unpredicted: ['b.md', 'fresh.md', 'new.md', 'old.md'] },
+    { id: '#8', base: 'line', predicted: ['a.md'], actual: ['a.md', 'b.md', 'fresh.md', 'new.md', 'old.md'], unpredicted: ['b.md', 'fresh.md', 'new.md', 'old.md'] },
+    { id: '#12', base: 'other', predicted: ['e.md'], actual: ['d.md'], unpredicted: ['d.md'] },
   ]);
   assert.deepEqual(r.json.start, ['#10']);
-  assert.deepEqual(r.json.wait.map((w) => w.id), ['#9', '#11']);
+  assert.deepEqual(r.json.wait.map((w) => w.id), ['#9', '#11', '#13']);
 
   const missing = run(dir, { base: 'line', running: [{ id: '#8', files: 'p8.txt', worktree: join(dir, 'nope') }] });
   assert.equal(missing.code, 1);

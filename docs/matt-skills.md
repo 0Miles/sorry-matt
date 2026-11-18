@@ -14,12 +14,12 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 
 | matt skill | 用在哪 | 決定 | 理由 |
 | --- | --- | --- | --- |
-| `implement` | `get-to-work` 開輪，交給實作 agent | 自有流程取代：`get-to-work/IMPLEMENTER.md` | 上游六行裡有三行被覆寫：「at pre-agreed seams」用 `tdd`、結尾跑完整套件、自己呼叫 `code-review`。剩下的「讀票先寫票名」「commit 到目前分支」併進交付說明。實作 agent 問不到人，交付內容要自足（#6）。 |
+| `implement` | `get-to-work` 派票，交給實作 agent | 自有流程取代：`get-to-work/IMPLEMENTER.md` | 上游六行裡有三行被覆寫：「at pre-agreed seams」用 `tdd`、結尾跑完整套件、自己呼叫 `code-review`。剩下的「讀票先寫票名」「commit 到目前分支」併進交付說明。實作 agent 問不到人，交付內容要自足（#6）。 |
 | `tdd` | 經 `implement` 由實作 agent 呼叫 | 自有流程取代：`IMPLEMENTER.md` 第 2 節 | 上游要求「confirm them with the user. No test is written at an unconfirmed seam」，實作 agent 做不到。改為 seams 以票為準、沒寫就自定並記入接續紀錄；保留測試原則（測公開介面、期望值來自獨立來源、一次一個切片）。 |
 | `to-spec` | `take-this` 第 3 步 | 自有流程取代：`take-this` 第 3 步與 `TEMPLATES.md` | 上游第 2 步「Check with the user that these seams match」被代答覆寫。seams 改為代答後寫進 Testing Decisions，供票與實作 agent 沿用。模板保留。 |
 | `to-tickets` | `take-this` 第 4 步 | 自有流程取代：`take-this` 第 4 步與 `TEMPLATES.md` | 上游第 4 步「Quiz the user… Iterate until the user approves」被代答覆寫；「深度只到 frontier」又覆寫了模板的寫法。切片規則、expand–contract、發布方式改寫進 skill；票模板加 Seams 欄。 |
 | `handoff` | `take-this` 第 1 步，壓縮前 | 原樣使用（vendored） | 沒有任何覆寫。上游是 user-invoked，Skill tool 叫不到，所以 pin 在 `take-this/references/upstream/`。 |
-| `code-review` | `get-to-work` 收輪的獨立審查 | 自有流程取代：`prove-it` | 兩軸改成 `prove-it` Finder 的兩個 lens：Spec 軸 → 驗收對照（保留驗收項出處），Standards 軸 → repo 慣例（只列能引用規則原文的）。原樣呼叫做不到 #15 要的流程：上游規定兩軸報告原樣並列、不合併不重排，接不上 Verifier 逐項裁決與 pass／fix／stuck 結論；兩軸之外再跑 `prove-it` 的 Finder 等於第二位 reviewer 重讀整份 diff，違反「每張票只有一次獨立審查」。Fowler smell baseline 不帶過來：上游自己定為 judgement call，說不出可觀察差異，過不了 `prove-it` 的修法方向檢查；品質收斂由線級 `simplify` 負責。 |
+| `code-review` | `get-to-work` 收票的獨立審查 | 自有流程取代：`prove-it` | 兩軸改成 `prove-it` Finder 的兩個 lens：Spec 軸 → 驗收對照（保留驗收項出處），Standards 軸 → repo 慣例（只列能引用規則原文的）。原樣呼叫做不到 #15 要的流程：上游規定兩軸報告原樣並列、不合併不重排，接不上 Verifier 逐項裁決與 pass／fix／stuck 結論；兩軸之外再跑 `prove-it` 的 Finder 等於第二位 reviewer 重讀整份 diff，違反「每張票只有一次獨立審查」。Fowler smell baseline 不帶過來：上游自己定為 judgement call，說不出可觀察差異，過不了 `prove-it` 的修法方向檢查；品質收斂由線級 `simplify` 負責。 |
 | `grilling` | `grill-them` 的 agent-griller | 只傳參數 | 只指定角色對應（上游的「使用者」＝ agent-grillee），上游行為原樣保留。問答經對打目錄的檔案往返（#14），換的是傳遞管道，不改提問方式。原本另外指定「主要靶點」等於加行為，已刪。 |
 | `domain-modeling` | `grill-them` 第 4 步沉澱 | 原樣使用 | 沉澱的是雙方已有共識的術語與決策，沒有改寫上游任何一行。 |
 | `research` | `grill-them` 支線的外部事實查證 | 自有流程取代：`grill-them` 第 3 步兩行指示 | 上游要把 findings 存進 repo 的慣例位置，`grill-them` 要寫 scratchpad、不寫 repo —— 原本是覆寫。改為直接要求查一手來源、附出處、寫進 scratchpad。 |

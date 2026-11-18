@@ -1,23 +1,24 @@
 #!/usr/bin/env node
-// overlap: which frontier tickets of one line can start now without touching the files held by its tickets in
-// flight. No dependencies: runs on a bare Node 20+.
+// overlap: which frontier tickets of one repository can start now without touching the files held by its tickets
+// in flight, on any line. No dependencies: runs on a bare Node 20+.
 //
 // Usage
 //   node overlap.mjs <plan.json>
 //
-// plan.json, written by the host for one line:
+// plan.json, written by the host for one repository, all its lines together:
 //   {
-//     "base":       "<integration branch>",   // in-flight changes are read against it
-//     "running":    [{ "id": "#12", "files": "<predicted-files list>", "worktree": "<ticket worktree>" }],
+//     "base":       "<integration branch>",   // optional default for running tickets without their own
+//     "running":    [{ "id": "#12", "files": "<predicted-files list>", "worktree": "<ticket worktree>",
+//                      "base": "<that ticket's line integration branch>" }],
 //     "candidates": [{ "id": "#13", "files": "<predicted-files list>" }]     // in dispatch order
 //   }
 //   `files` is the path (absolute, or relative to the plan file) of a predicted-files list: one repo-relative
 //   path per line, `/` alone for the whole repository; blank lines and lines starting with `#` are ignored.
 //   A path covers itself and everything under it, with or without a trailing `/`. A list with no path is an
 //   error: predict `/` when nothing narrower is known. `worktree` is optional; without it a running ticket
-//   holds only its prediction.
+//   holds only its prediction. A running ticket with a worktree needs a base: its own `base`, else the plan's.
 //
-// A running ticket holds its predicted paths plus what its worktree changed since it branched from base:
+// A running ticket holds its predicted paths plus what its worktree changed since it branched from its base:
 // `git diff --name-only --no-renames <merge-base of base and HEAD>` (committed, staged and unstaged) and the
 // untracked files git does not ignore. Two paths overlap when one covers the other. Candidates are taken in
 // order: one starts when none of its paths overlaps a path held by a running ticket or by a candidate started
@@ -27,7 +28,8 @@
 //   {
 //     "format":  "sorry-matt/overlap@1",
 //     "base":    "<base>" | null,
-//     "running": [{ "id": "#12", "predicted": ["src/a"], "actual": ["docs/y.md", "src/a/x.md"],
+//     "running": [{ "id": "#12", "base": "<its base>" | null, "predicted": ["src/a"],
+//                   "actual": ["docs/y.md", "src/a/x.md"],
 //                   "unpredicted": ["docs/y.md"] }],     // actual paths no predicted path covers
 //     "start":   ["#13"],
 //     "wait":    [{ "id": "#14", "overlaps": [{ "with": "#12", "paths": ["src/a/x.md"] }] }]
@@ -83,16 +85,18 @@ function changedFiles(git, worktree, base) {
 }
 
 /**
- * plan: { base, running: [{ id, files: [paths], worktree? }], candidates: [{ id, files: [paths] }] }
+ * plan: { base, running: [{ id, files: [paths], worktree?, base? }], candidates: [{ id, files: [paths] }] }
  * with `files` already parsed by parseList. git(cwd, args) returns stdout.
  */
 export function overlapPlan({ base = null, running = [], candidates = [] }, git) {
   const held = [];
   const runningOut = running.map((r) => {
-    const actual = r.worktree ? changedFiles(git, r.worktree, base) : [];
+    const own = r.base ?? base;
+    const actual = r.worktree ? changedFiles(git, r.worktree, own) : [];
     held.push({ id: r.id, paths: uniqueSorted([...r.files, ...actual]) });
     return {
       id: r.id,
+      base: own,
       predicted: r.files.map(display),
       actual,
       unpredicted: actual.filter((a) => !r.files.some((p) => overlaps(p, a))),
@@ -134,19 +138,27 @@ function readPlan(path, read) {
     if (seen.has(e.id)) throw new UsageError(`${path}: ${e.id} is listed twice`);
     seen.add(e.id);
     if (typeof e.files !== 'string' || !e.files) throw new UsageError(`${path}: ${e.id} has no files list`);
-    if (e.worktree !== undefined && (kind !== 'running' || typeof e.worktree !== 'string')) {
-      throw new UsageError(`${path}: ${e.id}: worktree is a path, and only running tickets have one`);
+    for (const key of ['worktree', 'base']) {
+      if (e[key] !== undefined && (kind !== 'running' || typeof e[key] !== 'string' || !e[key])) {
+        throw new UsageError(`${path}: ${e.id}: ${key} is a non-empty string, and only running tickets have one`);
+      }
     }
     const list = resolve(dirname(path), e.files);
-    return { id: e.id, files: parseList(read(list), list), ...(e.worktree ? { worktree: e.worktree } : {}) };
+    return {
+      id: e.id,
+      files: parseList(read(list), list),
+      ...(e.worktree ? { worktree: e.worktree } : {}),
+      ...(e.base ? { base: e.base } : {}),
+    };
   };
   const out = {
     base: plan.base ?? null,
     running: running.map((e, i) => entry(e, i, 'running')),
     candidates: candidates.map((e, i) => entry(e, i, 'candidates')),
   };
-  if (out.running.some((r) => r.worktree) && (typeof out.base !== 'string' || !out.base)) {
-    throw new UsageError(`${path}: base is required when a running ticket has a worktree`);
+  if (out.base !== null && (typeof out.base !== 'string' || !out.base)) throw new UsageError(`${path}: base is a non-empty string`);
+  for (const r of out.running) {
+    if (r.worktree && !(r.base ?? out.base)) throw new UsageError(`${path}: ${r.id} has a worktree but no base`);
   }
   return out;
 }

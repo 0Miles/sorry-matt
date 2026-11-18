@@ -21,7 +21,7 @@ all the rules you follow, and none of them points at a file or section you canno
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
-  time, or none}
+  time, and the files the old attempt touched that its prediction did not cover, or none}
 
 ## 1. Start
 

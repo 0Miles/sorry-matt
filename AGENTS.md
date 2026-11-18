@@ -155,6 +155,16 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 檔案重疊 | file overlap |
 | 退回重做 | send back for a redo |
 | 退回紀錄 | send-back record |
+| 退回次數 | send-back count |
+| 階段 | stage |
+| 展開中 | expanding |
+| 實作中 | implementing |
+| 審查中 | in review |
+| 修正中 | fixing |
+| 待整併 | queued |
+| 整併中 | integrating |
+| 喚醒 | wake-up |
+| 上游撤回 | upstream reverted |
 | 預算與斷路 | budget and breaker |
 | 無進展斷路 | no-progress breaker |
 | 上限/用量 | limit / usage |
