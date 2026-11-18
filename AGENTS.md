@@ -49,7 +49,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 自己模擬。skill 內文引用其他 skill 時:
 
 - 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`speak-human`、`no-bullshit`、
-  `clean-it-up`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
+  `clean-it-up`、`prove-it`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
   `disable-model-invocation: true`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
@@ -156,6 +156,17 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 交付說明 | brief |
 | 潤稿 | polish pass |
 | 原樣使用/自有流程取代/只傳參數 | used as-is / replaced by own flow / parameters only |
+| 審查用 worktree | review worktree |
+| 初審/複驗 | initial review / recheck |
+| 驗收對照 | acceptance check |
+| 範圍蔓延 | scope creep |
+| 修法方向 | fix direction |
+| 突變紀錄 | mutation record |
+| 存活/殺掉(mutant) | survived / killed |
+| 等價 mutant | equivalent mutant |
+| 基準(實跑) | baseline |
+| 上限(突變) | cap |
+| 成立/不成立(裁決) | confirmed / invalid |
 
 ## 外部語義來源
 
@@ -164,7 +175,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 對一次。它不在 runtime 被讀取 —— 規則已寫進 skill 本文 —— 所以不進 `references/upstream/`,
 也不需要 pin 與 hash。
 
-被自有流程取代的 matt skills(`implement`、`tdd`、`to-spec`、`to-tickets`、`research`)同理:
+被自有流程取代的 matt skills(`implement`、`tdd`、`to-spec`、`to-tickets`、`research`、`code-review`)同理:
 不在 runtime 被讀取,對帳用的上游路徑與取代時的 hash 記在 `docs/matt-skills.md`。
 
 ## 收尾檢查

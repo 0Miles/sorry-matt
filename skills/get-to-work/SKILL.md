@@ -94,14 +94,20 @@ finishing the run.
 
 1. **Targeted checks:** confirm the affected-surface checks the agent reported are green. Red goes back to that
    agent first and comes to review green.
-2. **Independent review:** call the Skill tool with `code-review`; the fixed point is the line integration branch
-   and the spec source is the ticket URL or path. **One ticket gets this one reviewer by default**, its two axes
-   covering standards and spec conformance together. Add a specialist reviewer only where a concrete risk calls for
-   one, naming the risk and recording the rationale in the self-answer log; "another look, to be safe" is not a
-   risk.
+2. **Independent review:** call the Skill tool with `prove-it` in mode `initial`, passing the ticket (identifier
+   and text), the fixed point (the line integration branch), the ticket branch, and the targeted-check results from
+   step 1. The reviewer does the live run and mutation limited to this ticket's diff, and it writes a fixed-format
+   `pass` / `fix` / `stuck` verdict and finding list into the ticket's status record. `pass` goes on to integration,
+   `fix` to the batched fix, and `stuck` is cleared using the condition it states: a `stuck` before the review
+   opens does not count as a review, so once cleared run `initial` again; a `stuck` mid-review, once cleared,
+   resumes only the part it recorded as unfinished. If it cannot be cleared, mark the ticket stuck. **One ticket gets this one reviewer by default**, its lenses covering
+   standards and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one,
+   naming the risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
 3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
-   round rather than one finding at a time. Afterwards re-run only the targeted checks for the affected surface. At
-   most two correction rounds.
+   round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface, then
+   call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block: it reruns the live
+   run and mutation only on the lines the findings concern, and is not a second review. At most two correction
+   rounds.
 
    **Hard rail — a flaky red is chased to its root cause.** A test that goes red and green on the same commit is
    treated as a real failure: find the root cause, and fix the test when it lies there or fix the product and
@@ -134,7 +140,9 @@ it **stuck**:
 
 After recording the stuck state, also remove the ticket worktree and local ticket branch.
 
-Done when: every ticket in the round went through exactly one independent review with its targeted checks back to
+Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`; a
+`stuck` before the review opens does not count), each
+correction round had one `recheck`, and every verdict is in the status record; its targeted checks are back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are
 integrated and their ticket worktrees and local branches removed.

@@ -24,6 +24,10 @@ branch is the next step for the user to run.
   tracker to build a linear work chain and identify exactly one next action; this branch is read-only.
 - **Review an incoming GitHub PR** → `/review-pr <PR>`. Review the changes in the PR and publish suggestions and
   change requests on GitHub.
+- **Re-review one ticket inside a sorry-matt run on its own (no PR comments)** → `/prove-it <ticket>`. Reviews the
+  ticket branch against the integration branch as fixed point, through the evidence chain, a live run, and mutation
+  limited to the ticket's diff, and writes the verdict into the ticket's status record; `get-to-work` calls it by
+  itself when closing a round.
 - **The agent is not speaking human** → `/speak-human`. Preserve facts, conditions, responsibility, and
   uncertainty while rewriting in natural, common language for the target language and locale.
 - **The agent is padding and burying the point** → `/no-bullshit`.

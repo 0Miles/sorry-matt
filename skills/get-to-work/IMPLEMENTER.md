@@ -35,8 +35,9 @@ all the rules you follow, and none of them points at a file or section you canno
 - One slice at a time: write one failing test, then just enough code to pass it, and repeat.
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
   relevant lint. The host runs the full suite once while finishing the run.
-- Do not call `code-review`: the host runs the independent review once while closing the round, and reviewing code
-  you just wrote is not independent.
+- Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
+  independent review and mutation once while closing the round, and reviewing code you just wrote is not
+  independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
   the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
   acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
