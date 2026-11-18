@@ -1,6 +1,6 @@
 ---
 name: get-to-work
-description: 逐輪清空一組已開好的 tickets，依阻塞順序平行實作與驗收，交付 GitHub PR 或本地整合分支
+description: 逐輪清空一組已開好的 tickets，依阻塞順序平行實作與驗收，每條線交付一支 GitHub 總 PR 或本地整合分支
 disable-model-invocation: true
 ---
 
@@ -56,8 +56,8 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 每次開輪先重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
 
-- **GitHub**：已整併進線整合分支的票在 GitHub 上仍是 open，取 ledger 對帳表中已整併的票以
-  `--done <n,...>` 傳入；卡住的票以 `--stuck <n,...>` 傳入。
+- **GitHub**：已整併進線整合分支的票在 GitHub 上仍是 open（關票等總 PR 合併），取 ledger 對帳表
+  中已整併的票以 `--done <n,...>` 傳入；卡住的票以 `--stuck <n,...>` 傳入。
 - **Local Markdown**：每條線各跑一次，傳整個凍結票集，加 `--ref <該線整合分支>` 與
   `--line <該線的 line>`（凍結時輸出的值）；frontier 是各線輸出 `frontier` 的聯集。完成與
   卡住由該分支票檔上的 `sorry-matt completion`／`sorry-matt blocker` 判定，`ready-for-human`
@@ -94,19 +94,18 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
-4. **票級 PR（GitHub only）**：push ticket 分支，建立以線整合分支為 base 的 PR；body
-   必須含 `Closes #N` 與驗收摘要。
-5. **整併**：在整合 worktree 合併 ticket 分支。有 conflict 時交給一個**整併 agent** 逐塊解：
+4. **整併**：在整合 worktree 合併 ticket 分支。有 conflict 時交給一個**整併 agent** 逐塊解：
    給它整合 worktree、兩邊的票面與 commit message，以及這條判準 —— 判的是兩個意圖而不是
    兩段文字，先追兩邊的 primary source（票面與 commit message），相容就都保留，不相容就取
    合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。它逐塊回報取捨摘要，主持人把
    取捨記進自答清單。解完執行受影響範圍的針對性檢查。
-6. **完成交付**：
-   - **GitHub**：push 整合分支；保留已因整併顯示為 merged 的票級 PR 作為審查紀錄。
+5. **完成交付**：
+   - **GitHub**：push 整合分支。票保持 open，關票交給總 PR（第 2 節）；本票的摘要在它的
+     commit message 裡（`IMPLEMENTER.md` 第 2 節）。
    - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion，將
      `Status` 改為 `ready-for-human`，追加 `## sorry-matt completion`，列出 implementation
      commit、整合分支及通過的檢查，再 commit 這份交付紀錄。
-7. 移除 ticket worktree 與本地 ticket 分支。
+6. 移除 ticket worktree 與本地 ticket 分支。
 
 中途事項走 `ASKING.md` 第 4 節的三條出路。獨立執行而沒有裁決點時，答不出來的事累積到
 下一次開輪前一次問完。
@@ -156,25 +155,35 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 
 接著依模式交付每條線：
 
-- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 收錄票級 PR，且只為已完成票
-  列 `Closes #N`；卡住與待裁決票列為缺口。總 PR body 依 `ASKING.md` 第 6 節潤稿。
+- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 為每張完成票寫一節：摘要與
+  `Closes #N`。摘要由主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
+  `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`。
+  卡住與待裁決的票列為**缺口**，不寫 `Closes`。總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後每行 `Closes #N` 仍要在。
 - **Local Markdown**：保留線整合分支供人審查與合併；記錄 branch name 與 tip SHA，再移除
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
-
-GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是確認呼叫，留到清理之後送出；
-放不放行由 Claude Code 的權限設定決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下
-（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
-權限規則片段，不為此另開提問。
 
 線交付完成後清理：呼叫 Skill tool 帶入 `clean-it-up`，照它的證據規則收掉本輪產生的
 ticket worktree 與已合併的本地分支。**待人審查的交付物不在清理範圍**：Local Markdown 的
 線整合分支、以及尚未合併的總 PR 來源分支一律保留 —— 對未合併項目，`clean-it-up` 本身就是
 降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
+GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是確認呼叫，留到清理之後送出；
+放不放行由 Claude Code 的權限設定決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下
+（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
+權限規則片段，不為此另開提問。
+
+**關票**在 `gh pr merge` 送出之後做。GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；
+預設分支以 `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
+
+- 總 PR 已合併：確認每張完成票都已關閉。基底不是預設分支，或合併後仍 open 的票，由主持人依
+  tracker 契約的 Close 逐張關閉，留言指向總 PR。
+- 總 PR 留給人合併、且基底不是預設分支：人工作業清單列出合併後要執行的關票指令。
+
 最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
 第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 
 完成判準：每條線都跑過一次線級精簡與一次完整驗證並收在綠燈，且恰有一項可供人合併的交付，
-或已經權限設定放行而合併並回報；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
+或已經權限設定放行而合併並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
+人工作業清單有關票指令；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
 分支仍保留；輸出已列出需授權動作的結果與本輪計量。

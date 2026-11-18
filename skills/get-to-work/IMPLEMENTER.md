@@ -2,7 +2,8 @@
 
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
 prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
-limit in section 7, or `have-it-all-done` section 0, change them together. Sections 1 and 2 are adapted from
+limit in section 7, or `have-it-all-done` section 0, change them together; change section 2's commit message
+format together with the aggregate PR body in `SKILL.md`'s finish. Sections 1 and 2 are adapted from
 `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
@@ -36,7 +37,11 @@ all the rules you follow, and none of them points at a file or section you canno
   relevant lint. The host runs the full suite once while finishing the run.
 - Do not call `code-review`: the host runs the independent review once while closing the round, and reviewing code
   you just wrote is not independent.
-- When done, commit your work to the ticket branch.
+- When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
+  the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
+  acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
+  aggregate PR summary from all of this ticket's commits. Write no closing
+  keyword such as `Closes` or `Fixes`: closing the ticket is the aggregate PR's job.
 
 ## 3. Autonomy and answering on the user's behalf
 
