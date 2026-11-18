@@ -20,9 +20,46 @@ grill them
 | `speak-human` | Rewrite stiff, bureaucratic, ambiguous, translated, or AI-sounding text into clear, natural language for the target locale without semantic drift. |
 | `no-bullshit` | Cut the crap. Get to the point. |
 | `clean-it-up` | Safely remove merged local branches and obsolete worktrees after a Git task is finished; remote branches require explicit opt-in. |
+| `figure-out-the-ui` | Before writing a new interface, settle who it is for and what it solves. Produces a UI brief, no code. |
+| `build-the-ui-right` | While writing user-visible frontend code, consult design and platform guidance, cover every state, and reuse the project's own tokens and components. |
+| `actually-look-at-the-ui` | After a frontend change, open it in a real browser, record evidence for each claim, and mark what was not seen as unverified. |
+| `make-the-ui-fast` | When the UI is slow, measure first, name the bottleneck, change one thing, and measure again. |
+| `make-this-shit-pretty` | Rework an existing piece of UI in small verified steps, with behavior unchanged. |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
+
+## Frontend skills
+
+Four of the frontend skills need no command. The agent picks them up on its own while working on a web
+frontend, each at its own moment:
+
+| When the agent is… | It loads |
+| --- | --- |
+| about to add a page, component, form, or flow, or restructure an existing one | `figure-out-the-ui` |
+| writing or changing user-visible frontend code | `build-the-ui-right` |
+| done with a frontend change and about to report it | `actually-look-at-the-ui` |
+| asked about slow loads, laggy interactions, layout jumps, or LCP, INP, CLS, bundle size | `make-the-ui-fast` |
+
+Ask for the work as you normally would — "add a settings page", "this list feels slow" — and the matching
+skills load. You can still type any of them as a slash command to force it.
+
+The fifth is yours to run. When an existing piece of UI needs reworking without changing what it does:
+
+```
+/make-this-shit-pretty <page, component, route, or flow>
+```
+
+It walks the whole journey for problems, shows you the findings and the proposed structure once for a ruling,
+then rewrites in small steps with a before/after pair and one commit per step.
+
+For design and platform knowledge, the frontend skills consult two upstream skills when they are installed:
+[`master-design`](https://github.com/master-co/design) for what to build and why, and
+[`modern-web-guidance`](https://github.com/GoogleChrome/modern-web-guidance) for which platform API to use.
+Without them the skills still run on their own rules and tell you which one was missing.
+
+Verification needs a browser tool in the agent's environment. Without one, `actually-look-at-the-ui` marks its
+claims unverified instead of reporting them as checked.
 
 ## Installation
 
@@ -36,6 +73,13 @@ claude plugin install sorry-matt@sorry-matt
 ```
 
 You can also use the `/plugin` interface in Claude Code.
+
+Optionally, install the two upstream skills the frontend skills consult:
+
+```bash
+npx skills add master-co/design --skill master-design
+npx modern-web-guidance@latest install
+```
 
 ## Guard hook
 
