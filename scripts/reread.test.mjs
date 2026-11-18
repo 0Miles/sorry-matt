@@ -23,7 +23,8 @@ const event = (cwd = '.') => JSON.stringify({ hook_event_name: 'SessionStart', s
 
 test('parseLedger: only a ledger whose first line is the active marker is in progress', () => {
   assert.deepEqual(parseLedger('<!-- sorry-matt:run active -->\n# run\n'), { rules: [] });
-  assert.deepEqual(parseLedger('\uFEFF\r\n<!--  sorry-matt:run  active  -->\r\n'), { rules: [] });
+  assert.deepEqual(parseLedger('\uFEFF<!--  sorry-matt:run  active  --> \r\n# run\r\n'), { rules: [] });
+  assert.equal(parseLedger('\n<!-- sorry-matt:run active -->\n'), null);
   assert.equal(parseLedger('<!-- sorry-matt:run ended -->\nrule: /a/SKILL.md\n'), null);
   assert.equal(parseLedger('# run\n<!-- sorry-matt:run active -->\n'), null);
   assert.equal(parseLedger(''), null);

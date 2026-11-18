@@ -260,3 +260,7 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   找第一行是 active 標記的 ledger，以純文字 stdout 印出 ledger 與它的規則檔路徑（找不到的檔案標 not found）；沒有 git、
   沒有 ledger、只有 ended 的 ledger 時不輸出。測試在 `scripts/reread.test.mjs`，CI 一起跑。
 - 同一 repo 有多個進行中的 run 時，hook 全部列出，提示主持人重讀自己那一份；hook 不以 session 篩選。
+- 改成 ended 的那一步寫在各收尾步驟與其完成判準：`have-it-all-done` 第 4 節（第 5 節不執行時）、第 5 節，
+  獨立執行的 `get-to-work` 收官。只寫在 `ASKING.md` 時沒有步驟負責，ledger 會一直 active，之後每次壓縮都印出已結束的 run。
+- 第 10 欄在接手既有 ledger 時補齊；只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`）不列。
+- hook 只認真正的第一行（BOM 不算）；`rule:` 行收整份 ledger，`ASKING.md` 規定其他欄不以 `rule:` 開頭。

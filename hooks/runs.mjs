@@ -2,8 +2,9 @@
 // progress, then the rule files it lists. Ledgers and their format are defined in
 // skills/have-it-all-done/ASKING.md section 7:
 //   - location: <git common dir>/sorry-matt/runs/<run>.md
-//   - in progress: the first non-empty line is `<!-- sorry-matt:run active -->`
-//   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet and backticks allowed)
+//   - in progress: the first line (a BOM aside) is `<!-- sorry-matt:run active -->`
+//   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet and backticks allowed);
+//     every such line in the ledger counts, which ASKING says by keeping `rule:` lines to field 10
 // Anything it cannot find or read means "no run in progress": it prints nothing.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -27,9 +28,8 @@ const isAbsolute = (p) => posix.isAbsolute(p) || win32.isAbsolute(p);
 
 /** Parse one ledger's text: null unless it is in progress, else its rule file paths in order. */
 export function parseLedger(text) {
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/);
-  const first = lines.find((l) => l.trim() !== '');
-  if (!first || !ACTIVE.test(first.trim())) return null;
+  const lines = (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text).split(/\r?\n/);
+  if (!ACTIVE.test(lines[0].trim())) return null;
   const rules = [];
   for (const line of lines) {
     const m = RULE.exec(line);

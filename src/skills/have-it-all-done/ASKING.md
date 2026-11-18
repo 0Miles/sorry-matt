@@ -152,8 +152,9 @@ hook 時，同樣不做。
 壓縮摘要重建；沒有時建立一份。
 
 第一行是狀態標記：建立時寫 `<!-- sorry-matt:run active -->`；整個 run 的最後一個步驟結束時改成
-`<!-- sorry-matt:run ended -->` —— 組合時是 `have-it-all-done` 的交棒與目視驗收之後，獨立執行的
-`get-to-work` 是收官之後。plugin 的 SessionStart hook 只認第一行是 active 標記的 ledger。十個欄位：
+`<!-- sorry-matt:run ended -->` —— 組合時是 `have-it-all-done` 的交棒（步驟 5 不執行時）或目視驗收
+之後，獨立執行的 `get-to-work` 是收官之後；各步驟寫明了這一步。plugin 的 SessionStart hook 只認第一行
+（BOM 不算）恰好是 active 標記的 ledger，標記前不能有空行。十個欄位：
 
 1. **下一個動作**：一行，恢復後照著做。
 2. 任務範圍與採用的 grilling 來源落點。
@@ -167,8 +168,11 @@ hook 時，同樣不做。
 9. **計量**：spawn 數、審查輪數、修正輪數、完整驗證次數、壓縮與交接次數。token 數除非
    執行環境自己提供，一律標為未知，不以耗時或 agent 數量推算。<!-- pending #16 -->
 10. **規則檔**：主持人本 run 以讀檔帶入、全程要遵守的每份規則檔，一行一份
-    `rule: <絕對路徑>`，建立 ledger 時就填好。經 Skill tool 載入的那份 `SKILL.md` 也列：
-    壓縮只重附它的前 5,000 tokens。
+    `rule: <絕對路徑>`，建立 ledger 時就填好，接手既有 ledger 時補齊缺的（例如 `have-it-all-done`
+    接手獨立 `get-to-work` 建的 ledger）。經 Skill tool 載入的那份 `SKILL.md` 也列：壓縮只重附它的
+    前 5,000 tokens。只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`
+    等）不列：用到的那一步本來就會重讀它。hook 收整份 ledger 裡每一行 `rule: <絕對路徑>`，所以
+    其他欄不要以 `rule:` 開頭寫行。
 
 共用目錄不可寫，或當前目錄不在 git repo 內時沒有 ledger —— 正本改為最終報告，在報告明記，
 不為此停工。每個步驟結束、每輪收輪結束都把它寫到最新。

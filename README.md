@@ -59,13 +59,6 @@ with `npx` are allowed. To run a blocked command, run it in your own terminal. T
 }
 ```
 
-## Compaction reminder
-
-The plugin also ships a SessionStart hook with matcher `compact` (`hooks/hooks.json` → `hooks/reread.mjs`). After a
-compaction it looks for run ledgers in progress under `<git common dir>/sorry-matt/runs/` (first line
-`<!-- sorry-matt:run active -->`) and prints each ledger with the rule files it lists, so the host re-reads them
-instead of working from the summary. Outside a git repo, or with no run in progress, it prints nothing.
-
 In other modes, whether `gh pr merge` goes ahead is up to your permission settings. To let sorry-matt merge
 aggregate PRs without a prompt, add these rules to `.claude/settings.local.json` (one repo) or
 `~/.claude/settings.json` (every project), merging them into an existing `permissions.allow` if there is one; to be
@@ -78,6 +71,13 @@ asked every time put them under `ask`, and to never allow it put them under `den
   }
 }
 ```
+
+## Compaction reminder
+
+The plugin also ships a SessionStart hook with matcher `compact` (`hooks/hooks.json` → `hooks/reread.mjs`). After a
+compaction it looks for run ledgers in progress under `<git common dir>/sorry-matt/runs/` (first line
+`<!-- sorry-matt:run active -->`) and prints each ledger with the rule files it lists, so the host re-reads them
+instead of working from the summary. Outside a git repo, or with no run in progress, it prints nothing.
 
 ## Updating
 
