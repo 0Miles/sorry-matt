@@ -274,6 +274,9 @@ test('MCP tools that send messages or move money are denied', () => {
   assert.equal(withInput('mcp__github__push_files', { branch: 'main', files: [] }), 'merge-bypass');
   assert.equal(withInput('mcp__github__create_or_update_file', { path: 'a' }), 'merge-bypass');
   assert.equal(withInput('mcp__github__enqueue_pull_request', { pull_number: 1 }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__enqueuePullRequest', { pull_number: 1 }), 'merge-bypass');
+  assert.equal(withInput('mcp__gitlab__enqueue_pr', {}), 'merge-bypass');
+  assert.equal(withInput('mcp__gitlab__enqueue_pipeline', {}), null);
   assert.equal(withInput('mcp__github__push_files', { branch: 'feature', files: [] }), null);
   assert.equal(withInput('mcp__sheets__merge_cells', {}), null);
 });
@@ -335,6 +338,26 @@ test('a merge queue is entered through gh pr merge, under the same permission mo
   assert.equal(bash('gh pr merge 12 --admin'), 'merge-bypass');
   assert.equal(bash(`gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{id}}}' -f id=x`), 'merge-bypass');
   assert.equal(pwsh(`gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: "x", jump: true}) { clientMutationId } }'`), 'merge-bypass');
+});
+
+test('a GraphQL body read from a file is checked like an inline one', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-guard-'));
+  try {
+    writeFileSync(join(dir, 'enqueue.graphql'), 'mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){clientMutationId}}');
+    writeFileSync(join(dir, 'body.json'), JSON.stringify({ query: 'mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }' }));
+    writeFileSync(join(dir, 'queue.graphql'), 'query{repository(owner:"o",name:"r"){mergeQueue(branch:"main"){url}}}');
+    const at = (command) => classify({ tool_name: 'Bash', tool_input: { command }, cwd: dir })?.category ?? null;
+    assert.equal(at('gh api graphql -F query=@enqueue.graphql -f id=x'), 'merge-bypass');
+    assert.equal(at(`gh api graphql --field query=@${join(dir, 'enqueue.graphql').replace(/\\/g, '/')}`), 'merge-bypass');
+    assert.equal(at('gh api graphql --input body.json'), 'merge-bypass');
+    assert.equal(at('gh api graphql --input=body.json'), 'merge-bypass');
+    assert.equal(at('gh api graphql -F query=@queue.graphql'), null);
+    // A raw field is sent as written, never read from a file.
+    assert.equal(at('gh api graphql -f query=@enqueue.graphql'), null);
+    assert.equal(at('gh api graphql -F query=@missing.graphql'), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the user can turn the guard off through the environment', () => {

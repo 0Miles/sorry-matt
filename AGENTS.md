@@ -144,6 +144,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 計量 | run metrics |
 | 壓縮 | compaction |
 | 併入基底 | sync the base |
+| 未併入 | unsynced |
 | 恢復 | resuming |
 | 規則檔 | rule files |
 | 狀態標記 | state marker |

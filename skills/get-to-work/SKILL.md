@@ -219,19 +219,20 @@ Every line passes **three line-level gates** first, in this order:
    the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from section 1, close the round step 4,
    under the same criterion: one side is the line (its tickets' text and commit messages), the other is the base
    (`git log --format=%B <merge-base>..<merged base ref>`), and the goal of this merge is the line's intent landing
-   on the latest base. The host records the tradeoffs in the self-answer log and runs the targeted checks for the
-   affected surface once resolved. When the merge agent reports a conflict it cannot resolve safely, run
-   `git merge --abort` and deliver the line unsynced, naming the conflicting files in the delivery and in the
-   human-work list.
-3. **Full verification:** run the repository's full checks once, on the integration branch with the latest base
-   merged in, and report the merged base SHA. On red, hand that stretch of changes back to its original agent and
-   re-run; this single pass is the only green that counts this run.
+   on the latest base. The host records the tradeoffs in the self-answer log. When the merge agent reports a
+   conflict it cannot resolve safely, run `git merge --abort`; the line is then **unsynced**: ledger field 4 records
+   the base SHA it tried and "unsynced", the delivery and the human-work list name the conflicting files, and the
+   delivery is always left for a human to merge (see the merge paragraph below).
+3. **Full verification:** run the repository's full checks once on the integration branch as step 2 left it, and
+   report the merged base SHA; an unsynced line still runs them, on its unsynced tree, and the report gives the base
+   SHA it tried and "unsynced". On red, hand that stretch of changes back to its original agent and re-run; this
+   single pass is the only green that counts this run.
 
 **The evidence-expiry rule.** Once a ticket has passed its ticket-level review, any later change on the integration
-branch to the files it touched — another ticket integrating, a conflict resolution, the line-level simplify — expires
-that ticket's green, and only the line-level full verification still holds. What to re-run follows the real blast
-radius of that change: by default only the targeted checks for the affected surface, with another full verification
-reserved for a new fix, a failure, or an unresolved risk.
+branch to the files it touched — another ticket integrating, a conflict resolution, the line-level simplify, the
+base sync — expires that ticket's green, and only the line-level full verification still holds. What to re-run
+follows the real blast radius of that change: by default only the targeted checks for the affected surface, with
+another full verification reserved for a new fix, a failure, or an unresolved risk.
 
 Then deliver each line according to its mode:
 
@@ -251,28 +252,43 @@ scope for cleanup:** Local Markdown line integration branches and the source bra
 are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
 explicit authority for this request; do not open a question for it.
 
-Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`. It is a prompting call, sent
-after cleanup; Claude Code's permission settings decide whether it is let through, and in `bypassPermissions` and
-`auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through, report the merge; when it is
-blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
-would let it through. Do not open a question for it.
+Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`; an unsynced line sends
+nothing and does not enter a merge queue, and its aggregate PR is left for a human to merge. It is a prompting
+call, sent after cleanup; Claude Code's permission settings decide whether it is let through, and in
+`bypassPermissions` and `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through,
+report the merge; when it is blocked or refused, the delivery stays with the human and the output carries the
+permission rule snippet that would let it through. Do not open a question for it.
 
-**Merge queue.** Before sending, check whether the base branch has a merge queue; a non-null `mergeQueue` means it
-does:
+**Merge queue.** Before sending, check whether the base branch has a merge queue:
 
 ```bash
 gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){url}}}' -f owner=<owner> -f name=<repo> -f branch=<base branch>
 ```
 
-Without one, follow the paragraph above; nothing changes. With one, the merge goes through the queue: the same
-`gh pr merge <PR>`, with no merge strategy and no `--admin` — gh adds the PR to the queue, which groups it with the
-latest base and the PRs ahead of it into a merge group and verifies that again before merging. The permission
-settings still decide whether it is let through, and the hook still blocks it in `bypassPermissions` and `auto`
-mode; skipping the queue with GraphQL's `enqueuePullRequest` or with `--admin` is always blocked. When none of the
-repository's workflows triggers on `merge_group`, the queue's checks never run and the PR would sit in the queue:
-do not send it; list it in the human-work list with the missing trigger. After sending, report either the merged PR
-or that it is still queued, with its URL; for an aggregate PR still in the queue, close tickets as for one left for
-a human to merge.
+A null `mergeQueue` means it has none: follow the paragraph above; nothing changes. With one, the merge goes
+through the queue: the same `gh pr merge <PR>`, with no merge strategy and no `--admin` — gh adds the PR to the
+queue, which groups it with the latest base and the PRs ahead of it into a merge group and verifies that again
+before merging. The permission settings still decide whether it is let through, and the hook still blocks it in
+`bypassPermissions` and `auto` mode; skipping the queue with `--admin`, or entering it with GraphQL's
+`enqueuePullRequest` and so around the permission check on `gh pr merge`, is always blocked.
+
+The queue runs checks only on `merge_group` events, so before sending, confirm its checks will run:
+
+- A workflow on the base ref has `merge_group` in its `on:`
+  (`git grep -l merge_group origin/<base branch> -- .github/workflows`): send.
+- No such workflow, and the base branch has no required checks: send. The required checks are the union of the
+  rulesets'
+  `gh api repos/<owner>/<repo>/rules/branches/<base branch> --jq '[.[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'`
+  and branch protection's
+  `gh api repos/<owner>/<repo>/branches/<base branch> --jq '.protection.required_status_checks.contexts'`.
+- No such workflow, but there are required checks (perhaps from third-party CI, whose response to `merge_group`
+  cannot be seen from here): do not send; the PR would only sit in the queue. List it in the human-work list with
+  the missing trigger and those required checks.
+
+When any of these queries fails, do not guess: do not send, and list it in the human-work list. Failure means `gh`
+exiting non-zero, a GraphQL response carrying `errors`, or `git grep` exiting above 1 (1 means "none", 0 means
+"found"). Treat a null `contexts` as empty. After sending, report either the merged PR or that it is still queued,
+with its URL; for an aggregate PR still in the queue, close tickets as for one left for a human to merge.
 
 **Closing tickets** comes after `gh pr merge` is sent. GitHub reads `Closes` only in a PR that targets the
 repository's default branch; find that branch with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
@@ -283,20 +299,19 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 - Aggregate PR left for a human to merge, with a base that is not the default branch: the human-work list carries
   the close commands to run after the merge.
 
-Report each line's aggregate PR or integration branch with its merged base SHA, the **reconciliation table** covering the entire initial set
-and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (section 5), and every raw ticket
-filed along the way with a recommendation that the user run `/triage`. Running standalone, change the ledger's
-first line to `<!-- sorry-matt:run ended -->` after this output; when `have-it-all-done` composes this skill, leave
-it for that skill's handoff.
+Report each line's aggregate PR or integration branch with its merged base SHA (or marked unsynced), the
+**reconciliation table** covering the entire initial set and this run's **metrics** (`ASKING.md` section 7), the
+authorization outcomes (section 5), and every raw ticket filed along the way with a recommendation that the user
+run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run ended -->` after this
+output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
 
 Done when: every line went through one line-level simplify, one base sync and one full verification and ended
-green, with the full verification run on the integration branch synced to the latest base and its report naming the
-base SHA, and any unresolved base conflict naming its files; every line has exactly one human-mergeable delivery, or
-was merged after the permission settings let it through (through the merge queue when the base has one) and
-reported; every
-completed ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human and the keyword
-does not apply, the human-work list carries the close commands; the
-reconciliation table covers the frozen set exactly once, every row pointing at that ticket's status record; every
-ticket worktree and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
-branches remain; the output lists the authorization outcomes and this run's metrics; running standalone, the
-ledger's first line is the ended marker.
+green, with the full verification run on the integration branch synced to the latest base and its report naming
+the base SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified on its unsynced
+tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or was merged after the
+permission settings let it through (through the merge queue when the base has one) and reported; every completed
+ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human and the keyword does not
+apply, the human-work list carries the close commands; the reconciliation table covers the frozen set exactly
+once, every row pointing at that ticket's status record; every ticket worktree and local ticket branch is removed;
+Local Markdown integration worktrees are removed while their integration branches remain; the output lists the
+authorization outcomes and this run's metrics; running standalone, the ledger's first line is the ended marker.
