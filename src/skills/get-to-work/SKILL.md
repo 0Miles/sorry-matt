@@ -40,12 +40,15 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
    以重跑輸出的 `line` 定線 —— 排除可能讓一條線分裂。
 4. 從目前分支尖端，為每條線建立 `<run>/<line-slug>` **整合分支**與整合 worktree；同線成果
    逐票累積於此。
+5. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
+   由 `have-it-all-done` 組合時，它們在裁決點前已寫定，不改。
 
 **硬護欄**：執行期間新發現或新開的票只作為背景，初始票集一經凍結便不再擴張。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票都有發布出處、tracker
 原生識別、所屬線與 blocker map；每條被他線佔用而排除的票都有佔用來源與解除條件；每條線
-都有從同一基底尖端建立的整合分支及 worktree。
+都有從同一基底尖端建立的整合分支及 worktree；獨立執行時 `budget: spawns` 與 `budget: rounds` 已依凍結票數
+寫定。
 
 ## 1. 用 `/loop` 推進流水線
 
@@ -61,14 +64,18 @@ frontier 並補派。
 第 10 欄列出的規則檔，再推進流水線」；沒有 ledger 時改為重讀本 skill 的 `SKILL.md` 與 `ASKING.md`
 的絕對路徑。每次喚醒都帶著這句，恢復（`ASKING.md` 第 7 節）不靠記憶。
 
-實作、展開、修正與整併 agent 一律在背景跑；有 agent 在跑時使用較長 fallback 等候通知。每次喚醒依序做：
+實作、展開、修正與整併 agent 一律在背景跑，各有**階段時限**；**在途 agent** 是對帳表裡到期時間不是 `—` 的
+agent，含展開 agent 與紅燈修正的 agent（「時限」）。每次喚醒依序做：
 
 1. 有線在紅燈處置中時，依「讀 CI」讀那條線。
-2. 處理已回報的 agents：實作或修正 agent 回報的票照「收票」往下走；展開或整併 agent 回報的，接回
-   等它的那一步。
-3. 依各線的**整併佇列**整併審查通過的票（收票步驟 4–8）。
-4. 有**派票點**觸發時，在最後做一次（「派票」）。
-5. 把 ledger 寫到最新才結束這次喚醒。沒有批次的邊界：每次喚醒的結尾就是交接點。
+2. 處理已回報的 agents：只收 agent id 與對帳表該票記的一致的回報；已被 `TaskStop` 或被改派取代的舊 agent
+   回報時不收，在該票接續紀錄記一行（agent id、回報時間、已忽略）。實作或修正 agent 回報的票照「收票」往下走；
+   展開或整併 agent 回報的，接回等它的那一步。
+3. **時限掃描**：照「時限」處理超時的在途 agent。
+4. 依各線的**整併佇列**整併審查通過的票（收票步驟 4–8）。
+5. 有**派票點**觸發時，在最後做一次（「派票」）。
+6. 把 ledger 寫到最新。沒有批次的邊界：每次喚醒的結尾就是交接點。
+7. 還有在途 agent 時排 **fallback 喚醒**（「時限」），才結束這次喚醒。
 
 ### 讀 CI
 
@@ -110,7 +117,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗
    摘要），在從整合分支新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收票步驟 3 的集中修正
    （`recheck` 附上該票上一次的審查區塊）與步驟 4–7，整併不排隊。對不到票就由主持人或做那一步的 agent 在整合
-   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。每輪修完都 push（沒有 `origin` 時
+   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。修正的 agent 超時被停下也算一輪（「時限」）。每輪修完都 push（沒有 `origin` 時
    略過），由下一次驗證判結果：流水線中是下一次讀 CI，收官是第 2 節步驟 3 當場再驗。
 5. **兩輪仍紅，對到票：撤回。** `git revert -m 1 <該票的 merge commit>`，並撤掉它的完成紀錄：
    - **GitHub**：照收票的「標卡住」開 raw issue；之後的派票點把它從 `--done` 移到 `--stuck`。
@@ -157,6 +164,90 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 
 完成判準：每個派票點都先更新了第 9 欄的用量、判過進展與四個上限，每張票收票結束都更新了用量；停下之後
 沒有再派票，未交付的票都已標待裁決並寫出停在哪個上限，第 9 欄有停止原因；被預算擋下的 spawn 沒有重試或換路。
+
+### 時限
+
+Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時掃描。**派送**是把工作交給一個背景 agent：spawn
+實作、展開或整併 agent，或以 SendMessage 把集中修正、紅燈修正、退回紀錄交回原 agent；紅燈對不到票時交給 agent
+做的修正也算。`prove-it` 的 finder、verifier 與 Fix Verifier 以前景派送（`prove-it` 第 2 節），在主持人自己的
+回合裡跑完才回來，主持人等的期間不會被喚醒，所以審查不設時限。
+
+**階段時限**是 ledger 第 9 欄的四行 `budget:`，單位分鐘（`ASKING.md` 第 7 節）：`timeout-implement`（實作中）、
+`timeout-fix`（修正中，含紅燈修正）、`timeout-expand`（展開中）、`timeout-merge`（整併中的整併 agent）。
+
+**派送紀錄**：每次派送時在對帳表該票那一列記下（一個展開 agent 負責的每張票都記）：
+
+- agent id、派送時間、階段時限與到期時間。時間一律 UTC，寫成 `date -u +%Y-%m-%dT%H:%M:%SZ` 的格式，到期時間 =
+  派送時間 + 階段時限；同格式的時間可以直接按字串比大小。延長記 `no`。
+- **進度指紋**：agent 工作的 worktree 的 HEAD 與工作樹的 tree。實作與修正是 ticket worktree（紅燈修正是 `-ci`
+  分支的 worktree；對不到票的是整合 worktree），整併是整合 worktree。一律以 Bash 執行 —— PowerShell 的管線與
+  編碼會讓同一棵樹算出不同的結果：
+
+  ```bash
+  git -C <worktree> rev-parse HEAD
+  idx="$(git -C <worktree> rev-parse --path-format=absolute --git-path sorry-matt-fingerprint.index)"
+  cp "$(git -C <worktree> rev-parse --path-format=absolute --git-path index)" "$idx" \
+    && GIT_INDEX_FILE="$idx" git -C <worktree> add -A 2>/dev/null \
+    && GIT_INDEX_FILE="$idx" git -C <worktree> write-tree
+  rm -f "$idx"
+  ```
+
+  第二段在一份暫存 index 裡把整個工作樹（含未追蹤檔，不含 ignored）寫成一棵 tree，輸出它的 hash；真正的 index
+  不動。未追蹤檔改內容、新檔放進未追蹤的目錄、已暫存的檔再改，都會讓它不同。展開 agent 不在 worktree 裡工作，
+  改記它負責的每張票以 `acceptance.mjs` 讀出的 `expansions` 數。
+
+agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 agent** 就是到期時間不是 `—` 的 agent。
+
+**時限掃描**：每次喚醒 —— `/loop` 的喚醒、agent 通知、fallback 喚醒都算 —— 在處理完已回報的 agents 之後做。
+取現在時間（同上格式），到期時間早於它的在途 agent 就是**超時**。對每個超時的 agent：
+
+1. **判進展**：用派送時的同一組指令重算進度指紋。HEAD 不同（有新 commit）或 tree 不同（工作樹有改動、衝突解到
+   一半）就是有進展；展開 agent 是任一張票的 `expansions` 數增加。
+2. **有進展，而這次派送還沒延長過 → 延長一次**：到期時間改為現在加同一個階段時限，延長記 `yes`。延長後再超時
+   一律走下一步，不再判進展。
+3. **沒有進展，或已延長過 → 停下**：`TaskStop` 這個 agent；它若剛好已經結束，改照喚醒步驟 2「處理已回報的
+   agents」收。停下後依下列情況，先符合的為準：
+   - **原因要人裁** —— 該票接續紀錄的「阻擋」寫了要人做的決定、缺的權限或查不到的事實 → 標**待裁決**，寫出原因。
+   - **整併中** → 先查 `git -C <整合 worktree> rev-parse -q --verify MERGE_HEAD`：有輸出就
+     `git -C <整合 worktree> merge --abort`；沒有輸出（整併 agent 已經 commit）就
+     `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>`。整併 agent 不 push，還原只動本機。該票照收票的
+     **退回重做**，佇列換下一張。
+   - **紅燈修正**（「讀 CI」紅燈處置第 4 點）→ 這次停下算一輪修正失敗，不計改派。還在第一輪就照第 4 點開第二輪：
+     對到票時照 `IMPLEMENTER.md` spawn 新的 agent 接手同一個 worktree，票面附上失敗摘要與下一點的超時說明；對不到
+     票時先 `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>` 清掉停下的 agent 留下的改動，再由主持人或新的
+     agent 修。已是第二輪就照第 5、6 點撤回或判驗證未過。不標卡住：沒有撤回或驗證未過，線一直紅、佇列一直暫停。
+   - **這個階段還沒因超時改派過**（實作中、修正中、展開中各自計）→ **改派**一次：實作中、修正中照
+     `IMPLEMENTER.md` spawn 新的實作 agent，接手同一個 worktree 與分支，票面附上一段說明 —— 上一個 agent 超時被
+     停下，已有的 commit 與未提交改動留著由它判斷要不要沿用，接續紀錄已存在就接手原地更新；修正中另附那一輪的
+     finding。展開中把它負責而還沒有展開區塊的票交給一個新的展開 agent。改派是一次新的派送：照上面重記，對帳表的
+     agent id 換成新的，該階段的超時改派次數加一。spawn 被預算擋下時照「預算與斷路」標待裁決。
+   - **這個階段已因超時改派過** → 實作中、修正中**標卡住**，原因寫兩次超時；展開中的票標**待裁決**。
+4. **留紀錄**：每次延長或停下，在該票接續紀錄寫一段時限處置 —— agent id、階段、派送與到期時間、派送時與現在的
+   進度指紋、處置 —— 並在 run 層自答清單記一列（`ASKING.md` 第 3 節的五欄）。第 9 欄的超時延長次數或超時停止
+   次數加一。
+
+標卡住、待裁決、退回重做，以及紅燈處置的撤回或驗證未過，照「派票」觸發派票點；改派與紅燈修正的第二輪不觸發，
+票留在原階段。
+
+**fallback 喚醒**：每次喚醒結束時還有在途 agent，就以最早的到期時間排下一次喚醒；所有 agent 都不回報時，主持人
+也會在第一個時限到期時醒來。派送過的喚醒結束時一定有在途 agent，所以每次派送之後都排了一次。延遲是最早的到期
+時間減現在，換成秒：
+
+- **`ScheduleWakeup`**（第 1 節進入的 `/loop` 動態模式可用）：延遲只能在 60–3600 秒之間。不到 60 秒排 60；超過
+  3600 秒排 3600，醒來沒有超時就照這一段再排一次。
+- 沒有 `ScheduleWakeup`：以 Bash 在背景執行 `sleep <秒>`（不設上限），把它的 task id 記進 ledger 第 9 欄。同一時間
+  只留一個：排新的之前，先以 `TaskStop` 停掉第 9 欄記的上一個（已結束就略過）。它結束時的通知就是喚醒，第一件事
+  照 `ASKING.md` 第 7 節的恢復重讀 ledger 與規則檔，再照第 1 節的喚醒步驟做。
+- 背景 `sleep` 也不能用：以 interval 模式重新進入第 1 節的 `/loop`，prompt 不變，間隔取最短的階段時限。沒有在途
+  agent、run 也已照「期間開票」末段的停止條件停止時，結束這個 interval loop。
+
+沒有在途 agent 時照 `/loop` 本來的自我調速。
+
+完成判準：每次派送都在對帳表留下派送紀錄（agent id、派送時間、階段時限、到期時間與進度指紋）；每次喚醒都在
+處理回報之後掃描了每個在途 agent，含展開與紅燈修正的；舊 agent 的回報沒有被收；每個超時的 agent 都以進度指紋
+判過進展，同一次派送至多延長一次，其餘都已 `TaskStop` 並改派、退回重做、標卡住、待裁決，或（紅燈修正）算作
+一輪修正失敗；整併 agent 停下後整合 worktree 已還原到派送時的 HEAD；每張票每個階段至多因超時改派一次；每個處置
+都寫進該票接續紀錄與自答清單；每次喚醒結束時還有在途 agent 就排了 fallback 喚醒，背景 `sleep` 同一時間至多一個。
 
 ### 派票
 
@@ -229,7 +320,8 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    在背景 spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
    的展開區塊在留言裡，票面全文裡沒有。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
    退回後重派的票：原 agent 還在就以 SendMessage 交給它退回紀錄與重建的 worktree，不新 spawn；不在了才照
-   `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id。
+   `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
+   派送紀錄。
 
 完成判準：每個派票點都先照「預算與斷路」判過上限、再照「讀 CI」讀過該讀的線，才往下派；每張派出的票在 spawn
 實作 agent 之前都已有驗收項、驗收快照與預計檔案，展開補上的驗收項都出自展開 agent 並標明 `by`、`run`、`round`，

@@ -42,6 +42,23 @@ test('parseBudget: budget lines with a name and an integer, bullets and backtick
   assert.deepEqual(parseBudget('# nothing here\n'), {});
 });
 
+test('parseBudget: the stage time limits share the format and leave the spawn limit alone', () => {
+  const text = [
+    '- budget: spawns 440',
+    '- budget: timeout-implement 30',
+    '- `budget: timeout-fix 20`',
+    '- budget: timeout-expand 15',
+    '- budget: timeout-merge 15',
+  ].join('\n');
+  assert.deepEqual(parseBudget(text), {
+    spawns: 440,
+    'timeout-implement': 30,
+    'timeout-fix': 20,
+    'timeout-expand': 15,
+    'timeout-merge': 15,
+  });
+});
+
 test('countersPath sits next to the ledger', () => {
   assert.equal(countersPath('/r/.git/sorry-matt/runs/issue-4.md'), '/r/.git/sorry-matt/runs/issue-4.counters.json');
 });
