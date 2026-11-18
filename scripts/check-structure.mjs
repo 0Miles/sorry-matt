@@ -2,13 +2,15 @@
 // Reconcile the Traditional Chinese source (src/skills) with the English dist (skills/).
 // The two are written in different languages, so this compares structure, not wording:
 // file sets, heading levels and numbering, "Done when" counts, referenced file names,
-// pending-ticket markers, frontmatter, and byte-identical metadata and vendored files.
+// pending-ticket markers, frontmatter, and byte-identical metadata, scripts and vendored files.
 import { existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readLF, listDirs, listFiles, frontmatter, proseLines, report } from './lib.mjs';
 
-const VERBATIM = (file) => file.startsWith('references/upstream/') || file.endsWith('.yaml');
+// Executed, not translated: skill scripts ship to dist unchanged, like metadata and vendored files.
+const VERBATIM = (file) =>
+  file.startsWith('references/upstream/') || file.startsWith('scripts/') || file.endsWith('.yaml');
 
 // `## 2. Title` -> "2:2."; `### (a) Title` -> "3:(a)"; `## Title` -> "2:". The label is language-neutral.
 export function headings(text) {

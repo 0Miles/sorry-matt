@@ -88,6 +88,19 @@ test('openai.yaml drift between src and dist is reported', () => {
   });
 });
 
+test('a skill script ships to dist unchanged', () => {
+  const script = "console.log('hi');\n";
+  withRepo({ 'src/skills/demo/scripts/run.mjs': script, 'skills/demo/scripts/run.mjs': script.replace(/\n/g, '\r\n') }, (root) => {
+    assert.deepEqual(checkStructure(root), []);
+  });
+  withRepo({ 'src/skills/demo/scripts/run.mjs': script, 'skills/demo/scripts/run.mjs': "console.log('bye');\n" }, (root) => {
+    assert.match(checkStructure(root).join('\n'), /demo\/scripts\/run\.mjs: must be identical/);
+  });
+  withRepo({ 'src/skills/demo/scripts/run.mjs': script }, (root) => {
+    assert.match(checkStructure(root).join('\n'), /scripts\/run\.mjs exists in src but not in dist/);
+  });
+});
+
 const UPSTREAM = 'upstream text\n';
 const HASH = createHash('sha256').update(UPSTREAM).digest('hex').toUpperCase();
 const notice = (hash) =>

@@ -25,13 +25,21 @@ Then **freeze** the initial ticket set:
 1. The optional argument accepts ticket numbers, URLs, or local file paths. With one, the initial set is
    exactly the named tickets. Without one, include only tickets with a publication record in this session;
    Local Markdown publication paths count. If none exist, ask the user for the set.
-2. Read blocker **edges** through the tracker contract and divide tickets into **lines**. Connected tickets
-   share a line; isolated tickets form their own. When the set needs chaining, call the Skill tool with
-   `issue-chain` and pass the frozen set explicitly so background work remains outside it. <!-- pending #11 -->
+2. Run this skill's `scripts/frontier.mjs` over the frozen set (`${CLAUDE_SKILL_DIR}` is the base directory
+   stated when this skill was loaded). Its `blockedBy` output is the blocker **edges** and its `line` output the
+   **lines**; do not derive them from the ticket text yourself:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" github --repo <owner>/<repo> <n>...
+   node "${CLAUDE_SKILL_DIR}/scripts/frontier.mjs" local <ticket-file>...
+   ```
+
+   The script's header documents the output format.
 3. **Exclude what another line holds.** From `git worktree list`, the commits on unmerged integration branches,
    the heads of open PRs, and whatever other sessions this session knows about, derive the files somebody else is
    working in. Tickets overlapping those files are not frozen into this set: list them as **awaiting ruling**
-   with the source of the hold and its clearing condition.
+   with the source of the hold and its clearing condition. When any ticket is excluded, re-run the script over the
+   remaining set and take the lines from that run's `line` — an exclusion can split a line.
 4. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
    per line. Accumulate that line's results there round by round.
 
@@ -51,8 +59,20 @@ point, so write the ledger current before that round ends.
 
 ### Open the round
 
-The **frontier** contains unfinished initial tickets whose blockers are all cleared. <!-- pending #11 --> Work
-across lines is usually parallel; tickets on the same line or touching the same files are **mutually exclusive**
+Every open-round starts by re-running `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
+
+- **GitHub:** tickets integrated into their line integration branch are still open on GitHub, so take the
+  integrated tickets from the ledger's reconciliation table and pass them with `--done <n,...>`; pass stuck tickets
+  with `--stuck <n,...>`.
+- **Local Markdown:** run once per line, passing the whole frozen set with `--ref <that line's integration branch>`
+  and `--line <that line's line>` (the value from the freeze); the frontier is the union of each line's `frontier`.
+  Done and stuck come from the `sorry-matt completion` / `sorry-matt blocker` records in the ticket files on that
+  branch, and `ready-for-human` does not count as done.
+
+A ticket whose `stalled` is not null (`cycle`, `missing`, `blocked-external`, `blocked-upstream`) cannot become
+startable within this run: list it as **awaiting ruling** with the reason and the blockers involved.
+
+Work across lines is usually parallel; tickets on the same line or touching the same files are **mutually exclusive**
 and must run in separate rounds.
 
 For each frontier ticket:
@@ -107,10 +127,6 @@ finishing the run.
 Anything that comes up mid-run takes the three exits in `ASKING.md` section 4. Running standalone, with no ruling
 point, whatever cannot be answered accumulates until the next open-round and is asked there in one go.
 
-In Local Markdown, a blocker clears only when the prerequisite ticket's complete `sorry-matt completion` is
-readable on the same integration branch and every acceptance criterion is checked. `ready-for-human` alone
-remains incomplete.
-
 If the ticket still fails review after two correction rounds, or a conflict cannot be resolved safely, mark
 it **stuck**:
 
@@ -118,14 +134,12 @@ it **stuck**:
 - **Local Markdown:** append `## sorry-matt blocker` to the original ticket on the integration branch with the
   reason, attempted remedies, and relevant branch; set `Status` to `ready-for-human` and commit it.
 
-After recording the stuck state, also remove the ticket worktree and local ticket branch. Keep tickets
-downstream of a stuck ticket blocked.
+After recording the stuck state, also remove the ticket worktree and local ticket branch.
 
 Done when: every ticket in the round went through exactly one independent review with its targeted checks back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are
-integrated and their ticket worktrees and local branches removed; Local Markdown blockers clear only under the
-completion contract.
+integrated and their ticket worktrees and local branches removed.
 
 ### Filing along the way
 
