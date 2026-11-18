@@ -30,6 +30,8 @@ disable-model-invocation: true
 - **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。
 - **工作已合併，想安全收掉本地分支與多餘 worktrees** → `/clean-it-up`。只刪除有合併證據且
   狀態乾淨的項目；遠端分支必須另外明確授權。
+- **要在前端專案第一次用前端 skills，或想從頭重建專案的元件地圖** → `/set-up-ui-skills`。
+  探查元件庫、tokens 與共用元件，一次問完，確認草稿後寫出 `docs/agents/ui.md`。
 - **既有的一段 UI 難看或難用，想重做但功能行為不變** → `/make-this-shit-pretty <頁面或元件>`。
   走完整段旅程找出問題，交給你裁一次，再小步改寫並逐步驗證。
 - **情境是 triage、bug 診斷、wayfinder 或 prototype** → `/ask-matt`；它是 matt skills 的 router。

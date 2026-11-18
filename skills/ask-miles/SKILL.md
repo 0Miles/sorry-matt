@@ -33,6 +33,9 @@ branch is the next step for the user to run.
 - **The agent is padding and burying the point** → `/no-bullshit`.
 - **Safely retire local branches and extra worktrees after the work is merged** → `/clean-it-up`. Remove only
   clean items backed by merge evidence; remote branches require separate explicit authority.
+- **Use the frontend skills in a frontend project for the first time, or rebuild the project's component map from
+  scratch** → `/set-up-ui-skills`. Explore the component library, tokens, and shared components, ask everything
+  in one batch, and write `docs/agents/ui.md` once the draft is approved.
 - **An existing piece of UI is ugly or awkward and should be reworked with behavior unchanged** →
   `/make-this-shit-pretty <page or component>`. Walk the whole journey for problems, get one ruling from you,
   then rewrite in small verified steps.

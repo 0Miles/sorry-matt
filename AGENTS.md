@@ -269,6 +269,15 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 超時延長次數 | timeout extensions |
 | 超時停止次數 | timeout stops |
 | 在途 agent | agent in flight |
+| 探查 | explore |
+| 元件庫 | component library |
+| 共用元件 | shared component |
+| 元件地圖 | component map |
+| 重複實作 | duplicate implementation |
+| 既有、不再新用 | existing, not for new use |
+| 指示檔 | instructions file |
+| 建議答案 | recommended answer |
+| 參考流程 | reference flow |
 
 ## 外部語義來源
 
