@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { changedLines, applyMutant, validatePlan, runPlan, pathKey, main, defaultDeps } from '../src/skills/prove-it/scripts/mutate.mjs';
+import { shortPath } from './lib.mjs';
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'mutate-'));
@@ -279,4 +280,25 @@ test('usage errors exit 2', () => {
   assert.equal(main(['lines']).code, 2);
   assert.equal(main(['run', '--base', 'main', '--plan', 'p.json', '--cmd', 'x']).code, 2);
   assert.equal(main(['run', '--base', 'main', '--plan', 'p.json', '--ledger', 'l.json', '--cmd', 'x', '--cap', '0']).code, 2);
+});
+
+test('lines: lcov SF paths match changed lines when the cwd is a Windows 8.3 short path and SF is long, or the reverse', (t) => {
+  const dir = tempDir(t);
+  const short = shortPath(dir);
+  if (!short) return t.skip('no 8.3 short path here (not Windows, or 8.3 names disabled)');
+  const git = gitIn(dir);
+  git('init', '-q', '-b', 'main');
+  writeFileSync(join(dir, 'a.js'), 'one\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'ticket');
+  writeFileSync(join(dir, 'a.js'), 'one\ntwo\n');
+  git('commit', '-q', '-am', 'change');
+
+  for (const [cwd, sf] of [[short, dir], [dir, short]]) {
+    writeFileSync(join(dir, 'lcov.info'), [`SF:${join(sf, 'a.js')}`, 'DA:2,1', 'end_of_record'].join('\n'));
+    const out = main(['lines', '--base', 'main', '--lcov', 'lcov.info'], defaultDeps(cwd));
+    assert.equal(out.code, 0, out.err);
+    assert.deepEqual(JSON.parse(out.out).files, [{ path: 'a.js', lines: [{ line: 2, text: 'two', covered: true }] }]);
+  }
 });

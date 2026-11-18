@@ -59,7 +59,7 @@
 // Exit codes: 0 output written (a change in the ticket is reported in "check", not in the exit code); 1 tracker,
 // git or snapshot read failed; 2 bad arguments, or the snapshot belongs to another ticket; 3 output written, but the
 // snapshot's items do not match --sha.
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
@@ -273,9 +273,21 @@ export function defaultDeps(cwd = process.cwd()) {
   };
 }
 
+// A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
+// text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
+// path when it exists, else through the real base.
+const realOr = (p, fallback) => {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return fallback;
+  }
+};
+const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
+
 function readLocal(deps, file, ref) {
-  const root = deps.git(['rev-parse', '--show-toplevel']).trim();
-  const path = relative(root, resolve(deps.cwd, file)).split(sep).join('/');
+  const root = canonical(deps.git(['rev-parse', '--show-toplevel']).trim());
+  const path = relative(root, canonical(deps.cwd, file)).split(sep).join('/');
   if (!ref) return { path, text: deps.readFile(resolve(root, path)) };
   // `<ref>:<path>` resolves from the repo root, whatever the cwd.
   return { path, text: deps.git(['show', `${ref}:${path}`]) };

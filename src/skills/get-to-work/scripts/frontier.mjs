@@ -51,7 +51,7 @@
 //   tickets inside the set. A blocker outside the set keeps its tracker state.
 //
 // Exit codes: 0 output written; 1 tracker or git read failed, or --line names no line; 2 bad arguments.
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, relative, sep, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -411,9 +411,21 @@ export function defaultDeps(cwd = process.cwd()) {
   };
 }
 
+// A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
+// text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
+// path when it exists, else through the real base.
+const realOr = (p, fallback) => {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return fallback;
+  }
+};
+const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
+
 function localDeps(deps, ref) {
-  const root = deps.git(['rev-parse', '--show-toplevel']).trim();
-  const rel = (p) => relative(root, resolve(deps.cwd, p)).split(sep).join('/');
+  const root = canonical(deps.git(['rev-parse', '--show-toplevel']).trim());
+  const rel = (p) => relative(root, canonical(deps.cwd, p)).split(sep).join('/');
   if (!ref) {
     const abs = (p) => resolve(root, p);
     return {

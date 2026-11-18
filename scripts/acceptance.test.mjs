@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { githubAcceptance, localAcceptance, compare, main, defaultDeps } from '../src/skills/get-to-work/scripts/acceptance.mjs';
+import { shortPath } from './lib.mjs';
 
 const REPO = 'acme/app';
 
@@ -310,4 +311,27 @@ test('an expansion section nested under the acceptance heading is counted once, 
   ].join('\n');
   const out = localAcceptance({ path: 't.md', text, source: 'worktree' });
   assert.deepEqual(out.items.map((i) => [i.from, i.text]), [['original', 'Original one'], ['expansion', 'Added one']]);
+});
+
+test('cli local: from a Windows 8.3 short-path cwd the ticket path is still repo-relative', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'acceptance-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const short = shortPath(dir);
+  if (!short) return t.skip('no 8.3 short path here (not Windows, or 8.3 names disabled)');
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-q', '-b', 'line');
+  git('config', 'user.email', 't@example.com');
+  git('config', 'user.name', 't');
+  git('config', 'core.autocrlf', 'false');
+  const file = '.scratch/x/issues/03-export.md';
+  mkdirSync(join(dir, '.scratch/x/issues'), { recursive: true });
+  writeFileSync(join(dir, file), LOCAL);
+  git('add', '.');
+  git('commit', '-q', '-m', 'expand 03');
+
+  for (const argv of [['local', file], ['local', '--ref', 'line', file], ['local', join(short, file)]]) {
+    const r = main(argv, defaultDeps(short));
+    assert.equal(r.code, 0, r.err);
+    assert.equal(JSON.parse(r.out).id, file);
+  }
 });

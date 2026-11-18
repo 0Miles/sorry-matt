@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { githubFrontier, localFrontier, main, defaultDeps } from '../src/skills/get-to-work/scripts/frontier.mjs';
+import { shortPath } from './lib.mjs';
 
 const REPO = 'acme/app';
 const API = `https://api.github.com/repos/${REPO}`;
@@ -409,5 +410,33 @@ test('cli: local reads the working tree by default, a commit with --ref, and one
     assert.deepEqual([missingFile.code, /cannot read ticket file/.test(missingFile.err)], [1, true]);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cli: local from a Windows 8.3 short-path cwd or argument still reports repo-relative paths', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'sorry-matt-frontier-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const short = shortPath(root);
+  if (!short) return t.skip('no 8.3 short path here (not Windows, or 8.3 names disabled)');
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-q', '-b', 'base');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'test');
+  git('config', 'core.autocrlf', 'false');
+  const file = `${ISSUE_DIR}/01-schema.md`;
+  mkdirSync(join(root, ISSUE_DIR), { recursive: true });
+  writeFileSync(join(root, file), '# 01: Schema\n\n**Blocked by:** None\n\n- [ ] Works\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'tickets');
+
+  // git reports the long toplevel; the cwd and the argument are the short alias of the same directory.
+  for (const [argv, cwd] of [
+    [['local', file], short],
+    [['local', '--ref', 'base', file], short],
+    [['local', join(short, file)], root],
+  ]) {
+    const r = main(argv, defaultDeps(cwd));
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(JSON.parse(r.out).frontier, [file]);
   }
 });
