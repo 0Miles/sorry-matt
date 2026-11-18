@@ -277,9 +277,10 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 
 新增：
 
-- 第 1 節的**對打目錄**：主持人在 repo 之外建立（有 harness scratchpad 就建在其下，否則 POSIX `mktemp -d`、Windows
-  PowerShell `GetTempPath()`），把絕對路徑交給雙方與支線 agent；不假設 subagent 自己的 scratchpad 位置。收場後保留。
+- 第 1 節的**對打目錄**：主持人在 repo 之外建立（有 harness scratchpad 就建在其下，否則 macOS／Linux `mktemp -d`，Windows
+  一律 PowerShell `GetTempPath()`；Git Bash 的 `mktemp` 回 MSYS 路徑，不交出），把絕對路徑交給雙方與支線 agent；不假設 subagent 自己的 scratchpad 位置。收場後保留。
 - 檔名規則：`topic.md`、`round-<r>-questions.md`、`round-<r>-answers.md`、`side-<r>-<n>/`、`round-<r>-answer-<n>.md`、
   `verdict.md`。輪次與題號編在檔名裡，問答對應不靠主持人記。
 - 雙方回給主持人的訊息只含路徑與狀態；agent-grillee 在回報列出待支線題號與支線類型，主持人依此開支線，不必讀答案檔。
 - 自動流程的上限改以檔案計數：問題檔三份、`side-*` 目錄兩個。
+- 每題最多一條支線：支線回來後證據仍不足、或結束／到上限時支線未回的題目，直接進待裁決。原本這兩種情況沒有出路。

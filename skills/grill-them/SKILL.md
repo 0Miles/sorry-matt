@@ -27,8 +27,10 @@ Create one **exchange directory** for this duel, outside the repository, and kee
 
 - When the environment provides a scratchpad directory (for example, a path the harness lists in the system prompt),
   create `grill-them-<timestamp>/` inside it.
-- Otherwise create it in the system temp directory. POSIX: `mktemp -d "${TMPDIR:-/tmp}/grill-them-XXXXXX"`; Windows
-  PowerShell: `New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "grill-them-$([guid]::NewGuid())")`.
+- Otherwise create it in the system temp directory. macOS and Linux: `mktemp -d "${TMPDIR:-/tmp}/grill-them-XXXXXX"`.
+  Windows always uses PowerShell:
+  `New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "grill-them-$([guid]::NewGuid())")`; in Git
+  Bash, `mktemp` returns an MSYS path of the form `/c/...` that other agents may not resolve, so never hand that over.
 
 Assume nothing about where any subagent's own scratchpad lives: the moderator creates the directory and hands its
 **absolute path** to both sides and to every side-quest agent. Write the topic card to `topic.md` in that directory.
@@ -90,8 +92,8 @@ A round is one frontier of agent-griller's. Run every round in this exact order:
    `round-<r>-answers.md`.
 3. agent-grillee answers every question, numbering its answers to match the question file, and reports the answer file's
    path.
-4. The moderator gives agent-griller the answer file's path and the round, together with any `round-<r>-answer-<n>.md`
-   completed since the last hand-back.
+4. The moderator gives agent-griller the answer file's path and the round, together with any `round-*-answer-*.md`
+   completed since the last hand-back (named for the original question's round, which may be earlier than this one).
 5. agent-griller recomputes the frontier and writes the next question file; when it decides to stop, it writes
    `verdict.md` instead and reports that it has finished.
 
@@ -103,7 +105,7 @@ When existing evidence cannot answer one question, agent-grillee marks that ques
 states the gap and the side-quest type. A parked question does not hold up its round: the round's answer file still goes
 back through step 4, and following the reported type the moderator opens a **side quest** that does not count as a
 round. The side-quest agent receives only the question and answer file paths, the question number, and its output
-directory, `side-<r>-<n>/`:
+directory, `side-<r>-<n>/` (here `<r>` and `<n>` are the parked question's own round and number):
 
 - **Executable check**, such as a state model, business rule, or visible UI: spawn a subagent and have it write a
   **worked instance** — the smallest thing that actually runs and exercises only the point in dispute — and then run it.
@@ -120,6 +122,10 @@ to agent-griller with the next step 4. A side quest supplies evidence; it does n
 agent-griller a parked question is an unsettled prerequisite: only the questions that depend on it wait, while the rest
 of the frontier proceeds.
 
+Each question gets at most one side quest. When the evidence is still insufficient after it returns, agent-grillee
+states the remaining gap in the completed answer and the question goes to **awaiting ruling**; a side quest that has not
+returned when agent-griller stops or the cap is reached sends its question straight to awaiting ruling as well.
+
 Run by a human directly, there is no round limit: end only when the frontier is empty and agent-griller finds
 consensus with no new material concern.
 
@@ -131,8 +137,10 @@ states the caps up front in both sides' role instructions: three rounds (three q
 questions.
 
 Done when: every question in every question file has a complete answer under the same number in that round's answer
-file, or was parked and has a matching `round-<r>-answer-<n>.md`; every side quest's `side-<r>-<n>/result.md` reached
-agent-grillee and is reflected in the completed answer; every message the moderator sent either side held only paths and
+file, or was parked and has a matching `round-<r>-answer-<n>.md`, except questions whose evidence was still
+insufficient after the side quest or whose side quest had not returned at the stop, all of which are under awaiting
+ruling; every returned side quest's `side-<r>-<n>/result.md` reached agent-grillee and is reflected in the completed
+answer; every message the moderator sent either side held only paths and
 the round, and during the duel the moderator neither read nor edited either side's files nor cherry-picked;
 agent-griller recorded the reason for stopping in `verdict.md`; and where an automated workflow composed this skill,
 rounds and side quests stayed within the caps, with anything past them sent to awaiting ruling.

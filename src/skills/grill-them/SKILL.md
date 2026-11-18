@@ -25,8 +25,9 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 
 - 環境有提供 scratchpad 目錄時（例如 harness 在 system prompt 列出的路徑），在其下建
   `grill-them-<時間戳>/`。
-- 沒有時建在系統暫存目錄。POSIX：`mktemp -d "${TMPDIR:-/tmp}/grill-them-XXXXXX"`；Windows
-  PowerShell：`New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "grill-them-$([guid]::NewGuid())")`。
+- 沒有時建在系統暫存目錄。macOS、Linux：`mktemp -d "${TMPDIR:-/tmp}/grill-them-XXXXXX"`。Windows 一律用
+  PowerShell：`New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) "grill-them-$([guid]::NewGuid())")`；
+  在 Git Bash 裡 `mktemp` 回的是 `/c/...` 形式的 MSYS 路徑，別的 agent 不一定認得，不要直接交出。
 
 不假設任何 subagent 自己的 scratchpad 在哪：目錄由主持人建立，再把它的**絕對路徑**交給雙方與每個
 支線 agent。題目卡寫成目錄下的 `topic.md`。
@@ -78,15 +79,17 @@ agent-griller 依 `grilling` 查它要問的，agent-grillee 勘查整個專案�
 1. agent-griller 寫好 `round-<r>-questions.md`，回報路徑。
 2. 主持人把問題檔路徑與輪次交給 agent-grillee，並給出答案檔路徑 `round-<r>-answers.md`。
 3. agent-grillee 逐題作答，題號與問題檔對應，回報答案檔路徑。
-4. 主持人把答案檔路徑與輪次交給 agent-griller，連同上次交回後補完的 `round-<r>-answer-<n>.md`。
-5. agent-griller 重算 frontier，寫下一輪問題檔；判定結束時改寫 `verdict.md` 並回報結束。
+4. 主持人把答案檔路徑與輪次交給 agent-griller，連同上次交回後補完的 `round-*-answer-*.md`（檔名是原題的
+   輪次，可能早於本輪）。
+5. agent-griller 重算 frontier，寫下一輪問題檔；判定結束時改為寫入 `verdict.md` 並回報結束。
 
 主持人傳給雙方的訊息只含路徑與輪次：不轉述、摘要、潤飾或加入立場，也不挑題 —— 問題檔與答案檔都
 整份交出。對打期間主持人不讀雙方的檔案，只看回報的路徑與狀態。
 
 某題現有證據無法回答時，agent-grillee 在答案檔把該題標為**待支線**，寫明缺口與支線類型。該題不擋
 整輪：同輪答案檔照步驟 4 先交回，主持人依回報的類型另開一條不計入回合數的**支線**，交給支線 agent
-的只有問題檔與答案檔路徑、題號，以及它的輸出目錄 `side-<r>-<n>/`：
+的只有問題檔與答案檔路徑、題號，以及它的輸出目錄 `side-<r>-<n>/`（這裡的 `<r>`、`<n>` 是待支線題
+所屬的輪次與題號）：
 
 - **可執行驗證**，例如狀態模型、業務邏輯或視覺化 UI：spawn subagent，要它寫一個**實例**——
   能實際跑起來、且只涵蓋該題爭點的最小案例——並真的執行它。實例與執行輸出都寫入 `side-<r>-<n>/`，
@@ -101,6 +104,9 @@ agent-griller 依 `grilling` 查它要問的，agent-grillee 勘查整個專案�
 agent-griller。支線結果只補足證據，不替 agent-grillee 做決策。待支線題對 agent-griller 而言是未解除的
 前置：只有依賴它的問題等待，其餘 frontier 照常推進。
 
+每題最多一條支線。支線回來後證據仍不足時，agent-grillee 在補完答案寫明剩下的缺口，該題進**待裁決**；
+agent-griller 判定結束或到上限時仍未回來的支線，該題同樣直接進待裁決。
+
 人直接執行時不設回合上限：frontier 清空、且 agent-griller 判定已達成共識並無新的重大疑慮
 時才結束。
 
@@ -110,8 +116,8 @@ agent-griller。支線結果只補足證據，不替 agent-grillee 做決策。�
 **待裁決**交回呼叫方，不再加輪 —— 訪談是用來消滅分歧的，不是用來窮盡問題的。
 
 完成判準：每份問題檔的每個問題，在同輪答案檔都有同號的完整回答，或已標為待支線並有對應的
-`round-<r>-answer-<n>.md`；每條支線的 `side-<r>-<n>/result.md` 都已交給 agent-grillee，並反映在補完答案
-中；主持人傳給雙方的每則訊息只含路徑與輪次，對打期間未讀、未改雙方的檔案，也未挑題；agent-griller
+`round-<r>-answer-<n>.md`；例外是支線後證據仍不足、或結束時支線未回的題目，這些都已進待裁決；每條已回來的
+支線，其 `side-<r>-<n>/result.md` 都已交給 agent-grillee，並反映在補完答案中；主持人傳給雙方的每則訊息只含路徑與輪次，對打期間未讀、未改雙方的檔案，也未挑題；agent-griller
 已在 `verdict.md` 記錄結束理由；被自動流程組合時，回合與支線都在上限內，超出上限的題目已進待裁決。
 
 ## 4. 收場與沉澱
