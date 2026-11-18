@@ -96,17 +96,29 @@ filled.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
   flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
   report body.
-- Only the user changes the run-level limits (section 7, field 9). Before the ruling point, estimate spawns from
-  the number of tickets the kickoff published — about 15 per ticket: implementation, expansion, `prove-it`'s
-  finders and verifiers, merging. When that exceeds the default, make the change one question, sorted by cost to
-  reverse with the others; when it does not make the cut, or a standalone `get-to-work` has no ruling point, run on
-  the defaults. When a limit runs short mid-run, never answer on the user's behalf to raise it; stop as
-  `get-to-work` section 1, budget and breaker, says.
+- Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
+  `budget: rounds` scale with the ticket count:
+  - `spawns` = max(`30 × tickets + 50`, spawns used + `30 × tickets`). A ticket typically takes about 15 spawns —
+    implementation, expansion, `prove-it`'s finders and verifiers, merging — doubled as a last-resort margin, and the
+    constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
+    plus 30 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
+  - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
+    send-back, one stuck / revert / red-to-green), plus the first one.
+
+  Rewrite both lines before the ruling point from the number of tickets the kickoff published; a standalone
+  `get-to-work` has no ruling point and rewrites them when it freezes the ticket set. Limits and time limits are not
+  asked about by default; when there is a concrete reason to expect a default to fall short
+  (a long data migration or a large test suite the ticket names, say), make the change one question, sorted by cost
+  to reverse with the others. When one runs short mid-run, never answer on the user's behalf to raise it: a limit
+  stops the run as `get-to-work` section 1, budget and breaker, says, and a time limit is extended once or stopped
+  as the same section's time limits say.
 - Eyes-on acceptance (`have-it-all-done` step 5) is an acceptance procedure, not a ruling, and this section does not
   limit it.
 
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
-it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list.
+it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; `budget: spawns` and
+`budget: rounds` were rewritten from the ticket count before the ruling point (at the freeze when running
+standalone), unless the user set a value at the ruling point.
 
 ## 5. Authority and actions needing confirmation
 
@@ -229,17 +241,23 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration,
-   red-light fix merges included). The stage is candidate, expanding, implementing, in review, fixing, queued or
-   integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming
-   relies on it and the agent id to pick back up every ticket short of an end state.
-9. **Run metrics and budget**, in three parts:
+   its responsible agent's id, its **assignment record** (assigned time, stage time limit, deadline, whether it was
+   extended, progress fingerprint; `get-to-work` section 1, time limits, recorded at every assignment), its timeout
+   reassignment count per stage, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
+   The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
+   states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming relies on it and the agent id to
+   pick back up every ticket short of an end state, and on the deadlines to keep scanning time limits.
+9. **Run metrics and budget**, in four parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is created,
-     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch
-     points, `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget:
-     hours 12` (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive count for the
-     no-progress breaker). For changing a limit, see section 4. The plugin's hook collects every `budget:` line in the
-     whole ledger, so no other field starts a line with `budget:`.
+     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch points,
+     `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget: hours 12`
+     (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive count for the no-progress
+     breaker). `spawns` and `rounds` are rewritten per section 4 once the ticket count is known.
+   - **Stage time limits:** in the same format, in minutes: `budget: timeout-implement 30` (implementing),
+     `budget: timeout-fix 20` (fixing, red-light fixes included), `budget: timeout-expand 15` (expanding), and
+     `budget: timeout-merge 15` (the merge agent). How they are judged is in `get-to-work` section 1, time limits.
+     For changing a limit or a time limit, see section 4. The plugin's hook collects every `budget:` line in the
+     whole ledger and blocks spawns on `spawns` alone, so no other field starts a line with `budget:`.
    - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user
      before the ruling point does not count; when taking over a ledger without one, record the takeover time and
      note that earlier time is not counted), waiting time (from then on, the total from sending each question to the
@@ -247,7 +265,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
      points run, the consecutive no-progress count with the progress snapshot from the last dispatch point (judged
      per `get-to-work` section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per
      verdict `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out
-     pushes does not count), send-backs for a redo, compactions and handovers. Spawns come from `spawns` in
+     pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers, and the task id of
+     the background `sleep` still running (the fallback wake-up in `get-to-work` section 1, time limits; "none" when
+     there is none). Spawns come from `spawns` in
      `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
      such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
      the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
@@ -276,7 +296,7 @@ and files that hold them; the host takes fixed-format summaries (fifteen lines a
 when it needs detail, it pulls just those lines with a command.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
-"none", field 9 has the four `budget:` limits and current usage, and field 10 has listed the rule files' absolute
+"none", field 9 has the four `budget:` limits, the four stage time limits and current usage, and field 10 has listed the rule files' absolute
 paths since creation; resuming always starts by re-reading the ledger and the rule files it lists; where there is
 no common directory, the report says the source of truth moved to it; the host's context holds no raw diffs, test
 logs, or agent reports.

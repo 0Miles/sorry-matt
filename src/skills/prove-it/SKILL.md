@@ -58,6 +58,9 @@ diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>
 每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出。diff 只有一個檔案且不超過
 數十行時，一個 finder 套用全部 lens。
 
+本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送，不在背景跑：呼叫方在自己的
+回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
+
 - **逐行**：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
   反轉、off-by-one、falsy zero、遺漏 `await`、copy-paste 錯變數與 catch 吞錯。
 - **被刪除的行為**：辨識每段被刪除或改寫的程式碼原本維持的不變量，在新程式碼中定位重建

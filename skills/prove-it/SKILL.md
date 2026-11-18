@@ -69,6 +69,10 @@ and the diff is saved.
 Give each lens to its own finder subagent, all dispatched in one message. When the diff is a single file of no
 more than a few dozen lines, one finder applies every lens.
 
+This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground,
+never in the background: the caller waits within its own turn until every one of them is back. `get-to-work` puts
+no time limit on review because of this rule.
+
 - **Line by line:** for every line of every hunk, ask which inputs, states, timings, or platforms break it. Check
   especially for inverted conditions, off-by-one, falsy zero, a missing `await`, a copy-pasted wrong variable, and
   a catch that swallows errors.
