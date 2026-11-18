@@ -298,6 +298,19 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「不適用時改用」欄(`ui.md`) | `Instead` column |
 | 「既有、不再新用」(`ui.md`) | `Existing, not for new use` |
 | 「新共用元件」行(`ui.md`) | `New shared components` line |
+| 繞過元件庫 | bypassing the component library |
+| 手刻近似元件 | hand-rolled lookalike |
+| 外部覆寫 | outside override |
+| 寫死的值 | hard-coded value |
+| 元件庫 findings | component library findings |
+| 套件與版本/瓶頸與量測證據/為什麼不在專案內改/建議去處(元件庫 findings 欄名) | package and version / bottleneck and measured evidence / why not changed in the project / suggested destination |
+| 就地 fork | fork in place |
+| 進入點(元件庫的) | entry point |
+| 執行期解析值 | resolved runtime value |
+| `ui.md` 不一致 | `ui.md` mismatches |
+| 「Tokens」段(`ui.md`) | `Tokens` section |
+| 「檔案位置」行(`ui.md` 的 Tokens 段) | `Location` line |
+| 「載入方式」行(`ui.md`) | `Loading` line |
 
 ## 外部語義來源
 

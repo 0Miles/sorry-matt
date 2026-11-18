@@ -11,7 +11,11 @@ stays has before-and-after numbers.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**precedence** and **browser support policy** below.
+**precedence**, **component reuse**, and **browser support policy** below.
+
+Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
+step 1: measure no baseline, change no code, and ask the user to run `/set-up-ui-skills` (running as a subagent,
+put that in the report as the prerequisite says).
 
 ## 1. Fix the target and the method
 
@@ -48,14 +52,22 @@ overturn it.
 Look up the approach for this bottleneck following the **precedence**, decide on a fallback under the
 **browser support policy**, then make one change.
 
+When the bottleneck sits in the component library package's own code (the project's shared components do not
+count), record it as a component library finding and do not fork in place: no edits to `node_modules`, no
+patch, no copying a library component into the project, no importing the library's internal paths; then return
+to step 3 for the next bottleneck. Switching to another public entry point of the library counts as one change;
+in that case the `Loading` line of the `Component library` section in `ui.md` goes in the same diff as the code.
+
 Done when: the diff holds one change aimed at this bottleneck, traceable to consulted guidance or to a piece of
-measured evidence.
+measured evidence; when `Loading` changed, that line of `ui.md` counts as part of the same change. When the
+bottleneck is in the library itself, instead: it is recorded as a component library finding and the diff is
+untouched.
 
 ## 5. Measure again and decide
 
 Measure five more times under the same measurement conditions. Keep the change when the improvement exceeds
-the noise; otherwise revert it and record the hypothesis as overturned. While the target is unmet, return to
-step 3 for the next bottleneck.
+the noise; otherwise revert it and record the hypothesis as overturned; when the reverted change carries an
+edit to `ui.md`, revert that too. While the target is unmet, return to step 3 for the next bottleneck.
 
 Done when: every attempted change has before-and-after medians and a verdict of "kept" or "reverted", and the
 working tree holds only the kept changes.
@@ -72,7 +84,11 @@ Done when: every screen touched by a kept change has a result from `actually-loo
 
 - **Before-and-after table**: `metric | baseline median | current median | noise range | target`.
 - **Change list**: every kept and reverted change, each with its bottleneck and its numbers.
+- **Component library findings**: `package and version | bottleneck and measured evidence | why not changed in
+  the project | suggested destination`; these findings stay out of the change list. "None" when there are none.
+- **State of `ui.md`**: which line this run changed, or why no update was needed.
 - The measurement conditions, noting that these are lab numbers and real-user numbers come from field data.
 
-Done when: every "current" number in the table comes from the last measurement in step 5, and every kept change
-maps to an improvement in the table.
+Done when: every "current" number in the table comes from the last measurement in step 5; every kept change
+maps to an improvement in the table; `ui.md` matches this change, or is explicitly recorded as needing no
+update.
