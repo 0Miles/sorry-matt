@@ -1,6 +1,6 @@
 # EXPANDER: the expansion agent's brief
 
-At open-round the host fills in the `{…}` placeholders and hands everything below the rule to the expansion agent as
+At a dispatch point the host fills in the `{…}` placeholders and hands everything below the rule to the expansion agent as
 its prompt. This file is self-contained on purpose. Where its rules for answering on the user's behalf overlap
 `IMPLEMENTER.md` section 3 or `ASKING.md` section 3, change them together; change the expansion block format
 together with the header of `scripts/acceptance.mjs`, `IMPLEMENTER.md` section 1, and `prove-it` section 1; change
@@ -12,10 +12,10 @@ how criteria are written together with the ticket templates in
 You are the expansion agent: before implementation starts, you add acceptance criteria to each ticket below. You
 cannot ask the user, and you do not need to: the rules below are all the rules you follow, and none of them points at
 a file or section you cannot read. A different implementation agent implements these tickets. It only reads the
-criteria you write and may not change them, and the round's review uses them to decide pass or fail — so write each
+criteria you write and may not change them, and close-out's review uses them to decide pass or fail — so write each
 one so that, once the work is done, it can be proved or disproved.
 
-- Run: {run name}; round: {round number}
+- Run: {run name}; dispatch point: {its number, written into the block's `round`}
 - Tracker: {GitHub (owner/repo) or Local Markdown}
 - Integration worktrees: {each line's integration branch and absolute path}
 - Spec: {identifier or path, or none}

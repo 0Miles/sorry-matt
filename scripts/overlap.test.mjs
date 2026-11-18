@@ -1,0 +1,149 @@
+// node --test scripts/overlap.test.mjs
+// Drives overlap.mjs through main() with real plan and list files in a temp dir; the in-flight case uses a real
+// git repository with a ticket worktree.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { main } from '../src/skills/get-to-work/scripts/overlap.mjs';
+
+function scratch(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-overlap-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+// files: { name: "list text" }; plan refers to lists by name, relative to the plan file.
+function run(dir, plan, files = {}) {
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+  writeFileSync(join(dir, 'plan.json'), JSON.stringify(plan));
+  const r = main([join(dir, 'plan.json')]);
+  return { ...r, json: r.code === 0 ? JSON.parse(r.out) : null };
+}
+
+test('same-line candidates whose files do not overlap all start together', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    { base: 'run/line', candidates: [{ id: '#11', files: 'a.txt' }, { id: '#12', files: 'b.txt' }, { id: '#13', files: 'c.txt' }] },
+    { 'a.txt': 'src/skills/a/SKILL.md\n', 'b.txt': 'src/skills/b/\n# a comment\n\nREADME.md\n', 'c.txt': 'docs/x.md\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.format, 'sorry-matt/overlap@1');
+  assert.deepEqual(r.json.start, ['#11', '#12', '#13']);
+  assert.deepEqual(r.json.wait, []);
+});
+
+test('a candidate overlapping a running prediction waits and names the holder and its own paths', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    { base: 'run/line', running: [{ id: '#5', files: 'r.txt' }], candidates: [{ id: '#6', files: 'c6.txt' }, { id: '#7', files: 'c7.txt' }] },
+    { 'r.txt': 'src/skills/get-to-work/\n', 'c6.txt': 'src/skills/get-to-work/SKILL.md\nREADME.md\n', 'c7.txt': 'src/skills/get-to-work-extra.md\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.start, ['#7'], 'a sibling with the same prefix is not inside the directory');
+  assert.deepEqual(r.json.wait, [{ id: '#6', overlaps: [{ with: '#5', paths: ['src/skills/get-to-work/SKILL.md'] }] }]);
+  assert.deepEqual(r.json.running, [{ id: '#5', predicted: ['src/skills/get-to-work'], actual: [], unpredicted: [] }]);
+});
+
+test('candidates are taken in order: an earlier start holds its files against later candidates', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    { candidates: [{ id: '#2', files: 'x.txt' }, { id: '#3', files: 'y.txt' }, { id: '#4', files: 'z.txt' }] },
+    { 'x.txt': 'lib/a.mjs\n', 'y.txt': 'lib\n', 'z.txt': 'test/a.mjs\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.start, ['#2', '#4']);
+  assert.deepEqual(r.json.wait, [{ id: '#3', overlaps: [{ with: '#2', paths: ['lib'] }] }]);
+});
+
+test('"/" is the whole repository; paths are normalized', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    { running: [{ id: '#1', files: 'all.txt' }], candidates: [{ id: '#2', files: 'one.txt' }] },
+    { 'all.txt': '/\n', 'one.txt': '.\\src\\a.md\r\n./src//b/\r\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.running[0].predicted, ['/']);
+  assert.deepEqual(r.json.wait, [{ id: '#2', overlaps: [{ with: '#1', paths: ['src/a.md', 'src/b'] }] }]);
+});
+
+test('bad plans exit 2: empty list, absolute or parent paths, duplicate ids, worktree without base', (t) => {
+  const dir = scratch(t);
+  const cases = [
+    [{ candidates: [{ id: '#1', files: 'empty.txt' }] }, /no path/],
+    [{ candidates: [{ id: '#1', files: 'abs.txt' }] }, /repo-relative/],
+    [{ candidates: [{ id: '#1', files: 'up.txt' }] }, /"\.\." is not allowed/],
+    [{ candidates: [{ id: '#1', files: 'ok.txt' }, { id: '#1', files: 'ok.txt' }] }, /listed twice/],
+    [{ running: [{ id: '#1', files: 'ok.txt', worktree: dir }] }, /base is required/],
+    [{ candidates: [{ id: '#1', files: 'ok.txt', worktree: dir }] }, /only running tickets/],
+    [{ candidates: [{ id: '#1' }] }, /no files list/],
+  ];
+  const files = { 'empty.txt': '# nothing yet\n\n', 'abs.txt': '/etc/passwd\n', 'up.txt': 'src/../x\n', 'ok.txt': 'a\n' };
+  for (const [plan, message] of cases) {
+    const r = run(dir, plan, files);
+    assert.equal(r.code, 2, JSON.stringify(plan));
+    assert.match(r.err, message);
+  }
+  assert.equal(main([]).code, 2);
+  writeFileSync(join(dir, 'bad.json'), '{');
+  assert.equal(main([join(dir, 'bad.json')]).code, 2);
+});
+
+test('a missing list file exits 1', (t) => {
+  const dir = scratch(t);
+  const r = run(dir, { candidates: [{ id: '#1', files: 'missing.txt' }] });
+  assert.equal(r.code, 1);
+  assert.match(r.err, /^overlap: /);
+});
+
+test('a running worktree holds what it changed since branching, not what the base gained since', (t) => {
+  const dir = scratch(t);
+  const repo = join(dir, 'repo');
+  const wt = join(dir, 'wt');
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('git', ['init', '-q', '-b', 'line', repo]);
+  git(repo, 'config', 'user.email', 'test@example.invalid');
+  git(repo, 'config', 'user.name', 'test');
+  git(repo, 'config', 'core.autocrlf', 'false');
+  for (const f of ['a.md', 'b.md', 'c.md', 'old.md']) writeFileSync(join(repo, f), `${f}\n`);
+  writeFileSync(join(repo, '.gitignore'), 'build/\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'base');
+  git(repo, 'worktree', 'add', '-q', '-b', 'ticket', wt);
+  // The ticket: a committed edit, a rename, an unstaged edit, an untracked file and an ignored one.
+  writeFileSync(join(wt, 'a.md'), 'ticket\n');
+  git(wt, 'mv', 'old.md', 'new.md');
+  git(wt, 'commit', '-q', '-am', 'ticket work');
+  writeFileSync(join(wt, 'b.md'), 'unstaged\n');
+  writeFileSync(join(wt, 'fresh.md'), 'untracked\n');
+  mkdirSync(join(wt, 'build'));
+  writeFileSync(join(wt, 'build', 'out.js'), 'ignored\n');
+  // The line moves on after the ticket branched: c.md is not the ticket's.
+  writeFileSync(join(repo, 'c.md'), 'merged elsewhere\n');
+  git(repo, 'commit', '-q', '-am', 'another ticket merged');
+
+  const r = run(
+    dir,
+    {
+      base: 'line',
+      running: [{ id: '#8', files: 'p8.txt', worktree: wt }],
+      candidates: [{ id: '#9', files: 'p9.txt' }, { id: '#10', files: 'p10.txt' }, { id: '#11', files: 'p11.txt' }],
+    },
+    { 'p8.txt': 'a.md\n', 'p9.txt': 'fresh.md\n', 'p10.txt': 'c.md\n', 'p11.txt': 'old.md\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.running, [
+    { id: '#8', predicted: ['a.md'], actual: ['a.md', 'b.md', 'fresh.md', 'new.md', 'old.md'], unpredicted: ['b.md', 'fresh.md', 'new.md', 'old.md'] },
+  ]);
+  assert.deepEqual(r.json.start, ['#10']);
+  assert.deepEqual(r.json.wait.map((w) => w.id), ['#9', '#11']);
+
+  const missing = run(dir, { base: 'line', running: [{ id: '#8', files: 'p8.txt', worktree: join(dir, 'nope') }] });
+  assert.equal(missing.code, 1);
+});

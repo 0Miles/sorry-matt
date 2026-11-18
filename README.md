@@ -12,7 +12,7 @@ grill them
 | `ask-miles` | Route among sorry-matt skills and identify the best next skill for the current situation |
 | `grill-them` | Run an autonomous iterative interview between two agents to refine a plan or design |
 | `take-this` | Carry completed grilling into an executable spec and ticket set for a new task |
-| `get-to-work` | Clear a prepared ticket set round by round, implementing and reviewing in blocker order before delivering one aggregate GitHub PR or local integration branch per line |
+| `get-to-work` | Clear a prepared ticket set as a per-ticket pipeline: ready tickets whose files do not overlap are implemented at once, each one reviewed and integrated as soon as it is done, delivering one aggregate GitHub PR or local integration branch per line |
 | `have-it-all-done` | Take over one complete task, carrying prior grilling through planning and implementation to something a human can merge |
 | `issue-chain` | Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action |
 | `review-pr` | Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes. |
@@ -106,8 +106,8 @@ a run is in progress, know how far it reaches:
   deny says so). A read still blocked by a file lock (antivirus, indexer) after the retries lets the spawn through
   with a warning; the count itself is still kept.
 
-The other limits (`rounds`, `hours`, `no-progress`) and the no-progress breaker are enforced by `get-to-work` itself at
-every open-round. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
+The other limits (`rounds`, which counts dispatch points, `hours`, `no-progress`) and the no-progress breaker are
+enforced by `get-to-work` itself at every dispatch point. This check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
 
 ```json
 {
@@ -160,7 +160,7 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   `scripts/reread.test.mjs`, and `scripts/budget.test.mjs` test them in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
-  `scripts/acceptance.test.mjs`) run in the same CI run.
+  `scripts/acceptance.test.mjs`, `scripts/overlap.test.mjs`) run in the same CI run.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the

@@ -165,7 +165,7 @@ const ledgersFor = (event, git) => {
 };
 
 export function denyReason(ledger, spawns, limit) {
-  return `sorry-matt budget blocked this spawn: the run in ${ledger} has spawned ${spawns} subagents and its limit is ${limit} (\`budget: spawns ${limit}\`). Do not spawn another subagent or try another route. Stop opening rounds and hand off as get-to-work's budget rule says, writing which limit stopped the run; only the user raises a limit, by editing that ledger line. If that run is no longer running, its first line should be \`<!-- sorry-matt:run ended -->\`. (The user can turn this check off by setting SORRY_MATT_BUDGET=off under "env" in their Claude Code settings.)`;
+  return `sorry-matt budget blocked this spawn: the run in ${ledger} has spawned ${spawns} subagents and its limit is ${limit} (\`budget: spawns ${limit}\`). Do not spawn another subagent or try another route. Dispatch no more tickets and hand off as get-to-work's budget rule says, writing which limit stopped the run; only the user raises a limit, by editing that ledger line. If that run is no longer running, its first line should be \`<!-- sorry-matt:run ended -->\`. (The user can turn this check off by setting SORRY_MATT_BUDGET=off under "env" in their Claude Code settings.)`;
 }
 
 const deny = (text) => ({

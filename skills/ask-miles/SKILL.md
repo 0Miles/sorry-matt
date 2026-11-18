@@ -14,8 +14,8 @@ branch is the next step for the user to run.
 - **Start a new task, or continue after grill-me or grill-with-docs, without a spec or tickets** → `/take-this`.
   Carry forward existing grilling; when none exists, build the requirements context from evidence, open
   grill-them only on a material disagreement, then write the spec and tickets.
-- **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them in rounds according
-  to the tracker configuration, delivering one aggregate GitHub PR or Local Markdown integration branch per line
+- **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them ticket by ticket in
+  parallel according to the tracker configuration, delivering one aggregate GitHub PR or Local Markdown integration branch per line
   until the initial ticket set is complete or explicitly stuck.
 - **Delegate existing grilling, planning, and implementation end to end, with controlled scope, convergent
   requirements, and reliable acceptance checks** → `/have-it-all-done`. Pass its risk gate, then run
@@ -27,7 +27,7 @@ branch is the next step for the user to run.
 - **Re-review one ticket inside a sorry-matt run on its own (no PR comments)** → `/prove-it <ticket>`. Reviews the
   ticket branch against the integration branch as fixed point, through the evidence chain, a live run, and mutation
   limited to the ticket's diff, and writes the verdict into the ticket's status record; `get-to-work` calls it by
-  itself when closing a round.
+  itself during close-out.
 - **The agent is not speaking human** → `/speak-human`. Preserve facts, conditions, responsibility, and
   uncertainty while rewriting in natural, common language for the target language and locale.
 - **The agent is padding and burying the point** → `/no-bullshit`.

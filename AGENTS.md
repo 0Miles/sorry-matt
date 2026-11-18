@@ -88,7 +88,6 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 互斥 | mutually exclusive |
 | 線(票的分組) | line |
 | 整合分支 | integration branch |
-| 收輪/開輪 | close the round / open the round |
 | 對帳表 | reconciliation table |
 | 語義帳本 | semantic ledger |
 | 母語重寫 | native rewrite |
@@ -143,6 +142,19 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 流水線 | pipeline |
+| 派票 | dispatch |
+| 派票點 | dispatch point |
+| 收票 | close-out |
+| 補派 | refill |
+| 在途 | in flight |
+| 候選（票） | candidate |
+| 終局 | end state |
+| 整併佇列 | integration queue |
+| 預計檔案 | predicted files |
+| 檔案重疊 | file overlap |
+| 退回重做 | send back for a redo |
+| 退回紀錄 | send-back record |
 | 預算與斷路 | budget and breaker |
 | 無進展斷路 | no-progress breaker |
 | 上限/用量 | limit / usage |
