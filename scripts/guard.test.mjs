@@ -54,6 +54,16 @@ const CLASSIFIED = {
     'redis-cli FLUSHALL',
     'mongosh --eval "db.dropDatabase()"',
     'gh repo delete o/r --yes',
+    'gcloud projects delete my-proj',
+    'terraform destroy -auto-approve',
+    'terraform apply -destroy',
+    'tofu destroy',
+    'pulumi destroy --yes -s prod',
+    'kubectl delete namespace shop --context prod',
+    'kubectl --context production delete ns web',
+    'az group delete -n rg1 --yes',
+    'aws s3 rb s3://prod-assets --force',
+    'aws cloudformation delete-stack --stack-name app-prod',
     'gh api -X DELETE repos/o/r',
     `gh api graphql -f query='mutation { deleteRepository(input: {repositoryId: "x"}) { clientMutationId } }'`,
     'git push -f origin main',
@@ -73,6 +83,8 @@ const CLASSIFIED = {
     'echo hi | mail -s subject someone@example.com',
     'sendmail someone@example.com < body.txt',
     'curl --url smtps://smtp.example.com --mail-rcpt a@example.com -T mail.txt',
+    'git send-email --to=a@example.com 0001.patch',
+    'curl "https://api.telegram.org/bot123:abc/sendMessage?chat_id=1&text=hi"',
   ],
   payments: [
     'stripe refunds create --charge ch_1',
@@ -82,6 +94,10 @@ const CLASSIFIED = {
     'echo {} > .claude/settings.local.json',
     "sed -i 's/ask/allow/' .claude/settings.json",
     'cp perms.json ~/.claude/settings.json',
+    'echo {} > .claude/sorry-matt.json',
+    'cp backup.json ~/.claude.json',
+    'cp hook.sh .claude/hooks/pre-tool.sh',
+    'echo {} > .mcp.json',
   ],
   'release-deploy': [
     'npm publish',
@@ -101,6 +117,22 @@ const CLASSIFIED = {
     'ssh prod-db-1 "systemctl restart app"',
     'gh workflow run deploy.yml -f environment=production',
     'psql -h prod-db -c "UPDATE users SET admin = true"',
+    'npx vercel --prod',
+    'bunx vercel deploy --prod',
+    'pnpm dlx vercel --prod',
+    'npm exec -- vercel --prod',
+    'pnpm -r publish',
+    'pnpm --recursive publish --access public',
+    'pnpm --filter app publish',
+    'npm publish --workspaces',
+    'yarn workspaces foreach -A npm publish',
+    'fly deploy',
+    'flyctl deploy -a shop',
+    'wrangler deploy',
+    'npx wrangler deploy',
+    'wrangler pages deploy dist',
+    'firebase deploy --only hosting',
+    'firebase deploy -P my-app-prod',
   ],
   'merge-deploys': [
     'gh pr merge 12 --squash',
@@ -188,6 +220,26 @@ const LET_THROUGH = [
   'curl https://api.stripe.com/v1/charges',
   'psql -c "SELECT 1"',
   'docker build -t app:prod .',
+  // read-only, dry runs, and targets named as non-production
+  'ssh prod-web-1 uptime',
+  'ssh prod-db-1 "systemctl status app"',
+  'ssh -i key.pem prod-web-1 tail -n 100 /var/log/app.log',
+  'ssh prod-web-1 "docker ps"',
+  'npm publish --dry-run',
+  'pnpm -r publish --dry-run',
+  'cargo publish --dry-run',
+  'terraform apply -var-file=staging.tfvars',
+  'TF_WORKSPACE=dev terraform apply -auto-approve',
+  'terraform -chdir=envs/staging apply',
+  'fly deploy -a shop-staging',
+  'wrangler deploy --env staging',
+  'firebase deploy -P my-app-dev',
+  'vercel deploy',
+  'npx vercel',
+  'kubectl delete namespace scratch',
+  'aws s3 rb s3://scratch-bucket',
+  'curl -s https://discord.com/api/webhooks/1/abc',
+  'curl https://hooks.slack.com/services/T/B/X',
 ];
 
 for (const [category, commands] of Object.entries(CLASSIFIED)) {
@@ -241,6 +293,11 @@ test('file tools: writing Claude Code settings is asked, secrets are not the gua
   assert.equal(file('Write', `${CWD}/.claude/settings.local.json`), 'claude-settings');
   assert.equal(file('Edit', '/home/me/.claude/settings.json'), 'claude-settings');
   assert.equal(file('MultiEdit', 'C:\\ProgramData\\ClaudeCode\\managed-settings.json'), 'claude-settings');
+  assert.equal(file('Write', `${CWD}/.claude/hooks/guard.sh`), 'claude-settings');
+  assert.equal(file('Edit', '/home/me/.claude.json'), 'claude-settings');
+  assert.equal(file('Edit', `${CWD}/.claude/sorry-matt.json`), 'claude-settings');
+  assert.equal(file('Write', `${CWD}/.mcp.json`), 'claude-settings');
+  assert.equal(file('Write', `${CWD}/.claude/launch.json`), null);
   assert.equal(file('Read', `${CWD}/.claude/settings.json`), null);
   assert.equal(file('Read', `${CWD}/.env`), null);
   assert.equal(file('Edit', `${CWD}/.env`), null);
@@ -264,6 +321,19 @@ test('MCP tools: messages and payments are double, merges and protected pushes d
   assert.equal(mcp('mcp__gitlab__enqueue_pipeline'), null);
   assert.equal(mcp('mcp__github__push_files', { branch: 'feature', files: [] }), null);
   assert.equal(mcp('mcp__sheets__merge_cells'), null);
+  assert.equal(mcp('mcp__github__delete_repository', { owner: 'o', repo: 'r' }), 'catastrophic');
+  assert.match(verdicts('mcp__github__delete_repository', { owner: 'o', repo: 'r' })[0].consequence, /刪除 GitHub repo o\/r（MCP server github 的 delete_repository）：連同 issues/);
+  assert.equal(mcp('mcp__gitlab__delete_repo', { repository: 'g/p' }), 'catastrophic');
+});
+
+test('cloud and infrastructure deletes spell out what goes', () => {
+  const consequence = (command) => verdicts('Bash', { command })[0].consequence;
+  assert.match(consequence('gcloud projects delete my-proj'), /刪除 GCP 專案 my-proj：/);
+  assert.match(consequence('TF_WORKSPACE=prod terraform destroy'), /銷毀 terraform 管理的所有資源（workspace prod）/);
+  assert.match(consequence('az group delete --name rg1'), /刪除 Azure 資源群組 rg1/);
+  assert.match(consequence('kubectl delete ns web --context prod'), /namespace web（prod）/);
+  assert.match(consequence('aws s3 rb s3://prod-assets --force'), /s3:\/\/prod-assets（--force：連同所有物件）/);
+  assert.match(consequence('git send-email --to=a@example.com 0001.patch'), /收件者 a@example\.com/);
 });
 
 test('a push lands on a protected branch: the current one, HEAD, or the remote default', () => {
@@ -433,8 +503,8 @@ test('two-step confirmation: approvals expire and are not shared across inputs o
   assert.equal(out(decide(event('node "/plugin/hooks/confirm.mjs" nothex'), {}, deps())).permissionDecision, 'deny');
   assert.equal(approve('nothex', { store, now }).ok, false);
   assert.equal(approve('0123456789abcdef', { store, now }).ok, false);
-  // An unrelated confirm.mjs is not the guard's.
-  assert.equal(decide(event('node scripts/confirm.mjs 0123456789abcdef'), {}, deps()), null);
+  // Any other confirm.mjs, by name, is denied: only the guard's own path runs.
+  assert.equal(out(decide(event('node scripts/confirm.mjs 0123456789abcdef'), {}, deps())).permissionDecision, 'deny');
 });
 
 test('two-step confirmation: a state file that cannot be read or written never lets a call through', () => {
@@ -514,6 +584,51 @@ test('the hook speaks the PreToolUse contract end to end and fails closed', () =
     assert.equal(spawnSync(process.execPath, [script, 'ffffffffffffffff'], { encoding: 'utf8', env }).status, 1);
   });
   assert.equal(decide('not json').hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('the first step cannot be completed without the prompt (M1 and the other bypasses)', () => {
+  const store = memoryStore();
+  const deps = { store, now: 1, pluginRoot: root };
+  decide(event('rm -rf ~'), {}, deps);
+  const token = tokenFor('s1', 'Bash', { command: 'rm -rf ~' });
+  const hooksDir = join(root, 'hooks').replace(/\\/g, '/');
+  const script = `${hooksDir}/confirm.mjs`;
+  const state = join(tmpdir(), 'sorry-matt-guard', 's1.json').replace(/\\/g, '/');
+  const decision = (command) => out(decide(event(command), {}, deps))?.permissionDecision ?? null;
+  // The one form the guard hands out is asked; any spelling of the same file is too.
+  assert.equal(decision(confirmCommand(root, token)), 'ask');
+  assert.equal(decision(`node "${hooksDir}//confirm.mjs" ${token}`), 'ask');
+  for (const command of [
+    // M1: the confirm command chained with anything
+    `${confirmCommand(root, token)} && rm -rf build`,
+    `${confirmCommand(root, token)}; echo done`,
+    `echo go && ${confirmCommand(root, token)}`,
+    `bash -c '${confirmCommand(root, token)}'`,
+    // other spellings and routes
+    `cd "${hooksDir}" && node confirm.mjs ${token}`,
+    `node --no-warnings "${script}" ${token}`,
+    `node "${script}" ${token} extra`,
+    `FOO=1 node "${script}" ${token}`,
+    `node "${script}" ${token} > out.txt`,
+    `node -e "import('${join(root, 'hooks', 'confirm-state.mjs').replace(/\\/g, '/')}').then((m) => m.fileStore())"`,
+    `node -e "import('${script}')" ${token}`,
+    `echo {} > "${state}"`,
+    `cp fake.json "${state}"`,
+    `python -c "open('${state}', 'w').write('{}')"`,
+    'tee $TMP/sorry-matt-guard/s1.json < fake.json',
+  ]) {
+    assert.equal(decision(command), 'deny', command);
+  }
+  // Reading or committing the scripts is not running them.
+  for (const command of ['cat hooks/confirm.mjs', 'git add hooks/confirm.mjs hooks/confirm-state.mjs', 'grep TOKEN hooks/confirm-state.mjs', 'git commit -m "touch confirm-state.mjs"']) {
+    assert.equal(decision(command), null, command);
+  }
+  // File tools cannot write the state either.
+  const write = (file_path) => out(decide(JSON.stringify({ tool_name: 'Write', tool_input: { file_path, content: '{}' }, session_id: 's1', cwd: CWD }), {}, deps))?.permissionDecision ?? null;
+  assert.equal(write(join(tmpdir(), 'sorry-matt-guard', 's1.json')), 'deny');
+  assert.equal(write('/tmp/sorry-matt-guard/s1.json'), 'deny');
+  assert.equal(write(`${CWD}/src/app.js`), null);
+  assert.deepEqual(Object.values(store.sessions.s1).map((e) => e.approved), [false], 'nothing was approved');
 });
 
 test('hooks.json wires the guard to every tool it classifies', () => {

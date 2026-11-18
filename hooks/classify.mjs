@@ -50,8 +50,12 @@ export function classify(event) {
 
 // ---------- paths ----------
 
+// Files that change how Claude Code (or this guard) behaves: settings, managed settings and MCP config,
+// the user's `~/.claude.json`, project hooks, MCP server lists, and the guard's own `.claude/sorry-matt.json`.
 export const isClaudeSettings = (path) =>
-  /(^|[\\/])\.claude[\\/]settings(\.local)?\.json$/i.test(path) || /(^|[\\/])managed-settings\.json$/i.test(path);
+  /(^|[\\/])\.claude[\\/](settings(\.local)?|sorry-matt)\.json$/i.test(path) ||
+  /(^|[\\/])\.claude[\\/]hooks([\\/]|$)/i.test(path) ||
+  /(^|[\\/])(managed-settings|managed-mcp|\.claude|\.mcp)\.json$/i.test(path);
 
 // `/d/code/x` (Git Bash) and `D:\code\x` compare equal.
 export const normalizePath = (p) =>
@@ -117,6 +121,9 @@ export function classifyCommand(command, dialect, cwd) {
 
 const READERS = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff']);
 const PROD = /(^|[^a-z0-9])(prod|production|prd)([^a-z0-9]|$)/i;
+const NONPROD = /(^|[^a-z0-9])(staging|stage|stg|dev|develop|development|preview|test|testing|qa|sandbox|canary)([^a-z0-9]|$)/i;
+// Values that name the target say it is not production, and none says it is.
+const explicitlyNonProd = (values) => values.some((v) => NONPROD.test(v)) && !values.some((v) => PROD.test(v));
 const READ_ONLY_VERB = /^(get|describe|logs?|list|ls|show|status|top|explain|version|view|info|whoami|history|diff|plan|help|cat|tail|validate)([-_].*)?$/i;
 const DEPLOY_TOOLS = new Set(['kubectl', 'helm', 'gcloud', 'aws', 'az', 'fly', 'flyctl', 'heroku', 'vercel', 'netlify', 'firebase', 'wrangler', 'serverless', 'sls', 'eb', 'ansible', 'ansible-playbook', 'kamal', 'cap', 'ssh', 'scp', 'rsync']);
 const SQL_CLIENTS = new Set(['psql', 'mysql', 'mariadb', 'sqlite3', 'sqlcmd', 'mongosh', 'mongo', 'redis-cli', 'clickhouse-client', 'cockroach']);
@@ -124,6 +131,41 @@ const SQL_DESTROY = /\b(drop\s+(table|database|schema)(\s+if\s+exists)?\s+([`"'\
 const SQL_WRITE = /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|replace|merge)\b/i;
 const FETCHERS = new Set(['curl', 'wget', 'http', 'https', 'xh', 'invoke-webrequest', 'iwr', 'invoke-restmethod', 'irm']);
 const MAILERS = new Set(['sendmail', 'mail', 'mailx', 'mutt', 'msmtp', 'ssmtp', 'swaks', 'send-mailmessage']);
+const SSH_VALUED = new Set(['-p', '-i', '-l', '-o', '-F', '-J', '-L', '-R', '-D', '-b', '-c', '-E', '-m', '-O', '-Q', '-S', '-W', '-w', '-B', '-I']);
+const REMOTE_READERS = new Set(['uptime', 'ls', 'cat', 'tail', 'head', 'less', 'grep', 'df', 'du', 'free', 'ps', 'whoami', 'hostname', 'date', 'uname', 'w', 'who', 'id', 'pwd', 'stat', 'wc', 'journalctl', 'env', 'printenv', 'top', 'netstat', 'ss', 'lsof', 'last']);
+
+// `ssh host <command>` where the command only reads. No command (an interactive shell) is not read-only.
+function sshReadOnly(args) {
+  const [, ...rest] = positionals(args, SSH_VALUED);
+  const remote = rest.join(' ').trim();
+  if (!remote || /[;&|<>`$]/.test(remote)) return false;
+  const [cmd, sub = ''] = remote.split(/\s+/);
+  if (REMOTE_READERS.has(cmd)) return true;
+  if (cmd === 'systemctl') return /^(status|is-active|is-enabled|is-failed|list-units|list-timers|show|cat)$/.test(sub);
+  if (cmd === 'docker') return /^(ps|logs|images|inspect|stats|top|version|info)$/.test(sub);
+  if (cmd === 'kubectl') return READ_ONLY_VERB.test(sub);
+  return false;
+}
+
+// What a package runner starts: `npx vercel --prod`, `bunx wrangler deploy`, `pnpm dlx x`, `npm exec -- x`.
+const RUNNER_VALUED = new Set(['-p', '--package', '-c', '--call', '--filter', '-F', '-C', '--dir', '-w', '--workspace']);
+function runnerTarget(name, args) {
+  let rest;
+  if (name === 'npx' || name === 'bunx') rest = args;
+  else if ((name === 'pnpm' || name === 'yarn') && (args[0] === 'dlx' || args[0] === 'exec')) rest = args.slice(1);
+  else if (name === 'npm' && (args[0] === 'exec' || args[0] === 'x')) rest = args.slice(1);
+  else return null;
+  let k = 0;
+  while (k < rest.length && rest[k].startsWith('-')) {
+    if (rest[k] === '--') {
+      k++;
+      break;
+    }
+    k += RUNNER_VALUED.has(rest[k]) ? 2 : 1;
+  }
+  const argv = rest.slice(k);
+  return argv.length ? argv : null;
+}
 
 function classifySegment(seg, prev, cwd) {
   const { argv } = unwrap(seg.argv);
@@ -134,6 +176,9 @@ function classifySegment(seg, prev, cwd) {
   const name = commandName(argv[0]);
   const args = argv.slice(1);
   const line = argv.join(' ');
+
+  const inner = runnerTarget(name, args);
+  if (inner) return classifySegment({ ...seg, argv: inner, redirects: [] }, prev, cwd);
 
   const byTool = commandRule(name, args, line, seg, cwd);
   if (byTool) return byTool;
@@ -155,8 +200,9 @@ function classifySegment(seg, prev, cwd) {
   }
   // Deploy tools pointed at production, unless the verb only reads.
   if (DEPLOY_TOOLS.has(name) && PROD.test(words)) {
+    if (name === 'ssh') return sshReadOnly(args) ? null : hit('release-deploy', line);
     const verbs = positionals(args).slice(0, 3);
-    if (name === 'ssh' || name === 'scp' || name === 'rsync' || !verbs.some((v) => READ_ONLY_VERB.test(v))) {
+    if (name === 'scp' || name === 'rsync' || !verbs.some((v) => READ_ONLY_VERB.test(v))) {
       return hit('release-deploy', line);
     }
   }
@@ -164,6 +210,58 @@ function classifySegment(seg, prev, cwd) {
 }
 
 const DISK = (line, target) => catastrophic(line, `覆寫或清除 ${target}：上面的所有資料都會消失，無法復原。`);
+const PUBLISH_VALUED = new Set(['--filter', '-F', '-C', '--dir', '--workspace', '-w', '--prefix', '--tag', '--access', '--otp', '--registry', '--publish-branch', '--report-summary']);
+
+// `npm publish`, `pnpm -r publish`, `yarn npm publish`, `yarn workspaces foreach -A npm publish`; a dry run publishes nothing.
+function publishes(args) {
+  if (hasLong(args, '--dry-run')) return false;
+  const p = positionals(args, PUBLISH_VALUED);
+  const npm = p.indexOf('npm');
+  return p[0] === 'publish' || (npm !== -1 && p[npm + 1] === 'publish') || (p[0] === 'workspaces' && p.includes('publish'));
+}
+const release = (line, args) => (hasLong(args, '--dry-run') ? null : hit('release-deploy', line));
+// A deploy that goes to production unless the command names a non-production target.
+const deployUnlessNonProd = (line, values) => (explicitlyNonProd(values.filter(Boolean)) ? null : hit('release-deploy', line));
+
+function terraformRule(name, args, line, seg) {
+  const sub = positionals(args, new Set(['-chdir']))[0] ?? '';
+  const chdir = args.find((a) => a.startsWith('-chdir='))?.slice(7) ?? '';
+  const workspace = seg.argv.find((w) => /^TF_WORKSPACE=/.test(w))?.slice(13) ?? '';
+  const where = [chdir && `目錄 ${chdir}`, workspace && `workspace ${workspace}`].filter(Boolean).join('、') || '目前目錄的設定';
+  if (sub === 'destroy' || (sub === 'apply' && args.includes('-destroy'))) {
+    return catastrophic(line, `銷毀 ${name} 管理的所有資源（${where}）：資源上的資料一併刪除，沒有備份就無法復原。`);
+  }
+  if (!['apply', 'import', 'taint'].includes(sub) && !(sub === 'state' && /^(rm|mv|push)$/.test(positionals(args)[1] ?? ''))) return null;
+  const values = [chdir, workspace];
+  for (let k = 0; k < args.length; k++) {
+    if (args[k] === '-var-file' || args[k] === '-var') values.push(args[k + 1] ?? '');
+    else if (/^-var(-file)?=/.test(args[k])) values.push(args[k].replace(/^-var(-file)?=/, ''));
+  }
+  return deployUnlessNonProd(line, values);
+}
+
+const CLOUD_VALUED = new Set(['--project', '--region', '--profile', '--subscription', '-n', '--name', '-g', '--resource-group', '--stack-name', '-o', '--output', '--context', '--namespace']);
+function cloudRule(name, args, line, words) {
+  const pos = positionals(args, CLOUD_VALUED);
+  if (name === 'gcloud' && pos[0] === 'projects' && pos[1] === 'delete') {
+    return catastrophic(line, `刪除 GCP 專案 ${pos[2] || '(未指名)'}：專案內所有資源停用並排定刪除，30 天寬限期過後無法復原。`);
+  }
+  if (name === 'az' && pos[0] === 'group' && pos[1] === 'delete') {
+    const group = optionValue(args, '-n', '--name', '-g', '--resource-group') || '(未指名)';
+    return catastrophic(line, `刪除 Azure 資源群組 ${group}：群組內所有資源一起刪除，無法復原。`);
+  }
+  if (!PROD.test(words)) return null;
+  if (name === 'kubectl' && pos[0] === 'delete' && /^(namespaces?|ns)$/.test(pos[1] ?? '')) {
+    return catastrophic(line, `刪除 Kubernetes namespace ${pos[2] || '(未指名)'}（prod）：namespace 裡所有資源與 volume 一起刪除，無法復原。`);
+  }
+  if (name === 'aws' && pos[0] === 's3' && pos[1] === 'rb') {
+    return catastrophic(line, `刪除 S3 bucket ${pos[2] || '(未指名)'}${hasLong(args, '--force') ? '（--force：連同所有物件）' : ''}：無法復原。`);
+  }
+  if (name === 'aws' && pos[0] === 'cloudformation' && pos[1] === 'delete-stack') {
+    return catastrophic(line, `刪除 CloudFormation stack ${optionValue(args, '--stack-name') || '(未指名)'}：stack 建立的資源一併刪除，未設保留的資料無法復原。`);
+  }
+  return null;
+}
 
 function commandRule(name, args, line, seg, cwd) {
   switch (name) {
@@ -175,25 +273,47 @@ function commandRule(name, args, line, seg, cwd) {
     case 'cnpm':
     case 'pnpm':
     case 'bun':
-      return args[0] === 'publish' ? hit('release-deploy', line) : null;
     case 'yarn':
-      return args[0] === 'publish' || (args[0] === 'npm' && args[1] === 'publish') ? hit('release-deploy', line) : null;
+      return publishes(args) ? hit('release-deploy', line) : null;
     case 'cargo':
-      return args[0] === 'publish' ? hit('release-deploy', line) : null;
+      return args[0] === 'publish' ? release(line, args) : null;
     case 'gem':
-      return args[0] === 'push' ? hit('release-deploy', line) : null;
+      return args[0] === 'push' ? release(line, args) : null;
     case 'dotnet':
-      return args[0] === 'nuget' && args[1] === 'push' ? hit('release-deploy', line) : null;
+      return args[0] === 'nuget' && args[1] === 'push' ? release(line, args) : null;
     case 'twine':
-      return args[0] === 'upload' ? hit('release-deploy', line) : null;
+      return args[0] === 'upload' ? release(line, args) : null;
     case 'vsce':
-      return args[0] === 'publish' ? hit('release-deploy', line) : null;
+    case 'ovsx':
+      return args[0] === 'publish' ? release(line, args) : null;
     case 'terraform':
     case 'tofu':
     case 'terragrunt':
-      return ['apply', 'destroy', 'import', 'taint'].includes(args[0]) || (args[0] === 'state' && /^(rm|mv|push)$/.test(args[1] ?? '')) ? hit('release-deploy', line) : null;
-    case 'pulumi':
-      return ['up', 'update', 'destroy'].includes(args[0]) ? hit('release-deploy', line) : null;
+      return terraformRule(name, args, line, seg);
+    case 'pulumi': {
+      const stack = optionValue(args, '-s', '--stack');
+      if (args[0] === 'destroy') return catastrophic(line, `銷毀 Pulumi stack ${stack || '(目前選取的 stack)'} 的所有資源：資源上的資料一併刪除，沒有備份就無法復原。`);
+      return ['up', 'update'].includes(args[0]) ? deployUnlessNonProd(line, [stack]) : null;
+    }
+    case 'fly':
+    case 'flyctl':
+      return positionals(args, new Set(['-a', '--app', '-c', '--config', '-i', '--image']))[0] === 'deploy'
+        ? deployUnlessNonProd(line, [optionValue(args, '-a', '--app'), optionValue(args, '-c', '--config')])
+        : null;
+    case 'wrangler': {
+      const [verb, sub] = positionals(args, new Set(['-e', '--env', '-c', '--config', '--branch', '--project-name']));
+      if (!(verb === 'deploy' || verb === 'publish' || (verb === 'pages' && (sub === 'deploy' || sub === 'publish')))) return null;
+      return hasLong(args, '--dry-run') ? null : deployUnlessNonProd(line, [optionValue(args, '-e', '--env'), optionValue(args, '--branch')]);
+    }
+    case 'firebase':
+      return positionals(args, new Set(['-P', '--project', '--only', '--except', '-m', '--message']))[0] === 'deploy'
+        ? deployUnlessNonProd(line, [optionValue(args, '-P', '--project')])
+        : null;
+    case 'gcloud':
+    case 'az':
+    case 'kubectl':
+    case 'aws':
+      return cloudRule(name, args, line, seg.argv.join(' '));
     case 'rm':
     case 'remove-item':
     case 'ri':
@@ -221,13 +341,15 @@ function commandRule(name, args, line, seg, cwd) {
     default:
       break;
   }
-  if (MAILERS.has(name)) {
-    const to = [...args.filter((a) => /^[^@\s]+@[^@\s]+$/.test(a)), optionValue(args, '-To', '--to')].filter(Boolean);
-    return message(line, to.length ? `收件者 ${[...new Set(to)].join(', ')}` : `${name} 指定的收件者`);
-  }
+  if (MAILERS.has(name)) return message(line, recipients(name, args));
   if (/^mkfs/.test(name)) return DISK(line, `裝置 ${positionals(args).at(-1) || '(未指名)'}（${name} 建立新檔案系統）`);
   if (FETCHERS.has(name)) return fetchRule(args, line);
   return null;
+}
+
+function recipients(name, args) {
+  const to = [...args.filter((a) => /^[^@\s=]+@[^@\s]+$/.test(a)), optionValue(args, '-To', '--to'), ...args.filter((a) => a.startsWith('--to=')).map((a) => a.slice(5))].filter(Boolean);
+  return to.length ? `收件者 ${[...new Set(to)].join(', ')}` : `${name} 指定的收件者`;
 }
 
 function deleteRule(name, args, line, cwd) {
@@ -294,6 +416,7 @@ const FORCE_PUSH = '改寫共享歷史，其他人的 commit 可能遺失。';
 
 function gitRule(args, line, cwd) {
   const { sub, rest } = gitSub(args);
+  if (sub === 'send-email') return message(line, recipients('git send-email', rest));
   if (sub !== 'push') return null;
   const flags = shortFlags(rest.filter((a, k) => !PUSH_VALUED.has(rest[k - 1])));
   const forceAll = flags.has('f') || hasLong(rest, '--force', '--force-with-lease', '--force-if-includes');
@@ -318,18 +441,23 @@ function gitRule(args, line, cwd) {
   const named = (t) => (t === 'HEAD' || t === '@' ? current() : t);
   let targets;
   if (hasLong(rest, '--all', '--branches')) {
-    targets = [...branches].filter((b) => git(dir, 'rev-parse', '--verify', '-q', `refs/heads/${b}`)).map((name) => ({ name, forced: forceAll }));
+    targets = [...branches].filter((b) => git(dir, 'rev-parse', '--verify', '-q', `refs/heads/${b}`)).map((name) => ({ name, source: name, forced: forceAll }));
   } else if (refspecs.length) {
-    targets = refspecs.map((r) => ({ name: named(dst(r)), forced: forceAll || r.startsWith('+') }));
+    // The source side is what lands on the branch: `src:dst`, or the ref itself.
+    const src = (r) => {
+      const s = r.replace(/^\+/, '').split(':')[0];
+      return !s || s === '@' ? 'HEAD' : s;
+    };
+    targets = refspecs.map((r) => ({ name: named(dst(r)), source: src(r), forced: forceAll || r.startsWith('+') }));
   } else if (hasLong(rest, '--tags')) {
     targets = [];
   } else {
-    targets = [{ name: current(), forced: forceAll }];
+    targets = [{ name: current(), source: 'HEAD', forced: forceAll }];
   }
   const hits = targets.filter((t) => isProtected(t.name));
   const forced = hits.filter((t) => t.forced).map((t) => t.name.replace(/^refs\/heads\//, ''));
   if (forced.length) return catastrophic(line, `強制推送到受保護分支 ${[...new Set(forced)].join('、')}：${FORCE_PUSH}`);
-  if (hits.length) return merge(line, { kind: 'push', branch: hits[0].name.replace(/^refs\/heads\//, ''), dir });
+  if (hits.length) return merge(line, { kind: 'push', branch: hits[0].name.replace(/^refs\/heads\//, ''), source: hits[0].source, dir });
   return null;
 }
 
@@ -497,7 +625,9 @@ function fetchRule(args, line) {
   }
   method = (method || (hasBody ? 'POST' : 'GET')).toUpperCase();
   for (const url of urls) {
-    if (MESSAGE_URL.test(url)) return message(line, destination(url, body.join('\n')));
+    // A plain GET reads; only a few APIs send on GET (Telegram's send*, Slack's chat.* with a query string).
+    const sends = method !== 'GET' || /^smtps?:/i.test(url) || /api\.telegram\.org\/bot[^/]*\/send|slack\.com\/api\/chat\.\w+\?/i.test(url);
+    if (MESSAGE_URL.test(url) && sends) return message(line, destination(url, body.join('\n')));
     if (PAYMENT_URL.test(url) && method !== 'GET') {
       const endpoint = url.replace(/[?#].*$/, '');
       return payment(line, `${method} ${endpoint}`);
@@ -530,6 +660,10 @@ function classifyMcp(tool, input = {}, cwd = process.cwd()) {
     return [message(tool, `MCP server ${server} 的 ${action}${to.length ? `（${to.join('，')}）` : ''}`)];
   }
   if (PAYMENT_SERVER.test(server) && PAYMENT_ACTION.test(action)) return [payment(tool, `MCP server ${server} 的 ${action}`)];
+  if (/(^|_)delete_?(repository|repo)($|_)/i.test(action)) {
+    const repo = input.owner && input.repo ? `${input.owner}/${input.repo}` : String(input.repository || input.repo || input.full_name || input.name || '(未指名)');
+    return [repoDelete(tool, `${repo}（MCP server ${server} 的 ${action}）`)];
+  }
   if (MERGE_ACTION.test(action) || ENQUEUE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)merge($|_)/i.test(action))) {
     const pr = input.pull_number ?? input.pullNumber ?? input.number;
     const target = input.owner && input.repo && pr !== undefined

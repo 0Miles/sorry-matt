@@ -447,3 +447,15 @@ merge 帶解法（`resolved`，比對 merge commit 的樹與 `git merge-tree --w
 `hooks/confirm.mjs`、`hooks/confirm-state.mjs`、`hooks/deploy-on-merge.mjs`；`hooks/hooks.json` 的 PreToolUse matcher
 拿掉 `Read` 與 `Grep`（不再檢查讀取機密）。測試：`scripts/guard.test.mjs` 改寫，新增 `scripts/deploy-on-merge.test.mjs`，
 CI 一起跑。`SORRY_MATT_GUARD=off` 全關開關保留；budget 與 reread hook 不動。
+
+獨立審查後補強：
+
+- 第一段確認只能由 guard 給的那一行完成：其他提到 `confirm.mjs`、`confirm-state` 或 `sorry-matt-guard` 的指令（串接、改寫、
+  換路徑、直譯器一行式、重導）與寫入狀態目錄的檔案工具一律擋下；只讀或 git 操作不算。
+- 文件不再宣稱「保證先問」：guard 是指令文字比對，不是安全邊界；模式與其他 hook 可能讓提示不出現或變成拒絕。
+- 確認一次類補上 `~/.claude.json`、`.claude/hooks/`、`.mcp.json`、`.claude/sorry-matt.json`，以及 `npx`／`bunx`／`pnpm dlx` 包一層的
+  部署、`pnpm -r publish` 等、預設就是正式環境的 `fly`／`wrangler`／`firebase deploy`；兩段確認類補上 `terraform`／`pulumi destroy`、
+  刪雲端專案與資源群組、刪 prod 的 namespace、bucket、stack、MCP 刪 repo 與 `git send-email`。
+- 不再問：`--dry-run`、明確指向非正式環境的部署、`ssh prod <唯讀指令>`、送往訊息服務的純 GET。
+- merge 偵測讀合併後的 workflow（PR head，取不到就 base 並註明；push 讀要推的 ref），合併 release-please／changesets 自己的
+  release PR 時視為立即發布，認得更多部署訊號，名稱像部署但認不出確切動作時當作無法判斷而詢問。

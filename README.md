@@ -86,14 +86,25 @@ npx modern-web-guidance@latest install
 The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`) on
 `Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and MCP tools. It runs in **every session
 where the plugin is enabled**, not only sorry-matt runs. It does not decide what an agent may do — your permission
-settings do — it only makes sure you are asked before the few things that should never happen unseen. Each call
-gets one of three levels:
+settings do — it adds a prompt before a few things that should not happen unseen. Each call gets one of three
+levels:
 
 | Level | What | Covers |
 | --- | --- | --- |
-| **double** | two-step confirmation, with the consequences spelled out | catastrophic actions: a recursive delete of `~`, `/`, a drive root, `.`, `..` or a path outside the project; `format`, `mkfs*`, `dd of=/dev/…`, `diskpart`; `dropdb`, SQL `DROP DATABASE/SCHEMA/TABLE`, `TRUNCATE`, `FLUSHALL`/`FLUSHDB`, `dropDatabase()`; `gh repo delete` and the API/GraphQL repo deletes; a force-push to, or delete of, `main`, `master` or the remote's default branch. Outgoing messages: mailers, chat and mail APIs through `curl` and friends, MCP send/post actions. Payments: `stripe` writes, non-GET calls to payment APIs, MCP payment actions |
-| **ask** | asked once | releases and production deploys (`npm`/`pnpm`/`yarn`/`bun` publish, `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply and destroy, deploy tools and SQL writes aimed at production, `gh workflow run` with prod); writes to Claude Code's settings files; a merge that deploys to production right away (below) |
-| none | let through to your permission settings | everything else: force-pushing a feature branch, `git reset --hard`, `git clean`, deletes inside the project, cloning, installing packages or extensions, `curl … | sh`, reading or writing credential files, `sudo`, `chmod`, `icacls` |
+| **double** | two-step confirmation, with the consequences spelled out | catastrophic actions: a recursive delete of `~`, `/`, a drive root, `.`, `..` or a path outside the project; `format`, `mkfs*`, `dd of=/dev/…`, `diskpart`; `dropdb`, SQL `DROP DATABASE/SCHEMA/TABLE`, `TRUNCATE`, `FLUSHALL`/`FLUSHDB`, `dropDatabase()`; `gh repo delete`, the API/GraphQL repo deletes and MCP `delete_repository`; `terraform`/`tofu`/`pulumi destroy`; `gcloud projects delete`, `az group delete`; `kubectl delete namespace`, `aws s3 rb` and `aws cloudformation delete-stack` aimed at prod; a force-push to, or delete of, `main`, `master` or the remote's default branch. Outgoing messages: mailers, `git send-email`, chat and mail APIs through `curl` and friends (a plain GET only reads, except APIs that send on GET such as Telegram's `sendMessage`), MCP send/post actions. Payments: `stripe` writes, non-GET calls to payment APIs, MCP payment actions |
+| **ask** | asked once | releases and production deploys: `npm`/`pnpm`/`yarn`/`bun` publish (recursive and workspace forms too), `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply, `fly deploy`, `wrangler deploy`, `firebase deploy`, other deploy tools and SQL writes aimed at prod, also through `npx`/`bunx`/`pnpm dlx`, `gh workflow run` with prod. Not asked: `--dry-run`, and targets explicitly named as non-production (`-var-file=staging.tfvars`, `TF_WORKSPACE=dev`, `fly deploy -a shop-staging`, `wrangler deploy --env staging`, `firebase deploy -P app-dev`), and `ssh prod-host <read-only command>` such as `uptime`, `tail` or `systemctl status`. Writes to files that change how Claude Code behaves: `.claude/settings*.json`, `managed-settings.json`, `.claude/hooks/`, `~/.claude.json`, `.mcp.json`, `managed-mcp.json`, `.claude/sorry-matt.json`. A merge that deploys to production right away (below) |
+| none | let through to your permission settings | everything else: force-pushing a feature branch, `git reset --hard`, `git clean`, deletes inside the project, cloning, installing packages or extensions, `curl … \| sh`, reading or writing credential files, `sudo`, `chmod`, `icacls` |
+
+**What it is not.** The guard matches command text; it is not a security boundary. It does not see through an
+interpreter wrapper (`node -e`, `python -c`), variable expansion, scripts that do the work for it, or commands like
+`find / -delete`. The two-step confirmation guards against a misjudgment or a slip, not against an agent set on
+getting around it. And it only adds a prompt; whether that prompt is shown depends on the rest of the setup:
+
+- Without managed settings, another plugin's or your own hook that returns `allow` for the same call can keep the
+  prompt from appearing.
+- In `dontAsk` mode, or with prompts turned into denials, an `ask` becomes a deny.
+- In `bypassPermissions` mode nothing guarantees a prompt: the guard denies double-level calls outright, and the
+  single-confirmation ones mostly run without a prompt.
 
 **Two-step confirmation.** The first time a double-level shell command comes in, the hook asks with the
 consequences ("recursive delete of /home/me: no recycle bin, unrecoverable without a backup") and swaps the command
@@ -102,10 +113,11 @@ approval and asks the agent to resend the original command unchanged; refusing r
 session, same tool, same input, within 10 minutes — gets the second prompt, and only allowing that one runs it. An
 approval is spent on that second prompt. MCP tools cannot have their input swapped, so their first call is denied
 with the `confirm.mjs` command to run first. The state lives in `<os temp dir>/sorry-matt-guard/<session>.json`; if
-it cannot be read or written the call is never let through on that account. In `bypassPermissions` mode nothing
-guarantees a prompt is shown, so double-level calls are always denied there: run them yourself in a mode with
-prompts. In `auto` and every other mode the flow above applies, since a PreToolUse `ask` goes to the permission
-prompt.
+it cannot be read or written the call is never let through on that account. Only the exact command the guard hands
+out may run `confirm.mjs`: any other command that names `confirm.mjs`, `confirm-state` or the state directory
+(chained, rewritten, another path, an interpreter one-liner, a redirect), and any file-tool write into the state
+directory, is denied; reading the scripts or committing them is not. In `auto` mode and every other attended mode
+the flow above applies, since a PreToolUse `ask` goes to the permission prompt.
 
 **Merges that deploy.** `gh pr merge` (with `--admin` or `--auto` too) and every direct write to a protected branch
 (`git push` to it, `gh api` merge, ref and contents endpoints, GraphQL `mergePullRequest`,
@@ -114,16 +126,21 @@ only when the merge would deploy right away. The hook takes, in order:
 
 1. `SORRY_MATT_MERGE_DEPLOYS` (`yes`/`no`) in the environment, or `{"mergeDeploysProduction": true|false}` in the
    repo's `.claude/sorry-matt.json`;
-2. otherwise detection: the base branch (`gh pr view <pr> --json baseRefName`, or the pushed ref), then every
-   `.github/workflows/*.y*ml` on `origin/<base>` (the working tree when that ref is missing). A workflow that a push
-   to the base triggers deploys when a job has `environment: prod`/`production`, uses a known deploy action
-   (`actions/deploy-pages`, `peaceiris/actions-gh-pages`, `cloudflare/wrangler-action`, …), or runs
-   `vercel --prod`, `fly deploy`, `npm publish`, `cargo publish`, `gh release create`, or `kubectl apply`/
-   `helm upgrade` with prod — unless that job or step is gated on a release tool's output (release-please's
-   `release_created`, changesets' `published`) or on a tag.
+2. otherwise detection, on the workflows the merge leaves on the base branch: for a PR, `gh pr view` gives the base
+   and the head, and the head's `.github/workflows/*.y*ml` are read (the base's when the head is not available
+   locally, which the prompt says); for a push, the tree of the ref being pushed. A workflow that a push to the base
+   triggers deploys when a job has `environment: prod`/`production`, uses a known deploy action
+   (`actions/deploy-pages`, `peaceiris/actions-gh-pages`, `cloudflare/wrangler-action`,
+   `FirebaseExtended/action-hosting-deploy`, …), calls a reusable workflow named like a deploy or release, or runs
+   `vercel --prod`, `fly deploy`, `wrangler deploy`, `firebase deploy`, `netlify deploy --prod`, `npm publish`,
+   `cargo publish`, `gh release create`, or `kubectl apply`/`helm upgrade` with prod — unless that job or step is
+   gated on a release tool's output (release-please's `release_created`, changesets' `published`) or on a tag.
+   Merging the release tool's own release PR (head `release-please--*` or `changeset-release/*`, or the
+   `autorelease: pending` label) lifts that gate: it releases right away.
 
 Detected: asked, naming the workflow and the signal. Clearly not: let through to your permission settings. A lookup
-that fails or cannot tell: asked, saying why.
+that fails, or a job or step named like a deploy, release or publish whose action the hook does not recognize:
+asked, saying why.
 
 To turn the guard off, set it in the `env` of your Claude Code settings:
 

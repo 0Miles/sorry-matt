@@ -123,7 +123,7 @@ test('branch filters follow GitHub glob rules', () => {
 test('known deploy actions and production environments are found', () => {
   const pages = analyzeWorkflows([wf('pages.yml', PAGES)], 'main');
   assert.equal(pages.deploys, true);
-  assert.match(pages.findings[0], /pages\.yml 的 job deploy（uses: actions\/deploy-pages）/);
+  assert.match(pages.findings[0], /pages\.yml 的 job deploy 第 2 步（uses: actions\/deploy-pages）/);
   assert.equal(analyzeWorkflows([wf('pages.yml', PAGES)], 'develop').deploys, false, 'not triggered on another branch');
   const env = analyzeWorkflows([wf('ship.yml', ENVIRONMENT)], 'release/2025/1');
   assert.equal(env.deploys, true);
@@ -173,19 +173,26 @@ const repo = (files, extra = {}) =>
   stub({
     'git rev-parse --show-toplevel': '/repo\n',
     'git remote get-url origin': 'https://github.com/o/r.git\n',
-    'gh pr view': 'main\n',
-    'git rev-parse --verify -q origin/main^{commit}': 'abc\n',
-    'git ls-tree --name-only origin/main .github/workflows/': files.map((f) => `.github/workflows/${f.name}`).join('\n') + '\n',
-    ...Object.fromEntries(files.map((f) => [`git show origin/main:.github/workflows/${f.name}`, f.text])),
+    'gh pr view': prJson(),
+    ...tree('origin/main', files),
     ...extra,
   });
+const prJson = (head = 'feature', labels = []) =>
+  JSON.stringify({ baseRefName: 'main', headRefName: head, headRefOid: 'f00d', labels: labels.map((name) => ({ name })) });
+// A ref that exists locally and holds these workflow files.
+const tree = (ref, files) => ({
+  [`git rev-parse --verify -q ${ref}^{commit}`]: 'abc\n',
+  [`git ls-tree --name-only ${ref} .github/workflows/`]: files.map((f) => `.github/workflows/${f.name}`).join('\n') + '\n',
+  ...Object.fromEntries(files.map((f) => [`git show ${ref}:.github/workflows/${f.name}`, f.text])),
+});
 
 test('mergeDeploys reads the PR base and the workflows on origin/<base>', () => {
   const { run, calls } = repo([wf('pages.yml', PAGES), wf('ci.yml', CI_ONLY)]);
   const result = mergeDeploys({ kind: 'pr', arg: '12', repo: '' }, { cwd: '/repo', env: {}, run, fs: noFs });
   assert.equal(result.deploys, true);
   assert.match(result.reason, /合併到 main 會觸發：pages\.yml/);
-  assert.ok(calls.includes('gh pr view 12 --json baseRefName --jq .baseRefName'), calls.join('\n'));
+  assert.ok(calls.includes('gh pr view 12 --json baseRefName,headRefName,headRefOid,labels'), calls.join('\n'));
+  assert.match(result.reason, /讀不到 PR head，改讀 base/);
 
   const quiet = repo([wf('release.yml', RELEASE_PLEASE)]);
   const gated = mergeDeploys({ kind: 'push', branch: 'main' }, { cwd: '/repo', env: {}, run: quiet.run, fs: noFs });
@@ -226,4 +233,65 @@ test('without origin/<base> the working tree is read', () => {
   assert.equal(result.deploys, true);
   assert.match(result.reason, /讀自 工作樹/);
   assert.equal(mergeDeploys({ kind: 'push', branch: 'main' }, { env: {}, run, fs: noFs }).deploys, false, 'no workflows at all');
+});
+
+test('merging a release tool\'s own release PR deploys right away', () => {
+  assert.equal(analyzeWorkflows([wf('release.yml', RELEASE_PLEASE)], 'main', { releasePr: true }).deploys, true);
+  const cs = analyzeWorkflows([wf('release.yml', CHANGESETS)], 'main', { releasePr: true });
+  assert.equal(cs.deploys, true);
+  assert.ok(cs.findings.some((f) => /changesets\/action.*pnpm release/.test(f)), cs.findings.join('\n'));
+  // A tag gate still holds on a release PR.
+  const tagged = `on: push\njobs:\n  j:\n    if: startsWith(github.ref, 'refs/tags/')\n    steps:\n      - run: npm publish\n`;
+  assert.equal(analyzeWorkflows([wf('t.yml', tagged)], 'main', { releasePr: true }).deploys, false);
+
+  for (const [head, labels] of [['release-please--branches--main', []], ['changeset-release/main', []], ['chore/release', ['autorelease: pending']]]) {
+    const { run } = repo([wf('release.yml', RELEASE_PLEASE)], { 'gh pr view': prJson(head, labels) });
+    const result = mergeDeploys({ kind: 'pr', arg: '7' }, { env: {}, run, fs: noFs });
+    assert.equal(result.deploys, true, head);
+    assert.match(result.reason, /release PR/);
+  }
+  const ordinary = repo([wf('release.yml', RELEASE_PLEASE)]);
+  assert.equal(mergeDeploys({ kind: 'pr', arg: '7' }, { env: {}, run: ordinary.run, fs: noFs }).deploys, false);
+});
+
+test('more deploy signals: wrangler, firebase, netlify, hosting action, reusable deploy workflows', () => {
+  const steps = (body) => `on: push\njobs:\n  j:\n    steps:\n${body}`;
+  const deploys = (text) => analyzeWorkflows([wf('w.yml', text)], 'main').deploys;
+  assert.equal(deploys(steps('      - run: npx wrangler deploy\n')), true);
+  assert.equal(deploys(steps('      - run: wrangler deploy --dry-run\n')), false);
+  assert.equal(deploys(steps('      - run: firebase deploy --only hosting\n')), true);
+  assert.equal(deploys(steps('      - run: netlify deploy --dir dist --prod\n')), true);
+  assert.equal(deploys(steps('      - run: netlify deploy --dir dist\n')), false);
+  assert.equal(deploys(steps('      - run: vercel deploy --prod\n')), true);
+  assert.equal(deploys(steps('      - uses: FirebaseExtended/action-hosting-deploy@v0\n')), true);
+  assert.equal(deploys('on: push\njobs:\n  ship:\n    uses: ./.github/workflows/deploy.yml\n    secrets: inherit\n'), true);
+  assert.equal(deploys('on: push\njobs:\n  ship:\n    uses: o/infra/.github/workflows/release-app.yml@main\n'), true);
+});
+
+test('something named like a deploy that is not recognized cannot be told apart, so the guard asks', () => {
+  const unsure = (text) => analyzeWorkflows([wf('w.yml', text)], 'main').unsure;
+  assert.equal(unsure('on: push\njobs:\n  build:\n    steps:\n      - name: Deploy to servers\n        run: ./scripts/go.sh\n').length, 1);
+  assert.equal(unsure('on: push\njobs:\n  release:\n    steps:\n      - run: ./scripts/go.sh\n').length, 1);
+  assert.equal(unsure('on: push\njobs:\n  call:\n    uses: o/infra/.github/workflows/build.yml@v1\n').length, 1);
+  assert.equal(unsure('on: push\njobs:\n  test:\n    steps:\n      - run: npm test\n').length, 0);
+  const { run } = repo([wf('go.yml', 'on: push\njobs:\n  deploy:\n    steps:\n      - run: ./scripts/go.sh\n')]);
+  const result = mergeDeploys({ kind: 'push', branch: 'main' }, { env: {}, run, fs: noFs });
+  assert.equal(result.deploys, null);
+  assert.match(result.reason, /認不出確切動作/);
+});
+
+test('the workflows that count are the ones the merge leaves: PR head, or the pushed ref', () => {
+  // The PR adds a deploy workflow the base does not have yet.
+  const pr = repo([wf('ci.yml', CI_ONLY)], tree('f00d', [wf('pages.yml', PAGES)]));
+  const result = mergeDeploys({ kind: 'pr', arg: '12' }, { env: {}, run: pr.run, fs: noFs });
+  assert.equal(result.deploys, true);
+  assert.match(result.reason, /讀自 f00d）/);
+  // The PR removes it.
+  const removes = repo([wf('pages.yml', PAGES)], tree('origin/feature', [wf('ci.yml', CI_ONLY)]));
+  assert.equal(mergeDeploys({ kind: 'pr', arg: '12' }, { env: {}, run: removes.run, fs: noFs }).deploys, false);
+  // A push reads the tree of the ref being pushed.
+  const push = repo([], tree('HEAD', [wf('pages.yml', PAGES)]));
+  const pushed = mergeDeploys({ kind: 'push', branch: 'main', source: 'HEAD' }, { env: {}, run: push.run, fs: noFs });
+  assert.equal(pushed.deploys, true);
+  assert.match(pushed.reason, /讀自 HEAD/);
 });

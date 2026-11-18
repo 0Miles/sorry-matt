@@ -3,11 +3,12 @@
 //   - ask verdicts ask once
 //   - merge verdicts ask once when deploy-on-merge.mjs says the merge deploys, or cannot tell
 // It fails closed: an event it cannot read is denied, so a broken guard is loud, not silent.
-import { dirname, join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classify } from './classify.mjs';
 import { parse, unwrap, commandName } from './shell.mjs';
-import { fileStore, isLive, tokenFor, TOKEN } from './confirm-state.mjs';
+import { fileStore, isLive, stateDir, tokenFor, TOKEN } from './confirm-state.mjs';
 import { mergeDeploys } from './deploy-on-merge.mjs';
 
 const HOOK_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,7 +42,10 @@ export function decide(raw, env = process.env, deps = {}) {
       root: deps.pluginRoot ?? pluginRoot(env),
       detect: deps.detect ?? mergeDeploys,
     };
-    const token = confirmInvocation(event);
+    if (writesGuardState(event)) {
+      return deny('sorry-matt guard：不能寫入 guard 的確認紀錄（sorry-matt-guard 目錄）。兩段確認只能經由 guard 給的確認指令完成。');
+    }
+    const token = confirmInvocation(event, ctx.root);
     if (token !== null) return confirmStep(ctx, token);
 
     const verdicts = classify(event);
@@ -61,24 +65,63 @@ export function decide(raw, env = process.env, deps = {}) {
 
 // ---------- the two-step confirmation ----------
 
+// Text that reaches into the confirmation machinery: the confirm scripts by name, or the state directory.
+const GUARD_TOUCH = /(^|[^\w.-])confirm(-state)?\.mjs\b|sorry-matt-guard/i;
+// Commands that only read or print the words they are given; they can name the scripts without running them.
+const INERT = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff', 'git', 'gh', 'echo', 'printf', 'write-output', 'write-host']);
+
+// The same file whatever the spelling: Git Bash `/d/x`, doubled or back slashes, case, symlinks.
+function samePath(a, b, cwd) {
+  const norm = (p) => {
+    const path = resolve(cwd, process.platform === 'win32' ? p.replace(/^\/([a-z])\//i, '$1:/') : p);
+    let real = path;
+    try {
+      real = realpathSync.native(path);
+    } catch {
+      // not there: compare the resolved spelling
+    }
+    return real.replace(/\\/g, '/').toLowerCase();
+  };
+  return norm(a) === norm(b);
+}
+
 /**
- * The token when the call runs the guard's confirm.mjs: the token for the one form the guard hands out,
- * '' for any other form (chained, extra arguments, a malformed token), null when confirm.mjs is not run.
+ * Whether a shell call touches the confirmation machinery, and how:
+ * the token for the one form the guard hands out (a single `node "<root>/hooks/confirm.mjs" <16 hex>`),
+ * '' for anything else that names the confirm scripts or the state directory (to be denied),
+ * null when it touches neither. Readers and printers may name them; a redirect into them never may.
  */
-export function confirmInvocation(event) {
+export function confirmInvocation(event, root = pluginRoot()) {
   if (event.tool_name !== 'Bash' && event.tool_name !== 'PowerShell') return null;
   const segments = parse(String(event.tool_input?.command || ''), event.tool_name === 'PowerShell' ? 'powershell' : 'bash');
-  const runs = segments.map((s) => unwrap(s.argv).argv).filter((argv) => commandName(argv[0]) === 'node' && /(^|[\\/])hooks[\\/]confirm\.mjs$/i.test(argv[1] ?? ''));
-  if (!runs.length) return null;
-  const [argv] = runs;
-  return segments.length === 1 && argv.length === 3 && TOKEN.test(argv[2]) ? argv[2] : '';
+  const touches = segments.some((seg) => {
+    if (seg.redirects.some((t) => GUARD_TOUCH.test(` ${t}`))) return true;
+    if (!GUARD_TOUCH.test(` ${seg.argv.join(' ')}\n${seg.heredoc}`)) return false;
+    return !INERT.has(commandName(unwrap(seg.argv).argv[0]));
+  });
+  if (!touches) return null;
+  const [seg] = segments;
+  const standard = segments.length === 1 && !seg.redirects.length && !seg.heredoc && seg.argv.length === 3 &&
+    commandName(seg.argv[0]) === 'node' && TOKEN.test(seg.argv[2]) &&
+    samePath(seg.argv[1], join(root, 'hooks', 'confirm.mjs'), event.cwd || process.cwd());
+  return standard ? seg.argv[2] : '';
+}
+
+/** A file tool writing into the guard's state directory. */
+function writesGuardState(event) {
+  if (!['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(event.tool_name)) return false;
+  const path = String(event.tool_input?.file_path || event.tool_input?.notebook_path || '');
+  if (!path) return false;
+  const dir = stateDir().replace(/\\/g, '/').toLowerCase();
+  const p = resolve(event.cwd || process.cwd(), path).replace(/\\/g, '/').toLowerCase();
+  return /sorry-matt-guard/i.test(path) || p === dir || p.startsWith(`${dir}/`);
 }
 
 const subjectOf = (event) =>
   event.tool_name === 'Bash' || event.tool_name === 'PowerShell' ? String(event.tool_input?.command ?? '') : event.tool_name;
 
 function confirmStep({ event, mode, store, now }, token) {
-  if (!token) return deny('sorry-matt guard：確認指令只能單獨、原樣執行 guard 給的那一行（`node ".../hooks/confirm.mjs" <確認碼>`），不能串接其他指令或改寫。');
+  if (!token) return deny('sorry-matt guard：這個指令碰到 guard 的確認機制（confirm.mjs、confirm-state 或 sorry-matt-guard 狀態目錄），只有 guard 給的那一行確認指令能原樣單獨執行（`node "<plugin>/hooks/confirm.mjs" <確認碼>`），不能串接、改寫或換路徑。');
   if (mode === BYPASS) return deny(`sorry-matt guard：目前是 ${BYPASS} 模式，不保證會跳確認提示，所以不記錄確認。請使用者切到有確認提示的模式後自己執行原指令。`);
   let entry;
   try {

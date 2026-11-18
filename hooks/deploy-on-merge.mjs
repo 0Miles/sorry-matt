@@ -2,10 +2,12 @@
 // when the answer is yes, or when it cannot tell. In order:
 //   1. explicit setting: env SORRY_MATT_MERGE_DEPLOYS (yes/no), else `mergeDeploysProduction` (true/false) in
 //      the repo's `.claude/sorry-matt.json`
-//   2. detection: the base branch (`gh pr view <arg> --json baseRefName`, or the pushed ref), then every
-//      `.github/workflows/*.y*ml` on `origin/<base>` (the working tree when that ref is missing). A workflow
-//      deploys on merge when a push to the base triggers it and one of its jobs carries a deploy or release
-//      signal that is not gated on a release tool's output (release-please, changesets) or on a tag.
+//   2. detection: the base branch (`gh pr view`, or the pushed ref), then every `.github/workflows/*.y*ml` the
+//      merge leaves there: the PR head's (else `origin/<base>`, noted), or the pushed ref's tree; the working tree
+//      when none of those refs exists locally. A workflow deploys on merge when a push to the base triggers it
+//      and one of its jobs carries a deploy or release signal that is not gated on a release tool's output
+//      (release-please, changesets) or on a tag. Merging the release tool's own release PR lifts that gate. A
+//      job or step named like a deploy whose action is not recognized means "cannot tell".
 // `analyzeWorkflows` is pure (workflow texts in, findings out); `mergeDeploys` does the I/O through `run`.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -232,25 +234,34 @@ const DEPLOY_ACTIONS = [
   /^aws-actions\/amazon-ecs-deploy-task-definition$/,
   /^azure\/webapps-deploy$/,
   /^google-github-actions\/deploy-[\w-]+$/,
+  /^firebaseextended\/action-hosting-deploy$/,
 ];
-const RELEASE_TOOLS = /^(googleapis|google-github-actions)\/release-please-action$|^changesets\/action$/;
+const RELEASE_PLEASE = /^(googleapis|google-github-actions)\/release-please-action$/;
+const CHANGESETS = /^changesets\/action$/;
 const PROD = /(^|[^a-z0-9])(prod|production|prd)([^a-z0-9]|$)/i;
 const RUN_SIGNALS = [
   [/\bvercel\b[^\n]*--prod\b/, 'vercel --prod'],
   [/\b(fly|flyctl)\s+deploy\b/, 'fly deploy'],
-  [/\b(npm|pnpm|yarn|bun)\s+(npm\s+)?publish\b/, 'npm publish'],
-  [/\bcargo\s+publish\b/, 'cargo publish'],
+  [/\bwrangler\s+(pages\s+)?(deploy|publish)\b(?![^\n]*--dry-run)/, 'wrangler deploy'],
+  [/\bfirebase\s+deploy\b/, 'firebase deploy'],
+  [/\bnetlify\s+deploy\b[^\n]*--prod\b/, 'netlify deploy --prod'],
+  [/\b(npm|pnpm|yarn|bun)\s+(-r\s+|--recursive\s+|npm\s+)?publish\b(?![^\n]*--dry-run)/, 'npm publish'],
+  [/\bcargo\s+publish\b(?![^\n]*--dry-run)/, 'cargo publish'],
   [/\bgh\s+release\s+create\b/, 'gh release create'],
 ];
 const KUBE = /\b(kubectl\s+apply|helm\s+upgrade)\b/;
-// Conditions that hold the step back on an ordinary merge: a release tool's output, or a tag push.
+const NAMED_LIKE_DEPLOY = /deploy|release|publish/i;
+const REUSABLE = /^(\.\/|[\w.-]+\/[\w.-]+\/)\.github\/workflows\/[^@]+/i;
+// Conditions that hold a step back on an ordinary merge: a release tool's output, or a tag push.
 const RELEASE_GATE = /\breleases?_created\b|\bsteps\.[\w-]+\.outputs\.release\b|\boutputs\.(release|published)\b/;
 const TAG_GATE = /refs\/tags\/|github\.ref_type\s*==\s*['"]tag['"]/;
+
+const actionOf = (step) => String(step?.uses ?? '').split('@')[0].toLowerCase();
 
 function stepSignals(step) {
   const out = [];
   if (!step || typeof step !== 'object') return out;
-  const uses = String(step.uses ?? '').split('@')[0].toLowerCase();
+  const uses = actionOf(step);
   if (uses && DEPLOY_ACTIONS.some((re) => re.test(uses))) out.push(`uses: ${uses}`);
   const run = String(step.run ?? '');
   for (const [re, label] of RUN_SIGNALS) if (re.test(run)) out.push(`run: ${label}`);
@@ -261,42 +272,76 @@ function stepSignals(step) {
 /**
  * @param {{name: string, text: string}[]} workflows
  * @param {string} branch the branch the merge lands on
- * @returns {{deploys: boolean, findings: string[], gated: string[]}}
+ * @param {{releasePr?: boolean}} options releasePr: the merge is a release tool's own release PR, so steps gated
+ *   on that tool's output run right away
+ * @returns {{deploys: boolean, findings: string[], gated: string[], unsure: string[]}}
  */
-export function analyzeWorkflows(workflows, branch) {
+export function analyzeWorkflows(workflows, branch, { releasePr = false } = {}) {
   const findings = [];
   const gated = [];
+  const unsure = [];
   for (const { name, text } of workflows) {
     let doc;
     try {
       doc = parseYaml(text);
     } catch {
-      findings.push(`${name}（無法解析，視為可能部署）`);
+      unsure.push(`${name}（無法解析）`);
       continue;
     }
     if (!doc || typeof doc !== 'object') continue;
-    const on = doc.on;
-    if (!pushTrigger(on, branch).triggered) continue;
-    const usesReleaseTool = Object.values(doc.jobs ?? {}).some((job) =>
-      [].concat(job?.steps ?? []).some((s) => RELEASE_TOOLS.test(String(s?.uses ?? '').split('@')[0].toLowerCase())),
-    );
-    const isGated = (cond) => {
+    if (!pushTrigger(doc.on, branch).triggered) continue;
+    const jobs = Object.entries(doc.jobs ?? {}).filter(([, job]) => job && typeof job === 'object');
+    const usesReleaseTool = jobs.some(([, job]) => [].concat(job.steps ?? []).some((s) => RELEASE_PLEASE.test(actionOf(s)) || CHANGESETS.test(actionOf(s))));
+    // 'release' when held back by a release tool's output, 'tag' when by a tag, null when not held back.
+    const gateOf = (cond) => {
       const c = String(cond ?? '');
-      return RELEASE_GATE.test(c) || TAG_GATE.test(c) || (usesReleaseTool && /\boutputs\./.test(c));
+      if (TAG_GATE.test(c)) return 'tag';
+      if (RELEASE_GATE.test(c) || (usesReleaseTool && /\boutputs\./.test(c))) return 'release';
+      return null;
     };
-    for (const [id, job] of Object.entries(doc.jobs ?? {})) {
-      if (!job || typeof job !== 'object') continue;
-      const jobGated = isGated(job.if);
-      const signals = [];
+    const place = (where, what, gate) => {
+      const text = `${name} 的 ${where}（${what}）`;
+      if (!gate) findings.push(text);
+      else if (gate === 'release' && releasePr) findings.push(`${text}，這是 release PR，合併後 release 工具的輸出成立`);
+      else gated.push(text);
+    };
+    for (const [id, job] of jobs) {
+      const jobGate = gateOf(job.if);
+      const where = `job ${id}`;
+      let recognized = false;
       const env = typeof job.environment === 'object' && job.environment ? job.environment.name : job.environment;
-      if (env && PROD.test(String(env))) signals.push({ what: `environment: ${env}`, gated: jobGated });
-      for (const step of [].concat(job.steps ?? [])) {
-        for (const what of stepSignals(step)) signals.push({ what, gated: jobGated || isGated(step?.if) });
+      if (env && PROD.test(String(env))) {
+        place(where, `environment: ${env}`, jobGate);
+        recognized = true;
       }
-      for (const s of signals) (s.gated ? gated : findings).push(`${name} 的 job ${id}（${s.what}）`);
+      const reusable = String(job.uses ?? '');
+      if (REUSABLE.test(reusable)) {
+        if (NAMED_LIKE_DEPLOY.test(reusable.split('@')[0].split('/').pop())) place(where, `uses: ${reusable}`, jobGate);
+        else if (!jobGate) unsure.push(`${name} 的 ${where}（呼叫 ${reusable}，看不到裡面做什麼）`);
+        recognized = true;
+      }
+      for (const [k, step] of [].concat(job.steps ?? []).entries()) {
+        if (!step || typeof step !== 'object') continue;
+        const gate = jobGate || gateOf(step.if);
+        const label = `${where} 第 ${k + 1} 步${step.name ? `「${step.name}」` : ''}`;
+        const signals = stepSignals(step);
+        for (const what of signals) place(label, what, gate);
+        // Merging a release tool's own PR is when the tool releases (release-please) or publishes (changesets).
+        const tool = actionOf(step);
+        if (RELEASE_PLEASE.test(tool) || CHANGESETS.test(tool)) {
+          recognized = true;
+          if (releasePr && gate !== 'tag') findings.push(`${name} 的 ${label}（${tool}：release PR 合併後建立 release${step.with?.publish ? ` 並執行 ${step.with.publish}` : ''}）`);
+          continue;
+        }
+        if (signals.length) recognized = true;
+        else if (!gate && NAMED_LIKE_DEPLOY.test(`${step.name ?? ''} ${step.id ?? ''}`)) unsure.push(`${name} 的 ${label}（名稱像部署或發布，但認不出確切動作）`);
+      }
+      if (!recognized && !jobGate && NAMED_LIKE_DEPLOY.test(`${id} ${job.name ?? ''}`)) {
+        unsure.push(`${name} 的 ${where}（名稱像部署或發布，但認不出確切動作）`);
+      }
     }
   }
-  return { deploys: findings.length > 0, findings, gated };
+  return { deploys: findings.length > 0, findings, gated, unsure };
 }
 
 // ---------- I/O ----------
@@ -329,9 +374,11 @@ export function explicitSetting(env, repoRoot, read = readFileSync) {
   return null;
 }
 
-function workflowsAt(root, ref, run, fs) {
+/** The workflows in the first of `refs` that exists locally; the working tree when none does. */
+function workflowsAt(root, refs, run, fs) {
   const git = (...args) => run('git', ['-C', root, ...args]);
-  if (git('rev-parse', '--verify', '-q', `${ref}^{commit}`).ok) {
+  const ref = refs.find((r) => r && git('rev-parse', '--verify', '-q', `${r}^{commit}`).ok);
+  if (ref) {
     const list = git('ls-tree', '--name-only', ref, '.github/workflows/');
     if (!list.ok) return null;
     const out = [];
@@ -353,9 +400,12 @@ function workflowsAt(root, ref, run, fs) {
 }
 
 const defaultFs = { exists: existsSync, list: readdirSync, read: readFileSync };
+const RELEASE_HEAD = /^(release-please--|changeset-release\/)/;
 
 /**
- * @param {{kind: 'pr'|'push'|'unknown', arg?: string, repo?: string, branch?: string, dir?: string, why?: string}} target
+ * Whether the merge deploys, judged on the workflows the merge leaves on the branch: the PR head's (else the
+ * base's, noted) for a PR, the pushed ref's tree for a push.
+ * @param {{kind: 'pr'|'push'|'unknown', arg?: string, repo?: string, branch?: string, source?: string, dir?: string, why?: string}} target
  * @returns {{deploys: true|false|null, reason: string}} null means it could not tell
  */
 export function mergeDeploys(target, { cwd = process.cwd(), env = process.env, run = runCommand, fs = defaultFs } = {}) {
@@ -368,6 +418,8 @@ export function mergeDeploys(target, { cwd = process.cwd(), env = process.env, r
   if (!root) return { deploys: null, reason: `${dir} 不在 git repo 內，讀不到 workflow` };
 
   let branch = target.branch;
+  let refs;
+  let releasePr = false;
   if (target.kind === 'pr') {
     if (target.repo) {
       const origin = run('git', ['-C', root, 'remote', 'get-url', 'origin']);
@@ -375,15 +427,29 @@ export function mergeDeploys(target, { cwd = process.cwd(), env = process.env, r
         return { deploys: null, reason: `PR 屬於 ${target.repo}，不是這個 clone 的 origin，讀不到它的 workflow` };
       }
     }
-    const args = ['pr', 'view', ...(target.arg ? [target.arg] : []), ...(target.repo ? ['--repo', target.repo] : []), '--json', 'baseRefName', '--jq', '.baseRefName'];
+    const args = ['pr', 'view', ...(target.arg ? [target.arg] : []), ...(target.repo ? ['--repo', target.repo] : []), '--json', 'baseRefName,headRefName,headRefOid,labels'];
     const view = run('gh', args, { cwd: root, timeout: 10000 });
-    branch = view.ok ? view.stdout.trim() : '';
+    let pr = null;
+    try {
+      pr = view.ok ? JSON.parse(view.stdout) : null;
+    } catch {
+      pr = null;
+    }
+    branch = typeof pr?.baseRefName === 'string' ? pr.baseRefName : '';
     if (!branch) return { deploys: null, reason: `查不到 PR ${target.arg || '(目前分支)'} 的目標分支（gh pr view 失敗）` };
+    const labels = [].concat(pr.labels ?? []).map((l) => String(l?.name ?? l));
+    releasePr = RELEASE_HEAD.test(String(pr.headRefName ?? '')) || labels.includes('autorelease: pending');
+    refs = [pr.headRefOid, pr.headRefName && `origin/${pr.headRefName}`, `origin/${branch}`];
+  } else {
+    refs = [target.source, `origin/${branch}`];
   }
-  const found = workflowsAt(root, `origin/${branch}`, run, fs);
-  if (!found) return { deploys: null, reason: `讀不到 origin/${branch} 上的 workflow` };
-  const { deploys, findings, gated } = analyzeWorkflows(found.workflows, branch);
-  if (deploys) return { deploys: true, reason: `合併到 ${branch} 會觸發：${findings.join('；')}（讀自 ${found.source}）` };
+  const found = workflowsAt(root, refs, run, fs);
+  if (!found) return { deploys: null, reason: `讀不到 ${refs.filter(Boolean).join(' 或 ')} 上的 workflow` };
+  const fallback = target.kind === 'pr' && found.source === `origin/${branch}` ? '；讀不到 PR head，改讀 base' : '';
+  const from = `讀自 ${found.source}${fallback}`;
+  const { findings, gated, unsure } = analyzeWorkflows(found.workflows, branch, { releasePr });
+  if (findings.length) return { deploys: true, reason: `合併到 ${branch} 會觸發：${findings.join('；')}（${from}）` };
+  if (unsure.length) return { deploys: null, reason: `合併到 ${branch} 會觸發看似部署、但認不出確切動作的 workflow：${unsure.join('；')}（${from}）` };
   const note = gated.length ? `；受 release 工具或 tag 控制、不會立即執行的：${gated.join('；')}` : '';
-  return { deploys: false, reason: `${found.source} 上沒有合併到 ${branch} 就立即部署的 workflow${note}` };
+  return { deploys: false, reason: `${found.source} 上沒有合併到 ${branch} 就立即部署的 workflow${note}${fallback}` };
 }

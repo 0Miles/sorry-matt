@@ -123,24 +123,35 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 
 ### 需要確認的動作
 
-下列動作 agent 可以執行，但只能在使用者於權限提示確認之後，由 plugin 的 `hooks/hooks.json` 以
-PreToolUse 強制：
+下列動作 agent 可以執行，但只能在使用者於權限提示確認之後；plugin 的 `hooks/hooks.json` 以
+PreToolUse 在執行前跳出確認：
 
-- **兩段確認**：災難級操作 —— 對家目錄、根目錄、磁碟根、上層目錄或專案外的路徑遞迴刪除，格式化
-  或覆寫磁碟，刪資料庫、schema 或資料表，刪 GitHub repo，force-push 或刪除受保護分支（main、master、
-  remote 預設分支）—— 以及對外發訊（郵件、聊天、社群貼文、第三方訊息 API）與金流。hook 第一次把
-  指令換成記錄確認的 `confirm.mjs` 並附上後果詳述詢問；允許後原樣重送原指令，hook 再問第二次，
-  允許才真的執行。不能換指令的工具（MCP）第一次會被擋下，擋下訊息附上要先跑的確認指令。
-- **確認一次**：發布版本與部署正式環境（套件 publish、`gh release create`、`terraform apply`、
-  指向正式環境的部署工具與 SQL 寫入）、寫入 Claude Code 設定，以及會立即觸發正式部署的合併 ——
-  `gh pr merge` 或直接寫入受保護分支，而基底分支上有 workflow 一收到 push 就部署或發布。
+- **兩段確認類**
+  - 災難級操作：對家目錄、根目錄、磁碟根、上層目錄或專案外的路徑遞迴刪除；格式化或覆寫磁碟；刪資料庫、
+    schema 或資料表；刪 GitHub repo；銷毀整套基礎設施（`terraform`／`pulumi destroy`、刪雲端專案或資源群組、
+    刪 prod 的 namespace、bucket 或 stack）；force-push 或刪除受保護分支（main、master、remote 預設分支）。
+  - 對外發訊與第三方溝通：郵件（含 `git send-email`）、聊天、社群貼文、第三方訊息 API。
+  - 金流。
+- **確認一次類**
+  - 發布版本與部署正式環境：套件 publish、`gh release create`、`terraform apply`、`fly`／`wrangler`／`firebase`
+    deploy、指向正式環境的其他部署工具與 SQL 寫入。
+  - 寫入會改變 Claude Code 行為的設定：設定檔、hooks、MCP 設定、`~/.claude.json`、`.claude/sorry-matt.json`。
+  - 會立即觸發正式部署的合併：`gh pr merge` 或直接寫入受保護分支，而合併後的 workflow 一收到 push 就部署或發布。
+
+兩段確認時，hook 第一次把指令換成記錄確認的 `confirm.mjs` 並附上後果詳述詢問；允許後原樣重送原指令，hook
+再問第二次，允許才真的執行。不能換指令的工具（MCP）第一次會被擋下，擋下訊息附上要先跑的確認指令。只有 hook
+給的那一行能執行 `confirm.mjs`；不改寫、不串接，也不寫入確認紀錄。
 
 subagent 不執行這些動作，寫進回報交給主持人。主持人把它們當**確認呼叫**，排在所有其他步驟之後
 連續送出（`have-it-all-done` 第 0 節）；兩段確認的重送緊接在第一次確認之後。使用者在提示拒絕，或
 hook 擋下 —— `bypassPermissions` 模式不保證會跳提示，兩段確認類一律擋下 —— 就記進人工作業清單，
-附上要執行的指令與 hook 給的後果說明；不換寫法重試。hook 認不出的寫法，或使用者關掉 hook 時，
-不自己執行，同樣記進人工作業清單。force-push 一般分支、clone、套件安裝、讀寫憑證檔、權限指令與
-專案內的刪除不在此列，放不放行交給權限設定。
+附上要執行的指令與 hook 給的後果說明；不換寫法重試。
+
+hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node -e`、`python -c`）、變數展開或 `find / -delete`
+這類寫法它認不出；沒有 managed settings 時，其他 hook 回 allow 可能讓提示不出現；`dontAsk` 模式或把提示改成拒絕
+的設定會讓詢問變成拒絕；`bypassPermissions` 下確認一次類多半不跳提示。上列動作在 hook 沒攔下、提示沒出現，或
+使用者關掉 hook 時，同樣不自己執行，記進人工作業清單。force-push 一般分支、clone、套件安裝、讀寫憑證檔、權限
+指令與專案內的刪除不在此列，放不放行交給權限設定。
 
 完成判準：本輪每個需要授權的動作都以正規指令送出，放行結果已記進 ledger 第 5 欄；每個需要確認的
 動作都在使用者於提示確認後才執行，或已列在人工作業清單並附要執行的指令；被擋下的動作都在人工作業

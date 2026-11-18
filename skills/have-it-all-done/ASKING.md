@@ -146,30 +146,45 @@ Choosing "don't ask again" at a permission prompt does the same, written by Clau
 ### Actions needing confirmation
 
 The agent may run the actions below, but only after the user confirms them at a permission prompt; the plugin's
-`hooks/hooks.json` enforces this in PreToolUse:
+`hooks/hooks.json` raises that prompt in PreToolUse before they run:
 
-- **Two-step confirmation**: catastrophic actions — a recursive delete of a home directory, a root, a drive root,
-  a parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema
-  or table; deleting a GitHub repo; force-pushing to or deleting a protected branch (main, master, the remote's
-  default branch) — along with outgoing messages (mail, chat, social posts, third-party messaging APIs) and
-  payments. The first time, the hook swaps the command for `confirm.mjs`, which records the confirmation, and asks
-  with a description of the consequences; once allowed, resend the original command unchanged and the hook asks a
-  second time; only that second yes runs it. A tool whose input cannot be swapped (MCP) is denied the first time,
-  and the denial carries the confirm command to run first.
-- **Single confirmation**: releases and production deploys (package publishes, `gh release create`,
-  `terraform apply`, deploy tools and SQL writes aimed at production), writes to Claude Code's settings, and a
-  merge that deploys to production right away — `gh pr merge` or a direct write to a protected branch, when a
-  workflow on the base branch deploys or releases on every push to it.
+- **Two-step confirmation**
+  - Catastrophic actions: a recursive delete of a home directory, a root, a drive root, a parent directory or a path
+    outside the project; formatting or overwriting a disk; dropping a database, schema or table; deleting a GitHub
+    repo; tearing down whole infrastructure (`terraform`/`pulumi destroy`, deleting a cloud project or resource
+    group, deleting a prod namespace, bucket or stack); force-pushing to or deleting a protected branch (main,
+    master, the remote's default branch).
+  - Outgoing messages and third-party communication: mail (`git send-email` included), chat, social posts,
+    third-party messaging APIs.
+  - Payments.
+- **Single confirmation**
+  - Releases and production deploys: package publishes, `gh release create`, `terraform apply`,
+    `fly`/`wrangler`/`firebase` deploy, other deploy tools and SQL writes aimed at production.
+  - Writes to settings that change how Claude Code behaves: settings files, hooks, MCP config, `~/.claude.json`,
+    `.claude/sorry-matt.json`.
+  - A merge that deploys to production right away: `gh pr merge` or a direct write to a protected branch, when a
+    workflow the merge leaves there deploys or releases on every push to it.
+
+For a two-step action, the hook first swaps the command for `confirm.mjs`, which records the confirmation, and asks
+with a description of the consequences; once allowed, resend the original command unchanged and the hook asks a
+second time; only that second yes runs it. A tool whose input cannot be swapped (MCP) is denied the first time,
+and the denial carries the confirm command to run first. Only the exact line the hook hands out may run
+`confirm.mjs`; never rewrite it, chain it, or write the confirmation records.
 
 Subagents do not run these actions; they report them to the host. The host sends them as **prompting calls**,
 back to back after every other step (`have-it-all-done` section 0); a two-step resend follows right after its
 first confirmation. When the user refuses at the prompt, or the hook denies the call — in `bypassPermissions`
 mode nothing guarantees a prompt, so every two-step action is denied — put it on the human-work list with the
-command to run and the consequences the hook described; do not retry with another spelling. A spelling the hook
-fails to recognize, or a hook the user has turned off, changes nothing: do not run it yourself, and list it on the
-human-work list as well. Force-pushing an ordinary branch, cloning, installing packages, reading or writing
-credential files, permission commands, and deletes inside the project are not on this list; the permission
-settings decide them.
+command to run and the consequences the hook described; do not retry with another spelling.
+
+The hook matches command text; it is not a security boundary. It does not recognize an interpreter wrapper
+(`node -e`, `python -c`), variable expansion, or commands like `find / -delete`; without managed settings, another
+hook returning allow can keep the prompt from appearing; `dontAsk` mode, or settings that turn prompts into
+denials, turn an ask into a deny; in `bypassPermissions` mode single-confirmation actions mostly run without a
+prompt. When the hook does not catch an action above, no prompt appears, or the user has turned the hook off, do
+not run it yourself either; list it on the human-work list. Force-pushing an ordinary branch, cloning, installing
+packages, reading or writing credential files, permission commands, and deletes inside the project are not on this
+list; the permission settings decide them.
 
 Done when: every action this run that needed authority went out as its canonical command, with its outcome in
 ledger field 5; every action needing confirmation ran only after the user confirmed it at the prompt, or is on the
