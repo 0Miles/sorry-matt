@@ -59,6 +59,13 @@ with `npx` are allowed. To run a blocked command, run it in your own terminal. T
 }
 ```
 
+## Compaction reminder
+
+The plugin also ships a SessionStart hook with matcher `compact` (`hooks/hooks.json` → `hooks/reread.mjs`). After a
+compaction it looks for run ledgers in progress under `<git common dir>/sorry-matt/runs/` (first line
+`<!-- sorry-matt:run active -->`) and prints each ledger with the rule files it lists, so the host re-reads them
+instead of working from the summary. Outside a git repo, or with no run in progress, it prints nothing.
+
 In other modes, whether `gh pr merge` goes ahead is up to your permission settings. To let sorry-matt merge
 aggregate PRs without a prompt, add these rules to `.claude/settings.local.json` (one repo) or
 `~/.claude/settings.json` (every project), merging them into an existing `permissions.allow` if there is one; to be
@@ -102,7 +109,8 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 - `scripts/` holds the repository checks, run on every pull request by `.github/workflows/check.yml`:
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
-- `hooks/` holds the guard hook; `scripts/guard.test.mjs` tests it in the same CI run.
+- `hooks/` holds the guard hook and the compaction reminder; `scripts/guard.test.mjs` and `scripts/reread.test.mjs`
+  test them in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
   `scripts/acceptance.test.mjs`) run in the same CI run.

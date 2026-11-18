@@ -241,3 +241,22 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 - 腳本解析：展開區塊裡只有 `by`、`run`、`round`、`acceptance`、`rulings` 是 key，其他 `word: …` 行是一般文字（原本會
   被當成 key，後面的驗收項默默丟掉）；任何層級的 `Comments`／`sorry-matt …` 節都不算原票驗收，放在 `## Acceptance`
   底下的 `### sorry-matt expansion` 不會被重複計成 original。`EXPANDER.md` 規定展開節一律用 `##`。
+
+## #9：壓縮後強制重讀規則檔
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `ASKING.md` 第 7 節「壓縮發生過、`/loop` 重新喚醒，或任何一次恢復之後，第一個動作都是重讀它，不從上下文的摘要推」 | 改為獨立的「恢復」段：重讀 ledger，再重讀第 10 欄列出的每份規則檔全文，然後才照第 1 欄做 | `have-it-all-done` 以讀檔帶入 `get-to-work/SKILL.md` 與 `ASKING.md`；壓縮只重附每個 skill 最近一次 Skill 呼叫的前 5,000 tokens，讀檔帶入的規則不在其中，這些 skill 又是 `disable-model-invocation: true`，模型無法重新載入。只重讀 ledger 時，主持人憑摘要執行各道關卡。 |
+| `ASKING.md` 第 7 節「位置是共用目錄下的」 | 補上共用目錄的定義（`git rev-parse --path-format=absolute --git-common-dir`） | #8 拿掉 `authority.md` 時連帶刪了第 0 節唯一的定義，「共用目錄」變成沒有定義的詞；hook 要找 ledger 也需要明確位置。 |
+| `get-to-work` 第 1 節 `/loop` prompt「get-to-work：收輪／開輪」 | 改為帶 ledger 絕對路徑的「重讀 … 與它第 10 欄列出的規則檔，再收輪／開輪」 | 每次喚醒都是這句 prompt；恢復動作寫在 prompt 裡，就不靠壓縮後殘留的記憶。 |
+
+`have-it-all-done` 與 `get-to-work` 本文沒有「喚醒後先讀 ledger」的文字可刪：那段在 #5 已搬進 `ASKING.md` 第 7 節（見上方 get-to-work 表「每次喚醒的第一個動作是重讀 ledger」），本票改的是那個正本。
+
+新增：
+
+- ledger 第一行狀態標記 `<!-- sorry-matt:run active -->`／`<!-- sorry-matt:run ended -->`，與第 10 欄**規則檔**（一行一份
+  `rule: <絕對路徑>`，建立 ledger 時填）。欄號往後加，既有九欄不重編。
+- `hooks/reread.mjs`＋`hooks/runs.mjs`（零依賴）：SessionStart（matcher `compact`）在共用目錄的 `sorry-matt/runs/*.md`
+  找第一行是 active 標記的 ledger，以純文字 stdout 印出 ledger 與它的規則檔路徑（找不到的檔案標 not found）；沒有 git、
+  沒有 ledger、只有 ended 的 ledger 時不輸出。測試在 `scripts/reread.test.mjs`，CI 一起跑。
+- 同一 repo 有多個進行中的 run 時，hook 全部列出，提示主持人重讀自己那一份；hook 不以 session 篩選。

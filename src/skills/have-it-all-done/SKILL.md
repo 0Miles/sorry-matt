@@ -42,8 +42,9 @@ disable-model-invocation: true
 ## 1. 接棒並通過風險閘門
 
 以本 skill 載入時標示的 base directory 為起點，讀同層的 [`ASKING.md`](ASKING.md) 全文，
-依它第 0 節開場、第 7 節接手或建立 run ledger。它是本 skill 與 `take-this`、`get-to-work`
-共用的契約，全程適用。
+依它第 0 節開場、第 7 節接手或建立 run ledger。建立時第 10 欄填本 skill 的 `SKILL.md`、
+`ASKING.md` 與同層 `../get-to-work/SKILL.md` 的絕對路徑。`ASKING.md` 是本 skill 與
+`take-this`、`get-to-work` 共用的契約，全程適用。
 
 依以下優先序界定唯一任務：
 

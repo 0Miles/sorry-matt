@@ -49,8 +49,9 @@ ruling with the fact that could not be found.
 ## 1. Pick up the handoff and pass the risk gate
 
 Starting from the base directory stated when this skill was loaded, read the sibling [`ASKING.md`](ASKING.md) in
-full, run its section 0 opening, and take over or create the run ledger per its section 7. It is the contract
-shared with `take-this` and `get-to-work`, and it applies throughout.
+full, run its section 0 opening, and take over or create the run ledger per its section 7. When creating it, fill
+field 10 with the absolute paths of this skill's `SKILL.md`, `ASKING.md`, and the sibling `../get-to-work/SKILL.md`.
+`ASKING.md` is the contract shared with `take-this` and `get-to-work`, and it applies throughout.
 
 Select exactly one task in this order:
 

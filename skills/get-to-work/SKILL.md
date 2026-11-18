@@ -12,7 +12,7 @@ Starting from the base directory stated when this skill was loaded, read the sib
 [`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md) in full and run its section 0 opening. It is the
 shared contract, and it applies throughout, whether the user ran this skill directly or `have-it-all-done` composed
 it. When `have-it-all-done` composes this skill, keep its run ledger; running standalone, create one per
-`ASKING.md` section 7.
+`ASKING.md` section 7, with field 10 listing the absolute paths of this skill's `SKILL.md` and `ASKING.md`.
 
 Confirm a Git repository and clean working tree; when the tracker configuration selects GitHub, also confirm
 `gh` is authenticated. Local Markdown mode needs no remote or `gh`. Section 2 gives each mode's deliveries.
@@ -53,8 +53,10 @@ from the same base tip.
 
 ## 1. Advance rounds with `/loop`
 
-Start a self-paced `/loop` with no interval and the prompt `get-to-work: close the round / open the round`.
-While agents are running, use a longer fallback and wait for notifications. A closed round is the only handover
+Start a self-paced `/loop` with no interval and the prompt `get-to-work: re-read <absolute ledger path> and the
+rule files its field 10 lists, then close the round / open the round`; with no ledger, the prompt names the absolute
+paths of this skill's `SKILL.md` and `ASKING.md` to re-read instead. Every wake-up carries that sentence, so the
+resumption step (`ASKING.md` section 7) never depends on memory. While agents are running, use a longer fallback and wait for notifications. A closed round is the only handover
 point, so write the ledger current before that round ends.
 
 ### Open the round

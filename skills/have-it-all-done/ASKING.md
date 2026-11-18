@@ -170,9 +170,14 @@ Done when: every question and every piece of outbound text this run follows all 
 
 ## 7. The run ledger and the context budget
 
-The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the common
-directory. When the same task already has one, take it over rather than rebuilding from the conversation's
-compaction summary; otherwise create one. Nine fields:
+The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the **common
+directory** (`git rev-parse --path-format=absolute --git-common-dir`). When the same task already has one, take it
+over rather than rebuilding from the conversation's compaction summary; otherwise create one.
+
+Its first line is a state marker: `<!-- sorry-matt:run active -->` when created, changed to
+`<!-- sorry-matt:run ended -->` when the run's last step ends — after `have-it-all-done`'s handover and eyes-on
+acceptance when composed, after the wrap-up when `get-to-work` runs standalone. The plugin's SessionStart hook only
+recognizes ledgers whose first line is the active marker. Ten fields:
 
 1. **Next action:** one line to follow on resuming.
 2. The task scope and where the adopted grilling source lives.
@@ -188,15 +193,24 @@ compaction summary; otherwise create one. Nine fields:
 9. **Run metrics:** spawns, review rounds, fix rounds, full verification runs, compactions and handovers. Token
    counts are unknown unless the runtime itself reports them; never estimate them from duration or agent count.
    <!-- pending #16 -->
+10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
+    `rule: <absolute path>`, filled in when the ledger is created. List the `SKILL.md` loaded through the Skill tool
+    too: compaction re-attaches only its first 5,000 tokens.
 
 When the common directory is not writable, or the current directory is not inside a git repo, there is no ledger —
 the final report becomes the source of truth; say so in the report, and do not stop over it. Write the ledger
-current at the end of every step and every closed round; after a compaction, a `/loop` wake-up, or any resumption,
-the first action is to re-read it rather than inferring from a summary in context.
+current at the end of every step and every closed round.
+
+**Resuming:** after a compaction, a `/loop` wake-up, or any resumption, the first action is to re-read the ledger,
+then every rule file its field 10 lists, in full, and only then follow field 1 — never infer from a summary in
+context. After a compaction the plugin's SessionStart hook prints the in-progress ledger and its rule file paths into
+context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
 when it needs detail, it pulls just those lines with a command.
 
-Done when: all nine ledger fields hold content or say "none", and where there is no common directory, the report
-says the source of truth moved to it; the host's context holds no raw diffs, test logs, or agent reports.
+Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
+"none", and field 10 has listed the rule files' absolute paths since creation; every resumption starts by re-reading
+the ledger and the rule files it lists; where there is no common directory, the report says the source of truth
+moved to it; the host's context holds no raw diffs, test logs, or agent reports.

@@ -11,7 +11,8 @@ disable-model-invocation: true
 以本 skill 載入時標示的 base directory 為起點，讀同層的
 [`../have-it-all-done/ASKING.md`](../have-it-all-done/ASKING.md) 全文，依它第 0 節開場。它是
 共用契約，全程適用，無論本 skill 是被使用者直接執行還是由 `have-it-all-done` 組合。由
-`have-it-all-done` 組合時沿用它的 run ledger；獨立執行時依 `ASKING.md` 第 7 節自建。
+`have-it-all-done` 組合時沿用它的 run ledger；獨立執行時依 `ASKING.md` 第 7 節自建，第 10 欄
+填本 skill 的 `SKILL.md` 與 `ASKING.md` 的絕對路徑。
 
 確認 git repo 與 working tree 乾淨；tracker 設定為 GitHub 時另確認 `gh` 已登入。Local
 Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節。
@@ -48,7 +49,9 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 ## 1. 用 `/loop` 推進輪次
 
-進入不帶間隔、可自我調速的 `/loop`，prompt 設為「get-to-work：收輪／開輪」。Agents 尚在
+進入不帶間隔、可自我調速的 `/loop`，prompt 設為「get-to-work：重讀 `<ledger 絕對路徑>` 與它
+第 10 欄列出的規則檔，再收輪／開輪」；沒有 ledger 時改為重讀本 skill 的 `SKILL.md` 與 `ASKING.md`
+的絕對路徑。每次喚醒都帶著這句，恢復動作（`ASKING.md` 第 7 節）不靠記憶。Agents 尚在
 執行時，使用較長 fallback 等候通知。收輪邊界是唯一的交接點，所以把 ledger 寫到最新才結束
 那一輪。
 
