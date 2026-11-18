@@ -309,3 +309,25 @@ guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 M
 `branches/main` 的 `protection.required_status_checks.contexts` 回 `[]`、`git grep -l merge_group HEAD -- .github/workflows`
 結束代碼 1 —— 未啟用 merge queue（它只開放給組織擁有的公開 repo 或 Enterprise Cloud 的組織私有 repo），本 repo 的收官
 行為不變。
+
+## #12：每次整併後 push 整合分支，全套交給 CI
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 收輪「完整驗證只在收官做一次」 | 改為每次整併後 push 整合分支（新的步驟 6，兩種模式；GitHub 原本在完成交付裡的 push 移過來），CI 在背景跑全套，主持人不等 | 整合時壞掉的東西原本要到收官才發現，之後疊上去的票都得重做。CI 跑全套不花 agent 的 token。 |
+| 收輪「整併」 | 指定 `git merge --no-ff`，一張票一個 merge commit；每次整併各 push 一次，不攢著推 | 紅燈要對得到是哪次整併：最早轉紅的 SHA 指向一張票，撤回時 `git revert -m 1` 有對象。 |
+| 開輪（新增） | 派票前以 `gh run list --branch <b> --commit <sha> --json databaseId,workflowName,status,conclusion` 讀 `origin/<整合分支>` 的 CI，分六種：查詢失敗、沒有 run、紅、還在跑、被取消、綠，依序判斷 | 「還在跑」與「查詢失敗」不等不輪詢，照常開輪、下一次開輪再讀 —— 每個 run 跑全套，較新的 SHA 涵蓋較舊的。「被取消」不是失敗，`gh run rerun` 後當還在跑。只讀 GitHub Actions：log（`--log-failed`）與等待（`gh run watch`）都有現成指令；其他 CI 讀不到，退回本機跑，不猜。 |
+| 開輪轉紅 | 該線不派新票；找最早轉紅的 SHA 對到票，交回原 agent 走集中修正與 `recheck`，兩輪修不好就 `git revert -m 1` 撤回該次整併、該票標卡住 | 不撤回的話整條線卡在紅燈上，後面的票都疊在壞的基礎上。撤回可逆，不屬永久例外。 |
+| 「沒有 run」 | 這條線較早 push 過的 SHA 有過 run 時當還在跑；都沒有才記為「CI 不涵蓋整合分支」 | 剛 push 的 SHA 要幾秒才登記，一次空清單不代表不涵蓋。 |
+| 第 2 節完整驗證「在整合分支上跑一次 repo 完整的自動檢查」 | 改為以整合分支最新 SHA 的 CI 為準，`gh run watch <id> --exit-status` 等結束；沒有 `origin`、CI 不涵蓋整合分支、或查詢失敗時才在本機跑一次，報告寫明原因與驗證的 SHA | 有 CI 的 repo 不再於本機重跑全套。收官沒有下一次開輪可等，所以這裡用一次阻塞呼叫，不輪詢。 |
+| 證據失效規則「只要它碰到的檔案又被改動……仍然有效的只有線級完整驗證」與「重跑範圍依實際改動的影響面決定：預設只重跑受影響範圍的針對性檢查，只有新的修正、失敗，或未解的風險才再跑一次完整驗證」 | 改為「綠燈只對它跑過的 SHA 有效，有效的只有整合分支最新 SHA 的結果」；重跑範圍一段刪掉 | 每次 push 都在新 SHA 上跑全套，不必再判斷改動碰到哪些檔、該重跑多少。改動來源清單保留（含 #10 補的「併入基底」），加上「CI 紅燈的修正」。 |
+| `ASKING.md` 第 7 節 ledger 第 4 欄 | 補「最近一次讀到的 CI 結果與它的 SHA」 | 恢復時要知道哪條線是紅的，不從記憶推。 |
+| `IMPLEMENTER.md` 第 2 節「完整套件由主持人在收官跑一次」 | 改為「主持人整併後交給 CI 跑」 | 跟著收輪的新步驟 6。 |
+
+本 repo 的 CI（不是 skill 規則）：`.github/workflows/check.yml` 的 `push` 從只有 `main` 改為 `['**', '!claude/**']`。整合分支
+`<run>/<line-slug>` 的 run 名稱不固定，窄的 pattern 會漏；`claude/**` 是開 PR 的 session 分支，`pull_request` 已涵蓋，排除它們避免
+同一個 SHA 跑兩次（matrix 含 Windows，private repo 的 Actions 分鐘數要算）。總 PR 開出後，整合分支的 push 會同時觸發 `push` 與
+`pull_request`，這幾次重複接受。
+
+guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`master` 與 remote 預設分支，`git push -u origin <run>/<line-slug>`
+不受影響；`gh run list`／`view`／`watch`／`rerun` 與 `git revert -m 1` 也不擋。這幾條寫進 `scripts/guard.test.mjs` 的放行清單。

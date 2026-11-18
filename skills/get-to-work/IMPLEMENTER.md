@@ -44,7 +44,7 @@ all the rules you follow, and none of them points at a file or section you canno
   independent source (a known-good literal, the spec, a worked example), never recomputed the way the code does.
 - One slice at a time: write one failing test, then just enough code to pass it, and repeat.
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
-  relevant lint. The host runs the full suite once while finishing the run.
+  relevant lint. The full suite is CI's job once the host integrates the ticket.
 - Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
   independent review and mutation once while closing the round, and reviewing code you just wrote is not
   independent.

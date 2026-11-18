@@ -58,7 +58,35 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
 
 ### 開輪
 
-每次開輪先重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
+每次開輪先為每條 push 過的線讀**整合分支最新 SHA 的 CI 結果**，再派票。最新 SHA 是
+`git rev-parse origin/<整合分支>`；它和本地整合分支不同時，先照收輪步驟 6 push 再讀：
+
+```bash
+gh run list --branch <整合分支> --commit <SHA> --json databaseId,workflowName,status,conclusion
+```
+
+只讀 GitHub Actions；其他 CI 在這裡讀不到，當作沒有 run。依下列順序判斷，先符合的為準，結果與 SHA 記進
+ledger 第 4 欄：
+
+- **查詢失敗**：`gh` 非零結束。不猜，記下原因，照常開輪，下一次開輪再讀。
+- **沒有 run**：清單是空的。剛 push 的 SHA 可能還沒登記，這條線較早 push 的 SHA 有過 run 時當成還在跑；
+  都沒有就記為「CI 不涵蓋整合分支」，照常開輪，收官改在本機完整驗證。
+- **紅**：有 run 的 `conclusion` 是 `failure`、`timed_out`、`startup_failure`、`action_required` 或
+  `stale`。這條線修好之前不派新票：
+  1. 以 `gh run list --branch <整合分支> --json headSha,status,conclusion` 找出最早轉紅、前一次 push
+     仍是綠的 SHA，對到那次整併的票 —— 每次整併各 push 一次，紅燈因此指得到票。
+  2. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。
+  3. 交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗摘要），在從整合分支
+     新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收輪步驟 3 的集中修正（`recheck`
+     附上該票上一次的審查區塊）與步驟 4–7。偶發紅燈的硬護欄照用。
+  4. 兩輪修不好：`git revert -m 1 <該次整併 commit>` 撤回整併、push，該票依收輪標**卡住**，這條線
+     照常開輪。
+- **還在跑**：有 run 的 `status` 不是 `completed`。不等、不輪詢，照常開輪；下一次開輪讀那時的最新
+  SHA —— 每個 run 都跑全套，較新的 SHA 涵蓋較舊的。
+- **被取消**：有 run 是 `cancelled`。`gh run rerun <databaseId>`，當成還在跑。
+- **綠**：其餘 —— 每個 run 都 `completed`，`conclusion` 都是 `success`、`skipped` 或 `neutral`。照常開輪。
+
+接著重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
 
 - **GitHub**：已整併進線整合分支的票在 GitHub 上仍是 open（關票等總 PR 合併），取 ledger 對帳表
   中已整併的票以 `--done <n,...>` 傳入；卡住的票以 `--stuck <n,...>` 傳入。
@@ -97,7 +125,8 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
    spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
    的展開區塊在留言裡，票面全文裡沒有。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
 
-完成判準：本輪派出的每張票在 spawn 實作 agent 之前都已有驗收項與驗收快照，展開補上的驗收項都出自
+完成判準：每條 push 過的線都讀了最新 SHA 的 CI 結果並記進 ledger，轉紅的線在修好或撤回之前沒有派新票；
+本輪派出的每張票在 spawn 實作 agent 之前都已有驗收項與驗收快照，展開補上的驗收項都出自
 展開 agent 並標明 `by`、`run`、`round`；本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent，
 或已列為待裁決；每個實作 agent 的 prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的票
 均排入不同輪。
@@ -105,7 +134,8 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
 ### 收輪
 
 同輪所有 agents 回報後，逐票完成下列關卡。順序固定是**針對性檢查 → 一次獨立審查 → 集中
-修正 → 按影響範圍複驗**；完整驗證只在收官做一次。
+修正 → 按影響範圍複驗**。全套交給 CI：每次整併後 push 整合分支，CI 在背景跑，主持人不等，下一次開輪
+再讀結果。
 
 1. **針對性檢查**：確認 agent 回報的受影響範圍檢查是綠的。紅燈先交回原 agent 修到綠，
    審查只收綠燈的票。
@@ -127,18 +157,21 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
-4. **整併**：在整合 worktree 合併 ticket 分支。有 conflict 時交給一個**整併 agent** 逐塊解：
-   給它整合 worktree、兩邊的票面與 commit message，以及這條判準 —— 判的是兩個意圖而不是
-   兩段文字，先追兩邊的 primary source（票面與 commit message），相容就都保留，不相容就取
-   合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。它逐塊回報取捨摘要，主持人把
+4. **整併**：在整合 worktree 以 `git merge --no-ff <ticket 分支>` 合併，一張票一個 merge commit。
+   有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
+   以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與 commit
+   message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。它逐塊回報取捨摘要，主持人把
    取捨記進自答清單。解完執行受影響範圍的針對性檢查。
 5. **完成交付**：
-   - **GitHub**：push 整合分支。票保持 open，關票交給總 PR（第 2 節）；本票的摘要在它的
-     commit message 裡（`IMPLEMENTER.md` 第 2 節）。
+   - **GitHub**：票保持 open，關票交給總 PR（第 2 節）；本票的摘要在它的 commit message 裡
+     （`IMPLEMENTER.md` 第 2 節）。
    - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion（含展開區塊的），將
      `Status` 改為 `ready-for-human`，追加 `## sorry-matt completion`，列出 implementation
      commit、整合分支及通過的檢查，再 commit 這份交付紀錄。
-6. 移除 ticket worktree 與本地 ticket 分支。
+6. **push**：有 `origin` 時 `git push -u origin <整合分支>`，兩種模式都是；Local Markdown 沒有 remote
+   時略過，收官改在本機完整驗證。每次整併各 push 一次，不攢幾張票一起推：紅燈要指得到是哪次整併。
+   push 完不等 CI。
+7. 移除 ticket worktree 與本地 ticket 分支。
 
 中途事項走 `ASKING.md` 第 4 節的三條出路。獨立執行而沒有裁決點時，答不出來的事累積到
 下一次開輪前一次問完。
@@ -149,12 +182,14 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
 - **Local Markdown**：在整合分支的原 ticket 追加 `## sorry-matt blocker`，列出原因、已做嘗試
   與相關分支；將 `Status` 改為 `ready-for-human` 後 commit。
 
-完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支。
+完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支。主持人在整合分支上的其他 commit（卡住紀錄、
+期間開票）在收輪結束前一併 push。
 
 完成判準：本輪每張票都恰好經過一次獨立審查（`prove-it` 的 `initial`，開審前的 `stuck` 不算），每輪修正後各有一次
 `recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；針對性檢查回到綠，並有通過驗收的模式原生
 交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；每張票的接續紀錄都寫到
-最新；成功票已整併並清理 ticket worktree 與本地分支。
+最新；成功票已整併並清理 ticket worktree 與本地分支；有 `origin` 的線，每次整併都各 push 了一次，
+收輪結束時 `origin/<整合分支>` 與本地整合分支同一個 SHA。
 
 ### 期間開票
 
@@ -188,14 +223,17 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
    主持人把取捨記進自答清單。整併 agent 回報無法安全解決時 `git merge --abort`，這條線就是
    **未併入**：ledger 第 4 欄記嘗試併入的基底 SHA 與「未併入」，交付物與人工作業清單寫明衝突的
    檔案，交付一律留給人合併（見下方合併段）。
-3. **完整驗證**：在步驟 2 之後的整合分支上跑一次 repo 完整的自動檢查，報告寫出併入的基底
-   SHA；未併入的線照樣在未併入的樹上跑，報告寫出嘗試併入的基底 SHA 與「未併入」。轉紅就交回
-   那段改動的原 agent，修完重跑；本輪唯一有效的綠燈就是這一次。
+3. **完整驗證**：以整合分支最新 SHA 的 CI 為準。照收輪步驟 6 push 步驟 1–2 之後的整合分支，依開輪的
+   指令與判法讀它最新 SHA 的 CI；還在跑時對每個未完成的 run 執行 `gh run watch <databaseId> --exit-status`
+   等它結束 —— 一次阻塞呼叫，不逐次輪詢，執行環境能背景執行就背景執行；run 還沒登記就稍後再讀一次。沒有 `origin`、記為「CI 不涵蓋
+   整合分支」、或查詢失敗時，改在這個 SHA 上本機跑一次 repo 完整的自動檢查，報告寫明是哪一種。報告
+   寫出驗證的 SHA 與併入的基底 SHA；未併入的線照樣驗證未併入的樹，報告寫出嘗試併入的基底 SHA 與
+   「未併入」。轉紅就交回那段改動的原 agent，修完 commit、push，再讀一次；本輪唯一有效的綠燈就是
+   最後這個 SHA 的結果。
 
-**證據失效規則。** 某張票通過票級驗收之後，只要它碰到的檔案在整合分支上又被改動 —— 他票
-整併、conflict 解法、線級精簡、併入基底 —— 那張票的票級綠燈就過期，仍然有效的只有線級完整
-驗證。重跑範圍依實際改動的影響面決定：預設只重跑受影響範圍的針對性檢查，只有新的修正、
-失敗，或未解的風險才再跑一次完整驗證。
+**證據失效規則。** 綠燈只對它跑過的那個 SHA 有效。整合分支每多一個 commit —— 他票整併、conflict
+解法、CI 紅燈的修正、線級精簡、併入基底 —— 較早的綠燈與票級驗收的綠燈就過期，有效的只有整合分支
+最新 SHA 的結果。
 
 接著依模式交付每條線：
 
@@ -250,13 +288,15 @@ PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的總 PR，關�
   tracker 契約的 Close 逐張關閉，留言指向總 PR。
 - 總 PR 留給人合併、且基底不是預設分支：人工作業清單列出合併後要執行的關票指令。
 
-最終輸出每條線的總 PR 或整合分支與併入的基底 SHA（未併入時標明）、涵蓋全部初始票的**對帳表**
+最終輸出每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源（CI，或
+本機與原因）、涵蓋全部初始票的**對帳表**
 與**本輪計量**（`ASKING.md` 第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets
 清單並請使用者執行 `/triage`。獨立執行時，輸出後把 ledger 第一行改成
 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
 
-完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證並收在綠燈，完整驗證跑在已併入
-最新基底的整合分支上且報告寫出基底 SHA；未併入的線寫明衝突檔案與嘗試的基底 SHA，在未併入的樹
+完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證並收在綠燈，完整驗證是已併入
+最新基底的整合分支最新 SHA 的 CI 結果，CI 不涵蓋、沒有 `origin` 或查詢失敗時是同一 SHA 的本機
+檢查且報告寫明原因，報告寫出驗證的 SHA 與基底 SHA；未併入的線寫明衝突檔案與嘗試的基底 SHA，在未併入的樹
 上驗證，並留給人合併；每條線恰有一項可供人合併的交付，或已經權限設定放行而合併（基底啟用
 merge queue 時走 queue）並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
 人工作業清單有關票指令；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有

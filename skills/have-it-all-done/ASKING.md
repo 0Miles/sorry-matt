@@ -183,7 +183,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
 1. **Next action:** one line to follow on resuming.
 2. The task scope and where the adopted grilling source lives.
 3. The risk gate's three lights and the clearance record.
-4. Lines, integration branches, and tip SHAs; the base SHA `get-to-work` merged in when finishing the run (when
+4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified as in
+   `get-to-work`'s open-round); the base SHA `get-to-work` merged in when finishing the run (when
    unsynced, the SHA it tried and "unsynced").
 5. Authorization outcomes: every action sent and Claude Code's verdict on it, with a permission rule snippet for
    each blocked one.
