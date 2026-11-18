@@ -69,7 +69,8 @@ recommended". Questions come only from the rules below; where a rule says not to
 **B. Shared components.** List the candidates by import count; this is a finding, not a question. Include only the
 truly shared: components used by two or more different pages or features; one used on a single page is not
 listed. The only question is about duplicate implementations: one question per group, "which copy is the source
-of truth, and which one wins". Recommended answer: the one with more imports; when the counts are close, the one in
+of truth, and which one wins", unless an existing `ui.md` already records the ruling for that group and the
+evidence still matches it. Recommended answer: the one with more imports; when the counts are close, the one in
 a shared directory, with a story, or with a barrel export.
 
 **C. Conventions.** Wrapper convention, where new shared components go, what they must come with (barrel export,
@@ -90,7 +91,7 @@ message.
 
 Done when: the findings and every question go out in one message; every question has a recommended answer and its
 basis; the question list holds none that a rule says not to ask (no library or only one, no duplicated
-component, no conflicting convention, an instructions file that already exists).
+component or one an existing `ui.md` already ruled on, no conflicting convention, an instructions file that already exists).
 
 ## 3. Confirm the draft
 
