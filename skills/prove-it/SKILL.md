@@ -126,9 +126,9 @@ Choosing lines:
    (`<` ↔ `<=`), replace a return value with a constant or empty value, delete a statement (a call, an assignment,
    an `await`). A mutant must change some observable behaviour.
 
-**Use a mutation tool when the repo already has one installed** — listed among the manifest's dependencies and
-runnable locally (`node_modules/.bin/stryker`, `cargo mutants --version`, `mutmut` in the project's venv). Do not
-install one. Narrow the tool to the chosen lines with its own scope options: StrykerJS takes
+**Use a mutation tool when the repo already has one installed** — already a dependency in the repo's manifest or a
+command already on PATH, and runnable locally right now (`node_modules/.bin/stryker`, `cargo mutants --version`
+succeeding, `mutmut` in the project's venv). Do not install one. Narrow the tool to the chosen lines with its own scope options: StrykerJS takes
 `--mutate <file>:<start>-<end>` (its `--incremental` compares against the previous report file, not a git ref, so it
 only speeds a run up and never narrows the scope); cargo-mutants takes `--in-diff <diff file>`; mutmut takes the
 changed file paths. Where a tool makes several mutants on one line, count one per line (a survivor if the line has
@@ -138,13 +138,17 @@ one), and the total still stays within the cap.
 header:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --plan <scratchpad>/mutants.json --cmd "<test command>" > <scratchpad>/mutants-result.json
+node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --base <fixed point> [--lcov <lcov file>] --plan <scratchpad>/mutants.json --ledger <scratchpad>/review-<ticket>-r<round>-ledger.json --cmd "<test command>" > <scratchpad>/mutants-result.json
 ```
 
-Give `--cmd` the narrowest test command that covers the chosen lines. The script runs the baseline first; refuses a
-plan over the cap (`--cap`, default 10), with two mutants on one line, or with an `original` that does not match
-the current line; and after each mutant writes the original bytes back and compares their SHA-256. Exit code 3
-means a restore failed: stop at once, discard the whole review worktree, and the verdict is `stuck`. When it
+Run it at the root of the review worktree. Give `--cmd` the narrowest test command that covers the chosen lines.
+The script runs the baseline first. It refuses a mutant that is not on a changed line of this ticket's diff or that
+lcov marks uncovered, and a plan with two mutants on one line, with an `original` that does not match the current
+line, or whose count plus what the ledger already spent exceeds the cap; `--cap` can only lower it. After each
+mutant it writes the original bytes back, compares their SHA-256, and records the mutant in the ledger. **One
+ledger per review round:** a round may be split into several `run`s, but never switch ledgers or open another
+round to get around the cap. Exit code 3 means a restore failed: stop at once, discard the whole review worktree,
+and the verdict is `stuck`. When it
 finishes, confirm `git -C <review worktree> status --porcelain` prints nothing.
 
 Outcomes: `killed` and `timeout` mean the tests caught it; `survived` is a candidate (lens `mutation`) whose
@@ -170,21 +174,22 @@ makes the original and the mutant differ observably. Only when disproof fails, g
 
 1. **Traced:** cite a `file:line` the verifier actually opened.
 2. **Introduced by this ticket:** run the same check on the fixed point; it passes only if the fixed point is fine
-   and the ticket branch fails.
+   and the ticket branch fails. A mutation candidate (a surviving mutant, or changed lines with no coverage) sits on
+   a changed line of this ticket's diff, which the script guarantees, and so passes this gate.
 3. **Concrete failure scenario:** the failure path is genuinely reachable and the consequence is observable.
 
-There are three rulings, each with `file:line` evidence: **valid** (all three gates pass), **pre-existing** (fails
-only the second gate), and **not valid**. When a ruling's `file:line` does not match the ticket branch, have
+There are three rulings, each with `file:line` evidence: **confirmed** (all three gates pass), **pre-existing**
+(fails only the second gate), and **invalid**. When a ruling's `file:line` does not match the ticket branch, have
 another verifier re-check that candidate.
 
 Routing:
 
-- **Valid and blocking** (it changes whether this ticket should be integrated) → a finding. A valid surviving mutant
-  always counts as blocking: the tests do not pin the behaviour this ticket changed.
-- **Valid but not blocking** → an observation; it triggers no fix.
+- **Confirmed and blocking** (it changes whether this ticket should be integrated) → a finding. A confirmed
+  surviving mutant always counts as blocking: the tests do not pin the behaviour this ticket changed.
+- **Confirmed but not blocking** → an observation; it triggers no fix.
 - **Pre-existing** → handed to the host for get-to-work's filing along the way.
-- **Not valid** → dropped; for a mutation candidate, its disposition goes into the mutation record (for example
-  "equivalent, not valid").
+- **Invalid** → dropped; for a mutation candidate, its disposition goes into the mutation record (for example
+  "equivalent, invalid").
 
 Each finding carries a one-sentence **fix direction** that states the observable before/after difference (an
 output, an error, a test going from red to green). One that cannot state it is a style preference; withdraw it.
@@ -195,10 +200,13 @@ falsifiable fix direction; every mutant has a disposition in the mutation record
 
 ## 5. Verdict
 
-- `pass`: no valid, blocking finding.
-- `fix`: at least one valid, blocking finding.
+- `pass`: no confirmed, blocking finding.
+- `fix`: at least one confirmed, blocking finding.
 - `stuck`: the review cannot finish — a precondition failed, a restore failed, the review worktree cannot run the
-  tests. State the reason and what would clear it.
+  tests. State the reason, what would clear it, and which section the review reached. A `stuck` before the review
+  opens (section 1) does not count as a review; once cleared, run `initial` again. A `stuck` mid-review, once
+  cleared, resumes only the unfinished sections, keeping the candidates, rulings, and mutation record already in
+  the block, and dispatches no Finders again.
 
 Done when: the verdict is exactly one of the three and follows from the routing in section 4, not from
 self-assessment.
@@ -227,8 +235,8 @@ pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
 live run: <command> -> green | red (<log path>)
-mutation: tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
-- <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, not valid | ...>
+mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
+- <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
@@ -236,7 +244,9 @@ An empty list is written `none`. With a second reviewer, each gets its own `revi
 separate, never merged or reranked; `verdict` follows from every reviewer's findings.
 
 Write this block into the "verification results" field of the ticket's status record, replacing the previous
-`sorry-matt:review` block and incrementing `round`; add the paths of the diff, live-run, and mutation output to the
+`sorry-matt:review` block and incrementing `round`. Every `mutation (round <n>)` section of the replaced block is
+carried into the new one verbatim, ahead of this round's, so a recheck never overwrites the initial review's full
+mutation record. Add the paths of the diff, live-run, and mutation output to the
 "evidence paths" field. On GitHub, update in place the comment whose first line is `<!-- sorry-matt:status -->`
 (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`); on Local Markdown, write it
 into the ticket file's `## sorry-matt status` section. This is a machine record for the next agent, with no polish
@@ -244,7 +254,8 @@ pass. Return the same block to the caller.
 
 Finally remove the review worktree: `git -C <repo> worktree remove <scratchpad>/review-<ticket>`.
 
-Done when: the block follows the format above; the status record holds exactly one, current review block; no PR
+Done when: the block follows the format above; the status record holds exactly one, current review block that keeps
+every round's mutation record; no PR
 comment, review, or `suggestion` block was produced; the review worktree is removed.
 
 ## 7. Recheck
@@ -263,10 +274,10 @@ Rebuild the review worktree per section 1 at the fixed ticket branch tip.
    4. Will any other caller break?
 
    Two rulings: **closed** or **open**. A new window from question 2 goes through the three gates of section 4,
-   and if valid and blocking becomes a new finding in this round.
+   and if confirmed and blocking becomes a new finding in this round.
 2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added.
-3. **Mutation:** mutate only the lines the findings concern, under the rules of section 3 (one per line, cap 10).
-   If a previously surviving mutant's line is unchanged, rerun the same mutant; this time it must be killed.
+3. **Mutation:** mutate only the lines the findings concern, under the rules of section 3 (one per line, cap 10),
+   with a new ledger for this round. If a previously surviving mutant's line is unchanged, rerun the same mutant; this time it must be killed.
 
 Verdict: every finding closed, the live run green, every mutant on finding lines killed, and no new blocking finding
 → `pass`; otherwise `fix`. The caller controls how many fix rounds there are. Output follows section 6 with

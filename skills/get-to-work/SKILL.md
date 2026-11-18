@@ -98,8 +98,9 @@ finishing the run.
    and text), the fixed point (the line integration branch), the ticket branch, and the targeted-check results from
    step 1. The reviewer does the live run and mutation limited to this ticket's diff, and it writes a fixed-format
    `pass` / `fix` / `stuck` verdict and finding list into the ticket's status record. `pass` goes on to integration,
-   `fix` to the batched fix, and `stuck` is cleared using the condition it states and reviewed once more; if it
-   cannot be cleared, mark the ticket stuck. **One ticket gets this one reviewer by default**, its lenses covering
+   `fix` to the batched fix, and `stuck` is cleared using the condition it states: a `stuck` before the review
+   opens does not count as a review, so once cleared run `initial` again; a `stuck` mid-review, once cleared,
+   resumes only the part it recorded as unfinished. If it cannot be cleared, mark the ticket stuck. **One ticket gets this one reviewer by default**, its lenses covering
    standards and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one,
    naming the risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
 3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
@@ -139,7 +140,8 @@ it **stuck**:
 
 After recording the stuck state, also remove the ticket worktree and local ticket branch.
 
-Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`), each
+Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`; a
+`stuck` before the review opens does not count), each
 correction round had one `recheck`, and every verdict is in the status record; its targeted checks are back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are

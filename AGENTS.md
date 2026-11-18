@@ -166,6 +166,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 等價 mutant | equivalent mutant |
 | 基準(實跑) | baseline |
 | 上限(突變) | cap |
+| 成立/不成立(裁決) | confirmed / invalid |
 
 ## 外部語義來源
 

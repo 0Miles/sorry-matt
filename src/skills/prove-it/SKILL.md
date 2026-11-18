@@ -111,9 +111,9 @@ coverage、coverage.py）或執行環境內建的（Node 22 的
 3. 每行挑一個最可能被測試漏掉的運算子：條件反轉、邊界移位（`<` ↔ `<=`）、回傳值換成常數或
    空值、刪除敘述（呼叫、賦值、`await`）。mutant 必須改變某個可觀察行為。
 
-**repo 已安裝突變工具就用工具。** 已安裝指在 manifest 的相依裡、本機可直接執行
-（`node_modules/.bin/stryker`、`cargo mutants --version`、專案 venv 裡的 `mutmut`）。沒裝的
-不裝。用工具自己的範圍選項限縮到選定的行：StrykerJS 用 `--mutate <file>:<起>-<迄>`（它的
+**repo 已安裝突變工具就用工具。** 已安裝指 repo manifest 的相依裡已有、或 PATH 上已有的
+指令，而且本機現在就能執行（`node_modules/.bin/stryker`、`cargo mutants --version` 成功、
+專案 venv 裡的 `mutmut`）。沒裝的不裝。用工具自己的範圍選項限縮到選定的行：StrykerJS 用 `--mutate <file>:<起>-<迄>`（它的
 `--incremental` 比對的是上次的報告檔，不是 git ref，只能加速、不能限縮範圍）；cargo-mutants
 用 `--in-diff <diff 檔>`；mutmut 傳變更檔路徑。工具在同一行產生多個 mutant 時每行只計一個
 （該行有存活者就計存活者），總數仍受上限約束。
@@ -121,12 +121,15 @@ coverage、coverage.py）或執行環境內建的（Node 22 的
 **沒有工具就手動突變**，用腳本跑。在 scratchpad 寫 plan，格式寫在腳本檔頭：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --plan <scratchpad>/mutants.json --cmd "<測試指令>" > <scratchpad>/mutants-result.json
+node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --base <fixed point> [--lcov <lcov 檔>] --plan <scratchpad>/mutants.json --ledger <scratchpad>/review-<票>-r<round>-ledger.json --cmd "<測試指令>" > <scratchpad>/mutants-result.json
 ```
 
-`--cmd` 用涵蓋選定行的最窄測試指令。腳本先跑一次基準；拒絕超過上限（`--cap`，預設 10）、
-同一行兩個 mutant、或 `original` 與現行內容不符的 plan；每個 mutant 跑完就寫回原始位元組並
-比對 SHA-256。結束代碼 3 表示還原失敗：立刻停，審查用 worktree 整個丟棄，結論 `stuck`。
+在審查用 worktree 的根目錄執行。`--cmd` 用涵蓋選定行的最窄測試指令。腳本先跑一次基準；
+拒絕不在本票 diff 改動行上、或 lcov 標為未覆蓋的 mutant，拒絕同一行兩個 mutant、`original`
+與現行內容不符的 plan，也拒絕 plan 加上 ledger 已用的數量超過上限；`--cap` 只能調低。每個
+mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger。**一輪審查只用一個 ledger**：
+同一輪可以分幾次 `run`，但不換 ledger、不另開一輪來繞過上限。結束代碼 3 表示還原失敗：立刻停，
+審查用 worktree 整個丟棄，結論 `stuck`。
 跑完以 `git -C <審查用 worktree> status --porcelain` 確認輸出為空。
 
 結果：`killed` 與 `timeout` 算被測試抓到；`survived` 是一則候選（lens `mutation`），
@@ -149,6 +152,8 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
 
 1. **Traced**：引用 verifier 實際開啟過的 `file:line`。
 2. **由本票引入**：在 fixed point 上做同一項檢查；只有 fixed point 正常、ticket 分支失效才通過。
+   突變候選（存活 mutant、改動行沒有覆蓋）落在本票 diff 的改動行上，腳本已保證這點，視為
+   通過這一關。
 3. **具體失效情境**：失效路徑真實可達，後果可觀察。
 
 裁決三種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗）、
@@ -172,8 +177,9 @@ mutant 在突變紀錄都有處置。
 
 - `pass`：沒有成立且 blocking 的 finding。
 - `fix`：至少一則成立且 blocking 的 finding。
-- `stuck`：審查做不完 —— 開審前提不成立、還原失敗、審查用 worktree 跑不起測試。寫明原因與
-  解除條件。
+- `stuck`：審查做不完 —— 開審前提不成立、還原失敗、審查用 worktree 跑不起測試。寫明原因、
+  解除條件，以及已完成到哪一節。開審前的 `stuck`（第 1 節）不算一次審查，排除後重跑 `initial`；
+  審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder。
 
 完成判準：結論恰為三者之一，而且由第 4 節的分流推得，不是自評。
 
@@ -200,8 +206,8 @@ pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
 live run: <command> -> green | red (<log path>)
-mutation: tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
-- <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, not valid | ...>
+mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
+- <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
@@ -209,7 +215,8 @@ restored: yes | no
 重排；`verdict` 以全部 reviewer 的 finding 推得。
 
 把這個區塊寫進該票接續紀錄的「驗證結果」欄，取代上一個 `sorry-matt:review` 區塊，`round`
-遞增；「證據路徑」欄補上 diff、實跑與突變輸出的路徑。GitHub 原地更新那則第一行是
+遞增。被取代的區塊裡每一段 `mutation (round <n>)` 原樣帶進新區塊、放在本輪那段之前，所以初審
+的完整突變紀錄不會被複驗蓋掉；「證據路徑」欄補上 diff、實跑與突變輸出的路徑。GitHub 原地更新那則第一行是
 `<!-- sorry-matt:status -->` 的留言
 （`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`）；Local
 Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agent 讀的機器紀錄，不用潤稿。
@@ -217,7 +224,7 @@ Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agen
 
 最後移除審查用 worktree：`git -C <repo> worktree remove <scratchpad>/review-<票>`。
 
-完成判準：區塊符合上述格式；接續紀錄只有一個最新的 review 區塊；沒有發出任何 PR 評語、
+完成判準：區塊符合上述格式；接續紀錄只有一個最新的 review 區塊，而且保有歷輪的突變紀錄；沒有發出任何 PR 評語、
 review 或 `suggestion` 區塊；審查用 worktree 已移除。
 
 ## 7. 複驗
@@ -238,8 +245,8 @@ ticket 分支尖端重建。
    裁決兩種：**已關閉**，或**未關閉**。第二題找到的新窗口照第 4 節的三關裁決，成立且 blocking
    的成為本輪新 finding。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。
-3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10）。上次存活的
-   mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
+3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10），用本輪新的
+   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
 
 結論：每則 finding 都已關閉、實跑全綠、finding 行上的 mutant 全被殺掉，而且沒有新的 blocking
 finding → `pass`；否則 `fix`。修正輪數由呼叫方控管。輸出照第 6 節，`mode: recheck`，每則舊
