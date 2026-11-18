@@ -146,3 +146,17 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 5. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
 6. `.claude-plugin/plugin.json` 的 `version` 已 bump
 7. `README.md` 的 skills 表格與 src 一致
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues (`0Miles/sorry-matt`), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles, each label string equal to its role name (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
