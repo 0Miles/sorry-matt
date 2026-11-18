@@ -20,7 +20,7 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 | `to-tickets` | `take-this` 第 4 步 | 自有流程取代：`take-this` 第 4 步與 `TEMPLATES.md` | 上游第 4 步「Quiz the user… Iterate until the user approves」被代答覆寫；「深度只到 frontier」又覆寫了模板的寫法。切片規則、expand–contract、發布方式改寫進 skill；票模板加 Seams 欄。 |
 | `handoff` | `take-this` 第 1 步，壓縮前 | 原樣使用（vendored） | 沒有任何覆寫。上游是 user-invoked，Skill tool 叫不到，所以 pin 在 `take-this/references/upstream/`。 |
 | `code-review` | `get-to-work` 收輪的獨立審查 | 只傳參數 | 上游留了 fixed point 與 spec 來源兩個參數；傳入整合分支與 ticket URL／路徑，上游「沒給就問使用者」的兩處就不會觸發。 |
-| `grilling` | `grill-them` 的 agent-griller | 只傳參數 | 只指定角色對應（上游的「使用者」＝ agent-grillee）與主要靶點，上游行為原樣保留。 |
+| `grilling` | `grill-them` 的 agent-griller | 只傳參數 | 只指定角色對應（上游的「使用者」＝ agent-grillee），上游行為原樣保留。原本另外指定「主要靶點」等於加行為，已刪。 |
 | `domain-modeling` | `grill-them` 第 4 步沉澱 | 原樣使用 | 沉澱的是雙方已有共識的術語與決策，沒有改寫上游任何一行。 |
 | `research` | `grill-them` 支線的外部事實查證 | 自有流程取代：`grill-them` 第 3 步兩行指示 | 上游要把 findings 存進 repo 的慣例位置，`grill-them` 要寫 scratchpad、不寫 repo —— 原本是覆寫。改為直接要求查一手來源、附出處、寫進 scratchpad。 |
 | `wizard` | `have-it-all-done` 交棒的人工作業清單 | 原樣使用 | 交棒時使用者已經回來，wizard 自己向使用者確認步驟不違反「裁決點之後不提問」。 |
@@ -46,7 +46,7 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 | `skills/engineering/to-tickets/SKILL.md` | `56EC23C5B2782785D4E65BFF9E315B6D3AEB4EF977C174A219E99489FADA1995` | `take-this/SKILL.md` 第 4 步、`take-this/TEMPLATES.md` |
 | `skills/engineering/research/SKILL.md` | 未 vendored，以 `1.3.2` 為準 | `grill-them/SKILL.md` 第 3 步 |
 
-`take-this/TEMPLATES.md` 改寫自 MIT 授權的上游原文，授權聲明在
+`take-this/TEMPLATES.md` 與 `get-to-work/IMPLEMENTER.md` 第 1、2 節改寫自 MIT 授權的上游原文，授權聲明在
 `take-this/references/upstream/NOTICE.md`。
 
 仍以 Skill tool 呼叫的第三方 skill：`code-review`、`grilling`、`domain-modeling`、`wizard`（皆為

@@ -17,6 +17,12 @@ tracker configuration for every publication target, identifier format, and triag
 governs throughout: if you can write a recommendation, answer on their behalf per section 3 rather than asking
 first; only matters in section 2's four classes are held back for the ruling point to ask at once.
 
+**Two contexts.** When the user runs this skill directly, every "ask the user…" in this file and in `ASKING.md`
+means asking the user. When `have-it-all-done` composes it and it runs as the kickoff agent, there is no user to
+ask: if the tracker configuration is missing, stop and report that to the host; when several grilling results
+could match this task, pick one on the evidence and record it in the self-answer log, or report it as awaiting
+ruling when the evidence cannot decide; every other "ask the user…" becomes an item in the report to the host.
+
 Complete requirements context, spec, and tickets in that order while preserving one continuous context until the
 tickets are published. When approaching the smart zone, before any compaction read and execute the
 [pinned handoff workflow](references/upstream/handoff.md) in full, then resume at the interrupted step.
@@ -28,7 +34,8 @@ prior grilling output, and everything required by the remaining steps.
 
 **Carry forward first:** find completed `grill-me`, `grill-with-docs`, or `grill-them` output that clearly
 belongs to this task. It may come from the current session, the argument, or a handoff. Reuse a matching
-result directly. If several results could match, ask the user to identify the intended one.
+result directly. If several results could match, ask the user to identify the intended one (when composed, follow the two-contexts
+rule in step 1).
 
 Where no reusable result exists, **the default is not to open an interrogation**: build the requirements context
 yourself out of the evidence in the tracker, the repository files, and git history, answering what is uncertain on

@@ -34,8 +34,7 @@ only during the distillation in Step 4.
 - **agent-griller, the griller**: give it the topic card and instruct it to call the Skill tool with `grilling`, treating
   "the user" in that workflow as agent-grillee. Leave `grilling`'s own behavior intact: it asks every question on the
   **frontier** in a single round, numbered, each carrying a recommended answer, and it dispatches its own sub-agents to
-  establish facts. The moderator interferes with neither; it only asks that ambiguous terms, overloaded words, and
-  hard-to-reverse decisions be the primary targets.
+  establish facts. The moderator interferes with neither.
 - **agent-grillee, the respondent**: give it the same topic card and instruct it to read the applicable `CLAUDE.md` or
   general `AGENTS.md`, then inspect relevant docs, code, and git state before answering from the whole-project
   perspective. It cites every factual claim, explains the tradeoff behind every decision, identifies information gaps,

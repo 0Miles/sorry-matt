@@ -1,8 +1,10 @@
 # IMPLEMENTER: the implementation agent's brief
 
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
-prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5 or
-`have-it-all-done` section 0, change them together.
+prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
+limit in section 7, or `have-it-all-done` section 0, change them together. Sections 1 and 2 are adapted from
+`mattpocock/skills` `implement` and `tdd` (MIT; source and license in
+[`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
 ---
 
@@ -45,12 +47,12 @@ all the rules you follow, and none of them points at a file or section you canno
 - Permanent exceptions are not yours to do; list them under "human work" in your report: force-pushes, outgoing
   messages and third-party communication, installing packages or cloning, anything touching credentials or
   secrets, deleting data that cannot be recovered, payments, permission changes, and production changes. Keeping
-  this ticket's status record on the tracker is not an outgoing message.
+  this ticket's status record on the tracker is not an outgoing message. <!-- pending #8 -->
 - Run calls that raise a confirmation prompt last, back to back.
 - **If you can write a recommendation, answer on the user's behalf.** Record each as one row with five columns:
   number, decision, rationale, cost to reverse (which files change, what re-runs, whether anything delivered is
   affected), and evidence location. Answers that affect only this ticket and are reversible inside its worktree go in
-  the status record; answers whose cost to reverse crosses tickets or deliveries are also listed in your report.
+  the status record; answers whose cost to reverse crosses tickets or deliveries go in your report instead of the status record.
 - Report what you cannot answer as **awaiting ruling**, and what only a human can do as "human work". Neither stops
   you from doing the rest.
 

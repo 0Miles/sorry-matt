@@ -15,17 +15,17 @@
 | `have-it-all-done/ASKING.md` | 166 / 1553 | 198 / 1898 |
 | `get-to-work/SKILL.md` | 239 / 2570 | 195 / 2068 |
 | **主持人自己要遵守的規則** | **614 / 6493** | **541 / 5538**（−12% 行、−15% 字） |
-| 轉交給實作 agent 的流程（改前 `implement.md`，改後 `IMPLEMENTER.md`） | 17 / 103 | 84 / 779 |
-| **主持人讀進 context 的總量** | **631 / 6596** | **625 / 6317** |
+| 轉交給實作 agent 的流程（改前 `implement.md`，改後 `IMPLEMENTER.md`） | 17 / 103 | 86 / 809 |
+| **主持人讀進 context 的總量** | **631 / 6596** | **627 / 6347** |
 
 `ASKING.md` 變長，是因為三個 skill 各寫一份的開場讀取、run ledger 與上下文預算都收進它當正本。
 
 實作 agent 這一側：改前收到 `implement.md`（17 行）、三條延伸契約，再以 Skill tool 載入 `tdd`
 （`SKILL.md`、`tests.md`、`mocking.md` 合計 174 行），其中有它做不到的「跟使用者確認 seams」。改後只收
-`IMPLEMENTER.md`（84 行），自足、沒有要它問人的地方。
+`IMPLEMENTER.md`（86 行），自足、沒有要它問人的地方。
 
 開局 agent 這一側：改前讀 `take-this/SKILL.md`、`to-spec.md`、`to-tickets.md`、`ASKING.md`（100＋75＋105
-＋166＝446 行）；改後讀 `take-this/SKILL.md`、`TEMPLATES.md`、`ASKING.md`（126＋84＋198＝408 行）。
+＋166＝446 行）；改後讀 `take-this/SKILL.md`、`TEMPLATES.md`、`ASKING.md`（133＋84＋198＝415 行）。
 
 重新量測：
 
@@ -109,6 +109,7 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 
 | 規則 | 處置 | 理由 |
 | --- | --- | --- |
+| 「請使用者指定」「請使用者執行 `/setup-matt-pocock-skills`」等問人措辭 | 保留給使用者直接執行；被組合為開局 agent 時改為依證據擇一記進代答、標待裁決或回報主持人（第 1 節「兩種情境」） | 開局 agent 是 subagent，問不到人；與 `have-it-all-done` 第 0 節「交付內容不能有要它問人的地方」矛盾。 |
 | 第 1 節開場讀取 | 搬到 `ASKING.md` 第 0 節 | 三個 skill 各寫一份。 |
 | 第 1 節「to-spec 與 to-tickets 的每個確認點依第 3 節代答」 | 改寫 | 上游確認點不再載入。 |
 | 第 2 節「一般的實作選擇沿用既有授權自行裁定」 | 刪 | 重複 `ASKING.md` 第 3 節。 |
@@ -126,6 +127,13 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 | 規則 | 處置 | 理由 |
 | --- | --- | --- |
 | 支線「呼叫 Skill tool 帶入 `research` 並照做」＋「findings 寫入 scratchpad，不寫入 repo」 | 自有兩行指示取代 | 上游要存進 repo，這裡要寫 scratchpad —— 載入上游再覆寫。 |
+| 「只要求 agent-griller 把模糊詞、一詞多義與難以逆轉的決策列為主要靶點」 | 刪 | 在 `grilling` 上加行為，違反「只傳參數」；`grilling` 的 design tree 本來就逐一走完每個分岔。 |
+
+### ask-miles
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `take-this` 路由說明「沒有時才執行 grill-them，再完成 to-spec → to-tickets」 | 改寫 | 已過時：`take-this` 預設不開訪談，只有重大分歧才開 `grill-them`，也不再走上游 to-spec／to-tickets。 |
 
 ## 新增的規則
 

@@ -15,6 +15,11 @@ disable-model-invocation: true
 發布位置、識別格式與 triage 表示均依 tracker 設定。全程依 `ASKING.md` 行事：能寫出建議就依
 第 3 節代答，不先問；只有落在第 2 節四類的事項才留著，交給裁決點一次問完。
 
+**兩種情境。** 使用者直接執行時，本檔與 `ASKING.md` 寫「請使用者……」的地方照字面問人。由
+`have-it-all-done` 組合、以開局 agent 執行時問不到使用者：tracker 設定不存在就停下並回報給
+主持人；多份 grilling 成果都可能對應本任務時，依證據擇一並記進代答清單，證據不足以擇一就標
+待裁決回報；其餘「請使用者……」一律改為寫進回報，交給主持人。
+
 整段依序完成「需求脈絡 → spec → tickets」，並維持同一份連續脈絡；tickets 發布前，保留這份
 脈絡。若接近 smart zone，在任何 compact 前完整讀取並執行
 [pinned handoff 流程](references/upstream/handoff.md)，再從中斷處繼續。
@@ -26,7 +31,7 @@ grilling 成果與後續步驟所需資訊。
 
 **承接優先**：先找與本任務明確對應、且已完成的 `grill-me`、`grill-with-docs` 或
 `grill-them` 成果。來源可以是目前 session，也可以由引數或 handoff 帶入。找到時直接承接；
-若多份成果都可能對應本任務，請使用者指定。
+若多份成果都可能對應本任務，請使用者指定（被組合時依第 1 節的情境規則處理）。
 
 沒有可承接成果時**預設不開訪談**：自行從 tracker、repo 檔案與 git 歷史的證據建立需求脈絡，
 不確定的事依 `ASKING.md` 第 3 節代答。只有命中**重大分歧**才呼叫 Skill tool 帶入

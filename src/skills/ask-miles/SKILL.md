@@ -11,7 +11,8 @@ disable-model-invocation: true
 - **想釐清需求計畫或決策，但懶得親自回答問題** → `/grill-them`。讓兩個 subagent 對打，
   輸出限於結論與待裁決事項，停在規劃階段。
 - **要開始新任務，或剛完成 grill-me／grill-with-docs，還沒有 spec 或 tickets** →
-  `/take-this`。承接既有 grilling；沒有時才執行 grill-them，再完成 to-spec → to-tickets。
+  `/take-this`。承接既有 grilling；沒有時從證據建立需求脈絡，只有重大分歧才開 grill-them，
+  再寫成 spec 與 tickets。
 - **Tickets 已備妥，現在要完成它們** → `/get-to-work`。依 tracker 設定逐輪實作與驗收，
   交付 GitHub PR 或 Local Markdown 整合分支，直到初始票集完成或明確卡住。
 - **想把既有 grilling、規劃到實作整段交出去，且範圍可控、需求足以收斂並有可靠驗收** →
