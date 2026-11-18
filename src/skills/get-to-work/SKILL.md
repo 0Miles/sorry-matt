@@ -174,13 +174,21 @@ Agents 尚在執行時，使用較長 fallback 等候通知。收輪邊界是唯
 
 ## 2. 收官
 
-每條線先過**線級的兩道關**，順序固定：
+每條線先過**線級的三道關**，順序固定：
 
 1. **精簡**：在整合 worktree 呼叫 Skill tool 帶入 `simplify`，對整條線累積的改動做一次品質
    收斂 —— 復用、簡化、效率、抽象層級 —— 它會直接套用修法。跨票的重複只有整併之後才看得
    見，所以精簡在這裡做一次，不在每張票各做一次。退掉的修法記進自答清單。
-2. **完整驗證**：跑一次 repo 完整的自動檢查。轉紅就交回那段改動的原 agent，修完重跑；本輪
-   唯一有效的綠燈就是這一次。
+2. **併入基底**：整合分支是第 0 節從當時的基底尖端建的，run 期間基底可能已前進，綠燈要跑在
+   最新基底上才算數。在整合 worktree 把最新的基底尖端合併進整合分支：有 `origin` 時
+   `git fetch origin <基底分支>` 再 `git merge origin/<基底分支>`；Local Markdown 沒有 remote 時
+   合併本地 `<基底分支>`。併入的基底 SHA 記進 ledger 第 4 欄。有 conflict 時交給第 1 節收輪
+   步驟 4 的**整併 agent**，判準照用：一邊是這條線（各票票面與 commit message），另一邊是基底
+   （`git log --format=%B <merge-base>..<併入的基底 ref>`），合併目標是讓線的意圖落在最新基底上。
+   主持人把取捨記進自答清單，解完執行受影響範圍的針對性檢查。整併 agent 回報無法安全解決時
+   `git merge --abort`，該線照未併入的狀態交付，交付物與人工作業清單寫明衝突的檔案。
+3. **完整驗證**：在已併入最新基底的整合分支上跑一次 repo 完整的自動檢查，報告寫出併入的
+   基底 SHA。轉紅就交回那段改動的原 agent，修完重跑；本輪唯一有效的綠燈就是這一次。
 
 **證據失效規則。** 某張票通過票級驗收之後，只要它碰到的檔案在整合分支上又被改動 —— 他票
 整併、conflict 解法、線級精簡 —— 那張票的票級綠燈就過期，仍然有效的只有線級完整驗證。
@@ -206,6 +214,20 @@ GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是�
 （`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
 權限規則片段，不為此另開提問。
 
+**merge queue。** 送出前查基底分支有沒有啟用 merge queue，`mergeQueue` 不是 null 就是啟用：
+
+```bash
+gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){url}}}' -f owner=<owner> -f name=<repo> -f branch=<基底分支>
+```
+
+沒有啟用時照上一段，行為不變。啟用時合併改走 merge queue：同一個 `gh pr merge <PR>`，不帶合併
+策略也不帶 `--admin` —— gh 會把 PR 排進 queue，queue 把它與最新基底、排在前面的 PR 組成 merge
+group 再驗一次才合併。放不放行同樣由權限設定決定，`bypassPermissions` 與 `auto` 模式下同樣被
+hook 擋下；用 GraphQL 的 `enqueuePullRequest` 或 `--admin` 跳過 queue 的寫法一律被擋。repo 的
+workflow 沒有一支以 `merge_group` 觸發時，queue 的檢查不會跑，送出只會卡在 queue：不送，改列
+人工作業清單並寫明缺的觸發。送出後回報 PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的
+總 PR，關票照「留給人合併」處理。
+
 **關票**在 `gh pr merge` 送出之後做。GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；
 預設分支以 `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
 
@@ -213,13 +235,14 @@ GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是�
   tracker 契約的 Close 逐張關閉，留言指向總 PR。
 - 總 PR 留給人合併、且基底不是預設分支：人工作業清單列出合併後要執行的關票指令。
 
-最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
+最終輸出每條線的總 PR 或整合分支與併入的基底 SHA、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
 第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 獨立執行時，輸出後把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done`
 組合時不改，留給它的交棒。
 
-完成判準：每條線都跑過一次線級精簡與一次完整驗證並收在綠燈，且恰有一項可供人合併的交付，
-或已經權限設定放行而合併並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
+完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證並收在綠燈，完整驗證跑在已併入
+最新基底的整合分支上且報告寫出基底 SHA，未解的基底衝突已寫明檔案；每條線恰有一項可供人合併的
+交付，或已經權限設定放行而合併（基底啟用 merge queue 時走 queue）並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
 人工作業清單有關票指令；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
 分支仍保留；輸出已列出需授權動作的結果與本輪計量；獨立執行時 ledger 第一行已是 ended 標記。

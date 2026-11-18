@@ -206,14 +206,26 @@ ticket filed along the way links its source and none has entered the frozen set.
 
 ## 2. Finish the run
 
-Every line passes **two line-level gates** first, in this order:
+Every line passes **three line-level gates** first, in this order:
 
 1. **Simplify:** in the integration worktree, call the Skill tool with `simplify` to make one quality pass over
    everything the line accumulated — reuse, simplification, efficiency, altitude — which it applies directly.
    Duplication across tickets is only visible after integration, so this pass runs here once rather than once per
    ticket. Record any dropped simplification in the self-answer log.
-2. **Full verification:** run the repository's full checks once. On red, hand that stretch of changes back to its
-   original agent and re-run; this single pass is the only green that counts this run.
+2. **Sync the base:** the integration branch was cut from the base tip in section 0, and the base may have moved
+   during the run; a green only counts on the latest base. In the integration worktree, merge the latest base tip
+   into the integration branch: with an `origin`, `git fetch origin <base branch>` then
+   `git merge origin/<base branch>`; in Local Markdown mode with no remote, merge the local `<base branch>`. Record
+   the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from section 1, close the round step 4,
+   under the same criterion: one side is the line (its tickets' text and commit messages), the other is the base
+   (`git log --format=%B <merge-base>..<merged base ref>`), and the goal of this merge is the line's intent landing
+   on the latest base. The host records the tradeoffs in the self-answer log and runs the targeted checks for the
+   affected surface once resolved. When the merge agent reports a conflict it cannot resolve safely, run
+   `git merge --abort` and deliver the line unsynced, naming the conflicting files in the delivery and in the
+   human-work list.
+3. **Full verification:** run the repository's full checks once, on the integration branch with the latest base
+   merged in, and report the merged base SHA. On red, hand that stretch of changes back to its original agent and
+   re-run; this single pass is the only green that counts this run.
 
 **The evidence-expiry rule.** Once a ticket has passed its ticket-level review, any later change on the integration
 branch to the files it touched — another ticket integrating, a conflict resolution, the line-level simplify — expires
@@ -245,6 +257,23 @@ after cleanup; Claude Code's permission settings decide whether it is let throug
 blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
 would let it through. Do not open a question for it.
 
+**Merge queue.** Before sending, check whether the base branch has a merge queue; a non-null `mergeQueue` means it
+does:
+
+```bash
+gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){url}}}' -f owner=<owner> -f name=<repo> -f branch=<base branch>
+```
+
+Without one, follow the paragraph above; nothing changes. With one, the merge goes through the queue: the same
+`gh pr merge <PR>`, with no merge strategy and no `--admin` — gh adds the PR to the queue, which groups it with the
+latest base and the PRs ahead of it into a merge group and verifies that again before merging. The permission
+settings still decide whether it is let through, and the hook still blocks it in `bypassPermissions` and `auto`
+mode; skipping the queue with GraphQL's `enqueuePullRequest` or with `--admin` is always blocked. When none of the
+repository's workflows triggers on `merge_group`, the queue's checks never run and the PR would sit in the queue:
+do not send it; list it in the human-work list with the missing trigger. After sending, report either the merged PR
+or that it is still queued, with its URL; for an aggregate PR still in the queue, close tickets as for one left for
+a human to merge.
+
 **Closing tickets** comes after `gh pr merge` is sent. GitHub reads `Closes` only in a PR that targets the
 repository's default branch; find that branch with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
 
@@ -254,14 +283,17 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 - Aggregate PR left for a human to merge, with a base that is not the default branch: the human-work list carries
   the close commands to run after the merge.
 
-Report each line's aggregate PR or integration branch, the **reconciliation table** covering the entire initial set
+Report each line's aggregate PR or integration branch with its merged base SHA, the **reconciliation table** covering the entire initial set
 and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (section 5), and every raw ticket
 filed along the way with a recommendation that the user run `/triage`. Running standalone, change the ledger's
 first line to `<!-- sorry-matt:run ended -->` after this output; when `have-it-all-done` composes this skill, leave
 it for that skill's handoff.
 
-Done when: every line went through one line-level simplify and one full verification and ended green, and has
-exactly one human-mergeable delivery, or was merged after the permission settings let it through and reported; every
+Done when: every line went through one line-level simplify, one base sync and one full verification and ended
+green, with the full verification run on the integration branch synced to the latest base and its report naming the
+base SHA, and any unresolved base conflict naming its files; every line has exactly one human-mergeable delivery, or
+was merged after the permission settings let it through (through the merge queue when the base has one) and
+reported; every
 completed ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human and the keyword
 does not apply, the human-work list carries the close commands; the
 reconciliation table covers the frozen set exactly once, every row pointing at that ticket's status record; every

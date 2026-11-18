@@ -264,3 +264,23 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   獨立執行的 `get-to-work` 收官。只寫在 `ASKING.md` 時沒有步驟負責，ledger 會一直 active，之後每次壓縮都印出已結束的 run。
 - 第 10 欄在接手既有 ledger 時補齊；只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`）不列。
 - hook 只認真正的第一行（BOM 不算）；`rule:` 行收整份 ledger，`ASKING.md` 規定其他欄不以 `rule:` 開頭。
+
+## #10：收官前併入最新基底
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `get-to-work` 第 2 節「線級的兩道關」（精簡 → 完整驗證） | 改為三道關，中間加**併入基底**：`git fetch origin <基底分支>` 後合併 `origin/<基底分支>`（Local Markdown 沒有 remote 時合併本地基底），基底 SHA 記進 ledger 第 4 欄 | 整合分支只在第 0 節建一次，run 期間主線前進時，唯一有效的綠燈跑在舊基底上，總 PR 可能衝突或語意衝突。放在精簡之後、完整驗證之前，讓併入與驗證之間沒有其他改動。 |
+| 併入時的 conflict | 引用第 1 節收輪步驟 4 的整併 agent 與判準，不另寫；兩邊定為「線（票面與 commit message）」與「基底（`<merge-base>..<基底 ref>` 的 commit message）」，取捨進自答清單；解不了就 `git merge --abort`，照未併入交付並寫明衝突檔案 | 同一套判準只留一份正本；線級 conflict 不屬於任何一張票，不能套票級的「卡住」，所以給一個不阻擋交付的出口。 |
+| 第 2 節完整驗證 | 補「跑在已併入最新基底的整合分支上，報告寫出基底 SHA」；完成判準與最終輸出同步 | 驗收要求報告可追溯當時的基底。 |
+| 第 2 節 `gh pr merge` 送出合併 | 新增 merge queue 段：以 `gh api graphql` 查 `repository.mergeQueue(branch:)`，不是 null 才走 queue；走 queue 仍是同一個 `gh pr merge <PR>`（不帶策略、不帶 `--admin`），沒有啟用時行為不變 | gh 在要求 merge queue 的分支上會自動排隊，指令不變，#8 的權限模型（授權來自 permissions、bypass／auto 一律擋）原樣適用。偵測不用 `gh pr view --json`：gh 2.91 沒有 merge queue 欄位；rulesets 的 `rules/branches/<b>` 也可查，但 GraphQL 一個欄位直接回答。 |
+| workflow 沒有 `merge_group` 觸發 | 不送，列人工作業清單 | queue 只在 `merge_group` 事件上跑檢查，沒有觸發時 PR 會停在 queue 直到逾時。 |
+
+guard（`hooks/permanent-exceptions.mjs`）：GraphQL `enqueuePullRequest` 與 git 類 MCP server 的 `enqueue` 動作歸為 `merge-bypass`，
+一律擋 —— 它們把 PR 排進 queue 卻繞過 `gh pr merge` 的權限檢查。`gh pr merge`／`gh pr merge --auto` 仍是 `merge`，
+交給權限設定；`--admin` 跳過 queue 原本就擋。`mergeQueue` 查詢與 `rules/branches/<b>` 讀取不受影響。測試在
+`scripts/guard.test.mjs`。
+
+偵測的實跑證據（2026-11-18，本 repo）：`mergeQueue(branch:"main")` 回 `null`、`rules/branches/main` 回 `[]` —— 未啟用
+（merge queue 只開放給組織擁有的公開 repo 或 Enterprise Cloud 的組織私有 repo），本 repo 的收官行為不變。
+
+未做：「證據失效規則」不動，留給 #12。

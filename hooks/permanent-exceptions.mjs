@@ -562,7 +562,7 @@ export function apiRule(method, rawEndpoint, body, line) {
   if (new RegExp(`^${OWNER_REPO}/pulls/[^/]+/merge$`).test(endpoint) && !reading) return hit('merge-bypass', line);
   if (new RegExp(`^${OWNER_REPO}/merges$`).test(endpoint) && !reading) return hit('merge-bypass', line);
   if (endpoint === 'graphql') {
-    if (/\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
+    if (/\b(mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
     if (/\b(deleteRepository|deleteIssue)\b/.test(body)) return hit('irrecoverable-delete', line);
     if (/\b(updateRefs?)\b/.test(body) && /\bforce\s*:\s*true\b/.test(body)) return hit('force-push', line);
     if (/\bcreateCommitOnBranch\b/.test(body) && /(branchName|qualifiedBranchName)["']?\s*:\s*["']?(refs\/heads\/)?(main|master)\b/.test(body)) return hit('merge-bypass', line);
@@ -642,8 +642,8 @@ function classifyMcp(tool, input = {}) {
   const [, server = '', action = ''] = /^mcp__(.+?)__(.+)$/.exec(tool) || [];
   if ((MESSAGING_SERVER.test(server) || MESSAGING_SERVER.test(action)) && MESSAGING_ACTION.test(action)) return hit('outgoing-message', tool);
   if (PAYMENT_SERVER.test(server) && PAYMENT_ACTION.test(action)) return hit('payments', tool);
-  // Merges go through `gh pr merge` only; pushes may not land on a protected branch.
-  if (MERGE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)merge($|_)/i.test(action))) return hit('merge-bypass', tool);
+  // Merges, merge queue entries included, go through `gh pr merge` only; pushes may not land on a protected branch.
+  if (MERGE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)(merge|enqueue)($|_)/i.test(action))) return hit('merge-bypass', tool);
   if (GIT_SERVER.test(server) && PUSH_ACTION.test(action)) {
     const branch = String(input.branch || input.ref || '');
     if (!branch || PROTECTED_BRANCH.test(branch)) return hit('merge-bypass', `${tool} ${branch || '(default branch)'}`.trim());
