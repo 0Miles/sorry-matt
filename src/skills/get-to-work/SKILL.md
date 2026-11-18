@@ -49,7 +49,7 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 ## 1. 用 `/loop` 推進流水線
 
-每張可開工的票各走一條**流水線**：派票 → 實作 → 收票（審查、修正、整併）。票與票之間不分輪、不互等：
+每張可開工的票各走一條**流水線**：派票 → 實作 → 收票（審查、修正、整併）。票與票之間不分批、不互等：
 **互斥**只看預計檔案是否重疊，不看是否同線，同一個 repo 裡跨線也判；一張票做完就收票，整併後立即重算
 frontier 並補派。
 
@@ -68,12 +68,13 @@ frontier 並補派。
    等它的那一步。
 3. 依各線的**整併佇列**整併審查通過的票（收票步驟 4–8）。
 4. 有**派票點**觸發時，在最後做一次（「派票」）。
-5. 把 ledger 寫到最新才結束這次喚醒。沒有輪的邊界：每次喚醒的結尾就是交接點。
+5. 把 ledger 寫到最新才結束這次喚醒。沒有批次的邊界：每次喚醒的結尾就是交接點。
 
 ### 讀 CI
 
 派票點與收官都以**整合分支最新 SHA 的 CI 結果**為準；有線在紅燈處置中時，每次喚醒也讀那條線。最新 SHA 是
-`git rev-parse origin/<整合分支>`；它和本地整合分支不同時，先照收票步驟 6 push 再讀：
+`git rev-parse origin/<整合分支>`；它和本地整合分支不同時，先照收票步驟 6 push 再讀（從未 push 過、
+或已定案為 CI 不涵蓋整合分支的線不讀）：
 
 ```bash
 gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId,workflowName,status,conclusion
@@ -101,39 +102,42 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    按 `headSha` 彙整，每個 SHA 照上面判；沿 `git log --first-parent --format=%H origin/<整合分支>` 由新往舊，
    找出最早的紅 SHA —— 它之前最近一個有結論的 SHA 是綠。
 2. **對到票**：`git log --merges --first-parent --format='%H %s' <前一個綠 SHA>..<最早的紅 SHA>` 列出這段的
-   merge commit，照 `scripts/review-guide.mjs` 檔頭的規則對票：SHA 記在 ledger 對帳表某張票的 merge SHA 裡，
-   就是那張票；沒記 SHA 的票才看 subject（先 `Merge branch '<ticket 分支>'`，再 `Merge <票 ID>` 與它的
-   `(+<票 ID>)` 別名）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
+   merge commit，照 `scripts/review-guide.mjs` 檔頭的規則對票（ledger 對帳表記的 merge SHA 優先，沒記 SHA 的票
+   才看 subject）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
    票（中間的 push 沒有結論）從最早的開始。沒有 merge 對到票 —— 紅燈來自主持人 commit、精簡或併入基底 —— 就
    **對不到票**。
 3. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。
 4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗
    摘要），在從整合分支新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收票步驟 3 的集中修正
    （`recheck` 附上該票上一次的審查區塊）與步驟 4–7，整併不排隊。對不到票就由主持人或做那一步的 agent 在整合
-   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。每輪修完都 push，下一次讀 CI 判結果。
+   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。每輪修完都 push（沒有 `origin` 時
+   略過），由下一次驗證判結果：流水線中是下一次讀 CI，收官是第 2 節步驟 3 當場再驗。
 5. **兩輪仍紅，對到票：撤回。** `git revert -m 1 <該票的 merge commit>`，並撤掉它的完成紀錄：
-   - **GitHub**：依收票開卡住紀錄的 raw issue；之後的派票點把它從 `--done` 移到 `--stuck`。
-   - **Local Markdown**：`git revert` 撤回完成紀錄那個 commit，再依收票追加 `## sorry-matt blocker`，原因寫
-     CI 紅燈與撤回的 commit。frontier 把完成紀錄之後的 blocker 判為卡住，漏撤也不會算完成。
+   - **GitHub**：照收票的「標卡住」開 raw issue；之後的派票點把它從 `--done` 移到 `--stuck`。
+   - **Local Markdown**：`git revert` 撤回完成紀錄那個 commit，再照收票的「標卡住」追加
+     `## sorry-matt blocker`，原因寫 CI 紅燈與撤回的 commit。frontier 把完成紀錄之後的 blocker 判為卡住，漏撤也不會算完成。
 
    ledger 對帳表該列改為卡住，總 PR 列為缺口。依賴它而已整併的票一併改成缺口：它們的 merge 不撤，對帳表
    標「上游撤回」，GitHub 從 `--done` 移到 `--stuck`，Local Markdown 在該票追加 blocker 寫明上游；
    總 PR 都不寫 `Closes`。依賴它而還在途的票（含整併佇列裡的）退出流水線，標**待裁決**，原因寫「上游撤回」
    與撤回的 commit：還在跑的 agent 回報後不收票；分支尖端照收票的退回重做留在
-   `refs/sorry-matt/<run>/<NN>-<slug>/upstream-reverted`，再移除 worktree 與分支。push 後照常讀 CI。日後要
-   重新整併被撤回的票，先 `git revert <撤回的 commit>` 還原撤回，否則 git 認為它已併入，不會再帶進改動。
+   `refs/sorry-matt/<run>/<NN>-<slug>/upstream-reverted`，再移除 worktree 與分支。push 後照常由下一次驗證判
+   結果。日後要重新整併被撤回的票，先 `git revert <撤回的 commit>` 還原撤回，否則 git 認為它已併入，不會再帶進改動。
 6. **兩輪仍紅，對不到票**：這條線**驗證未過**：不送 `gh pr merge`、不進 merge queue，總 PR 寫明並留給人
    合併，人工作業清單列出失敗的 job。這條線之後不再派票：該線的候選與還沒派過的票標待裁決，原因寫「線驗證
-   未過」與失敗的 job；在途的票照常收票，佇列不再為紅燈暫停。這件事觸發一個派票點，讓預算與停止條件照常判。
+   未過」與失敗的 job；在途的票照常收票，佇列不再為紅燈暫停。流水線中，這件事觸發一個派票點，讓預算與停止條件
+   照常判。
+
+完成判準：每條該讀 CI 的線都讀了最新 SHA 的結果並記進 ledger；轉紅的線在綠燈或撤回之前沒有派新票、整併佇列
+沒有前進；撤回的票與依賴它的已整併票都已從 `--done` 移出、對帳表改為卡住或缺口，依賴它的在途票已標待裁決並
+寫明上游撤回；驗證未過的線之後沒有派票，它的候選都已標待裁決。
 
 ### 預算與斷路
 
 上限與用量都在 ledger 第 9 欄（`ASKING.md` 第 7 節）。用量在兩個時點更新：每個派票點的第一件事（下列三步），
 與每張票收票結束把 ledger 寫到最新時（只做步驟 1；進展與上限只在派票點判）。
 
-1. **更新用量**：spawn 數讀 ledger 旁 `<run>.counters.json` 的 `spawns`（沒有這個檔就用主持人自己累計的數）；
-   經過時間照第 9 欄的算法 —— 現在減開始時間，再減等人時間。第一個派票點記開始時間；接手沒有開始時間的
-   ledger 時記接手的時刻，並註明之前的時間未計。
+1. **更新用量**：照 `ASKING.md` 第 7 節第 9 欄更新 spawn 數與經過時間（開始時間的記法也在那裡）。
 2. **判進展**：「一次」是一個派票點。等 agents 的喚醒、只推進收票的喚醒都不算。比對上個派票點記下的進度
    快照 —— 每條線整合分支的 tip SHA，與對帳表中已到終局（已交付、卡住、待裁決）的票：兩者都沒變，連續
    無進展次數加一；任何一項變了就歸零。票在終局之前的階段之間移動，或被退回重做，都不算
@@ -145,7 +149,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 **停下**：這個派票點不派票、不展開，之後也不再有派票點。在途的票照「收票」收到整併、卡住或退回為止，讀 CI
 與紅燈處置照常；退回的票不再派。凍結票集中沒派過的（含展開中的）、退回後等重派的、spawn 被擋下的票標**待裁決**，原因寫
 停在哪個上限與當時的用量。第 9 欄記停止原因；無進展斷路時寫出最近這幾個派票點裡，每張未交付的票停在哪一步、
-在等什麼，並指向它的接續紀錄。在途的票都收完就停止 loop，照第 2 節收官。
+在等什麼，並指向它的接續紀錄。之後照「期間開票」末段的停止條件收尾。
 
 派票或收票中途，spawn 被 plugin 的 hook 以預算為由擋下：不重試、不換路。已派出的 agents 照常收票；沒派出的
 票，與收票缺了那個 agent 就走不下去的票，照上一段標待裁決；下一個派票點在步驟 3 停下。收官的步驟需要 spawn
@@ -160,7 +164,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 撤回；有票離開流水線（卡住、待裁決、退回重做）；轉紅的線回到綠燈或判為驗證未過；展開 agent 回報。其他
 喚醒不派票。
 
-每個派票點先照「預算與斷路」判上限；沒停下，再依「讀 CI」讀每條 push 過、還沒定案為 CI 不涵蓋的線。轉紅的
+每個派票點先照「預算與斷路」判上限；沒停下，再依「讀 CI」讀各線。轉紅的
 線走紅燈處置，在綠燈或撤回之前不派新票；其他結果照常派票。
 
 接著重跑 `scripts/frontier.mjs`，**frontier** 就是輸出的 `frontier`：
@@ -227,9 +231,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    退回後重派的票：原 agent 還在就以 SendMessage 交給它退回紀錄與重建的 worktree，不新 spawn；不在了才照
    `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id。
 
-完成判準：每個派票點都先判過預算；每條該讀 CI 的線都讀了最新 SHA 的結果並記進 ledger，轉紅的線在綠燈或
-撤回之前沒有派新票、整併佇列沒有前進，撤回的票與依賴它的已整併票都已從 `--done` 移出、對帳表改為卡住或缺口，
-依賴它的在途票已標待裁決並寫明上游撤回；驗證未過的線之後沒有派票，它的候選都已標待裁決；每張派出的票在 spawn
+完成判準：每個派票點都先照「預算與斷路」判過上限、再照「讀 CI」讀過該讀的線，才往下派；每張派出的票在 spawn
 實作 agent 之前都已有驗收項、驗收快照與預計檔案，展開補上的驗收項都出自展開 agent 並標明 `by`、`run`、`round`，
 展開中的票沒有被重複送去展開；每個派票點每個 repo 都有 `overlap.mjs` 的計畫檔與輸出，`start` 的票全部派出，
 派出的票與同 repo 任何一條線上在途的票沒有重疊；frontier 中每張票都已展開中或在途、在 `wait` 中有重疊理由，
@@ -249,14 +251,14 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    `initial`，傳入票（識別碼、原票票面與展開區塊）、驗收快照與比對輸出的路徑、fixed point（該線
    整合分支）、ticket 分支與步驟 1 的針對性檢查結果。它由審查方做實跑與只限
    本票 diff 的突變，輸出 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單，並寫進該票的
-   接續紀錄。`pass` 進整併，`fix` 進集中修正，`stuck` 依它寫的解除條件排除：開審前的 `stuck`
-   不算審查，排除後重跑 `initial`；審中的 `stuck` 排除後只續跑它記下未完成的部分。排除不了就
-   標卡住。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
+   接續紀錄。`pass` 進整併，`fix` 進集中修正，`stuck` 依它寫的解除條件排除後，照 `prove-it` 第 5 節
+   重新呼叫；排除不了就標卡住。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
    只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單；
    「再看一遍比較保險」不是風險。
 3. **集中修正**：本票的 finding 一次全部交回保有 context 的原 agent，一輪修完，不逐則來回。
    修完重跑受影響範圍的針對性檢查與驗收比對，再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，
-   附上一次的審查區塊與新的比對輸出：它只對 finding 涉及的行重跑實跑與突變，不是第二次審查。最多兩輪修正。
+   附上一次的審查區塊與新的比對輸出：它只對 finding 涉及的行重跑實跑與突變，不是第二次審查。最多兩輪修正；
+   兩輪後仍未通過就標卡住。
 
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
@@ -301,7 +303,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 中途事項走 `ASKING.md` 第 4 節的三條出路。獨立執行而沒有裁決點時，答不出來的事累積到
 下一個派票點前一次問完。
 
-兩輪修正後仍未通過驗收，或退回重做後整併仍衝突解不了時，將票標為**卡住**：
+**標卡住**（本 skill 各處寫「標卡住」時都照這裡做）：
 
 - **GitHub**：另開 raw issue 記錄失敗，body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：在整合分支的原 ticket 追加 `## sorry-matt blocker`，列出原因、已做嘗試
@@ -358,12 +360,11 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
 3. **完整驗證**：以整合分支最新 SHA 的 CI 為準。照收票步驟 6 push 步驟 1–2 之後的整合分支，依第 1 節
    「讀 CI」讀它。還在跑時，每個未完成的 run 各執行一次 `gh run watch <databaseId> --exit-status` 等它
    結束 —— 每個 run 一次阻塞呼叫，不逐次輪詢，執行環境能背景執行就背景執行。沒有 run 時稍後再讀一次。
-   紅就走第 1 節的紅燈處置：流水線停止後沒有下一個派票點，所以每輪修完、push 後就在這裡再讀；撤回後
-   同樣再讀；對不到票而兩輪仍紅，這條線就是**驗證未過**。
+   紅就走第 1 節的紅燈處置。
 
    **本機驗證**（本 skill 唯一的正本，其他地方引用這裡）：沒有 `origin`、這條線已定案為 CI 不涵蓋整合
    分支，或這個 SHA 讀不到結論（查詢失敗，或再讀一次仍沒有 run）時，改在這個 SHA 上本機跑一次 repo
-   完整的自動檢查，報告寫明是哪一種。本機轉紅照紅燈處置第 4–6 點修，修完重跑。
+   完整的自動檢查，報告寫明是哪一種。本機轉紅照紅燈處置第 4–6 點修，下一次驗證就是在新 SHA 上本機重跑。
 
    報告寫出驗證的 SHA、來源（CI 或本機與原因）與併入的基底 SHA；未併入的線照樣驗證未併入的樹，報告
    寫出嘗試併入的基底 SHA 與「未併入」。唯一有效的綠燈是最後這個 SHA 的結果。
@@ -384,10 +385,9 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
   計畫檔與輸出（同名的 `.json`）跟 ledger 同在共用目錄，格式寫在腳本檔頭：`base` 是併入的基底 ref
   （`origin/<基底分支>`），`web` 取 `gh repo view --json url --jq .url`，`tickets` 是對帳表中整併過這條線的每張票
   （含後來成為缺口的），帶對帳表記的 merge SHA（`merges`）、ticket 分支、票名、凍結時 frontier 輸出的
-  `blockedBy` 與接續紀錄的連結。腳本沿 `git log --first-parent` 認出每張票的 merge —— 有 `merges` 的票只認
-  SHA，沒有的才退回認 subject —— 票的 commit 就是 `<merge>^1..<merge>^2`；其他 first-parent commit（精簡、
-  併入基底、主持人 commit、對不到票的修正、撤回）是**線級 commit**。結束代碼 3 表示 `missing` 裡的票在線上
-  找不到 merge，`warnings` 列出不在線上的 SHA：照 ledger 核對它的 merge SHA 與分支名，修正計畫檔重跑；仍找
+  `blockedBy` 與接續紀錄的連結。腳本照檔頭的規則把 first-parent 上的 merge 對到
+  票，票的 commit 就是 `<merge>^1..<merge>^2`；其他 first-parent commit（精簡、併入基底、主持人 commit、對不到
+  票的修正、撤回）是**線級 commit**。結束代碼 3 表示 `missing` 裡的票在線上找不到 merge，`warnings` 列出不在線上的 SHA：照 ledger 核對它的 merge SHA 與分支名，修正計畫檔重跑；仍找
   不到就在該票那節寫明「commit 範圍對不到」，不猜範圍。
 
   Body 依輸出寫，順序固定：
@@ -458,8 +458,8 @@ PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的總 PR，關�
 
 最終輸出每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源（CI，或
 本機與原因）、涵蓋全部初始票的**對帳表**（含每張票的退回次數）
-與**本 run 的計量與預算**（`ASKING.md` 第 7 節第 9 欄，停下時含停止原因）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets
-清單並請使用者執行 `/triage`。獨立執行時，輸出後把 ledger 第一行改成
+與**本 run 的計量與預算**（`ASKING.md` 第 7 節第 9 欄，停下時含停止原因）、需授權動作的結果（ledger
+第 5 欄），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。獨立執行時，輸出後把 ledger 第一行改成
 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
 
 完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證，收在綠燈或標明驗證未過並留給人

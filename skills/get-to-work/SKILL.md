@@ -55,7 +55,7 @@ tip.
 ## 1. Advance the pipeline with `/loop`
 
 Every startable ticket runs its own **pipeline**: dispatch → implementation → close-out (review, fix,
-integration). Tickets do not move in rounds and do not wait on each other: tickets are **mutually exclusive** only
+integration). Tickets do not move in batches and do not wait on each other: tickets are **mutually exclusive** only
 when their predicted files overlap, never merely for sharing a line, and overlap is judged across the lines of one
 repository too; a ticket is closed out as soon as it is done, and every integration immediately recomputes the
 frontier and dispatches whatever has become startable.
@@ -79,7 +79,7 @@ fallback and wait for notifications. Every wake-up does, in order:
    close-out; an expansion or merge agent's report goes back to the step waiting on it.
 3. Integrate reviewed tickets through each line's **integration queue** (close-out steps 4–8).
 4. When a **dispatch point** has been triggered, run one at the end (dispatch).
-5. Write the ledger current before the wake-up ends. There is no round boundary: the end of every wake-up is the
+5. Write the ledger current before the wake-up ends. There is no batch boundary: the end of every wake-up is the
    handover point.
 
 ### Reading CI
@@ -87,7 +87,7 @@ fallback and wait for notifications. Every wake-up does, in order:
 Dispatch points and finishing the run go by **the CI result for the integration branch's latest SHA**; while a line
 is in red-light handling, every wake-up reads that line as well. The latest SHA is
 `git rev-parse origin/<integration branch>`; when it differs from the local integration branch, push first per
-close-out step 6, then read:
+close-out step 6, then read (a line never pushed, or settled as not covered by CI, is not read):
 
 ```bash
 gh run list --branch <integration branch> --commit <SHA> --limit 100 --json databaseId,workflowName,status,conclusion
@@ -119,10 +119,9 @@ the fix leave it red, map the red back to the original ticket by mistake.
    `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red
    SHA — the nearest SHA before it with a verdict is green.
 2. **Map it to a ticket:** `git log --merges --first-parent --format='%H %s' <previous green SHA>..<earliest red SHA>`
-   lists that stretch's merge commits; map them by the rules in the header of `scripts/review-guide.mjs`: a merge
-   whose SHA is among a ticket's merge SHAs in the ledger's reconciliation table is that ticket; only tickets with
-   no recorded SHA fall back to the subject (first `Merge branch '<ticket branch>'`, then `Merge <ticket ID>` with
-   its `(+<ticket ID>)` aliases). The host's commits — completion records, stuck records, tickets filed along the
+   lists that stretch's merge commits; map them by the rules in the header of `scripts/review-guide.mjs` (the
+   merge SHAs recorded in the ledger's reconciliation table come first; only tickets with no recorded SHA fall back
+   to the subject). The host's commits — completion records, stuck records, tickets filed along the
    way — are not merges, so landing in between changes nothing. With several tickets (the pushes between them have
    no verdict), start from the earliest. With no merge mapped to a ticket — the red came from a host commit, the
    simplify pass or the base sync — it **maps to no ticket**.
@@ -134,14 +133,16 @@ the fix leave it red, map the red back to the original ticket by mistake.
    through close-out step 3's batched fix (`recheck` attaching that ticket's previous review block) and steps 4–7,
    integrating without queueing. When it maps to no ticket, the host or the agent that ran that step fixes it in the
    integration worktree, commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies.
-   Every fix round ends with a push, and the next CI read gives its result.
+   Every fix round ends with a push (skipped with no `origin`), and the next verification gives its result: in the
+   pipeline that is the next CI read; when finishing the run, it is section 2 step 3 verifying again on the spot.
 5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and
    take back its completion record:
-   - **GitHub:** file the stuck record's raw issue per close-out; later dispatch points move the ticket from
+   - **GitHub:** file the raw issue per close-out's "mark it stuck"; later dispatch points move the ticket from
      `--done` to `--stuck`.
    - **Local Markdown:** `git revert` the commit holding the completion record, then append `## sorry-matt blocker`
-     per close-out, giving the red CI and the reverted commit as the reason. The frontier reads a blocker after the
-     completion record as stuck, so a completion record the revert missed still does not count as done.
+     per close-out's "mark it stuck", giving the red CI and the reverted commit as the reason. The frontier reads a
+     blocker after the completion record as stuck, so a completion record the revert missed still does not count as
+     done.
 
    Its row in the ledger's reconciliation table becomes stuck, and the aggregate PR lists it as a gap. Integrated
    tickets that depend on it become gaps as well: their merges stay, their reconciliation rows say "upstream
@@ -150,14 +151,21 @@ the fix leave it red, map the red back to the original ticket by mistake.
    (queued ones included) leave the pipeline as **awaiting ruling**, with "upstream reverted" and the revert commit as
    the reason: an agent still running is not closed out when it reports; its branch tip is kept, as in close-out's
    send-back for a redo, at `refs/sorry-matt/<run>/<NN>-<slug>/upstream-reverted`, and then its worktree and branch
-   are removed. Push, then read CI as usual. To integrate the reverted ticket again later, first undo the revert with
-   `git revert <the revert commit>`; otherwise Git considers it already merged and brings none of its changes back.
+   are removed. Push, and the next verification gives the result as usual. To integrate the reverted ticket again
+   later, first undo the revert with `git revert <the revert commit>`; otherwise Git considers it already merged and
+   brings none of its changes back.
 6. **Still red after two rounds, mapped to no ticket:** the line has **failed verification**: send no `gh pr merge`,
    enter no merge queue, say so in the aggregate PR and leave it for a human to merge, with the failing jobs in the
    human-work list. The line dispatches nothing from then on: its candidates and the tickets never dispatched on it
    are marked awaiting ruling, with "line failed verification" and the failing jobs as the reason; tickets in flight
-   are closed out as usual, and the queue no longer pauses for the red. This triggers a dispatch point, so the budget
-   and the stop conditions are judged as usual.
+   are closed out as usual, and the queue no longer pauses for the red. In the pipeline, this triggers a dispatch
+   point, so the budget and the stop conditions are judged as usual.
+
+Done when: every line due a CI read had its latest SHA's result read and recorded in the ledger; a red line
+dispatched nothing new and advanced no integration queue until it was green or reverted; a reverted ticket and the
+integrated tickets depending on it are out of `--done`, their reconciliation rows marked stuck or gap, with the
+tickets in flight depending on it awaiting ruling and naming the upstream revert; a line that failed verification
+dispatched nothing afterwards, and its candidates are all awaiting ruling.
 
 ### Budget and breaker
 
@@ -165,10 +173,8 @@ The limits and their usage live in ledger field 9 (`ASKING.md` section 7). Usage
 thing at every dispatch point (the three steps below), and at the end of every ticket's close-out when the ledger is
 written current (step 1 only; progress and the limits are judged only at dispatch points).
 
-1. **Update usage:** read spawns from `spawns` in `<run>.counters.json` next to the ledger (without that file, use the
-   count the host keeps itself); compute elapsed time as field 9 defines it — now minus the start time, minus
-   waiting time. Record the start time at the first dispatch point; when taking over a ledger without one, record
-   the takeover time and note that earlier time is not counted.
+1. **Update usage:** update the spawn count and elapsed time per `ASKING.md` section 7, field 9 (which also says how
+   the start time is recorded).
 2. **Judge progress:** "once" means one dispatch point. A wake-up spent waiting on agents, or one that only moves
    close-outs along, does not count. Compare against the progress snapshot recorded at the last dispatch point —
    each line's integration-branch tip SHA, and the tickets in the reconciliation table that have reached an end state
@@ -185,9 +191,9 @@ go on through close-out until they are integrated, stuck or sent back, with CI r
 a ticket sent back is not dispatched again. Mark every ticket of the frozen set never dispatched (expanding ones
 included), sent back and waiting for a redo, or whose spawn was blocked, **awaiting ruling**, with the limit that
 stopped the run and the usage at the time as the reason. Record the stop reason in field 9; for the no-progress
-breaker, write for each undelivered ticket which step it was stuck at over these last dispatch points and what it
-was waiting on, pointing at its status record. Once the tickets in flight are all closed out, stop the loop and
-finish the run per section 2.
+breaker, write for each undelivered ticket which step it was stuck at over these last dispatch points and what it was
+waiting on, pointing at its status record. From then on, wind down per the stop conditions at the end of "Filing along
+the way".
 
 When the plugin's hook blocks a spawn on budget grounds while dispatching or during a close-out: do not retry it and
 do not route around it. Agents already dispatched are closed out as usual; tickets not dispatched, and tickets whose
@@ -207,10 +213,9 @@ wake-up: the first wake-up; a ticket integrated into an integration branch or re
 (stuck, awaiting ruling, sent back for a redo); a red line turning green or being found to have failed verification;
 an expansion agent reporting. No other wake-up dispatches.
 
-Every dispatch point first checks the limits per budget and breaker; when the run does not stop, it reads CI, per
-reading CI, for each line that has been pushed and is not settled as not covered by CI. A red line goes through the
-red-light handling and dispatches nothing new until it is green or the culprit is reverted; any other result
-dispatches as usual.
+Every dispatch point first checks the limits per budget and breaker; when the run does not stop, it reads each line
+per reading CI. A red line goes through the red-light handling and dispatches nothing new until it is green or the
+culprit is reverted; any other result dispatches as usual.
 
 Then re-run `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
 
@@ -300,18 +305,14 @@ candidate, in order:
    instead of spawning; only when it is gone, spawn a new one per `IMPLEMENTER.md` with the send-back record in its
    placeholder. The reconciliation table records each ticket's stage and its responsible agent's id.
 
-Done when: every dispatch point checked the budget first; every line due a CI read had its latest SHA's result read
-and recorded in the ledger, a red line dispatched nothing new and advanced no integration queue until it was green or
-reverted, and a reverted ticket and the integrated tickets depending on it are out of `--done`, their reconciliation
-rows marked stuck or gap, with the tickets in flight depending on it awaiting ruling and naming the upstream revert; a
-line that failed verification dispatched nothing afterwards, and its candidates are all awaiting ruling; every
-dispatched ticket had acceptance criteria, an acceptance snapshot and predicted files before its implementation agent
-was spawned, every criterion added by expansion came from the expansion agent and states `by`, `run` and `round`, and
-no expanding ticket was sent to expansion twice; every dispatch point has an `overlap.mjs` plan and output for every
-repository, every ticket in `start` was dispatched, and no dispatched ticket overlapped a ticket in flight on any line
-of its repository; every frontier ticket is expanding or in flight, waiting in `wait` with its overlap as the reason,
-or listed as awaiting ruling; every implementation agent's prompt is the full `IMPLEMENTER.md` text with its
-placeholders filled.
+Done when: every dispatch point first judged the limits per budget and breaker, then read the lines due a read per
+reading CI, before dispatching anything; every dispatched ticket had acceptance criteria, an acceptance snapshot and
+predicted files before its implementation agent was spawned, every criterion added by expansion came from the
+expansion agent and states `by`, `run` and `round`, and no expanding ticket was sent to expansion twice; every
+dispatch point has an `overlap.mjs` plan and output for every repository, every ticket in `start` was dispatched, and
+no dispatched ticket overlapped a ticket in flight on any line of its repository; every frontier ticket is expanding
+or in flight, waiting in `wait` with its overlap as the reason, or listed as awaiting ruling; every implementation
+agent's prompt is the full `IMPLEMENTER.md` text with its placeholders filled.
 
 ### Close-out
 
@@ -331,16 +332,15 @@ integration branch, CI runs in the background, the host does not wait, and the n
    ticket branch, and the targeted-check results from step 1. The reviewer does the live run, and mutation limited
    to this ticket's diff, and it writes a fixed-format `pass` / `fix` / `stuck` verdict and finding list into the
    ticket's status record. `pass` goes on to integration, `fix` to the batched fix, and `stuck` is cleared using the
-   condition it states: a `stuck` before the review opens does not count as a review, so once cleared run `initial`
-   again; a `stuck` mid-review, once cleared, resumes only the part it recorded as unfinished. If it cannot be
-   cleared, mark the ticket stuck. **One ticket gets this one reviewer by default**, its lenses covering standards
+   condition it states, then `prove-it` is called again per its section 5. If it cannot be cleared, mark the ticket
+   stuck. **One ticket gets this one reviewer by default**, its lenses covering standards
    and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one, naming the
    risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
 3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
    round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface and the
    acceptance diff, then call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block
    and the new acceptance diff output: it reruns the live run and mutation only on the lines the findings concern,
-   and is not a second review. At most two correction rounds.
+   and is not a second review. At most two correction rounds; still failing after two, mark the ticket stuck.
 
    **Hard rail — a flaky red is chased to its root cause.** A test that goes red and green on the same commit is
    treated as a real failure: find the root cause; when it lies in how the test is written, fix the test; when it
@@ -402,8 +402,7 @@ A ticket is sent back once at most: if, after the redo, its conflict again canno
 Anything that comes up mid-run takes the three exits in `ASKING.md` section 4. Running standalone, with no ruling
 point, whatever cannot be answered accumulates until the next dispatch point and is asked there in one go.
 
-If the ticket still does not pass acceptance after two correction rounds, or its conflict cannot be resolved after
-a redo, mark it **stuck**:
+**Mark it stuck** (wherever this skill says to mark a ticket stuck, do this):
 
 - **GitHub:** file a separate raw issue recording the failure, its body polished per `ASKING.md` section 6.
 - **Local Markdown:** append `## sorry-matt blocker` to the original ticket on the integration branch with the
@@ -472,14 +471,13 @@ Every line passes **three line-level gates** first, in this order:
    integration branch as steps 1–2 left it, per close-out step 6, and read it per section 1, reading CI.
    While it is still running, run `gh run watch <databaseId> --exit-status` once for each unfinished run to wait it
    out — one blocking call per run, no repeated polling, in the background where the environment allows. With no
-   run, read once more a little later. On red, go through section 1's red-light handling: once the pipeline has
-   stopped there is no next dispatch point, so read again right here after every fix round's push, and after a
-   revert; mapped to no ticket and still red after two rounds, the line has **failed verification**.
+   run, read once more a little later. On red, go through section 1's red-light handling.
 
-   **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`,
-   a line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second
-   read), run the repository's full checks locally once on this SHA instead, and the report says which case it
-   was. A local red is fixed per points 4–6 of the red-light handling, and re-run after each fix.
+   **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`, a
+   line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second read),
+   run the repository's full checks locally once on this SHA instead, and the report says which case it was. A local
+   red is fixed per points 4–6 of the red-light handling, where the next verification is a local re-run on the new
+   SHA.
 
    The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
    line is verified all the same, on its unsynced tree, and the report gives the base SHA it tried and "unsynced".
@@ -500,17 +498,16 @@ Then deliver each line according to its mode:
   ```
 
   The plan and its output (the same name ending in `.json`) live in the common directory beside the ledger, in the
-  format the script's header documents: `base` is the merged base ref (`origin/<base branch>`), `web` comes from
-  `gh repo view --json url --jq .url`, and `tickets` lists every ticket in the reconciliation table that was
-  integrated into this line (including those that later became gaps), with the merge SHAs the reconciliation
-  table recorded (`merges`), its ticket branch, its title, the `blockedBy` from the frontier output at the freeze,
-  and a link to its status record. Walking `git log --first-parent`, the script recognizes each ticket's merges — a
-  ticket with `merges` only by SHA, one without falling back to the subject — and a ticket's commits are
-  `<merge>^1..<merge>^2`; every other first-parent commit (simplify, base sync, host commits, fixes mapped to no
-  ticket, reverts) is a **line-level commit**. Exit code 3 means a ticket in `missing` has no merge on the line,
-  and `warnings` lists any recorded SHA not on the line: check its merge SHAs and branch name against the ledger,
-  correct the plan and re-run; if it is still not found, say "commit range not found" in that ticket's section
-  rather than guessing a range.
+  format the script's header documents: `base` is the merged base ref (`origin/<base branch>`), `web` comes from `gh
+  repo view --json url --jq .url`, and `tickets` lists every ticket in the reconciliation table that was integrated
+  into this line (including those that later became gaps), with the merge SHAs the reconciliation table recorded
+  (`merges`), its ticket branch, its title, the `blockedBy` from the frontier output at the freeze, and a link to its
+  status record. The script maps the first-parent merges to tickets by the rules in its header, and a ticket's commits
+  are `<merge>^1..<merge>^2`; every other first-parent commit (simplify, base sync, host commits, fixes mapped to no
+  ticket, reverts) is a **line-level commit**. Exit code 3 means a ticket in `missing` has no merge on the line, and
+  `warnings` lists any recorded SHA not on the line: check its merge SHAs and branch name against the ledger, correct
+  the plan and re-run; if it is still not found, say "commit range not found" in that ticket's section rather than
+  guessing a range.
 
   Write the body from the output, in this fixed order:
 
@@ -573,10 +570,10 @@ The queue runs checks only on `merge_group` events, so before sending, confirm i
 - A workflow on the base ref has `merge_group` in its `on:`
   (`git grep -l merge_group origin/<base branch> -- .github/workflows`): send.
 - No such workflow, and the base branch has no required checks: send. The required checks are the union of the
-  rulesets'
-  `gh api repos/<owner>/<repo>/rules/branches/<base branch> --jq '[.[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'`
-  and branch protection's
-  `gh api repos/<owner>/<repo>/branches/<base branch> --jq '.protection.required_status_checks.contexts'`.
+  rulesets' `gh api repos/<owner>/<repo>/rules/branches/<base branch> --jq
+  '[.[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context]'` and branch
+  protection's `gh api repos/<owner>/<repo>/branches/<base branch> --jq
+  '.protection.required_status_checks.contexts'`.
 - No such workflow, but there are required checks (perhaps from third-party CI, whose response to `merge_group`
   cannot be seen from here): do not send; the PR would only sit in the queue. List it in the human-work list with
   the missing trigger and those required checks.
@@ -596,12 +593,11 @@ repository's default branch; find that branch with `gh repo view --json defaultB
   the close commands to run after the merge.
 
 Report each line's aggregate PR or integration branch, its merged base SHA (or marked unsynced), and the full
-verification's SHA and source (CI, or local with the reason); the **reconciliation table** covering the entire
-initial set (with each ticket's send-back count); this run's **run metrics and budget** (`ASKING.md` section 7,
-field 9, with the stop reason when it stopped); the authorization outcomes (section 5); and every raw ticket filed
-along the way, asking the user to run `/triage`. Running standalone, change the ledger's first line to
-`<!-- sorry-matt:run ended -->` after this output; when `have-it-all-done` composes this skill, leave it for that
-skill's handoff.
+verification's SHA and source (CI, or local with the reason); the **reconciliation table** covering the entire initial
+set (with each ticket's send-back count); this run's **run metrics and budget** (`ASKING.md` section 7, field 9, with
+the stop reason when it stopped); the authorization outcomes (ledger field 5); and every raw ticket filed along the
+way, asking the user to run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run
+ended -->` after this output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
 
 Done when: every line went through one line-level simplify, one base sync and one full verification, ending green
 or marked as failed verification and left for a human to merge; the simplify pass and the base sync are each their

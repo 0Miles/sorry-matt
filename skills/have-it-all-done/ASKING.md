@@ -32,7 +32,7 @@ Done when: every question sent clears all three gates; every environment artifac
 ## 2. What to ask
 
 Only matters that fall into the four classes below **and** clear section 1 may be asked. Their defaults follow;
-where the repo's own `CLAUDE.md` or generic `AGENTS.md` rules differently, the repo wins.
+where the repo's own `CLAUDE.md` or generic `AGENTS.md` rules differently (a **project exception**), the repo wins.
 
 ### (a) How far to go
 
@@ -203,13 +203,12 @@ is exactly the active marker, with no blank line before it. Ten fields:
    integrating, or one of the end states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming
    relies on it and the agent id to pick back up every ticket short of an end state.
 9. **Run metrics and budget**, in three parts:
-   - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is
-     created, and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns),
-     `budget: rounds 40` (dispatch points, `get-to-work` section 1, dispatch; the name is kept from before),
-     `budget: hours 12` (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive
-     count for the no-progress breaker). Changing a limit is the user's call; the host never answers on their
-     behalf to raise one (see section 4). The plugin's hook collects every `budget:` line in the whole ledger, so
-     no other field starts a line with `budget:`.
+   - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is created,
+     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch
+     points, `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget:
+     hours 12` (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive count for the
+     no-progress breaker). For changing a limit, see section 4. The plugin's hook collects every `budget:` line in the
+     whole ledger, so no other field starts a line with `budget:`.
    - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user
      before the ruling point does not count; when taking over a ledger without one, record the takeover time and
      note that earlier time is not counted), waiting time (from then on, the total from sending each question to the
@@ -220,9 +219,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
      pushes does not count), send-backs for a redo, compactions and handovers. Spawns come from `spawns` in
      `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
      such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
-     the runtime itself reports them; never estimate them from duration or agent count. Update usage when
-     `get-to-work` section 1, budget and breaker, says: first thing at every dispatch point, and at the end of
-     every ticket's close-out.
+     the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
+     `get-to-work` section 1, budget and breaker.
    - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
      and where the run is stuck; "none" when it has not stopped.
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
