@@ -1,0 +1,4 @@
+interface:
+  display_name: "Figure Out the UI"
+  short_description: "Settle a UI brief before writing code"
+  default_prompt: "Use $figure-out-the-ui to settle who this interface is for and how it is ordered before building it."

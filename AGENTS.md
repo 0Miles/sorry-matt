@@ -7,7 +7,8 @@
 - `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
 - `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,或多個 skill
   共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
-  `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀)
+  `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀;
+  `build-the-ui-right/FRONTEND.md` 由五支前端 skill 共讀)
 - `skills/<name>/SKILL.md` — 英文 dist 版;plugin 實際載入的是這份,供人使用
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
@@ -36,7 +37,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 自己模擬。skill 內文引用其他 skill 時:
 
 - 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`speak-human`、`no-bullshit`、
-  `clean-it-up`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
+  `clean-it-up`、`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
+  `make-the-ui-fast`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
   `disable-model-invocation: true`)→ 措辭必須明寫
   **「呼叫 Skill tool 帶入 `<name>`」**。只寫「執行 `<name>` skill」或丟一個 `/name` 進散文
   不保證觸發載入,這是上游 `grill-with-docs` 最常被回報的問題。Skill tool 一次只吃一個
@@ -125,6 +127,25 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 前端契約 | frontend contract |
+| 仲裁順序 | precedence |
+| 狀態矩陣 | state matrix |
+| 無障礙底線 | accessibility floor |
+| 實測/推導/判斷 | measured / derived / judged |
+| 未驗證 | unverified |
+| 主張 | claim |
+| 介面定案 | UI brief |
+| 有用的結果 | useful outcome |
+| 主要動作 | primary action |
+| 假設 | assumption |
+| 前後對照 | before/after pair |
+| 給人看的清單 | eyes-on list |
+| 基準值 | baseline |
+| 雜訊 | noise |
+| 瓶頸 | bottleneck |
+| 行為基準 | behavior baseline |
+| 整段旅程 | whole journey |
+| 中斷情境 | interruption |
 
 ## 外部語義來源
 
@@ -132,6 +153,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 (`plugins/work-mode/hooks/tempo.ts` 的 `autonomousText()`,MIT)。那邊的 auto 規則改了就回來
 對一次。它不在 runtime 被讀取 —— 規則已寫進 skill 本文 —— 所以不進 `references/upstream/`,
 也不需要 pin 與 hash。
+
+五支前端 skill 的知識來源是兩個第三方 model-invoked skill:`master-design`
+(`master-co/design`,MIT)與 `modern-web-guidance`(`GoogleChrome/modern-web-guidance`,
+Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不進 `references/upstream/`;
+缺席時的行為寫在 `build-the-ui-right/FRONTEND.md` 第 1 節。`FRONTEND.md` 的狀態矩陣、無障礙底線
+與證據三級對帳 Master Design 的 `principles.md`、`accessibility.md` 與 `evidence.md`
+(寫入時為 0.3.7),上游改了就回來對一次。
 
 ## 收尾檢查
 
