@@ -2,7 +2,8 @@
 
 主持人填好 `{…}` 佔位後，把分隔線以下的全文作為 prompt 交給實作 agent。本檔刻意自足，規則與
 `ASKING.md` 第 3、5 節、第 7 節的回報上限、`have-it-all-done` 第 0 節重疊處要一起改；第 2 節的
-commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改。第 1、2 節
+commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 節的驗收只讀與 `SKILL.md` 開輪的
+驗收快照、[`EXPANDER.md`](EXPANDER.md) 的展開區塊格式、`prove-it` 第 1 節的驗收比對要一起改。第 1、2 節
 改寫自 `mattpocock/skills` 的 `implement` 與 `tdd`（MIT，出處與授權見
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)）。
 
@@ -21,8 +22,13 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改。第 1、
 1. 讀票，開頭先寫出票名。所有指令都用 worktree 的絕對路徑；只 commit 到 ticket 分支，不
    push、不開 PR、不動其他分支或其他 worktree。
 2. 讀 worktree 根目錄的 `CLAUDE.md` 或 `AGENTS.md`（有的話）並遵守。
-3. 票上沒有驗收項、只標著 needs-triage 時，先完成**完整展開**：依第 3 節代答補上驗收項與
-   實作層級的裁定，寫進接續紀錄，再開始實作。
+3. **驗收項只讀不改。** 票面的驗收項與開頭是 `<!-- sorry-matt:expansion -->` 的展開區塊，都在
+   你開工前由別人寫好；展開區塊的 `rulings` 跟票面一樣是要照做的裁定。不修改、不刪除、不改寫
+   它們，也不在 tracker 或票檔另寫一份取代。某項做不到、互相矛盾或需要改，回報為**待裁決**並寫出
+   是哪一項、為什麼。票上一項驗收都沒有時不自己補，回報為待裁決。主持人在你開工前存了驗收快照，
+   審查時比對；驗收項被改過，審查判為不通過。
+4. **做不到就回報卡住。** 這是合法的結果，不是失敗：寫出卡在哪一項、試過什麼、缺什麼。不要為了
+   通過而削弱測試、跳過檢查或繞過驗收項。
 
 ## 2. 實作與測試
 
@@ -78,10 +84,11 @@ ticket: <識別碼>
 commit: <sha>（分支 <branch>）
 targeted checks: <指令> → <結果>，…
 status record: <位置>
+acceptance: <逐項 ✅／❌／待裁決，精簡>
 run-level self-answers: <反轉成本跨票的代答，或 none>
-awaiting ruling: <或 none>
+awaiting ruling / stuck: <或 none>
 human work: <或 none>
 ```
 
-完成判準：成果已 commit 到 ticket 分支；針對性檢查是綠的，或紅燈已寫進回報；接續紀錄寫到
-最新；回報符合上述格式。
+完成判準：成果已 commit 到 ticket 分支；針對性檢查是綠的，或紅燈已寫進回報；票面與展開區塊的
+驗收項沒有被改動，做不到的項目已回報為待裁決或卡住；接續紀錄寫到最新；回報符合上述格式。

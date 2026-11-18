@@ -17,8 +17,11 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 
 呼叫方給：
 
-- **票**：tracker 原生識別碼與票面全文。驗收項標了出處（原票或展開時補上）的，對照時連出處
-  一起保留。
+- **票**：tracker 原生識別碼、原票票面全文，以及開頭是 `<!-- sorry-matt:expansion -->` 的展開
+  區塊（有的話）。
+- **驗收快照與比對**：實作開工前存下的驗收快照，與交付後對它的比對輸出（兩者都是
+  `sorry-matt/acceptance@1`，比對輸出多一個 `check`）。快照的 `items` 是本次的驗收項，每項標出處：
+  `from: original` 來自原票，`from: expansion` 是展開時補上的，附 `by`、`run`、`round`。
 - **fixed point**：線整合分支。
 - **待審 ref**：ticket 分支。
 - **針對性檢查結果**：實作 agent 回報的指令與結果。
@@ -29,6 +32,12 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 
 - `git rev-parse` 解得到 fixed point 與 ticket 分支，`git diff <fixed point>...<ticket 分支>` 非空。
 - 針對性檢查是綠的。紅燈是實作 agent 的事，審查只收綠燈的票。
+- 驗收快照與比對輸出都在，`id` 是這張票，快照至少有一項驗收。
+
+**驗收被改過就不通過。** 比對輸出的 `check.changed` 為 true 時，直接記一則 blocking finding
+（lens `acceptance`），不經 Finder 與 Verifier：證據是比對輸出的路徑與 `removed`／`added`，修法方向
+是把 tracker 上的驗收恢復成快照，要改的項目由實作 agent 回報為待裁決。審查照常進行，驗收對照一律
+以快照為準，不以改過的版本為準。
 
 在 scratchpad 建立**審查用 worktree**，實跑與突變都只在這裡做，實作 agent 的 worktree 保持原狀：
 
@@ -41,8 +50,8 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 `pnpm install --frozen-lockfile` 這類凍結寫法）。不加相依、不下載新工具 —— 那是永久例外，
 plugin 的 guard hook 也會擋。新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
-完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；審查用 worktree 位於 ticket 分支尖端，
-diff 已存檔。
+完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
+審查用 worktree 位於 ticket 分支尖端，diff 已存檔。
 
 ## 2. Finder：平行找候選
 
@@ -55,8 +64,9 @@ diff 已存檔。
   位置；找不到就列為候選。
 - **跨檔案契約**：追蹤被改函式的呼叫端與被呼叫端，檢查新的前置條件、回傳形狀、例外或時序
   是否破壞任一端。
-- **驗收對照**：把每項驗收定位到 diff 中實現它的位置與驗證它的測試。列出缺漏或只做一半的、
-  看起來做了但做錯的，以及票沒要求的改動（範圍蔓延）。每則引用驗收項原文與出處。
+- **驗收對照**：把驗收快照的每一項定位到 diff 中實現它的位置與驗證它的測試。列出缺漏或只做一半
+  的、看起來做了但做錯的，以及票沒要求的改動（範圍蔓延）。每則引用驗收項原文與出處（`original`，
+  或 `expansion` 附 `by`、`round`）。
 - **repo 慣例**：套用涵蓋變更檔的 `CLAUDE.md`、`AGENTS.md`、`CONTRIBUTING.md`、
   `CODING_STANDARDS.md` 規則。只有能引用規則原文的才列；工具已經強制的不列。
 
@@ -175,13 +185,13 @@ mutant 在突變紀錄都有處置。
 
 ## 5. 結論
 
-- `pass`：沒有成立且 blocking 的 finding。
-- `fix`：至少一則成立且 blocking 的 finding。
+- `pass`：沒有成立且 blocking 的 finding，驗收比對也沒有變。
+- `fix`：至少一則成立且 blocking 的 finding；第 1 節的 `acceptance` finding 算一則。
 - `stuck`：審查做不完 —— 開審前提不成立、還原失敗、審查用 worktree 跑不起測試。寫明原因、
   解除條件，以及已完成到哪一節。開審前的 `stuck`（第 1 節）不算一次審查，排除後重跑 `initial`；
   審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder。
 
-完成判準：結論恰為三者之一，而且由第 4 節的分流推得，不是自評。
+完成判準：結論恰為三者之一，而且由第 1 節的驗收比對與第 4 節的分流推得，不是自評。
 
 ## 6. 輸出與接續紀錄
 
@@ -193,6 +203,7 @@ review: <round>  mode: initial | recheck
 verdict: pass | fix | stuck
 base: <fixed point>@<sha>  head: <ticket branch>@<sha>
 stuck: <reason and how to clear it, or none>
+acceptance: unchanged | changed (<check output path>)  original=<n> expansion=<n> (<by>, round <n>)
 
 reviewer: primary
 findings:
@@ -211,7 +222,7 @@ mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mu
 restored: yes | no
 ```
 
-沒有內容的清單寫 `none`。有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
+沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
 重排；`verdict` 以全部 reviewer 的 finding 推得。
 
 把這個區塊寫進該票接續紀錄的「驗證結果」欄，取代上一個 `sorry-matt:review` 區塊，`round`
@@ -233,7 +244,7 @@ review 或 `suggestion` 區塊；審查用 worktree 已移除。
 不派 Finder，只對上一次的 finding 涉及的行重做驗證。審查用 worktree 依第 1 節以修正後的
 ticket 分支尖端重建。
 
-1. **Fix Verifier**：每則 finding 各交給一個獨立的 subagent，並行派出。Prompt 自足，含審查用
+1. **Fix Verifier**：每則 finding（`acceptance` 除外，見第 4 步）各交給一個獨立的 subagent，並行派出。Prompt 自足，含審查用
    worktree 路徑、finding 的 `summary`、`evidence` 與 `fix`，以及修正 commit 的 diff
    （`git diff <上次 head>..<ticket 分支>`）；省略實作者的說明。先嘗試反駁修法，四題逐一作答並附
    `file:line`：
@@ -247,10 +258,12 @@ ticket 分支尖端重建。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。
 3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10），用本輪新的
    ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
+4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
+   關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
-結論：每則 finding 都已關閉、實跑全綠、finding 行上的 mutant 全被殺掉，而且沒有新的 blocking
-finding → `pass`；否則 `fix`。修正輪數由呼叫方控管。輸出照第 6 節，`mode: recheck`，每則舊
+結論：每則 finding 都已關閉、實跑全綠、finding 行上的 mutant 全被殺掉、驗收比對沒有變，而且沒有
+新的 blocking finding → `pass`；否則 `fix`。修正輪數由呼叫方控管。輸出照第 6 節，`mode: recheck`，每則舊
 finding 的 `summary` 前標 `closed` 或 `open`。
 
-完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據；實跑與突變只碰 finding 涉及的行；
+完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑與突變只碰 finding 涉及的行；
 結論與區塊已依第 6 節寫進接續紀錄。

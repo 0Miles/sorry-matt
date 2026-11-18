@@ -68,14 +68,33 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 跨線工作通常可平行；同線或修改同一批檔案的**互斥** tickets 必須分輪。
 
-對每張 frontier ticket：
+對每張 frontier ticket，先補齊驗收再開工。補驗收項的不能是要通過它的人，所以實作 agent 只讀
+驗收項、不寫也不改：
 
-1. 從所屬線的整合分支建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。
-2. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
+1. **驗收**：以本 skill 的 `scripts/acceptance.mjs` 讀出該票的驗收項與出處，不自己讀票面判斷：
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/acceptance.mjs" github --repo <owner>/<repo> <n>
+   node "${CLAUDE_SKILL_DIR}/scripts/acceptance.mjs" local --ref <該線整合分支> <票檔路徑>
+   ```
+
+   輸出格式寫在腳本檔頭。`needsExpansion` 為 true 的票（一項驗收都沒有，常見於延到進 frontier
+   才完整展開的票）交給**展開 agent**：讀同層的 [`EXPANDER.md`](EXPANDER.md)，把本輪所有這類票
+   填進佔位，以填好的全文 spawn 一個展開 agent，不另加規則。它在 tracker 寫下標明 `by`、`run`、
+   `round` 的展開區塊。它回報後重跑腳本；仍為 true 或被回報為待裁決的票列為**待裁決**，本 run
+   不再派，之後開輪從 frontier 剔除。
+2. **驗收快照**：把每張要派的票的腳本輸出存成 `sorry-matt/runs/<run>/acceptance/<ticket>.json`
+   （`<ticket>` 是票號或票檔名；與 ledger 同在共用目錄，沒有 ledger 時存在 scratchpad），存了就不再覆寫。它是收輪比對驗收
+   有沒有被改過的基準。
+3. 從所屬線的整合分支建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。Local Markdown 的展開區塊
+   已 commit 在整合分支上，ticket 分支從它之後切出。
+4. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
    spawn 一個實作 agent，不另加規則。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
 
-完成判準：本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent，且每個 agent 的
-prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的票均排入不同輪。
+完成判準：本輪派出的每張票在 spawn 實作 agent 之前都已有驗收項與驗收快照，展開補上的驗收項都出自
+展開 agent 並標明 `by`、`run`、`round`；本輪 frontier 中每張票都有獨立分支、worktree 與負責 agent，
+或已列為待裁決；每個實作 agent 的 prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的票
+均排入不同輪。
 
 ### 收輪
 
@@ -84,8 +103,10 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 
 1. **針對性檢查**：確認 agent 回報的受影響範圍檢查是綠的。紅燈先交回原 agent 修到綠，
    審查只收綠燈的票。
-2. **獨立審查**：呼叫 Skill tool 帶入 `prove-it`，模式 `initial`，傳入票（識別碼與票面）、
-   fixed point（該線整合分支）、ticket 分支與步驟 1 的針對性檢查結果。它由審查方做實跑與只限
+2. **獨立審查**：先比對驗收 —— 以 `acceptance.mjs` 加 `--against <驗收快照>` 重讀該票（Local
+   Markdown 改用 `--ref <ticket 分支>`），輸出存檔。再呼叫 Skill tool 帶入 `prove-it`，模式
+   `initial`，傳入票（識別碼、原票票面與展開區塊）、驗收快照與比對輸出的路徑、fixed point（該線
+   整合分支）、ticket 分支與步驟 1 的針對性檢查結果。它由審查方做實跑與只限
    本票 diff 的突變，輸出 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單，並寫進該票的
    接續紀錄。`pass` 進整併，`fix` 進集中修正，`stuck` 依它寫的解除條件排除：開審前的 `stuck`
    不算審查，排除後重跑 `initial`；審中的 `stuck` 排除後只續跑它記下未完成的部分。排除不了就
@@ -93,8 +114,8 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
    只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單；
    「再看一遍比較保險」不是風險。
 3. **集中修正**：本票的 finding 一次全部交回保有 context 的原 agent，一輪修完，不逐則來回。
-   修完重跑受影響範圍的針對性檢查，再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，附上
-   一次的審查區塊：它只對 finding 涉及的行重跑實跑與突變，不是第二次審查。最多兩輪修正。
+   修完重跑受影響範圍的針對性檢查與驗收比對，再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，
+   附上一次的審查區塊與新的比對輸出：它只對 finding 涉及的行重跑實跑與突變，不是第二次審查。最多兩輪修正。
 
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
@@ -107,7 +128,7 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 5. **完成交付**：
    - **GitHub**：push 整合分支。票保持 open，關票交給總 PR（第 2 節）；本票的摘要在它的
      commit message 裡（`IMPLEMENTER.md` 第 2 節）。
-   - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion，將
+   - **Local Markdown**：在整合分支的 ticket 檔勾選每項已驗證的 acceptance criterion（含展開區塊的），將
      `Status` 改為 `ready-for-human`，追加 `## sorry-matt completion`，列出 implementation
      commit、整合分支及通過的檢查，再 commit 這份交付紀錄。
 6. 移除 ticket worktree 與本地 ticket 分支。
@@ -124,7 +145,7 @@ prompt 都是填好佔位的 `IMPLEMENTER.md` 全文；同線或檔案重疊的�
 完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支。
 
 完成判準：本輪每張票都恰好經過一次獨立審查（`prove-it` 的 `initial`，開審前的 `stuck` 不算），每輪修正後各有一次
-`recheck`，結論都寫進接續紀錄；針對性檢查回到綠，並有通過驗收的模式原生
+`recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；針對性檢查回到綠，並有通過驗收的模式原生
 交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；每張票的接續紀錄都寫到
 最新；成功票已整併並清理 ticket worktree 與本地分支。
 

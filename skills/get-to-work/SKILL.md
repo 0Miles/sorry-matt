@@ -75,16 +75,39 @@ startable within this run: list it as **awaiting ruling** with the reason and th
 Work across lines is usually parallel; tickets on the same line or touching the same files are **mutually exclusive**
 and must run in separate rounds.
 
-For each frontier ticket:
+For each frontier ticket, settle its acceptance criteria before work starts. Whoever writes the criteria must not be
+the one who has to pass them, so the implementation agent only reads the criteria; it neither writes nor changes them:
 
-1. From its line integration branch, create `<run>/<NN>-<slug>` and a ticket worktree.
-2. Read the sibling [`IMPLEMENTER.md`](IMPLEMENTER.md), fill in its placeholders, and spawn one implementation
+1. **Acceptance:** read the ticket's criteria and where each came from with this skill's `scripts/acceptance.mjs`,
+   not by reading the ticket text yourself:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/acceptance.mjs" github --repo <owner>/<repo> <n>
+   node "${CLAUDE_SKILL_DIR}/scripts/acceptance.mjs" local --ref <that line's integration branch> <ticket file path>
+   ```
+
+   The output format is in the script's header. Tickets with `needsExpansion` true (not a single criterion, usually
+   a ticket whose full expansion was deferred until it reached the frontier) go to an **expansion agent**: read
+   the sibling [`EXPANDER.md`](EXPANDER.md), fill its placeholders with every such ticket in this round, and spawn
+   one expansion agent with the filled-in text as its prompt, adding no rules of your own. It writes an expansion
+   block on the tracker stating `by`, `run` and `round`. After it reports, re-run the script; a ticket still true,
+   or reported as awaiting ruling, is listed as **awaiting ruling**, is not dispatched again in this run, and is
+   dropped from the frontier at later open-rounds.
+2. **Acceptance snapshot:** save the script's output for every ticket about to be dispatched as
+   `sorry-matt/runs/<run>/acceptance/<ticket>.json`, where `<ticket>` is the ticket number or file name (in the
+   shared directory beside the ledger; in the scratchpad when there is no ledger), and never overwrite it once saved. It is the baseline the round's close
+   compares against to tell whether the criteria were changed.
+3. From its line integration branch, create `<run>/<NN>-<slug>` and a ticket worktree. With Local Markdown the
+   expansion block is already committed on the integration branch, and the ticket branch is cut after it.
+4. Read the sibling [`IMPLEMENTER.md`](IMPLEMENTER.md), fill in its placeholders, and spawn one implementation
    agent with the filled-in text as its prompt, adding no rules of your own. The **status record** it defines is
    that ticket's own source of truth; everywhere else cites it.
 
-Done when: every frontier ticket in the round has an independent branch, worktree, and responsible agent, and every
-agent's prompt is the full `IMPLEMENTER.md` text with its placeholders filled; same-line or file-overlapping tickets
-are absent from the same round.
+Done when: every ticket dispatched this round had acceptance criteria and an acceptance snapshot before its
+implementation agent was spawned, and every criterion added by expansion came from the expansion agent and states
+`by`, `run` and `round`; every frontier ticket in the round has an independent branch, worktree, and responsible
+agent, or is listed as awaiting ruling; every implementation agent's prompt is the full `IMPLEMENTER.md` text with its
+placeholders filled; same-line or file-overlapping tickets are absent from the same round.
 
 ### Close the round
 
@@ -94,9 +117,11 @@ finishing the run.
 
 1. **Targeted checks:** confirm the affected-surface checks the agent reported are green. Red goes back to that
    agent first and comes to review green.
-2. **Independent review:** call the Skill tool with `prove-it` in mode `initial`, passing the ticket (identifier
-   and text), the fixed point (the line integration branch), the ticket branch, and the targeted-check results from
-   step 1. The reviewer does the live run and mutation limited to this ticket's diff, and it writes a fixed-format
+2. **Independent review:** first check the acceptance criteria — re-read the ticket with `acceptance.mjs` plus
+   `--against <acceptance snapshot>` (for Local Markdown, with `--ref <ticket branch>`) and save the output. Then
+   call the Skill tool with `prove-it` in mode `initial`, passing the ticket (identifier, the original ticket text
+   and the expansion block), the paths of the acceptance snapshot and of the check output, the fixed point (the
+   line integration branch), the ticket branch, and the targeted-check results from step 1. The reviewer does the live run and mutation limited to this ticket's diff, and it writes a fixed-format
    `pass` / `fix` / `stuck` verdict and finding list into the ticket's status record. `pass` goes on to integration,
    `fix` to the batched fix, and `stuck` is cleared using the condition it states: a `stuck` before the review
    opens does not count as a review, so once cleared run `initial` again; a `stuck` mid-review, once cleared,
@@ -104,8 +129,9 @@ finishing the run.
    standards and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one,
    naming the risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
 3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
-   round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface, then
-   call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block: it reruns the live
+   round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface and the
+   acceptance diff, then call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block
+   and the new check output: it reruns the live
    run and mutation only on the lines the findings concern, and is not a second review. At most two correction
    rounds.
 
@@ -123,7 +149,8 @@ finishing the run.
 5. **Complete delivery:**
    - **GitHub:** push the integration branch. The ticket stays open; closing it is the aggregate PR's job
      (section 2). This ticket's summary lives in its commit message (`IMPLEMENTER.md` section 2).
-   - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket,
+   - **Local Markdown:** on the integration branch, check every verified acceptance criterion in the ticket
+     (the expansion block's included),
      set `Status` to `ready-for-human`, and append `## sorry-matt completion` with the implementation commit,
      integration branch, and passed checks. Commit this delivery record.
 6. Remove the ticket worktree and local ticket branch.
@@ -142,7 +169,8 @@ After recording the stuck state, also remove the ticket worktree and local ticke
 
 Done when: every ticket in the round went through exactly one independent review (`prove-it` in `initial`; a
 `stuck` before the review opens does not count), each
-correction round had one `recheck`, and every verdict is in the status record; its targeted checks are back to
+correction round had one `recheck`, every call came with that call's check output against the acceptance snapshot,
+and every verdict is in the status record; its targeted checks are back to
 green, and has either a reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a
 specialist reviewer names the risk; every ticket's status record is written current; successful tickets are
 integrated and their ticket worktrees and local branches removed.

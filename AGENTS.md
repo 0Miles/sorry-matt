@@ -167,6 +167,12 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 基準(實跑) | baseline |
 | 上限(突變) | cap |
 | 成立/不成立(裁決) | confirmed / invalid |
+| 展開 agent | expansion agent |
+| 展開區塊 | expansion block |
+| 驗收快照 | acceptance snapshot |
+| 驗收比對 | acceptance diff |
+| 出處(驗收項) | source |
+| 驗收只讀 | read-only acceptance criteria |
 
 ## 外部語義來源
 

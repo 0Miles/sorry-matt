@@ -3,7 +3,9 @@
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
 prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
 limit in section 7, or `have-it-all-done` section 0, change them together; change section 2's commit message
-format together with the aggregate PR body in `SKILL.md`'s finish. Sections 1 and 2 are adapted from
+format together with the aggregate PR body in `SKILL.md`'s finish; change section 1's read-only acceptance rule
+together with the acceptance snapshot in `SKILL.md`'s open-round, the expansion block format in
+[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Sections 1 and 2 are adapted from
 `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
@@ -22,9 +24,16 @@ all the rules you follow, and none of them points at a file or section you canno
 1. Read the ticket and state its title first. Use the worktree's absolute path in every command; commit only to
    the ticket branch — do not push, open a PR, or touch any other branch or worktree.
 2. Read the worktree root's `CLAUDE.md` or `AGENTS.md`, where present, and follow it.
-3. When the ticket has no acceptance criteria and carries only its needs-triage marker, complete the **full
-   expansion** first: answer on the user's behalf per section 3 to fill in the acceptance criteria and the
-   implementation-level rulings, write them into the status record, then implement.
+3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the expansion block that starts
+   with `<!-- sorry-matt:expansion -->`, were written by someone else before you started; the expansion block's
+   `rulings` bind you just as the ticket text does. Do not edit, delete, or reword them, and do not write a
+   replacement copy on the tracker or in the ticket file. When a criterion cannot be met, contradicts another, or
+   needs changing, report it as **awaiting ruling**, naming the criterion and why. When the ticket has no criteria
+   at all, do not write your own; report that as awaiting ruling. The host saved an acceptance snapshot before you
+   started and the review compares against it: changed criteria fail the review.
+4. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
+   stuck on, what you tried, and what is missing. Do not weaken tests, skip checks, or route around a criterion to
+   get a pass.
 
 ## 2. Implement and test
 
@@ -89,10 +98,13 @@ ticket: <identifier>
 commit: <sha> (branch <branch>)
 targeted checks: <command> → <result>, …
 status record: <location>
+acceptance: <per criterion ✅ / ❌ / awaiting ruling, briefly>
 run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
-awaiting ruling: <or none>
+awaiting ruling / stuck: <or none>
 human work: <or none>
 ```
 
 Done when: the work is committed to the ticket branch; the targeted checks are green, or the red is stated in the
-report; the status record is written current; the report follows the format above.
+report; the acceptance criteria in the ticket text and the expansion block are unchanged, and every criterion that
+could not be met is reported as awaiting ruling or stuck; the status record is written current; the report follows
+the format above.

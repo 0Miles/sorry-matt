@@ -73,7 +73,8 @@ is affected; where a count exists, give the count. It is the ordering key for th
 not an adjective.
 
 Each self-answer is written once, in one of two layers: an implementation detail that affects one ticket only and
-is reversible inside that ticket's worktree goes in that ticket's status record; only the self-answers whose cost
+is reversible inside that ticket's worktree goes in that ticket's status record (or, when made while expanding the
+ticket before work starts, in its expansion block); only the self-answers whose cost
 to reverse crosses tickets or deliveries enter the run-level **self-answer log**. Decisions the user made in person
 during an earlier grilling are requirements, not self-answers.
 
