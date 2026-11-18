@@ -83,19 +83,49 @@ npx modern-web-guidance@latest install
 
 ## Guard hook
 
-The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`). It runs
-in **every session where the plugin is enabled**, not only sorry-matt runs, and denies:
+The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`) on
+`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and MCP tools. It runs in **every session
+where the plugin is enabled**, not only sorry-matt runs. It does not decide what an agent may do — your permission
+settings do — it only makes sure you are asked before the few things that should never happen unseen. Each call
+gets one of three levels:
 
-- the permanent exceptions — force-pushes, outgoing messages, cloning (along with installing an editor or agent
-  extension and piping a fetched script into a shell), touching credentials or secrets, irrecoverable deletes,
-  payments, permission changes (Claude Code's settings files included), and production changes;
-- every route that lands changes on `main`, `master`, or the remote's default branch without `gh pr merge`
-  (direct pushes, `gh api` merge and ref endpoints, `gh pr merge --admin`, MCP merge tools);
-- `gh pr merge` itself in `bypassPermissions` and `auto` mode, where nobody would confirm it.
+| Level | What | Covers |
+| --- | --- | --- |
+| **double** | two-step confirmation, with the consequences spelled out | catastrophic actions: a recursive delete of `~`, `/`, a drive root, `.`, `..` or a path outside the project; `format`, `mkfs*`, `dd of=/dev/…`, `diskpart`; `dropdb`, SQL `DROP DATABASE/SCHEMA/TABLE`, `TRUNCATE`, `FLUSHALL`/`FLUSHDB`, `dropDatabase()`; `gh repo delete` and the API/GraphQL repo deletes; a force-push to, or delete of, `main`, `master` or the remote's default branch. Outgoing messages: mailers, chat and mail APIs through `curl` and friends, MCP send/post actions. Payments: `stripe` writes, non-GET calls to payment APIs, MCP payment actions |
+| **ask** | asked once | releases and production deploys (`npm`/`pnpm`/`yarn`/`bun` publish, `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply and destroy, deploy tools and SQL writes aimed at production, `gh workflow run` with prod); writes to Claude Code's settings files; a merge that deploys to production right away (below) |
+| none | let through to your permission settings | everything else: force-pushing a feature branch, `git reset --hard`, `git clean`, deletes inside the project, cloning, installing packages or extensions, `curl … | sh`, reading or writing credential files, `sudo`, `chmod`, `icacls` |
 
-Installing packages (`npm install`, `npx`, `pip install`, `brew install` and the like) is allowed. To run a blocked
-command, run it in your own terminal. To turn the guard off, set it in the `env` of your Claude Code settings (the
-agent cannot write those files):
+**Two-step confirmation.** The first time a double-level shell command comes in, the hook asks with the
+consequences ("recursive delete of /home/me: no recycle bin, unrecoverable without a backup") and swaps the command
+for `node "<plugin>/hooks/confirm.mjs" <token>`. Allowing that prompt runs only `confirm.mjs`, which records the
+approval and asks the agent to resend the original command unchanged; refusing records nothing. The resend — same
+session, same tool, same input, within 10 minutes — gets the second prompt, and only allowing that one runs it. An
+approval is spent on that second prompt. MCP tools cannot have their input swapped, so their first call is denied
+with the `confirm.mjs` command to run first. The state lives in `<os temp dir>/sorry-matt-guard/<session>.json`; if
+it cannot be read or written the call is never let through on that account. In `bypassPermissions` mode nothing
+guarantees a prompt is shown, so double-level calls are always denied there: run them yourself in a mode with
+prompts. In `auto` and every other mode the flow above applies, since a PreToolUse `ask` goes to the permission
+prompt.
+
+**Merges that deploy.** `gh pr merge` (with `--admin` or `--auto` too) and every direct write to a protected branch
+(`git push` to it, `gh api` merge, ref and contents endpoints, GraphQL `mergePullRequest`,
+`enablePullRequestAutoMerge`, `enqueuePullRequest`, `createCommitOnBranch`, MCP merge and push tools) are asked
+only when the merge would deploy right away. The hook takes, in order:
+
+1. `SORRY_MATT_MERGE_DEPLOYS` (`yes`/`no`) in the environment, or `{"mergeDeploysProduction": true|false}` in the
+   repo's `.claude/sorry-matt.json`;
+2. otherwise detection: the base branch (`gh pr view <pr> --json baseRefName`, or the pushed ref), then every
+   `.github/workflows/*.y*ml` on `origin/<base>` (the working tree when that ref is missing). A workflow that a push
+   to the base triggers deploys when a job has `environment: prod`/`production`, uses a known deploy action
+   (`actions/deploy-pages`, `peaceiris/actions-gh-pages`, `cloudflare/wrangler-action`, …), or runs
+   `vercel --prod`, `fly deploy`, `npm publish`, `cargo publish`, `gh release create`, or `kubectl apply`/
+   `helm upgrade` with prod — unless that job or step is gated on a release tool's output (release-please's
+   `release_created`, changesets' `published`) or on a tag.
+
+Detected: asked, naming the workflow and the signal. Clearly not: let through to your permission settings. A lookup
+that fails or cannot tell: asked, saying why.
+
+To turn the guard off, set it in the `env` of your Claude Code settings:
 
 ```json
 {
@@ -103,10 +133,11 @@ agent cannot write those files):
 }
 ```
 
-In other modes, whether `gh pr merge` goes ahead is up to your permission settings. To let sorry-matt merge
-aggregate PRs without a prompt, add these rules to `.claude/settings.local.json` (one repo) or
-`~/.claude/settings.json` (every project), merging them into an existing `permissions.allow` if there is one; to be
-asked every time put them under `ask`, and to never allow it put them under `deny`:
+Whether `gh pr merge` goes ahead otherwise is up to your permission settings, and sorry-matt sends the aggregate PR's
+merge only when a rule allows it or you told it to merge in that run. To let it merge aggregate PRs without a
+prompt, add these rules to `.claude/settings.local.json` (one repo) or `~/.claude/settings.json` (every project),
+merging them into an existing `permissions.allow` if there is one; to be asked every time put them under `ask`,
+and to never allow it put them under `deny`:
 
 ```json
 {
@@ -201,7 +232,8 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
 - `hooks/` holds the guard hook, the compaction reminder, and the run budget hooks; `scripts/guard.test.mjs`,
-  `scripts/reread.test.mjs`, and `scripts/budget.test.mjs` test them in the same CI run.
+  `scripts/deploy-on-merge.test.mjs`, `scripts/reread.test.mjs`, and `scripts/budget.test.mjs` test them in the
+  same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
   `scripts/acceptance.test.mjs`, `scripts/overlap.test.mjs`, `scripts/review-guide.test.mjs`) run in the same CI run.
