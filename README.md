@@ -38,21 +38,35 @@ You can also use the `/plugin` interface in Claude Code.
 
 ## Guard hook
 
-The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`). In every
-session where the plugin is enabled, it denies the permanent exceptions — force-pushes, outgoing messages,
-installing new packages or cloning, touching credentials or secrets, irrecoverable deletes, payments, permission
-changes (Claude Code's settings files included), and production changes — along with merges that skip
-`gh pr merge`. Restoring dependencies from a lockfile (`npm ci`, `npm install` with no package) is allowed. To run a
-blocked command yourself, run it in your own terminal.
+The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`). It runs
+in **every session where the plugin is enabled**, not only sorry-matt runs, and denies:
 
-Whether `gh pr merge` goes through is up to your permission settings. To let sorry-matt merge aggregate PRs without
-a prompt, add this to `.claude/settings.local.json` (one repo) or `~/.claude/settings.json` (every project); to be
-asked every time put it under `ask`, and to never allow it put it under `deny`:
+- the permanent exceptions — force-pushes, outgoing messages, installing new packages (including `npx`,
+  `pnpm dlx`, `uvx` downloads) or cloning, touching credentials or secrets, irrecoverable deletes, payments,
+  permission changes (Claude Code's settings files included), and production changes;
+- every route that lands changes on `main`, `master`, or the remote's default branch without `gh pr merge`
+  (direct pushes, `gh api` merge and ref endpoints, `gh pr merge --admin`, MCP merge tools);
+- `gh pr merge` itself in `bypassPermissions` and `auto` mode, where nobody would confirm it.
+
+Restoring dependencies from a lockfile (`npm ci`, `pnpm install --frozen-lockfile`) and running a project-local bin
+with `npx` are allowed. To run a blocked command, run it in your own terminal. To turn the guard off, set it in the
+`env` of your Claude Code settings (the agent cannot write those files):
+
+```json
+{
+  "env": { "SORRY_MATT_GUARD": "off" }
+}
+```
+
+In other modes, whether `gh pr merge` goes ahead is up to your permission settings. To let sorry-matt merge
+aggregate PRs without a prompt, add these rules to `.claude/settings.local.json` (one repo) or
+`~/.claude/settings.json` (every project), merging them into an existing `permissions.allow` if there is one; to be
+asked every time put them under `ask`, and to never allow it put them under `deny`:
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)"]
+    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
   }
 }
 ```

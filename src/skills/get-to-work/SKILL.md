@@ -148,8 +148,9 @@ Local Markdown 的 blocker 只在同一整合分支可讀到前置票的完整 `
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
 
 GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是確認呼叫，留到清理之後送出；
-放不放行由 Claude Code 的權限設定決定（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或
-被拒就維持交給人，輸出附上能放行它的權限規則片段，不為此另開提問。
+放不放行由 Claude Code 的權限設定決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下
+（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
+權限規則片段，不為此另開提問。
 
 線交付完成後清理：呼叫 Skill tool 帶入 `clean-it-up`，照它的證據規則收掉本輪產生的
 ticket worktree 與已合併的本地分支。**待人審查的交付物不在清理範圍**：Local Markdown 的

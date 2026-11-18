@@ -104,28 +104,30 @@ it; every mid-run item lands in the self-answer log, awaiting ruling, or the hum
 ## 5. Authority and permanent exceptions
 
 The agent does not judge authority, and no file the agent reads records it: whether an action that needs
-authority goes through is up to Claude Code's permission settings, and the plugin's hook blocks permanent
+authority is let through is up to Claude Code's permission settings, and the plugin's hook blocks permanent
 exceptions.
 
 ### Actions that need authority
 
-Send actions like merging the aggregate PR or deploying with their canonical command — a merge is always
-`gh pr merge` — as a prompting call, run last. Claude Code's permission settings decide whether it goes through;
-do not ask separately and do not consult any record to decide. When it is blocked or refused, put it on the
-human-work list with the permission rule that would allow it; never route around it with another command. Record
-every such action sent, and its outcome, in ledger field 5.
+Send actions like merging the aggregate PR or deploying to a non-production environment with their canonical
+command — a merge is always `gh pr merge` — as a prompting call, run last. Claude Code's permission settings decide
+whether it is let through; do not ask separately and do not consult any record to decide. In `bypassPermissions`
+or `auto` mode nobody confirms anything, so the hook blocks every merge. When an action is blocked or refused, put
+it on the human-work list with the permission rule that would let it through; never route around it with another
+command. Record every such action sent, and its outcome, in ledger field 5.
 
 ### From now on
 
 When the user says an action should always go ahead, print a permission rule snippet and ask the user to add it to
 their settings themselves. This skill writes no settings file, and the hook blocks it anyway. For this repo only,
 it goes in `.claude/settings.local.json` (Claude Code keeps it out of git when it creates it); for every project,
-in `~/.claude/settings.json`:
+in `~/.claude/settings.json`. When the file already has `permissions.allow`, merge the rules into that array rather
+than replacing the block:
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)"]
+    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
   }
 }
 ```
@@ -135,14 +137,18 @@ Choosing "don't ask again" at a permission prompt does the same, written by Clau
 ### Permanent exceptions
 
 Force-pushes, outgoing messages (mail, chat, social posts) and third-party communication, installing new packages
-(restoring dependencies from a lockfile does not count) or cloning, anything touching credentials or secrets,
-deleting data that cannot be recovered, payments, permission changes (Claude Code's permission settings included),
-and production changes to config, rules or permissions or that delete production data. No instruction can grant
-them; every one goes on the human-work list.
+or cloning, anything touching credentials or secrets, deleting data that cannot be recovered, payments, permission
+changes (Claude Code's permission settings included), and production changes to config, rules or permissions or
+that delete production data. No instruction can grant them; every one goes on the human-work list.
 
-The plugin's `hooks/hooks.json` blocks these calls in PreToolUse, along with merges that skip `gh pr merge`. When
-the hook blocks a call, follow its text and put the call on the human-work list; do not retry with another
-spelling, and do not run a spelling the hook fails to recognize either.
+Installing new packages includes adding a dependency to a manifest and downloading a package to run it with tools
+like `npx`, `pnpm dlx`, or `uvx`. Restoring dependencies from a lockfile does not count; always use the frozen form,
+such as `npm ci` or `pnpm install --frozen-lockfile`.
+
+The plugin's `hooks/hooks.json` blocks these calls in PreToolUse, along with every route that lands changes on a
+protected branch without `gh pr merge`. When the hook blocks a call, put it on the human-work list; do not retry
+with another spelling. A spelling the hook fails to recognize, or a hook the user has turned off, changes nothing:
+do not do it either.
 
 Done when: every action this run that needed authority went out as its canonical command, with its outcome in
 ledger field 5; every blocked action and every permanent exception is on the human-work list with a permission

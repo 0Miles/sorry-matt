@@ -1,11 +1,16 @@
-// Which tool calls are permanent exceptions (ASKING.md section 5), and which ones merge a PR
-// around `gh pr merge`. `classify` is the whole interface: a PreToolUse event in, a verdict out.
+// Which tool calls are permanent exceptions (ASKING.md section 5), which ones land changes on a
+// protected branch around `gh pr merge`, and which ones merge a PR. `classify` is the whole
+// interface: a PreToolUse event in, a verdict out. Whether a verdict is denied is decision.mjs's call.
 import { tmpdir, homedir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { parse, unwrap, commandName } from './shell.mjs';
 
 export const CATEGORIES = {
   'force-push': 'force-push',
-  'merge-bypass': 'merging outside `gh pr merge`',
+  merge: 'merging a pull request',
+  'merge-bypass': 'landing changes on a protected branch outside `gh pr merge`',
   'outgoing-message': 'outgoing message',
   'install-or-clone': 'installing a package or cloning',
   credentials: 'touching credentials or secrets',
@@ -34,7 +39,7 @@ export function classify(event) {
     if (path && tool !== 'Read' && tool !== 'Grep' && isClaudeSettings(path)) return hit('permissions', `${tool} ${path}`);
     return null;
   }
-  if (tool.startsWith('mcp__')) return classifyMcp(tool);
+  if (tool.startsWith('mcp__')) return classifyMcp(tool, input);
   return null;
 }
 
@@ -94,13 +99,16 @@ const positionals = (args, valued = new Set()) => {
   return out;
 };
 
+// The first verdict that is always denied wins over a `merge`, which is denied only in some modes.
 export function classifyCommand(command, dialect, cwd) {
   const segments = parse(command, dialect);
+  let merge = null;
   for (let s = 0; s < segments.length; s++) {
     const verdict = classifySegment(segments[s], segments[s - 1], cwd);
-    if (verdict) return verdict;
+    if (verdict?.category === 'merge') merge ??= verdict;
+    else if (verdict) return verdict;
   }
-  return null;
+  return merge;
 }
 
 const READERS = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff']);
@@ -171,7 +179,7 @@ function redirectVerdict(seg) {
 function commandRule(name, args, line, seg, cwd) {
   switch (name) {
     case 'git':
-      return gitRule(args, line);
+      return gitRule(args, line, cwd);
     case 'gh':
       return ghRule(args, line, seg);
     case 'hg':
@@ -180,11 +188,18 @@ function commandRule(name, args, line, seg, cwd) {
       return /^(checkout|co|export)$/.test(args[0] ?? '') ? hit('install-or-clone', line) : null;
     case 'npm':
     case 'cnpm':
+      if (args[0] === 'exec' || args[0] === 'x') return downloadsPackage(args.slice(1), cwd) ? hit('install-or-clone', line) : null;
       return packageRule(name, args, line, ['install', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'add'], [], ['publish']);
     case 'pnpm':
+      if (args[0] === 'dlx') return hit('install-or-clone', line);
       return packageRule(name, args, line, ['install', 'i'], ['add'], ['publish']);
+    case 'npx':
+    case 'bunx':
+      return downloadsPackage(args, cwd) ? hit('install-or-clone', line) : null;
+    case 'uvx':
+      return hit('install-or-clone', line);
     case 'yarn':
-      if (args[0] === 'global' && args[1] === 'add') return hit('install-or-clone', line);
+      if ((args[0] === 'global' && args[1] === 'add') || args[0] === 'dlx') return hit('install-or-clone', line);
       return packageRule(name, args, line, ['install'], ['add'], ['publish', 'npm']);
     case 'bun':
       return packageRule(name, args, line, ['install', 'i'], ['add', 'a'], ['publish']);
@@ -200,10 +215,10 @@ function commandRule(name, args, line, seg, cwd) {
     }
     case 'uv':
       if (args[0] === 'pip') return pipRule(args.slice(1), line);
-      if (args[0] === 'add' || (args[0] === 'tool' && args[1] === 'install')) return hit('install-or-clone', line);
+      if (args[0] === 'add' || (args[0] === 'tool' && /^(install|run)$/.test(args[1] ?? ''))) return hit('install-or-clone', line);
       return null;
     case 'pipx':
-      return args[0] === 'install' ? hit('install-or-clone', line) : null;
+      return args[0] === 'install' || args[0] === 'run' ? hit('install-or-clone', line) : null;
     case 'cargo':
       if (args[0] === 'add' || (args[0] === 'install' && !hasLong(args, '--path'))) return hit('install-or-clone', line);
       return args[0] === 'publish' ? hit('production', line) : null;
@@ -331,6 +346,24 @@ function packageRule(name, args, line, installs, adds, publishes) {
   return null;
 }
 
+// `npx`/`bunx`/`npm exec` run a bin from node_modules when the project has it, and download the
+// package otherwise. `--package`/`-p` always names a package to fetch.
+const NPX_VALUED = new Set(['-c', '--call', '--prefix', '--workspace', '-w', '--registry', '--cache']);
+function downloadsPackage(args, cwd) {
+  if (args.some((a) => a === '-p' || a.startsWith('--package'))) return true;
+  const target = positionals(args, NPX_VALUED)[0];
+  if (!target) return false;
+  if (/^(\.|\/|[a-z]:[\\/])/i.test(target)) return false; // a local path
+  // `pkg`, `@scope/pkg`: run the local bin if there is one. A version (`pkg@2`), URL, or git spec downloads.
+  const m = /^(?:@[\w.-]+\/)?([\w.-]+)$/.exec(target);
+  if (!m) return true;
+  const bin = m[1];
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    if (['', '.cmd', '.ps1'].some((ext) => existsSync(join(dir, 'node_modules', '.bin', bin + ext)))) return false;
+    if (dirname(dir) === dir) return true;
+  }
+}
+
 const PIP_VALUED = new Set(['-r', '--requirement', '-c', '--constraint', '-e', '--editable', '-i', '--index-url', '--extra-index-url', '-t', '--target', '--prefix', '-f', '--find-links', '--root', '--python']);
 function pipRule(args, line) {
   if (args[0] !== 'install') return null;
@@ -366,20 +399,55 @@ function gitSub(args) {
 }
 
 const PROTECTED_BRANCH = /^(refs\/heads\/)?(main|master)$/;
+
+const git = (dir, ...args) => {
+  try {
+    return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }).trim();
+  } catch {
+    return '';
+  }
+};
+// main, master, and the remote's default branch when the clone knows it.
+function protectedBranches(dir, remote) {
+  const names = new Set(['main', 'master']);
+  if (/^[\w.-]+$/.test(remote || 'origin')) {
+    const head = git(dir, 'symbolic-ref', '--short', '-q', `refs/remotes/${remote || 'origin'}/HEAD`);
+    if (head) names.add(head.slice(head.indexOf('/') + 1));
+  }
+  return names;
+}
+// The directory git runs in: `-C` options resolve against the event's cwd.
+function gitDir(args, cwd) {
+  let dir = cwd;
+  for (let k = 0; k < args.length && args[k].startsWith('-'); k++) {
+    if (args[k] === '-C') dir = resolve(dir, args[++k] ?? '');
+    else if (GIT_GLOBAL_VALUED.has(args[k])) k++;
+  }
+  return dir;
+}
 const PUSH_VALUED = new Set(['-o', '--push-option', '--repo', '--receive-pack', '--exec']);
 
-function gitRule(args, line) {
+function gitRule(args, line, cwd) {
   const { sub, rest } = gitSub(args);
   switch (sub) {
     case 'push': {
       const flags = shortFlags(rest.filter((a, k) => !PUSH_VALUED.has(rest[k - 1])));
       if (flags.has('f') || hasLong(rest, '--force', '--force-with-lease', '--force-if-includes', '--mirror')) return hit('force-push', line);
-      const [, ...refspecs] = positionals(rest, PUSH_VALUED);
+      const [remote, ...refspecs] = positionals(rest, PUSH_VALUED);
       if (refspecs.some((r) => r.startsWith('+'))) return hit('force-push', line);
+      const dir = gitDir(args, cwd);
+      const branches = protectedBranches(dir, remote);
+      const isProtected = (ref) => branches.has(ref.replace(/^refs\/heads\//, ''));
+      const dst = (r) => (r.includes(':') ? r.slice(r.lastIndexOf(':') + 1) : r);
       const deleting = flags.has('d') || hasLong(rest, '--delete');
-      if (deleting && refspecs.some((r) => PROTECTED_BRANCH.test(r))) return hit('irrecoverable-delete', line);
-      if (refspecs.some((r) => r.includes(':') && PROTECTED_BRANCH.test(r.slice(r.lastIndexOf(':') + 1)))) return hit('merge-bypass', line);
-      return null;
+      if (refspecs.some((r) => (deleting || r.startsWith(':')) && isProtected(dst(r)))) return hit('irrecoverable-delete', line);
+      if (deleting) return null;
+      if (hasLong(rest, '--all', '--branches')) return hit('merge-bypass', line);
+      // No refspec pushes the current branch; `HEAD` and `@` name it too.
+      const current = () => git(dir, 'symbolic-ref', '--short', '-q', 'HEAD');
+      const targets = refspecs.length ? refspecs.map(dst) : hasLong(rest, '--tags') ? [] : ['HEAD'];
+      const named = targets.map((t) => (t === 'HEAD' || t === '@' ? current() : t));
+      return named.some((t) => t && isProtected(t)) ? hit('merge-bypass', line) : null;
     }
     case 'clone':
       return hit('install-or-clone', line);
@@ -425,7 +493,8 @@ function ghRule(args, line, seg) {
     case 'api':
       return ghApi(args.slice(1), line, seg);
     case 'pr':
-      return verb === 'merge' && hasLong(rest, '--admin') ? hit('merge-bypass', line) : null;
+      if (verb !== 'merge') return null;
+      return hasLong(rest, '--admin') ? hit('merge-bypass', line) : hit('merge', line);
     case 'repo':
       if (verb === 'clone' || (verb === 'fork' && hasLong(rest, '--clone') && !rest.includes('--clone=false'))) return hit('install-or-clone', line);
       if (verb === 'delete') return hit('irrecoverable-delete', line);
@@ -496,10 +565,20 @@ export function apiRule(method, rawEndpoint, body, line) {
     if (/\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(body)) return hit('merge-bypass', line);
     if (/\b(deleteRepository|deleteIssue)\b/.test(body)) return hit('irrecoverable-delete', line);
     if (/\b(updateRefs?)\b/.test(body) && /\bforce\s*:\s*true\b/.test(body)) return hit('force-push', line);
+    if (/\bcreateCommitOnBranch\b/.test(body) && /(branchName|qualifiedBranchName)["']?\s*:\s*["']?(refs\/heads\/)?(main|master)\b/.test(body)) return hit('merge-bypass', line);
     return null;
   }
   if (reading) return null;
   if (new RegExp(`^${OWNER_REPO}/git/refs/`).test(endpoint) && /\bforce["']?\s*[=:]\s*["']?true\b/.test(body)) return hit('force-push', line);
+  // Writing a protected branch's ref, or committing to it through the contents API, skips the PR.
+  if (new RegExp(`^${OWNER_REPO}/git/refs/heads/(main|master)$`).test(endpoint)) {
+    return hit(method === 'DELETE' ? 'irrecoverable-delete' : 'merge-bypass', line);
+  }
+  if (new RegExp(`^${OWNER_REPO}/git/refs$`).test(endpoint) && /refs\/heads\/(main|master)\b/.test(body)) return hit('merge-bypass', line);
+  if (new RegExp(`^${OWNER_REPO}/contents/`).test(endpoint)) {
+    const branch = /\bbranch["']?\s*[=:]\s*["']?([\w./-]+)/.exec(body)?.[1];
+    if (!branch || PROTECTED_BRANCH.test(branch)) return hit('merge-bypass', line);
+  }
   if (SECRET_PATHS.test(endpoint)) return hit('credentials', line);
   if (PERMISSION_PATHS.test(endpoint)) return hit('permissions', line);
   if (new RegExp(`^${OWNER_REPO}$`).test(endpoint)) {
@@ -555,9 +634,19 @@ const MESSAGING_ACTION = /(^|_)(send|post|reply|forward|publish|schedule|broadca
 const PAYMENT_SERVER = /(stripe|paypal|square|braintree|adyen|wise|payment|billing|checkout)/i;
 const PAYMENT_ACTION = /(^|_)(create|confirm|capture|refund|pay|transfer|payout|cancel|charge|void|finalize)/i;
 
-function classifyMcp(tool) {
+const GIT_SERVER = /(git|github|gitlab|bitbucket|gitea|forgejo)/i;
+const MERGE_ACTION = /(^|_)merge_(pull_request|pr|request|branch)($|_)/i;
+const PUSH_ACTION = /(^|_)(push_files|push|create_or_update_file|update_file|delete_file|create_commit|commit_files)($|_)/i;
+
+function classifyMcp(tool, input = {}) {
   const [, server = '', action = ''] = /^mcp__(.+?)__(.+)$/.exec(tool) || [];
   if ((MESSAGING_SERVER.test(server) || MESSAGING_SERVER.test(action)) && MESSAGING_ACTION.test(action)) return hit('outgoing-message', tool);
   if (PAYMENT_SERVER.test(server) && PAYMENT_ACTION.test(action)) return hit('payments', tool);
+  // Merges go through `gh pr merge` only; pushes may not land on a protected branch.
+  if (MERGE_ACTION.test(action) || (GIT_SERVER.test(server) && /(^|_)merge($|_)/i.test(action))) return hit('merge-bypass', tool);
+  if (GIT_SERVER.test(server) && PUSH_ACTION.test(action)) {
+    const branch = String(input.branch || input.ref || '');
+    if (!branch || PROTECTED_BRANCH.test(branch)) return hit('merge-bypass', `${tool} ${branch || '(default branch)'}`.trim());
+  }
   return null;
 }

@@ -171,9 +171,10 @@ Then deliver each line according to its mode:
   do not simulate a PR or close operation.
 
 Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`. It is a prompting call, sent
-after cleanup; Claude Code's permission settings decide whether it goes through (`ASKING.md` section 5). When it
-goes through, report the merge; when it is blocked or refused, the delivery stays with the human and the output
-carries the permission rule snippet that would allow it. Do not open a question for it.
+after cleanup; Claude Code's permission settings decide whether it is let through, and in `bypassPermissions` and
+`auto` mode the hook always blocks it (`ASKING.md` section 5). When it is let through, report the merge; when it is
+blocked or refused, the delivery stays with the human and the output carries the permission rule snippet that
+would let it through. Do not open a question for it.
 
 Once a line is delivered, clean up: call the Skill tool with `clean-it-up` and let its evidence rules retire the
 ticket worktrees and merged local branches this run created. **Deliverables awaiting human review are out of
@@ -186,7 +187,7 @@ and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (
 filed along the way with a recommendation that the user run `/triage`.
 
 Done when: every line went through one line-level simplify and one full verification and ended green, and has
-exactly one human-mergeable delivery, or was merged, with the permission settings letting it through, and reported; the reconciliation
-table covers the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree
-and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
+exactly one human-mergeable delivery, or was merged after the permission settings let it through and reported; the
+reconciliation table covers the frozen set exactly once, every row pointing at that ticket's status record; every
+ticket worktree and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
 branches remain; the output lists the authorization outcomes and this run's metrics.

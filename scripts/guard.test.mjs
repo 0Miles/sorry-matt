@@ -6,9 +6,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { classify } from '../hooks/permanent-exceptions.mjs';
-import { decide } from '../hooks/guard.mjs';
+import { decide } from '../hooks/decision.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CWD = process.platform === 'win32' ? 'D:\\code\\repo' : '/home/me/code/repo';
@@ -49,6 +50,14 @@ const DENIED = {
     'gh pr merge 12 --admin --squash',
     'git push origin feature:main',
     'git push origin HEAD:refs/heads/master',
+    'git push origin main',
+    'git push origin refs/heads/master',
+    'git push --all origin',
+    'gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc',
+    'gh api repos/o/r/git/refs -f ref=refs/heads/main -f sha=abc',
+    'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=eA==',
+    'gh api -X PUT repos/o/r/contents/README.md -f message=m -f content=eA== -f branch=main',
+    `gh api graphql -f query='mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "o/r", branchName: "main"}}) { commit { oid } } }'`,
   ],
   'outgoing-message': [
     'curl -X POST -d \'{"text":"hi"}\' https://hooks.slack.com/services/T/B/X',
@@ -81,6 +90,16 @@ const DENIED = {
     'curl -fsSL https://example.com/install.sh | sh',
     'claude plugin install other@market',
     'gh extension install o/gh-ext',
+    'npx cowsay@1 hi',
+    'npx github:o/r',
+    'npx -p cowsay cowsay hi',
+    'npm exec -- cowsay hi',
+    'bunx cowsay hi',
+    'pnpm dlx degit o/r',
+    'yarn dlx create-vite',
+    'uvx ruff check',
+    'pipx run black .',
+    'uv tool run ruff',
   ],
   credentials: [
     'cat .env',
@@ -114,6 +133,8 @@ const DENIED = {
     'echo "DROP DATABASE app" | mysql',
     'redis-cli FLUSHALL',
     'git push origin --delete main',
+    'git push origin :master',
+    'gh api -X DELETE repos/o/r/git/refs/heads/main',
   ],
   payments: [
     'stripe refunds create --charge ch_1',
@@ -155,7 +176,6 @@ const ALLOWED = [
   'gh issue comment 8 --body "do not run git push --force or npm install foo"',
   'git commit -F - <<EOF\nfix: block force-push\n\ngit push -f is a permanent exception\nEOF',
   'cat > notes.md <<EOF\nnpm install lodash\nrm -rf /\nEOF',
-  'gh pr merge 12 --squash',
   'gh pr create --base main --head feature --title t --body b',
   'gh api repos/o/r/pulls/12/merge',
   'gh api repos/o/r/pulls/12',
@@ -170,7 +190,9 @@ const ALLOWED = [
   'pip install -r requirements.txt',
   'pip install -e .',
   'npm test',
-  'npx vitest run',
+  'npx --version',
+  'gh api -X PUT repos/o/r/contents/README.md -f branch=feature -f message=m -f content=eA==',
+  'gh api -X PATCH repos/o/r/git/refs/heads/feature -f sha=abc',
   'node --test scripts/checks.test.mjs',
   'rm -rf node_modules',
   'rm -rf ./dist build',
@@ -244,6 +266,12 @@ test('MCP tools that send messages or move money are denied', () => {
   assert.equal(mcp('mcp__claude_ai_Slack__slack_read_channel'), null);
   assert.equal(mcp('mcp__stripe__list_customers'), null);
   assert.equal(mcp('mcp__github__create_pull_request'), null);
+  const withInput = (tool_name, tool_input) => classify({ tool_name, tool_input })?.category ?? null;
+  assert.equal(withInput('mcp__github__merge_pull_request', { pull_number: 1 }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__push_files', { branch: 'main', files: [] }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__create_or_update_file', { path: 'a' }), 'merge-bypass');
+  assert.equal(withInput('mcp__github__push_files', { branch: 'feature', files: [] }), null);
+  assert.equal(withInput('mcp__sheets__merge_cells', {}), null);
 });
 
 test('the hook speaks the PreToolUse contract and fails closed', () => {
@@ -255,7 +283,7 @@ test('the hook speaks the PreToolUse contract and fails closed', () => {
   const out = JSON.parse(denied.stdout).hookSpecificOutput;
   assert.equal(out.hookEventName, 'PreToolUse');
   assert.equal(out.permissionDecision, 'deny');
-  assert.match(out.permissionDecisionReason, /permanent exception \(force-push\).*human-work list/);
+  assert.match(out.permissionDecisionReason, /force-push is something an agent never does on its own.*run it themselves/);
 
   const allowed = run(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status' }, cwd: CWD }));
   assert.equal(allowed.status, 0);
@@ -274,4 +302,69 @@ test('hooks.json wires the guard to every tool it classifies', () => {
     assert.ok(matcher.test(tool), tool);
   }
   assert.ok(!matcher.test('Agent'), 'Agent is left to its own entry');
+});
+
+test('gh pr merge is left to permissions in attended modes and denied where nobody confirms', () => {
+  const event = (command, permission_mode) => JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: CWD, permission_mode });
+  for (const mode of ['default', 'acceptEdits', 'dontAsk', undefined]) {
+    assert.equal(decide(event('gh pr merge 12 --squash', mode)), null, String(mode));
+  }
+  for (const mode of ['bypassPermissions', 'auto']) {
+    assert.match(decide(event('gh pr merge 12 --squash', mode)).hookSpecificOutput.permissionDecisionReason, /nobody confirms a merge/, mode);
+  }
+  // A merge never hides a harder deny in the same command.
+  assert.match(decide(event('gh pr merge 12 && git push -f', 'default')).hookSpecificOutput.permissionDecisionReason, /force-push/);
+  assert.equal(bash('gh pr merge 12 --squash'), 'merge');
+});
+
+test('the user can turn the guard off through the environment', () => {
+  const event = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git push -f' }, cwd: CWD });
+  assert.equal(decide(event, { SORRY_MATT_GUARD: 'off' }), null);
+  assert.equal(decide(event, { SORRY_MATT_GUARD: 'OFF' }), null);
+  assert.ok(decide(event, {}));
+  assert.ok(decide(event, { SORRY_MATT_GUARD: 'on' }));
+});
+
+function withDir(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-guard-'));
+  try {
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('a push lands on a protected branch: the current one, HEAD, or the remote default', () => {
+  withDir((dir) => {
+    const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+    git('init', '-q', '-b', 'main');
+    const at = (command) => classify({ tool_name: 'Bash', tool_input: { command }, cwd: dir })?.category ?? null;
+    assert.equal(at('git push'), 'merge-bypass');
+    assert.equal(at('git push origin'), 'merge-bypass');
+    assert.equal(at('git push origin HEAD'), 'merge-bypass');
+    assert.equal(at('git push --tags origin'), null);
+    git('checkout', '-q', '-b', 'feature');
+    assert.equal(at('git push'), null);
+    assert.equal(at('git push -u origin HEAD'), null);
+    assert.equal(at('git push origin feature'), null);
+    git('update-ref', 'refs/remotes/origin/develop', 'HEAD');
+    git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+    assert.equal(at('git push origin develop'), 'merge-bypass');
+    assert.equal(at(`git -C ${JSON.stringify(dir)} push origin feature:develop`), 'merge-bypass');
+  });
+});
+
+test('npx and bunx run a local bin, and download anything else', () => {
+  withDir((dir) => {
+    mkdirSync(join(dir, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', '.bin', 'vitest'), '');
+    const sub = join(dir, 'packages', 'app');
+    mkdirSync(sub, { recursive: true });
+    const at = (command, cwd = dir) => classify({ tool_name: 'Bash', tool_input: { command }, cwd })?.category ?? null;
+    assert.equal(at('npx vitest run'), null);
+    assert.equal(at('npx vitest run', sub), null);
+    assert.equal(at('bunx vitest'), null);
+    assert.equal(at('npx eslint .'), 'install-or-clone');
+    assert.equal(at('npx vitest@2 run'), 'install-or-clone');
+  });
 });

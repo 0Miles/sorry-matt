@@ -160,4 +160,9 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   `gh pr merge` 的合併；測試在 `scripts/guard.test.mjs`，CI 一起跑。
 - 「以後都這樣」改為輸出 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的權限規則片段，由使用者
   自己加入。
-- 永久例外的「安裝套件」明定為安裝新套件；照 lockfile 還原相依不算，hook 也照這條放行。
+- 永久例外的「安裝套件」明定為安裝新套件，含在 manifest 加相依與 `npx`／`pnpm dlx`／`uvx` 下載執行；照
+  lockfile 還原相依不算，一律用凍結寫法。hook 放行 `npm ci`、不帶套件名的 install，以及專案本地 bin 的 `npx`。
+- 受保護分支（main、master、remote 預設分支）只能經 `gh pr merge` 進去：直接 push、`gh api` 的 refs／contents／
+  merge 端點、MCP 的 merge 與 push 工具都擋。
+- `bypassPermissions` 與 `auto` 模式下沒有人確認，hook 連 `gh pr merge` 都擋。
+- 使用者可在 Claude Code settings 的 `env` 設 `SORRY_MATT_GUARD=off` 關掉 hook；skill 文字照樣不做。

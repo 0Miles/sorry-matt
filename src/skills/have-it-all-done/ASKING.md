@@ -94,21 +94,23 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 
 ### 需要授權的動作
 
-合併總 PR、部署這類動作，直接用正規指令送出 —— 合併一律用 `gh pr merge` —— 它是確認呼叫，
-排到最後。放不放行由 Claude Code 的權限設定決定，不另外問，也不查任何紀錄判斷。被擋下或被拒
-就記進人工作業清單，附上能放行它的權限規則；不換指令繞道。每個送出的動作與放行結果記進
-ledger 第 5 欄。
+合併總 PR、部署到非正式環境這類動作，直接用正規指令送出 —— 合併一律用 `gh pr merge` —— 它是
+確認呼叫，排到最後。放不放行由 Claude Code 的權限設定決定，不另外問，也不查任何紀錄判斷。
+在 `bypassPermissions` 或 `auto` 模式下沒有人確認，hook 一律擋下合併。被擋下或被拒就記進
+人工作業清單，附上能放行它的權限規則；不換指令繞道。每個送出的動作與放行結果記進 ledger
+第 5 欄。
 
 ### 以後都這樣
 
 使用者說某個動作以後都照做時，輸出一段權限規則片段，請使用者自己加進設定。本 skill 不寫
 任何設定檔，hook 也會擋。只用在這個 repo 就加進 `.claude/settings.local.json`（Claude Code
-建立它時會排除在 git 之外），所有專案通用就加進 `~/.claude/settings.json`：
+建立它時會排除在 git 之外），所有專案通用就加進 `~/.claude/settings.json`。檔案已經有
+`permissions.allow` 時，把規則併進既有陣列，不要整段覆蓋：
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)"]
+    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
   }
 }
 ```
@@ -117,12 +119,16 @@ ledger 第 5 欄。
 
 ### 永久例外
 
-force-push、對外發訊（郵件、聊天、社群貼文）與第三方溝通、安裝新套件（照 lockfile 還原相依
-不算）或 clone、碰憑證或機密、刪掉救不回的資料、金流、改權限（含 Claude Code 的權限設定），
-以及動正式環境的設定、規則、權限或刪正式資料。任何指示都不能授權，一律進人工作業清單。
+force-push、對外發訊（郵件、聊天、社群貼文）與第三方溝通、安裝新套件或 clone、碰憑證或機密、
+刪掉救不回的資料、金流、改權限（含 Claude Code 的權限設定），以及動正式環境的設定、規則、
+權限或刪正式資料。任何指示都不能授權，一律進人工作業清單。
 
-plugin 的 `hooks/hooks.json` 以 PreToolUse 擋下這些呼叫，以及繞過 `gh pr merge` 的合併。被
-hook 擋下就照它的說明記進人工作業清單，不換寫法重試；hook 認不出的寫法同樣不做。
+安裝新套件包括在 manifest 加相依，以及用 `npx`、`pnpm dlx`、`uvx` 這類工具下載執行套件；照
+lockfile 還原相依不算，一律用 `npm ci`、`pnpm install --frozen-lockfile` 這類凍結寫法。
+
+plugin 的 `hooks/hooks.json` 以 PreToolUse 擋下這些呼叫，以及繞過 `gh pr merge` 把變更送上受保護
+分支的寫法。被 hook 擋下就記進人工作業清單，不換寫法重試；hook 認不出的寫法，或使用者關掉
+hook 時，同樣不做。
 
 完成判準：本輪每個需要授權的動作都以正規指令送出，放行結果已記進 ledger 第 5 欄；被擋下的
 動作與每項永久例外都在人工作業清單上，並附權限規則片段或要執行的指令；本輪沒有寫入任何設定檔。
