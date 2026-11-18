@@ -96,12 +96,18 @@ filled.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
   flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
   report body.
-- Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns`
-  scales with the ticket count: a ticket typically takes about 15 spawns — implementation, expansion, `prove-it`'s
-  finders and verifiers, merging — doubled as a last-resort margin, plus 50 for planning and finishing the run,
-  which gives `30 × tickets + 50`. Rewrite that line before the ruling point from the number of tickets the kickoff
-  published; a standalone `get-to-work` has no ruling point and rewrites it when it freezes the ticket set. Limits
-  and time limits are not asked about by default; when there is a concrete reason to expect a default to fall short
+- Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
+  `budget: rounds` scale with the ticket count:
+  - `spawns` = max(`30 × tickets + 50`, spawns used + `30 × tickets`). A ticket typically takes about 15 spawns —
+    implementation, expansion, `prove-it`'s finders and verifiers, merging — doubled as a last-resort margin, and the
+    constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
+    plus 30 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
+  - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
+    send-back, one stuck / revert / red-to-green), plus the first one.
+
+  Rewrite both lines before the ruling point from the number of tickets the kickoff published; a standalone
+  `get-to-work` has no ruling point and rewrites them when it freezes the ticket set. Limits and time limits are not
+  asked about by default; when there is a concrete reason to expect a default to fall short
   (a long data migration or a large test suite the ticket names, say), make the change one question, sorted by cost
   to reverse with the others. When one runs short mid-run, never answer on the user's behalf to raise it: a limit
   stops the run as `get-to-work` section 1, budget and breaker, says, and a time limit is extended once or stopped
@@ -110,7 +116,9 @@ filled.
   limit it.
 
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
-it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list.
+it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; `budget: spawns` and
+`budget: rounds` were rewritten from the ticket count before the ruling point (at the freeze when running
+standalone), unless the user set a value at the ruling point.
 
 ## 5. Authority and actions needing confirmation
 
@@ -233,19 +241,18 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, its assigned time, stage time limit, deadline, whether it was extended, progress
-   fingerprint and timeout reassignment count (`get-to-work` section 1, time limits, recorded at every assignment), its
-   send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
+   its responsible agent's id, its **assignment record** (assigned time, stage time limit, deadline, whether it was
+   extended, progress fingerprint; `get-to-work` section 1, time limits, recorded at every assignment), its timeout
+   reassignment count per stage, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
    The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
    states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming relies on it and the agent id to
    pick back up every ticket short of an end state, and on the deadlines to keep scanning time limits.
 9. **Run metrics and budget**, in four parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is created,
-     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns; rewritten to
-     `30 × tickets + 50` per section 4 once the ticket count is known), `budget: rounds 40` (dispatch points,
+     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch points,
      `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget: hours 12`
      (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive count for the no-progress
-     breaker).
+     breaker). `spawns` and `rounds` are rewritten per section 4 once the ticket count is known.
    - **Stage time limits:** in the same format, in minutes: `budget: timeout-implement 30` (implementing),
      `budget: timeout-fix 20` (fixing, red-light fixes included), `budget: timeout-expand 15` (expanding), and
      `budget: timeout-merge 15` (the merge agent). How they are judged is in `get-to-work` section 1, time limits.
@@ -258,7 +265,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
      points run, the consecutive no-progress count with the progress snapshot from the last dispatch point (judged
      per `get-to-work` section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per
      verdict `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out
-     pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers. Spawns come from `spawns` in
+     pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers, and the task id of
+     the background `sleep` still running (the fallback wake-up in `get-to-work` section 1, time limits; "none" when
+     there is none). Spawns come from `spawns` in
      `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
      such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
      the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
