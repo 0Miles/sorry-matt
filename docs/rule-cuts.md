@@ -264,3 +264,23 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   獨立執行的 `get-to-work` 收官。只寫在 `ASKING.md` 時沒有步驟負責，ledger 會一直 active，之後每次壓縮都印出已結束的 run。
 - 第 10 欄在接手既有 ledger 時補齊；只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`）不列。
 - hook 只認真正的第一行（BOM 不算）；`rule:` 行收整份 ledger，`ASKING.md` 規定其他欄不以 `rule:` 開頭。
+
+## #14：grill-them 改用檔案交換問答
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 第 3 節「把 agent-griller 整輪的所有問題逐字轉給 agent-grillee」「把整輪答案逐字傳回 agent-griller」 | 改為雙方寫檔，主持人只傳檔案路徑與輪次 | 每輪問答在主持人的 context 進出兩次，整場拷問堆在主持人身上；被 `take-this`、`have-it-all-done` 組合時還吃掉主持人的上下文預算。 |
+| 第 3 節「主持人只傳原文，不摘要、潤飾或加入立場，也不挑題傳話」 | 改為「訊息只含路徑與輪次」，加上對打期間不讀、不改雙方的檔案 | 主持人不經手內容，「不摘要、不挑題、不改寫」由結構保證，不再靠自律。 |
+| 第 2 節「兩者全程只讀」 | 改為不改 repo 與外部狀態，只在對打目錄寫自己負責的檔 | 雙方要寫問題檔與答案檔。 |
+| 第 3 節支線「實例與執行輸出都寫入 scratchpad」「findings 寫入 scratchpad 的一份 Markdown」 | 改為寫入 `side-<r>-<n>/`，結論在 `result.md`；主持人只把路徑交給 agent-grillee | 支線結果同樣不經主持人轉述。 |
+| 第 4 節「先請 agent-griller 提交最終判決」 | 改為 agent-griller 結束時寫 `verdict.md`，含結束理由與逐題裁定；主持人收場時讀檔彙整四個區塊 | 主持人對打期間沒讀過內容，交鋒摘要的裁定要有出處可對。四個區塊不變。 |
+
+新增：
+
+- 第 1 節的**對打目錄**：主持人在 repo 之外建立（有 harness scratchpad 就建在其下，否則 macOS／Linux `mktemp -d`，Windows
+  一律 PowerShell `GetTempPath()`；Git Bash 的 `mktemp` 回 MSYS 路徑，不交出），把絕對路徑交給雙方與支線 agent；不假設 subagent 自己的 scratchpad 位置。收場後保留。
+- 檔名規則：`topic.md`、`round-<r>-questions.md`、`round-<r>-answers.md`、`side-<r>-<n>/`、`round-<r>-answer-<n>.md`、
+  `verdict.md`。輪次與題號編在檔名裡，問答對應不靠主持人記。
+- 雙方回給主持人的訊息只含路徑與狀態；agent-grillee 在回報列出待支線題號與支線類型，主持人依此開支線，不必讀答案檔。
+- 自動流程的上限改以檔案計數：問題檔三份、`side-*` 目錄兩個。
+- 每題最多一條支線：支線回來後證據仍不足、或結束／到上限時支線未回的題目，直接進待裁決。原本這兩種情況沒有出路。

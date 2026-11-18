@@ -148,6 +148,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 狀態標記 | state marker |
 | 總 PR | aggregate PR |
 | 缺口 | gap |
+| 對打目錄 | exchange directory |
+| 問題檔/答案檔 | question file / answer file |
+| 補完答案 | completed answer |
 | 關票 | closing tickets |
 | 放行 | let through |
 | 擋下 | blocked |
