@@ -1,11 +1,11 @@
 ---
 name: prove-it
-description: Ticket-level independent review for the sorry-matt workflow. Reviews one ticket branch through an evidence chain (Finder → Verifier → Fix Verifier), a live run, and mutation limited to the ticket's own diff, then writes a fixed-format pass / fix / stuck verdict and finding list into the ticket's status record. Called by get-to-work when closing a round; posts no PR comments and produces no suggestions.
+description: Ticket-level independent review for the sorry-matt workflow. Reviews one ticket branch through an evidence chain (Finder → Verifier → Fix Verifier), a live run, and mutation limited to the ticket's own diff, then writes a fixed-format pass / fix / stuck verdict and finding list into the ticket's status record. Called by get-to-work during a ticket's close-out; posts no PR comments and produces no suggestions.
 ---
 
 # prove-it: review one ticket, and prove it
 
-The **independent review** of the sorry-matt workflow, run once per ticket when closing a round. The evidence chain
+The **independent review** of the sorry-matt workflow, run once per ticket during its close-out. The evidence chain
 follows `review-pr`: Finders raise candidates, Verifiers rule on them independently, and after the batched fix a
 Fix Verifier rechecks. The difference is the reader: here it is the host, not a PR author — no PR comments, no
 `suggestion` blocks, nothing posted anywhere; the only output is the fixed-format verdict in section 6, written

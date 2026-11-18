@@ -1,11 +1,11 @@
 ---
 name: prove-it
-description: sorry-matt 流程專用的票級獨立審查：以證據鏈（Finder → Verifier → Fix Verifier）、實跑與只限本票 diff 的突變審一張票的 ticket 分支，輸出 pass／fix／stuck 的固定格式結論與 finding 清單，寫進該票的接續紀錄。由 get-to-work 收輪呼叫；不發 PR 評語、不產 suggestion。
+description: sorry-matt 流程專用的票級獨立審查：以證據鏈（Finder → Verifier → Fix Verifier）、實跑與只限本票 diff 的突變審一張票的 ticket 分支，輸出 pass／fix／stuck 的固定格式結論與 finding 清單，寫進該票的接續紀錄。由 get-to-work 收票時呼叫；不發 PR 評語、不產 suggestion。
 ---
 
 # prove-it：審一張票，舉證到底
 
-sorry-matt 自動流程收輪的**獨立審查**，一張票一次。證據鏈沿用 `review-pr`：Finder 找候選，
+sorry-matt 自動流程收票時的**獨立審查**，一張票一次。證據鏈沿用 `review-pr`：Finder 找候選，
 Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者：這裡的讀者是主持人，不是 PR
 作者 —— 不發 PR 評語、不產 `suggestion` 區塊、不對外留言，只輸出第 6 節的固定格式結論，寫進
 該票的接續紀錄。

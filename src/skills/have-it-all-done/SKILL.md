@@ -27,7 +27,7 @@ disable-model-invocation: true
 - **needs-triage 的票分兩段展開。** 凍結的是票集成員，不是票的內容深度。範圍內的票只標著
   needs-triage 時，凍結前只補到能排序的程度：一句範圍、阻塞邊，按 tracker 慣例標成
   ready-for-agent。**完整展開** —— 驗收項與實作層級的裁定 —— 延到該票進入 frontier 的
-  那一刻，由 `get-to-work` 開輪時的展開 agent 在實作 agent 開工前完成；補驗收項的不是要
+  那一刻，由 `get-to-work` 派票時的展開 agent 在實作 agent 開工前完成；補驗收項的不是要
   通過它的人。上游實作會改寫下游的事實，提前裁定的那些就是要重做的那些。展開所需的事實查不到才標待裁決；執行期間新開的 needs-triage 票屬背景，
   留到交棒。
 - **主持人的上下文有預算**，依 `ASKING.md` 第 7 節。
@@ -107,9 +107,10 @@ Local Markdown 路徑）作為它的明確引數，沿用本 run 的 ledger。�
   的**複核**。
 - **人工作業清單**：每項都要有照著就能做完的步驟。步驟多或要走第三方介面時，呼叫
   Skill tool 帶入 `wizard` 產生互動式 wizard，並在清單裡指向它。
-- 每條線的交付（GitHub 總 PR，或 Local Markdown 整合分支與 tip SHA）與**對帳表**。
+- 每條線的交付（GitHub 總 PR，或 Local Markdown 整合分支與 tip SHA）與**對帳表**，含每張票的退回次數與
+  退回紀錄的位置。
 - 期間開票產生的 raw tickets、請使用者執行 `/triage` 的建議，以及所有待裁決項目。
-- **本輪計量與預算**（ledger 第 9 欄）：上限與用量；run 因上限或無進展斷路停下時，寫出停在哪一項與卡在哪裡。
+- **本 run 的計量與預算**（ledger 第 9 欄）：上限與用量；run 因上限或無進展斷路停下時，寫出停在哪一項與卡在哪裡。
 
 報告送出後，步驟 5 不執行時，把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`。
 

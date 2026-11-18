@@ -30,7 +30,7 @@ points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold th
   ticket goes. When an in-scope ticket carries nothing beyond its needs-triage marker, fill it only far enough to
   order it before the freeze: one line of scope, the blocker edges, marked ready-for-agent the way the tracker
   does. **Full expansion** — acceptance criteria and implementation-level rulings — waits for the moment that
-  ticket enters the frontier, where `get-to-work`'s expansion agent completes it at open-round, before the
+  ticket enters the frontier, where `get-to-work`'s expansion agent completes it at dispatch, before the
   implementation agent starts; whoever writes the criteria is not the one who has to pass them. Upstream
   implementation rewrites the facts the downstream tickets rest on; the rulings made early are the ones that get
   redone. Mark it awaiting ruling only when a fact the expansion needs cannot be found anywhere; a needs-triage
@@ -127,7 +127,7 @@ It includes:
   run through a third-party interface, call the Skill tool with `wizard` to generate an interactive wizard and
   point the list at it.
 - Each line's delivery (a GitHub aggregate PR, or a Local Markdown integration branch and tip SHA) and the
-  **reconciliation table**.
+  **reconciliation table**, with each ticket's send-back count and where its send-back records are.
 - Raw tickets created through filing along the way, a recommendation that the user run `/triage`, and every
   awaiting-ruling item.
 - **This run's metrics and budget** (the ledger's ninth field): limits and usage; when the run stopped on a limit or

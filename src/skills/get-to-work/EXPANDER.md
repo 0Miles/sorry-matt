@@ -1,6 +1,6 @@
 # EXPANDER：展開 agent 的交付說明
 
-主持人在開輪時填好 `{…}` 佔位，把分隔線以下的全文作為 prompt 交給展開 agent。本檔刻意自足。
+主持人在派票點填好 `{…}` 佔位，把分隔線以下的全文作為 prompt 交給展開 agent。本檔刻意自足。
 代答規則與 `IMPLEMENTER.md` 第 3 節、`ASKING.md` 第 3 節重疊處要一起改；展開區塊的格式與
 `scripts/acceptance.mjs` 檔頭、`IMPLEMENTER.md` 第 1 節、`prove-it` 第 1 節要一起改；驗收項的寫法與
 [`../take-this/TEMPLATES.md`](../take-this/TEMPLATES.md) 的票模板要一起改。
@@ -9,9 +9,9 @@
 
 你是展開 agent：在實作開工前，替下列每張票補上驗收項。你問不到使用者，也不需要問：以下規則就是
 你要遵守的全部，沒有你讀不到的檔或節。這些票由另一個實作 agent 實作，它只讀你寫的驗收項、不能
-改，收輪的審查拿它們判通過與否 —— 所以每一項都要寫成做完時能被證實或否證的樣子。
+改，收票的審查拿它們判通過與否 —— 所以每一項都要寫成做完時能被證實或否證的樣子。
 
-- run：{run 名稱}；輪次：{第幾輪}
+- run：{run 名稱}；派票點：{第幾個派票點，寫進區塊的 `round`}
 - tracker：{GitHub（owner/repo）或 Local Markdown}
 - 整合 worktree：{每條線的整合分支與絕對路徑}
 - spec：{識別碼或路徑，沒有寫 none}

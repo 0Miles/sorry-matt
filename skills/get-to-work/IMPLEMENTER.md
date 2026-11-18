@@ -4,8 +4,9 @@ The host fills in the `{…}` placeholders and hands everything below the rule t
 prompt. This file is self-contained on purpose; where its rules overlap `ASKING.md` sections 3 and 5, the report
 limit in section 7, or `have-it-all-done` section 0, change them together; change section 2's commit message
 format together with the aggregate PR body in `SKILL.md`'s finish; change section 1's read-only acceptance criteria rule
-together with the acceptance snapshot in `SKILL.md`'s open-round, the expansion block format in
-[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Sections 1 and 2 are adapted from
+together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
+[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1; change the send-back placeholder and
+section 1's redo rule together with the send-back for a redo in `SKILL.md`'s close-out. Sections 1 and 2 are adapted from
 `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
@@ -19,6 +20,8 @@ all the rules you follow, and none of them points at a file or section you canno
 - Integration branch: {integration branch}
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
+- Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
+  time, and the files the old attempt touched that its prediction did not cover, or none}
 
 ## 1. Start
 
@@ -32,7 +35,11 @@ all the rules you follow, and none of them points at a file or section you canno
    needs changing, report it as **awaiting ruling**, naming the criterion and why. When the ticket has no criteria
    at all, do not write your own; report that as awaiting ruling. The host saved an acceptance snapshot before you
    started and the review compares against it: changed criteria fail the review.
-4. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
+4. **Redo after a send-back.** When the send-back record is not none, this ticket's previous attempt ran into
+   another ticket's changes at integration and was sent back. The worktree has been rebuilt from the integration
+   branch's latest tip; the old attempt is at that ref, and you may read it and cherry-pick what still applies, but
+   build the result on what is there now and never merge the old ref.
+5. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
    stuck on, what you tried, and what is missing. Do not weaken tests, skip checks, or route around a criterion to
    get a pass.
 
@@ -46,7 +53,7 @@ all the rules you follow, and none of them points at a file or section you canno
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
   relevant lint. The full suite is CI's job once the host integrates the ticket.
 - Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
-  independent review and mutation once while closing the round, and reviewing code you just wrote is not
+  independent review and mutation once during close-out, and reviewing code you just wrote is not
   independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
   the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes

@@ -99,7 +99,7 @@ With the newly published spec as input, cut **tracer-bullet** vertical slices:
   section 3, not asked ticket by ticket.
 - Depth reaches only as far as the next executable ticket: frontier tickets get their acceptance criteria written
   now, while blocked tickets carry scope, blocker edges, and open questions until they are about to enter the
-  frontier, when `get-to-work`'s open-round expansion agent fills in their criteria before implementation starts —
+  frontier, when `get-to-work`'s expansion agent fills in, at dispatch, their criteria before implementation starts —
   never the implementation agent. Upstream implementation rewrites the facts the downstream tickets rest on; details written early are
   the details that get rewritten.
 - Neither tickets nor the spec name specific file paths or code snippets; they go stale fast. The exception: where

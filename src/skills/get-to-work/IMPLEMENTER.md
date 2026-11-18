@@ -2,8 +2,8 @@
 
 主持人填好 `{…}` 佔位後，把分隔線以下的全文作為 prompt 交給實作 agent。本檔刻意自足，規則與
 `ASKING.md` 第 3、5 節、第 7 節的回報上限、`have-it-all-done` 第 0 節重疊處要一起改；第 2 節的
-commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 節的驗收只讀與 `SKILL.md` 開輪的
-驗收快照、[`EXPANDER.md`](EXPANDER.md) 的展開區塊格式、`prove-it` 第 1 節的驗收比對要一起改。第 1、2 節
+commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 節的驗收只讀與 `SKILL.md` 派票的
+驗收快照、[`EXPANDER.md`](EXPANDER.md) 的展開區塊格式、`prove-it` 第 1 節的驗收比對要一起改；退回紀錄的佔位與第 1 節的重做規則和 `SKILL.md` 收票的退回重做要一起改。第 1、2 節
 改寫自 `mattpocock/skills` 的 `implement` 與 `tdd`（MIT，出處與授權見
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)）。
 
@@ -17,6 +17,8 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 �
 - 整合分支：{整合分支}
 - 票面全文：{票面全文}
 - 展開區塊：{驗收快照 `expansions[].text` 的全文，沒有寫 none}
+- 退回紀錄：{上次嘗試的 ref 與 SHA、衝突的檔案、當時的整合分支 SHA、舊嘗試動到而預計檔案沒涵蓋的檔，
+  沒有寫 none}
 
 ## 1. 開工
 
@@ -28,7 +30,10 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 �
    它們，也不在 tracker 或票檔另寫一份取代。某項做不到、互相矛盾或需要改，回報為**待裁決**並寫出
    是哪一項、為什麼。票上一項驗收都沒有時不自己補，回報為待裁決。主持人在你開工前存了驗收快照，
    審查時比對；驗收項被改過，審查判為不通過。
-4. **做不到就回報卡住。** 這是合法的結果，不是失敗：寫出卡在哪一項、試過什麼、缺什麼。不要為了
+4. **退回後重做。** 退回紀錄不是 none 時，這張票上次的嘗試整併時撞上別張票的改動，已被退回。worktree
+   已從整合分支最新尖端重建；舊嘗試在那個 ref，可以讀、可以 cherry-pick 套得上的部分，但成果要建立在
+   現況上，不合併舊 ref。
+5. **做不到就回報卡住。** 這是合法的結果，不是失敗：寫出卡在哪一項、試過什麼、缺什麼。不要為了
    通過而削弱測試、跳過檢查或繞過驗收項。
 
 ## 2. 實作與測試
@@ -40,7 +45,7 @@ commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 �
 - 一次一個切片：先寫一個會失敗的測試，再寫剛好讓它通過的程式，重複。
 - 只跑受影響範圍的**針對性檢查**：typecheck、這張票碰到的測試檔、相關的 lint。完整套件由
   主持人整併後交給 CI 跑。
-- 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收輪
+- 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收票
   做一次，審自己剛寫的程式沒有獨立性。
 - 完成後把成果 commit 到 ticket 分支。每個 commit 的 subject 帶票 ID（GitHub 為 `#N`，Local
   Markdown 為票檔名）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足哪幾項
