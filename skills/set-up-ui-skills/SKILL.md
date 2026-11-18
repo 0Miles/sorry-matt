@@ -11,8 +11,7 @@ project uses (which may be "none"), tokens, **shared components**, conventions, 
 `### UI` subsection pointing to it under the `## Agent skills` block of the project's **instructions file**
 (`CLAUDE.md` or `AGENTS.md`).
 
-`ui.md` is a map, not an API: it records only what exists, where it lives, when to use it, and what to use
-instead. It never copies props or variants — those are read from source every time.
+`ui.md` is a map, not an API, written per the **A map, not props** rule in [`UI-TEMPLATE.md`](UI-TEMPLATE.md).
 
 Five steps: explore → present findings and questions at once → confirm the draft → write → report. Only steps 2
 and 3 wait on the user.
@@ -66,9 +65,8 @@ recommended". Questions come only from the rules below; where a rule says not to
   or a migration note points to; otherwise the one with more imports. Record the others as "existing, not for new
   use".
 
-**B. Shared components.** List the candidates by import count; this is a finding, not a question. Include only the
-truly shared: components used by two or more different pages or features; one used on a single page is not
-listed. The only question is about duplicate implementations: one question per group, "which copy is the source
+**B. Shared components.** List the candidates by import count; this is a finding, not a question; the threshold for a
+candidate is the **Only the truly shared** rule in `UI-TEMPLATE.md`. The only question is about duplicate implementations: one question per group, "which copy is the source
 of truth, and which one wins", unless an existing `ui.md` already records the ruling for that group and the
 evidence still matches it. Recommended answer: the one with more imports; when the counts are close, the one in
 a shared directory, with a story, or with a barrel export.

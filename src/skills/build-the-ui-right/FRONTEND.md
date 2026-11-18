@@ -44,8 +44,8 @@ subagent 身分執行時同樣停下，在回報裡寫明需要人執行 `/set-u
 
 ### 2. 元件庫自帶 skill 優先
 
-「元件庫」段的「自帶 skill」記了 skill 時，動工前呼叫 Skill tool 帶入 `ui.md` 記載的自帶 skill；
-它屬於**仲裁順序**第 1 層。可用 skill 清單裡找不到它時，照本契約把工作做完，並在回報裡點名
+「元件庫」段的「自帶 skill」記了 skill 時，動工前呼叫 Skill tool 帶入 `ui.md` 記載的自帶 skill。
+可用 skill 清單裡找不到它時，照本契約把工作做完，並在回報裡點名
 一次。
 
 ### 3. 先讀 API 再用

@@ -52,7 +52,5 @@ When the project uses no ready-made component library, the "Component library" s
   — the first is the job the component does, the second is the component or approach to switch to when the job
   does not fit.
 - **Wraps**: the library component a wrapper wraps; "—" when it is not a wrapper.
-- **Evidence first**: every line must trace to source, a config file, or the user's ruling; a section with nothing
-  found reads "None" rather than a guess.
-- **No checks that do not exist**: "Mechanical checks" lists only commands the project actually has; with none at
-  all, it reads "None".
+- **Evidence first**: every line must trace to source, a config file, or the user's ruling, never a guess.
+- **No checks that do not exist**: "Mechanical checks" lists only commands the project actually has.

@@ -51,7 +51,7 @@ answer mentions once that `ui.md` is missing.
 ### 2. The bundled skill first
 
 When the `Bundled skill` field of the `Component library` section names a skill, call the Skill tool with the
-bundled skill recorded in `ui.md` before starting; it belongs to tier 1 of the **precedence**. When it is missing
+bundled skill recorded in `ui.md` before starting. When it is missing
 from the available skills, finish the work under this contract and name it once in the report.
 
 ### 3. Read the API before using it
