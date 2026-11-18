@@ -138,6 +138,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 放行／擋下 | let through / blocked |
+| 權限規則片段 | permission rule snippet |
+| 需授權動作的結果 | authorization outcomes |
+| 以後都這樣 | from now on |
 | 開場 | opening |
 | 共用契約 | shared contract |
 | 交付說明 | brief |

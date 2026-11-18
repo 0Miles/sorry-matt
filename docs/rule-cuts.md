@@ -35,13 +35,10 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 
 ## 待腳本或 hook 落地的規則
 
-這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字：
+這些規則先留著，以 `<!-- pending #N -->` 標記，由各自的票落地後刪文字（`#8` 已落地，見文末）：
 
 | 標記 | 位置 | 規則 |
 | --- | --- | --- |
-| `#8` | `ASKING.md` 第 5 節 | 授權三層與永久例外 |
-| `#8` | `get-to-work` 第 0 節 | 授權來源 |
-| `#8` | `get-to-work` 第 2 節 | 常設授權允許時自動合併總 PR |
 | `#11` | `get-to-work` 第 0 節凍結第 2 步 | 讀 blocker 邊、劃分線 |
 | `#11` | `get-to-work` 開輪 | frontier 的定義 |
 | `#16` | `ASKING.md` 第 7 節 ledger 第 9 欄 | 計量（只記錄、不據此停下） |
@@ -144,3 +141,23 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
 - `ASKING.md` 永久例外清單加 force-push（原本只寫在 `get-to-work`）。
 - CI：`.github/workflows/check.yml` 在 PR 上跑 `claude plugin validate`、`scripts/check-structure.mjs`
   （src／dist 結構對帳）、`scripts/check-vendored.mjs`（vendored 檔 SHA-256），以及兩支腳本的測試。
+
+## #8：授權與永久例外改由 permissions 與 hook 強制
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `ASKING.md` 第 0 節讀共用目錄的 `sorry-matt/authority.md` | 刪 | 授權不再存在 agent 讀的檔案裡。 |
+| `ASKING.md` 第 5 節 L2／L1／L0 三層與 `authority.md` 的五欄格式 | 改為「需要授權的動作以正規指令送出，由 Claude Code 權限設定決定」 | 放不放行由權限設定判，模型讀 markdown 判不算數。 |
+| `ASKING.md` 第 5 節護欄 1–3（每列附出處、報告印授權表與檔案路徑、新增列只來自當輪原話） | 刪 | 保護的對象是 `authority.md`；它已移除，權限規則由使用者自己寫、`/permissions` 看得到。 |
+| `ASKING.md` 第 5 節護欄 4（永久例外清單） | 留清單，加「plugin hook 擋下」 | 清單是規劃依據（第 2 節 (a)、人工作業清單）；強制改由 `hooks/guard.mjs`。 |
+| `ASKING.md` 第 7 節 ledger 第 5 欄「本輪授權表」 | 改為「需授權動作的結果」 | 欄號不動，內容改記送出的動作與放行結果。 |
+| `have-it-all-done` 步驟 2「需要授權的動作依第 5 節在這裡一併問」 | 刪 | 權限提示本身就是當下的詢問；「不再詢問」就是以後都這樣。 |
+| `get-to-work` 第 0 節授權來源、第 2 節「常設授權允許時合併」 | 改為「CI 綠後送出 `gh pr merge`，由權限設定決定」 | 同上。 |
+
+新增：
+
+- `hooks/hooks.json` 與 `hooks/guard.mjs`：PreToolUse 擋下永久例外八類的指令（含繞道寫法）與繞過
+  `gh pr merge` 的合併；測試在 `scripts/guard.test.mjs`，CI 一起跑。
+- 「以後都這樣」改為輸出 `.claude/settings.local.json` 或 `~/.claude/settings.json` 的權限規則片段，由使用者
+  自己加入。
+- 永久例外的「安裝套件」明定為安裝新套件；照 lockfile 還原相依不算，hook 也照這條放行。

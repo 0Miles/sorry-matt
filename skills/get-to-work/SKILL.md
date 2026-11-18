@@ -17,10 +17,6 @@ it. When `have-it-all-done` composes this skill, keep its run ledger; running st
 Confirm a Git repository and clean working tree; when the tracker configuration selects GitHub, also confirm
 `gh` is authenticated. Local Markdown mode needs no remote or `gh`. Section 2 gives each mode's deliveries.
 
-Authority follows `ASKING.md` section 5: where the standing authority has a row with a source, follow it; where it
-does not, the caller supplies it — `have-it-all-done`'s ruling point, or the user's instruction for this run.
-<!-- pending #8 -->
-
 When the configuration says the workspace spans several repositories, survey tickets repository by repository.
 Lines never cross a repository; each repository gets its own integration branches and deliveries.
 
@@ -42,7 +38,7 @@ Then **freeze** the initial ticket set:
 **Hard rail:** tickets discovered or filed during the run remain context; the initial set never expands after
 the freeze.
 
-Done when: the tracker mode is selected and verified; the standing authority is recorded; every initial ticket
+Done when: the tracker mode is selected and verified; every initial ticket
 has a publication source, provider-native identifier, line, and blocker map; every ticket excluded as held by
 another line has a source and a clearing condition; every line has an integration branch and worktree created
 from the same base tip.
@@ -174,9 +170,10 @@ Then deliver each line according to its mode:
   tip SHA, then remove the integration worktree. Ticket state travels with the implementation on that branch;
   do not simulate a PR or close operation.
 
-Where the standing authority permits merging, GitHub mode merges the aggregate PR once its CI goes green and
-reports the result. Where that authority is absent, the delivery stays with the human and the output names which
-grant is missing; do not open another round of questions for it. <!-- pending #8 -->
+Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`. It is a prompting call, sent
+after cleanup; Claude Code's permission settings decide whether it goes through (`ASKING.md` section 5). When it
+goes through, report the merge; when it is blocked or refused, the delivery stays with the human and the output
+carries the permission rule snippet that would allow it. Do not open a question for it.
 
 Once a line is delivered, clean up: call the Skill tool with `clean-it-up` and let its evidence rules retire the
 ticket worktrees and merged local branches this run created. **Deliverables awaiting human review are out of
@@ -185,11 +182,11 @@ are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote
 explicit authority for this request; do not open a question for it.
 
 Report each line's aggregate PR or integration branch, the **reconciliation table** covering the entire initial set
-and this run's **metrics** (`ASKING.md` section 7), this run's authority table (section 5), and every raw ticket
+and this run's **metrics** (`ASKING.md` section 7), the authorization outcomes (section 5), and every raw ticket
 filed along the way with a recommendation that the user run `/triage`.
 
 Done when: every line went through one line-level simplify and one full verification and ended green, and has
-exactly one human-mergeable delivery, or was merged and reported under the standing authority; the reconciliation
+exactly one human-mergeable delivery, or was merged, with the permission settings letting it through, and reported; the reconciliation
 table covers the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree
 and local ticket branch is removed; Local Markdown integration worktrees are removed while their integration
-branches remain; the output lists the authority used this run and this run's metrics.
+branches remain; the output lists the authorization outcomes and this run's metrics.

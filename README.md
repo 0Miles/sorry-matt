@@ -36,6 +36,27 @@ claude plugin install sorry-matt@sorry-matt
 
 You can also use the `/plugin` interface in Claude Code.
 
+## Guard hook
+
+The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`). In every
+session where the plugin is enabled, it denies the permanent exceptions — force-pushes, outgoing messages,
+installing new packages or cloning, touching credentials or secrets, irrecoverable deletes, payments, permission
+changes (Claude Code's settings files included), and production changes — along with merges that skip
+`gh pr merge`. Restoring dependencies from a lockfile (`npm ci`, `npm install` with no package) is allowed. To run a
+blocked command yourself, run it in your own terminal.
+
+Whether `gh pr merge` goes through is up to your permission settings. To let sorry-matt merge aggregate PRs without
+a prompt, add this to `.claude/settings.local.json` (one repo) or `~/.claude/settings.json` (every project); to be
+asked every time put it under `ask`, and to never allow it put it under `deny`:
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash(gh pr merge:*)"]
+  }
+}
+```
+
 ## Updating
 
 Update sorry-matt:
@@ -66,6 +87,7 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 - `scripts/` holds the repository checks, run on every pull request by `.github/workflows/check.yml`:
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
+- `hooks/` holds the guard hook; `scripts/guard.test.mjs` tests it in the same CI run.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the

@@ -18,8 +18,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Test the check scripts
-        run: node --test scripts/checks.test.mjs
+      - name: Test the check scripts and the guard hook
+        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs
 
       - name: src/dist structure
         run: node scripts/check-structure.mjs

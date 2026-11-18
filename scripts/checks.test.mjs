@@ -60,7 +60,7 @@ test('a missing heading, Done-when, or referenced file in dist is reported', () 
 });
 
 test('pending markers must match between src and dist', () => {
-  withRepo({ 'src/skills/demo/SKILL.md': SRC + '<!-- pending #8 -->\n' }, (root) => {
+  withRepo({ 'src/skills/demo/SKILL.md': SRC + '<!-- pending #99 -->\n' }, (root) => {
     assert.match(checkStructure(root).join('\n'), /pending markers differ/);
   });
 });
