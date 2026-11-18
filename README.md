@@ -61,6 +61,11 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 - Each dist skill includes `agents/openai.yaml` for OpenAI-compatible display metadata, prompts, and invocation policy.
 - Pinned verbatim workflows and MIT notices live under the owning skill's `references/upstream/` directory;
   `SKILL.md` reads those references directly at runtime, and the same files serve as upgrade-diff baselines.
+  `docs/matt-skills.md` records how each mattpocock skill is used: as-is, replaced by a sorry-matt flow, or with
+  parameters only.
+- `scripts/` holds the repository checks, run on every pull request by `.github/workflows/check.yml`:
+  `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
+  SHA-256 against its `NOTICE.md`.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the

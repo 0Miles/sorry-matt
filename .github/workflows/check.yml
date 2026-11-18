@@ -1,0 +1,33 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test the check scripts
+        run: node --test scripts/checks.test.mjs
+
+      - name: src/dist structure
+        run: node scripts/check-structure.mjs
+
+      - name: Vendored SHA-256
+        run: node scripts/check-vendored.mjs
+
+      - name: claude plugin validate
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.325
+          claude plugin validate .

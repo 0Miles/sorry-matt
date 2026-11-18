@@ -29,8 +29,7 @@ description: 交由兩個 agents 自主為完善計劃或設計而進行的反�
 
 - **agent-griller（拷問者）**：交付題目卡，指示它呼叫 Skill tool 帶入 `grilling`，並把其中的
   「使用者」視為 agent-grillee。`grilling` 的行為原樣保留：它每輪一次問完 **frontier** 上的
-  所有問題、逐題編號並附建議答案，也自行 spawn sub-agent 查證事實。主持人不干預這兩件事，
-  只要求它把模糊詞、一詞多義與難以逆轉的決策列為主要靶點。
+  所有問題、逐題編號並附建議答案，也自行 spawn sub-agent 查證事實。主持人不干預這兩件事。
 - **agent-grillee（受審者）**：交付同一張題目卡，指示它先讀取專案適用的 `CLAUDE.md` 或通用
   `AGENTS.md`，再勘查相關 docs、code 與 git 現況，從整體專案的角度作答。每個事實主張都附出處；
   每個決策答案都說明取捨；資訊不足時指出缺口；問題前提與證據衝突時直接指出衝突。
@@ -60,9 +59,9 @@ agent-griller 依 `grilling` 查它要問的，agent-grillee 勘查整個專案�
   能實際跑起來、且只涵蓋該題爭點的最小案例——並真的執行它。實例與執行輸出都寫入 scratchpad，
   不寫入 repo，也不建立 worktree 或分支。取回實例路徑、實際跑出來的結果，以及它對原問題的
   verdict。
-- **外部事實查證**，例如 API 行為或套件文件：spawn agent，要它呼叫 Skill tool 帶入 `research`
-  並照做。findings 寫入 scratchpad，不寫入 repo；把結論與出處交回 agent-grillee，再由它完成
-  該題回答。
+- **外部事實查證**，例如 API 行為或套件文件：spawn agent，要它對一手來源（官方文件、原始碼、
+  規格、第一方 API）查證，每個主張都追到擁有它的來源並附出處。findings 寫入 scratchpad 的一份
+  Markdown，不寫入 repo；把結論與出處交回 agent-grillee，再由它完成該題回答。
 
 支線結果只補足證據，不替 agent-grillee 做決策。補完的答案在下一次傳話中連同原題號一併交回。
 待支線題對 agent-griller 而言是未解除的前置：只有依賴它的問題等待，其餘 frontier 照常推進。

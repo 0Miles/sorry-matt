@@ -12,6 +12,9 @@
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
+- `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
+  由 `.github/workflows/check.yml` 在 PR 上執行
+- `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
 
 ## 開發規則
 
@@ -27,6 +30,11 @@
   並補進表裡
 - 僅適用於原作者的細節要一般化或移除(如個人的輸出語言偏好、個人環境路徑)
 - frontmatter 的 `name` 兩版相同;`description` 用英文重寫
+
+### 待落地標記
+
+之後會改由腳本或 hook 執行的規則,在 src 與 dist 的同一處加 `<!-- pending #N -->`(N 是負責落地的票)。
+那張票落地後刪掉規則文字與標記。結構對帳腳本會比對兩版的標記是否一致。
 
 ## 跨 skill 組合
 
@@ -49,6 +57,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
     直接要求全文讀取。若它本來就是獨立的人為步驟,請使用者執行
 - 要「人」執行的指令(`/setup-matt-pocock-skills`、`/triage`、`/implement` 等
   下一步建議)措辭必須是「請使用者執行」,不能寫成 agent 的動作
+
+- 不寫「載入上游全文,再覆寫其中幾行」:要改上游的行為,就寫自有流程取代它,或只填上游留的
+  參數位置。決定與理由記進 `docs/matt-skills.md`
+- 交給 subagent 的內容要自足:它問不到使用者,也讀不到主持人的 skill 檔。它要遵守的規則都寫在
+  交付內容裡(如 `get-to-work/IMPLEMENTER.md`),要讀的檔案給絕對路徑
 
 以上只約束 **operative** 指令 —— skill 自己的步驟要 agent 現在就去跑另一個 skill。純粹列給人
 挑選的 router 散文(`ask-miles`、README 表格)沒有在呼叫任何東西,`/name` 在那裡是標籤,照原樣寫。
@@ -125,6 +138,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 開場 | opening |
+| 共用契約 | shared contract |
+| 交付說明 | brief |
+| 潤稿 | polish pass |
+| 原樣使用/自有流程取代/只傳參數 | used as-is / replaced by own flow / parameters only |
 
 ## 外部語義來源
 
@@ -133,7 +151,14 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 對一次。它不在 runtime 被讀取 —— 規則已寫進 skill 本文 —— 所以不進 `references/upstream/`,
 也不需要 pin 與 hash。
 
+被自有流程取代的 matt skills(`implement`、`tdd`、`to-spec`、`to-tickets`、`research`)同理:
+不在 runtime 被讀取,對帳用的上游路徑與取代時的 hash 記在 `docs/matt-skills.md`。
+
 ## 收尾檢查
+
+`node scripts/check-structure.mjs`、`node scripts/check-vendored.mjs` 與 `claude plugin validate .`
+機械檢查第 2、3、4(hash)、5、7 項,以及第 1 項的結構部分(檔案、標題、完成判準數、引用的檔名);
+語義是否一致仍要人看。
 
 1. 動過的每個 `src/skills/<name>/` 都有對應重寫過的 `skills/<name>/`
 2. 每個 dist skill 都有 `agents/openai.yaml`,且與 src 對應檔一致

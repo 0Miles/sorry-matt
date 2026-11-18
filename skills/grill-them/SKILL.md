@@ -34,8 +34,7 @@ only during the distillation in Step 4.
 - **agent-griller, the griller**: give it the topic card and instruct it to call the Skill tool with `grilling`, treating
   "the user" in that workflow as agent-grillee. Leave `grilling`'s own behavior intact: it asks every question on the
   **frontier** in a single round, numbered, each carrying a recommended answer, and it dispatches its own sub-agents to
-  establish facts. The moderator interferes with neither; it only asks that ambiguous terms, overloaded words, and
-  hard-to-reverse decisions be the primary targets.
+  establish facts. The moderator interferes with neither.
 - **agent-grillee, the respondent**: give it the same topic card and instruct it to read the applicable `CLAUDE.md` or
   general `AGENTS.md`, then inspect relevant docs, code, and git state before answering from the whole-project
   perspective. It cites every factual claim, explains the tradeoff behind every decision, identifies information gaps,
@@ -70,8 +69,9 @@ opens a **side quest** that does not count as a round:
   **worked instance** — the smallest thing that actually runs and exercises only the point in dispute — and then run it.
   Write the instance and its output to a scratchpad rather than the repository; no worktree, no branch. Retrieve the
   instance path, what running it actually produced, and its verdict on the original question.
-- **External fact**, such as API behavior or package documentation: spawn an agent and have it call the Skill tool with
-  `research` and follow it. Write findings to a scratchpad rather than the repository. Return the conclusion and sources
+- **External fact**, such as API behavior or package documentation: spawn an agent to check it against primary sources
+  (official docs, source code, specs, first-party APIs), tracing every claim back to the source that owns it and citing
+  it. Write findings to one Markdown file in a scratchpad rather than the repository. Return the conclusion and sources
   to agent-grillee, then let it complete that answer.
 
 A side quest supplies evidence; it does not decide for agent-grillee. The completed answer returns on the next relay

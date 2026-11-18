@@ -4,13 +4,18 @@
 - Source: https://github.com/mattpocock/skills
 - Pin: Claude plugin distribution `mattpocock-skills@1.3.2` (`main` @ `4ae2317`)
 - Vendored files and pinned SHA-256 values:
-  - `skills/productivity/handoff/SKILL.md`: `4CBB043950DAD2FFD3662FF1A5A0B51AE676004B5CAE10E3787E8EE7A4EE69D3`
-  - `skills/engineering/to-spec/SKILL.md`: `43AD9CF318E5E7D3D1FA360253A37021796DC87A0C2E595AD262661A10F85088`
-  - `skills/engineering/to-tickets/SKILL.md`: `56EC23C5B2782785D4E65BFF9E315B6D3AEB4EF977C174A219E99489FADA1995`
+  - `handoff.md` ← `skills/productivity/handoff/SKILL.md`: `4CBB043950DAD2FFD3662FF1A5A0B51AE676004B5CAE10E3787E8EE7A4EE69D3`
 
-The adjacent sources are verbatim vendored runtime references and upstream reconciliation baselines. The pinned
-SHA-256 values are taken over LF-normalized content, so they hold however a working tree checks newlines out. The
-parent `SKILL.md` directs when to read and execute them.
+The adjacent source is a verbatim vendored runtime reference and upstream reconciliation baseline. The pinned
+SHA-256 is taken over LF-normalized content, so it holds however a working tree checks newlines out
+(`scripts/check-vendored.mjs` verifies it). The parent `SKILL.md` directs when to read and execute it.
+
+Adapted, not vendored: the spec and ticket procedure in the parent `SKILL.md` (steps 3 and 4) and the templates in
+`TEMPLATES.md` are rewritten from `skills/engineering/to-spec/SKILL.md` and
+`skills/engineering/to-tickets/SKILL.md` at the same pin, and sections 1 and 2 of the implementation brief in
+`../../../get-to-work/IMPLEMENTER.md` are rewritten from `skills/engineering/implement/SKILL.md` and
+`skills/engineering/tdd/SKILL.md` at the same pin. Their pinned hashes and the reason they are no longer
+vendored are recorded in `docs/matt-skills.md` of the sorry-matt repository.
 
 ## MIT License
 

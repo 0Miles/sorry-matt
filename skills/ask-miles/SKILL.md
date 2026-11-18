@@ -12,7 +12,8 @@ branch is the next step for the user to run.
 - **Clarify requirements, plans, or decisions without personally answering the questions** → `/grill-them`.
   Let two subagents duel; return only their conclusions and awaiting-ruling items, and stop at planning.
 - **Start a new task, or continue after grill-me or grill-with-docs, without a spec or tickets** → `/take-this`.
-  Carry forward existing grilling; when none exists, run grill-them before completing to-spec → to-tickets.
+  Carry forward existing grilling; when none exists, build the requirements context from evidence, open
+  grill-them only on a material disagreement, then write the spec and tickets.
 - **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them in rounds according
   to the tracker configuration, delivering GitHub PRs or Local Markdown integration branches until the initial
   ticket set is complete or explicitly stuck.
