@@ -417,10 +417,12 @@ ticket worktree 與已合併的本地分支。**待人審查的交付物不在�
 線整合分支、以及尚未合併的總 PR 來源分支一律保留 —— 對未合併項目，`clean-it-up` 本身就是
 降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
-GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併；未併入或驗證未過的線不送，也不進 merge
-queue，總 PR 留給人合併。它是確認呼叫，留到清理之後送出；放不放行由 Claude Code 的權限設定
-決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下（`ASKING.md` 第 5 節）。放行就回報
-合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的權限規則片段，不為此另開提問。
+GitHub 模式在總 PR 的 CI 轉綠後，有常設授權（權限設定的 `permissions.allow` 涵蓋 `gh pr merge`）
+或使用者本 run 指示合併時，以 `gh pr merge` 送出合併；兩者都沒有就不送，總 PR 留給人合併，輸出附上
+能放行它的權限規則片段。未併入或驗證未過的線不送，也不進 merge queue，總 PR 留給人合併。它是確認
+呼叫，留到清理之後送出；放不放行由 Claude Code 的權限設定決定，合併會立即觸發正式部署時 hook 會再
+跳一次確認（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
+權限規則片段，不為此另開提問。
 
 **merge queue。** 送出前查基底分支有沒有啟用 merge queue：
 
@@ -430,9 +432,8 @@ gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){rep
 
 `mergeQueue` 是 null 就是沒有啟用，照上一段，行為不變。啟用時合併改走 merge queue：同一個
 `gh pr merge <PR>`，不帶合併策略也不帶 `--admin` —— gh 會把 PR 排進 queue，queue 把它與最新
-基底、排在前面的 PR 組成 merge group 再驗一次才合併。放不放行同樣由權限設定決定，
-`bypassPermissions` 與 `auto` 模式下同樣被 hook 擋下；用 `--admin` 跳過 queue，或用 GraphQL 的
-`enqueuePullRequest` 排進 queue 而繞過 `gh pr merge` 的權限檢查，都一律被擋。
+基底、排在前面的 PR 組成 merge group 再驗一次才合併。送不送、放不放行都同上一段；不用 `--admin`
+跳過 queue，也不用 GraphQL 的 `enqueuePullRequest` 排進 queue 而繞過 `gh pr merge` 的權限檢查。
 
 queue 只在 `merge_group` 事件上跑檢查，所以送出前先確認它的檢查會跑：
 

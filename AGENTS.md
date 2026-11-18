@@ -16,8 +16,8 @@
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
 - `skills/<name>/scripts/` — 與 src 逐位元組相同的腳本(不翻譯)
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
-- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(永久例外與繞過 `gh pr merge`
-  的合併);不分 src/dist,測試在 `scripts/guard.test.mjs`
+- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
+  含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
 - `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
   由 `.github/workflows/check.yml` 在 PR 上執行
 - `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
@@ -123,7 +123,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 反轉成本 | cost to reverse |
 | 環境事實 | environment facts |
 | 專案例外 | project exception |
-| 永久例外 | permanent exception |
+| 需要確認的動作 | actions needing confirmation |
+| 兩段確認 | two-step confirmation |
+| 確認一次 | single confirmation |
+| 災難級操作 | catastrophic actions |
 | 硬停 | hard stop |
 | 確認呼叫 | prompting call |
 | 精簡 | simplify pass |

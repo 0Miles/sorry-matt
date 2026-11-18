@@ -67,13 +67,16 @@ all the rules you follow, and none of them points at a file or section you canno
   and continue.
 - When a gate denies a call and says how to proceed, do that and retry; it counts as stuck only when no route
   exists.
-- Permanent exceptions are not yours to do; list them under "human work" in your report: force-pushes, outgoing
-  messages and third-party communication, cloning, anything touching credentials or secrets, deleting data that
-  cannot be recovered, payments, permission changes (Claude Code's permission settings included), and production
-  changes. Keeping this ticket's status record on the tracker is not an outgoing message.
-- The plugin's hook blocks these calls: when it does, list the call under "human work" and do not retry with
-  another spelling. A spelling the hook fails to recognize, or a hook the user has turned off, changes nothing: do
-  not do it either.
+- Actions needing the user's confirmation are not yours to do; list them under "human work" in your report for
+  the host: catastrophic actions (a recursive delete of a home directory, a root, a drive root, a parent directory
+  or a path outside the project; formatting or overwriting a disk; dropping a database or table; deleting a repo;
+  force-pushing to or deleting main, master or the remote's default branch), outgoing messages and third-party
+  communication, payments, releases or production deploys, writes to Claude Code's settings, and merging a PR or
+  writing straight to a protected branch. Keeping this ticket's status record on the tracker is not an outgoing
+  message.
+- The plugin's hook raises a confirmation prompt before these calls, or denies them: when it does, stop, list the
+  call under "human work", and do not retry with another spelling. A spelling the hook fails to recognize, or a
+  hook the user has turned off, changes nothing: do not do it either.
 - Run calls that raise a confirmation prompt last, back to back.
 - **If you can write a recommendation, answer on the user's behalf.** Record each as one row with five columns:
   number, decision, rationale, cost to reverse (which files change, what re-runs, whether anything delivered is

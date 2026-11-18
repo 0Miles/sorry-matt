@@ -427,3 +427,23 @@ merge 帶解法（`resolved`，比對 merge commit 的樹與 `git merge-tree --w
 | --- | --- | --- |
 | 永久例外「安裝新套件」（含在 manifest 加相依、用 `npx`、`pnpm dlx`、`uvx` 下載執行套件，以及「照 lockfile 還原一律用凍結寫法」） | 刪除；`have-it-all-done/ASKING.md` 第 5 節與 `get-to-work/IMPLEMENTER.md` 的清單只剩 clone；`prove-it` 仍不加相依，理由改為審查不改這張票的 diff 與 repo 相依 | 使用者 2026-11-19 指示移除。 |
 | guard 對套件管理器安裝的攔截（`hooks/permanent-exceptions.mjs`） | 刪除 npm、pnpm、yarn、bun、npx、bunx、uvx、pip、uv、pipx、cargo、gem、go、poetry、pdm、bundle、系統套件管理器、composer、dotnet 與 PowerShell `Install-*` 的安裝規則；各工具的 publish/push → `production` 保留；類別 `install-or-clone` 改名 `clone-or-extension`（clone、編輯器/agent 擴充安裝、fetch-and-run） | 同上。 |
+
+## guard 從「永久例外一律擋下」改為「該問的才問」
+
+使用者 2026-11-19 指示：平常的工作全權交給 agent；發布版本與部署正式環境，使用者看過後也交給 agent 執行。guard
+只在該問的地方跳確認，其餘交給 Claude Code 自己的權限設定。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `ASKING.md` 第 5 節「永久例外：任何指示都不能授權，一律進人工作業清單」 | 改為「需要確認的動作」：兩段確認類（災難級、對外發訊、金流）與確認一次類（發布與正式部署、寫入 Claude 設定、會立即觸發正式部署的合併）；agent 可以執行，但只在使用者於權限提示確認後；subagent 不執行、回報主持人；主持人當確認呼叫排到最後連續送出 | 使用者要把發布與部署也交給 agent，人只在提示上點頭；擋死的清單逼使用者自己去終端機打指令，與工作流程相反。 |
+| 永久例外的 force-push（一般分支）、clone 與擴充安裝、fetch-and-run、憑證與機密、改權限、非災難級刪除（`git reset --hard`、`git clean`、`stash drop`、`filter-repo`、release／issue 刪除） | 刪除，guard 不回 verdict | 可逆或範圍限於本機與專案；放不放行交給 Claude Code 權限設定，guard 不重複判斷。 |
+| 災難級刪除（家目錄、根目錄、磁碟根、上層與專案外路徑的遞迴刪除，`format`、`mkfs`、`dd of=/dev/…`、`diskpart`、`dropdb`、SQL `DROP`／`TRUNCATE`、`FLUSHALL`、`dropDatabase()`、刪 repo、force-push 或刪除受保護分支）、對外發訊、金流 | 兩段確認：第一段把指令換成 `hooks/confirm.mjs <token>` 並詢問，允許後記錄核准；原樣重送時第二段再問，允許才執行；核准單次使用、10 分鐘有效，以 session、工具與正規化輸入綁定；狀態檔讀寫失敗不放行；`bypassPermissions` 一律擋下；MCP 第一段擋下並附確認指令 | 一次點錯就無法復原的動作，多一次停頓的成本遠低於後果；提示內文寫出這次的具體對象與後果，讓第二次確認不是反射動作。`bypassPermissions` 沒有保證 ask 會跳提示。 |
+| `bypassPermissions`／`auto` 模式下 `gh pr merge` 一律擋下；繞過 `gh pr merge` 的合併一律擋下 | 刪除；改為只在合併會立即觸發正式部署時確認一次（`hooks/deploy-on-merge.mjs`：先看 `SORRY_MATT_MERGE_DEPLOYS` 或 `.claude/sorry-matt.json` 的 `mergeDeploysProduction`，否則讀 `origin/<base>` 的 workflow 判斷；release-please、changesets 或 tag 控制的發布不算；查不到就問） | 合併本身可逆；會讓人在意的是合併立刻上線。auto 模式下 PreToolUse 的 ask 會送到權限提示，classifier 不代決。 |
+| `get-to-work` 收官「CI 綠就送 `gh pr merge`」 | 改為有常設授權（`permissions.allow` 涵蓋 `gh pr merge`）或使用者本 run 指示時才送，否則留給人合併 | 刪掉 auto 模式的擋下後，沒有這個條件時 auto 模式的合併會由 classifier 決定。 |
+| 寫入 Claude Code 設定（原歸在「改權限」，擋下） | 確認一次 | 使用者可能請 agent 改設定；仍要讓人看過。 |
+| 發布與正式部署（原 `production`，擋下） | 確認一次；補 `gh release create` | 使用者看過後交給 agent 執行。 |
+
+程式：`hooks/permanent-exceptions.mjs` 改名 `hooks/classify.mjs`，每個 verdict 帶等級（`double`、`ask`、`merge`）；新增
+`hooks/confirm.mjs`、`hooks/confirm-state.mjs`、`hooks/deploy-on-merge.mjs`；`hooks/hooks.json` 的 PreToolUse matcher
+拿掉 `Read` 與 `Grep`（不再檢查讀取機密）。測試：`scripts/guard.test.mjs` 改寫，新增 `scripts/deploy-on-merge.test.mjs`，
+CI 一起跑。`SORRY_MATT_GUARD=off` 全關開關保留；budget 與 reread hook 不動。

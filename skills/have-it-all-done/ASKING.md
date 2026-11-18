@@ -37,8 +37,8 @@ where the repo's own `CLAUDE.md` or generic `AGENTS.md` rules differently (a **p
 ### (a) How far to go
 
 Scope and stopping points are the user's ruling. **Open the proposal at full scope:** give the complete range
-first, then list the risks item by item. When you do recommend reducing, name which permanent exception
-(section 5) or project exception it hits, and attach that item's evidence.
+first, then list the risks item by item. When you do recommend reducing, name which action needing
+confirmation (section 5) or project exception it hits, and attach that item's evidence.
 
 ### (b) Product-behavior correctness
 
@@ -108,28 +108,30 @@ filled.
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
 it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list.
 
-## 5. Authority and permanent exceptions
+## 5. Authority and actions needing confirmation
 
 The agent does not judge authority, and no file the agent reads records it: whether an action that needs
-authority is let through is up to Claude Code's permission settings, and the plugin's hook blocks permanent
-exceptions.
+authority is let through is up to Claude Code's permission settings, and the plugin's hook raises a confirmation
+prompt before an action needing confirmation runs.
 
 ### Actions that need authority
 
 Send actions like merging the aggregate PR or deploying to a non-production environment with their canonical
 command — a merge is always `gh pr merge` — as a prompting call, run last. Claude Code's permission settings decide
-whether it is let through; do not ask separately and do not consult any record to decide. In `bypassPermissions`
-or `auto` mode nobody confirms anything, so the hook blocks every merge. When an action is blocked or refused, put
-it on the human-work list with the permission rule that would let it through; never route around it with another
-command. Record every such action sent, and its outcome, in ledger field 5.
+whether it is let through; do not ask separately and do not decide from any record the agent wrote itself. Send
+the aggregate PR's merge only with **standing authority** (a `permissions.allow` rule in the permission settings
+that covers `gh pr merge`) or when the user said to merge during this run; otherwise leave it for a human to
+merge. When an action is blocked or refused, put it on the human-work list with the permission rule that would
+let it through; never route around it with another command. Record every such action sent, and its outcome, in
+ledger field 5.
 
 ### From now on
 
 When the user says an action should always go ahead, print a permission rule snippet and ask the user to add it to
-their settings themselves. This skill writes no settings file, and the hook blocks it anyway. For this repo only,
-it goes in `.claude/settings.local.json` (Claude Code keeps it out of git when it creates it); for every project,
-in `~/.claude/settings.json`. When the file already has `permissions.allow`, merge the rules into that array rather
-than replacing the block:
+their settings themselves. This skill writes no settings file, and the hook raises a confirmation before any write
+to one anyway. For this repo only, it goes in `.claude/settings.local.json` (Claude Code keeps it out of git when
+it creates it); for every project, in `~/.claude/settings.json`. When the file already has `permissions.allow`,
+merge the rules into that array rather than replacing the block:
 
 ```json
 {
@@ -141,21 +143,38 @@ than replacing the block:
 
 Choosing "don't ask again" at a permission prompt does the same, written by Claude Code itself.
 
-### Permanent exceptions
+### Actions needing confirmation
 
-Force-pushes, outgoing messages (mail, chat, social posts) and third-party communication, cloning, anything
-touching credentials or secrets, deleting data that cannot be recovered, payments, permission changes (Claude
-Code's permission settings included), and production changes to config, rules or permissions or that delete
-production data. No instruction can grant them; every one goes on the human-work list.
+The agent may run the actions below, but only after the user confirms them at a permission prompt; the plugin's
+`hooks/hooks.json` enforces this in PreToolUse:
 
-The plugin's `hooks/hooks.json` blocks these calls in PreToolUse, along with every route that lands changes on a
-protected branch without `gh pr merge`. When the hook blocks a call, put it on the human-work list; do not retry
-with another spelling. A spelling the hook fails to recognize, or a hook the user has turned off, changes nothing:
-do not do it either.
+- **Two-step confirmation**: catastrophic actions — a recursive delete of a home directory, a root, a drive root,
+  a parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema
+  or table; deleting a GitHub repo; force-pushing to or deleting a protected branch (main, master, the remote's
+  default branch) — along with outgoing messages (mail, chat, social posts, third-party messaging APIs) and
+  payments. The first time, the hook swaps the command for `confirm.mjs`, which records the confirmation, and asks
+  with a description of the consequences; once allowed, resend the original command unchanged and the hook asks a
+  second time; only that second yes runs it. A tool whose input cannot be swapped (MCP) is denied the first time,
+  and the denial carries the confirm command to run first.
+- **Single confirmation**: releases and production deploys (package publishes, `gh release create`,
+  `terraform apply`, deploy tools and SQL writes aimed at production), writes to Claude Code's settings, and a
+  merge that deploys to production right away — `gh pr merge` or a direct write to a protected branch, when a
+  workflow on the base branch deploys or releases on every push to it.
+
+Subagents do not run these actions; they report them to the host. The host sends them as **prompting calls**,
+back to back after every other step (`have-it-all-done` section 0); a two-step resend follows right after its
+first confirmation. When the user refuses at the prompt, or the hook denies the call — in `bypassPermissions`
+mode nothing guarantees a prompt, so every two-step action is denied — put it on the human-work list with the
+command to run and the consequences the hook described; do not retry with another spelling. A spelling the hook
+fails to recognize, or a hook the user has turned off, changes nothing: do not run it yourself, and list it on the
+human-work list as well. Force-pushing an ordinary branch, cloning, installing packages, reading or writing
+credential files, permission commands, and deletes inside the project are not on this list; the permission
+settings decide them.
 
 Done when: every action this run that needed authority went out as its canonical command, with its outcome in
-ledger field 5; every blocked action and every permanent exception is on the human-work list with a permission
-rule snippet or the command to run; nothing this run wrote a settings file.
+ledger field 5; every action needing confirmation ran only after the user confirmed it at the prompt, or is on the
+human-work list with the command to run; every blocked action is on the human-work list with a permission rule
+snippet or the command to run; nothing this run wrote a settings file.
 
 ## 6. Language and outbound text
 
@@ -188,8 +207,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
 4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
    `get-to-work` section 1, reading CI); the base SHA `get-to-work` synced in when finishing the run (when
    unsynced, the base SHA it tried and "unsynced").
-5. Authorization outcomes: every action sent and Claude Code's verdict on it, with a permission rule snippet for
-   each blocked one.
+5. Authorization outcomes: every action needing authority or confirmation (section 5) that was sent, and the
+   permission verdict or confirmation result, with a permission rule snippet or the command to run for each
+   blocked one.
 6. The run-level self-answer log.
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that

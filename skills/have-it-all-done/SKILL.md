@@ -21,9 +21,10 @@ ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
 - **A gate's refusal is an instruction.** When a process or quality gate denies a call and says how to proceed,
   follow that text and retry. It counts as stuck only when no such route exists, or following it still gets
   denied.
-- **Hard stops go on the list; keep working on everything else.** Put each permanent exception from `ASKING.md`
-  section 5, and each action the permissions block, on the **human-work list**, then carry on with every other
-  thing that can be done.
+- **Hard stops go on the list; keep working on everything else.** Put each action the permissions block or
+  refuse, and each action needing confirmation from `ASKING.md` section 5 that the hook denies or the user refuses
+  at the prompt, on the **human-work list**, then carry on with every other thing that can be done. An action
+  needing confirmation is not itself a hard stop: send it as a prompting call, per the next rule.
 - **Run prompting calls last, back to back.** A call that raises a confirmation prompt by itself — a hook ask,
   the built-in delete check — is a **prompting call**, and it waits for the end even when the user approved it
   long ago ("send it when it's done"), so the interruption lands once, at the end.

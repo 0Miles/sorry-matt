@@ -545,12 +545,15 @@ scope for cleanup:** Local Markdown line integration branches and the source bra
 are kept — for unmerged items, `clean-it-up` itself downgrades to keep. Remote branches still require the user's
 explicit authority for this request; do not open a question for it.
 
-Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge`; an unsynced line, or one
-that failed verification, sends nothing and does not enter a merge queue, and its aggregate PR is left for a human
-to merge. It is a prompting call, sent after cleanup; Claude Code's permission settings decide whether it is let
-through, and in `bypassPermissions` and `auto` mode the hook always blocks it (`ASKING.md` section 5). When it is
-let through, report the merge; when it is blocked or refused, the delivery stays with the human and the output
-carries the permission rule snippet that would let it through. Do not open a question for it.
+Once the aggregate PR's CI goes green, GitHub mode sends the merge with `gh pr merge` when there is standing
+authority (a `permissions.allow` rule in the permission settings that covers `gh pr merge`) or the user said to
+merge during this run; with neither, it sends nothing, the aggregate PR is left for a human to merge, and the
+output carries the permission rule snippet that would let it through. An unsynced line, or one that failed
+verification, sends nothing and does not enter a merge queue, and its aggregate PR is left for a human to merge. It
+is a prompting call, sent after cleanup; Claude Code's permission settings decide whether it is let through, and
+when the merge would deploy to production right away the hook asks for one more confirmation (`ASKING.md`
+section 5). When it is let through, report the merge; when it is blocked or refused, the delivery stays with the
+human and the output carries the permission rule snippet that would let it through. Do not open a question for it.
 
 **Merge queue.** Before sending, check whether the base branch has a merge queue:
 
@@ -561,9 +564,9 @@ gh api graphql -f query='query($owner:String!,$name:String!,$branch:String!){rep
 A null `mergeQueue` means it has none: follow the paragraph above; nothing changes. With one, the merge goes
 through the queue: the same `gh pr merge <PR>`, with no merge strategy and no `--admin` — gh adds the PR to the
 queue, which groups it with the latest base and the PRs ahead of it into a merge group and verifies that again
-before merging. The permission settings still decide whether it is let through, and the hook still blocks it in
-`bypassPermissions` and `auto` mode; skipping the queue with `--admin`, or entering it with GraphQL's
-`enqueuePullRequest` and so around the permission check on `gh pr merge`, is always blocked.
+before merging. Whether to send it, and whether it is let through, follow the paragraph above; do not skip the
+queue with `--admin`, and do not enter it with GraphQL's `enqueuePullRequest` and so around the permission check
+on `gh pr merge`.
 
 The queue runs checks only on `merge_group` events, so before sending, confirm its checks will run:
 
