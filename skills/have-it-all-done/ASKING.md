@@ -7,14 +7,11 @@ human in one go.**
 
 ## 0. Opening
 
-After this file, read three more, in order:
+After this file, read two more, in order:
 
 1. `docs/agents/issue-tracker.md`: the provider and its conventions. If it is missing, ask the user to run
    `/setup-matt-pocock-skills`, and continue once it is set up.
-2. `sorry-matt/authority.md` under the **common directory** that
-   `git rev-parse --path-format=absolute --git-common-dir` reports, for the **standing authority** (section 5).
-   When it is missing, run on the defaults — do not stop.
-3. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
+2. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
 
 ## 1. Pre-ask check
 
@@ -104,54 +101,58 @@ filled.
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
 it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list.
 
-## 5. The three layers of authority <!-- pending #8 -->
+## 5. Authority and permanent exceptions
 
-Authority is **never version-controlled** and never self-answered. It has three layers, and the default is the
-shortest-lived one.
+The agent does not judge authority, and no file the agent reads records it: whether an action that needs
+authority is let through is up to Claude Code's permission settings, and the plugin's hook blocks permanent
+exceptions.
 
-### L2 this run (the default)
+### Actions that need authority
 
-Authority obtained at the ruling point applies to this run only. Every authority option is split into "this time"
-and "from now on"; without "from now on", it counts for this time only.
+Send actions like merging the aggregate PR or deploying to a non-production environment with their canonical
+command — a merge is always `gh pr merge` — as a prompting call, run last. Claude Code's permission settings decide
+whether it is let through; do not ask separately and do not consult any record to decide. In `bypassPermissions`
+or `auto` mode nobody confirms anything, so the hook blocks every merge. When an action is blocked or refused, put
+it on the human-work list with the permission rule that would let it through; never route around it with another
+command. Record every such action sent, and its outcome, in ledger field 5.
 
-### L1 project (written only when the user says "from now on")
+### From now on
 
-Write it on the spot to `sorry-matt/authority.md` under the common directory: from any linked worktree the path
-resolves to the same file, and it sits outside the working tree, so it is never committed or pushed.
+When the user says an action should always go ahead, print a permission rule snippet and ask the user to add it to
+their settings themselves. This skill writes no settings file, and the hook blocks it anyway. For this repo only,
+it goes in `.claude/settings.local.json` (Claude Code keeps it out of git when it creates it); for every project,
+in `~/.claude/settings.json`. When the file already has `permissions.allow`, merge the rules into that array rather
+than replacing the block:
 
-Five columns per row; a row missing any one of them does not exist:
+```json
+{
+  "permissions": {
+    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
+  }
+}
+```
 
-| Action | Level | Source (the user's own words) | Date | Session |
-| --- | --- | --- | --- | --- |
+Choosing "don't ask again" at a permission prompt does the same, written by Claude Code itself.
 
-When the common directory is not writable, or the current directory is not inside a git repo, there is no L1:
-authority is asked once per run at the ruling point. Delete the whole file when the user revokes it.
+### Permanent exceptions
 
-### L0 global
+Force-pushes, outgoing messages (mail, chat, social posts) and third-party communication, installing new packages
+or cloning, anything touching credentials or secrets, deleting data that cannot be recovered, payments, permission
+changes (Claude Code's permission settings included), and production changes to config, rules or permissions or
+that delete production data. No instruction can grant them; every one goes on the human-work list.
 
-Rules that hold across projects stay in the user's own global `CLAUDE.md`, which already loads into every
-session. **Read it, never write it:** when something should be added, print the suggested lines and let the user
-paste them.
+Installing new packages includes adding a dependency to a manifest and downloading a package to run it with tools
+like `npx`, `pnpm dlx`, or `uvx`. Restoring dependencies from a lockfile does not count; always use the frozen form,
+such as `npm ci` or `pnpm install --frozen-lockfile`.
 
-### Hard rails
+The plugin's `hooks/hooks.json` blocks these calls in PreToolUse, along with every route that lands changes on a
+protected branch without `gh pr merge`. When the hook blocks a call, put it on the human-work list; do not retry
+with another spelling. A spelling the hook fails to recognize, or a hook the user has turned off, changes nothing:
+do not do it either.
 
-Nothing under `.git` shows up in a diff, so nobody reviews it. Therefore:
-
-1. **Every row carries its source:** the user's own words, the date, and the session. A row without a source does
-   not exist — ask again.
-2. **Every run's final report prints this run's authority table:** each grant actually used, one row each with the
-   action, level, the user's own words, and the date, plus the absolute path of that file; where no standing
-   authority was used, say "none".
-3. **A new row may only come from what the user said this round.** Never derive one from the other rows, never
-   widen an existing row's reach, never add one because "we did it last round".
-4. **Permanent exceptions, ungrantable at any layer:** force-pushes, outgoing messages (mail, chat, social posts)
-   and third-party communication, installing packages or cloning, anything touching credentials or secrets,
-   deleting data that cannot be recovered, payments, permission changes, and production changes to config, rules
-   or permissions or that delete production data. Every one goes on the human-work list.
-
-Done when: every action this run that needed authority points at one source in L0, L1, or L2; every row written to
-L1 carries the user's own words from this round; the final report prints the authority table and the file's
-absolute path.
+Done when: every action this run that needed authority went out as its canonical command, with its outcome in
+ledger field 5; every blocked action and every permanent exception is on the human-work list with a permission
+rule snippet or the command to run; nothing this run wrote a settings file.
 
 ## 6. Language and outbound text
 
@@ -176,7 +177,8 @@ compaction summary; otherwise create one. Nine fields:
 2. The task scope and where the adopted grilling source lives.
 3. The risk gate's three lights and the clearance record.
 4. Lines, integration branches, and tip SHAs.
-5. This run's authority table.
+5. Authorization outcomes: every action sent and Claude Code's verdict on it, with a permission rule snippet for
+   each blocked one.
 6. The run-level self-answer log.
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, deliverable, verification result, and where that

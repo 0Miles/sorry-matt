@@ -17,12 +17,12 @@ Once the risk gate clears it (step 1), this run aims to reach the handoff callin
 points: step 2's ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
 
 - **Make reversible internal decisions yourself.** Local files, commits on local branches, worktrees, tests, and
-  merges or deploys already authorized: decide, record it per `ASKING.md` section 3, and continue.
+  merges or deploys the permission settings let through: decide, record it per `ASKING.md` section 3, and continue.
 - **A gate's refusal is an instruction.** When a process or quality gate denies a call and says how to proceed,
   follow that text and retry. It counts as stuck only when no such route exists, or following it still gets
   denied.
 - **Hard stops go on the list; keep working on everything else.** Put each permanent exception from `ASKING.md`
-  section 5 on the **human-work list**, then carry on with every other thing that can be done.
+  section 5, and each action the permissions block, on the **human-work list**, then carry on with every other thing that can be done.
 - **Run prompting calls last, back to back.** A call that raises a confirmation prompt by itself — a hook ask,
   the built-in delete check — is a **prompting call**, and it waits for the end even when the user approved it
   long ago ("send it when it's done"), so the interruption lands once, at the end.
@@ -76,7 +76,7 @@ and evidence. The alternatives stay available but are not the recommendation: as
 take part in planning, `/grill-me`, `/grill-with-docs`, or `/grill-them` to clarify first, or `/wayfinder` for a
 large unresolved task. Continue after explicit approval; proceed directly when all are green.
 
-Done when: the tracker configuration, the standing authority, one task, and the grilling source are recorded; the
+Done when: the tracker configuration, one task, and the grilling source are recorded; the
 run ledger is picked up or created; all three lights have a red-or-green result; every red light has an explicit
 user approval record and a proposal that opened at full scope.
 
@@ -93,8 +93,7 @@ context budget; the spec and the ticket bodies stay on the tracker.
 One run opens one kickoff agent. When it stops short or reports incompletely, start another from the ledger's
 next action instead of re-running what is already published.
 
-After the kickoff agent delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4;
-actions that need authority are asked there too, per section 5.
+After the kickoff agent delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4.
 
 Done when: tickets are published to the configured tracker and every blocker edge is explicit; the kickoff
 agent's requirements context points to the same grilling result selected in step 1; the ruling point ran exactly
@@ -117,7 +116,8 @@ it belongs, with the other sections citing identifiers and paths — no embedded
 It includes:
 
 - Task scope, selected grilling source, and all three risk-light results.
-- **This run's authority table**, per `ASKING.md` section 5, hard rail 2.
+- **Authorization outcomes** (ledger field 5): every action sent and whether it went through, with a permission
+  rule snippet for each blocked one.
 - **The run-level self-answer log**, or an explicit `none`; ticket-level self-answers are cited by location. Then
   the **review pass** from `ASKING.md` section 4.
 - **The human-work list:** every item carries steps someone can follow to completion. Where the steps are many or
@@ -129,7 +129,7 @@ It includes:
   awaiting-ruling item.
 - **This run's metrics** (the ledger's ninth field).
 
-Done when: all seven categories are present; the authority table matches the actions actually taken, row by row;
+Done when: all seven categories are present; the authorization outcomes match the actions actually sent, row by row;
 every line has a traceable deliverable and acceptance evidence that lets someone outside the run decide whether
 to merge its aggregate PR or local integration branch; every human-work item has followable steps or a wizard; no
 section of the report duplicates text that is of record elsewhere.

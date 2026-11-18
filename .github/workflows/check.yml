@@ -10,7 +10,11 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -18,8 +22,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Test the check scripts
-        run: node --test scripts/checks.test.mjs
+      - name: Test the check scripts and the guard hook
+        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs
 
       - name: src/dist structure
         run: node scripts/check-structure.mjs

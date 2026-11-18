@@ -12,6 +12,8 @@
 - `skills/<name>/agents/openai.yaml` — 與 src 同步的 OpenAI metadata dist 版
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
+- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(永久例外與繞過 `gh pr merge`
+  的合併);不分 src/dist,測試在 `scripts/guard.test.mjs`
 - `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
   由 `.github/workflows/check.yml` 在 PR 上執行
 - `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
@@ -138,6 +140,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 重大分歧 | material disagreement |
 | 計量 | run metrics |
 | 壓縮 | compaction |
+| 放行 | let through |
+| 擋下 | blocked |
+| 權限規則片段 | permission rule snippet |
+| 需授權動作的結果 | authorization outcomes |
+| 以後都這樣 | from now on |
 | 開場 | opening |
 | 共用契約 | shared contract |
 | 交付說明 | brief |

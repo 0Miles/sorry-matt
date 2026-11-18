@@ -38,7 +38,7 @@ export function references(text) {
 export const linkTargets = (text) =>
   [...text.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]).filter((t) => !/^(https?:|#|mailto:)/.test(t));
 
-// `<!-- pending #8 -->` marks a rule that a later ticket replaces with a script or hook.
+// `<!-- pending #N -->` marks a rule that a later ticket replaces with a script or hook.
 export const pendingMarkers = (text) => [...text.matchAll(/<!--\s*pending\s+(#\d+)\s*-->/g)].map((m) => m[1]).sort();
 
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);

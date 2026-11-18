@@ -16,9 +16,6 @@ disable-model-invocation: true
 確認 git repo 與 working tree 乾淨；tracker 設定為 GitHub 時另確認 `gh` 已登入。Local
 Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節。
 
-授權依 `ASKING.md` 第 5 節：常設授權有附出處的列就照它走，沒有就由呼叫方給 ——
-`have-it-all-done` 的裁決點，或使用者本次的指示。<!-- pending #8 -->
-
 設定指出工作區含多個 repo 時，逐 repo 盤票。線不跨 repo，每個 repo 各有自己的整合分支與
 交付物。
 
@@ -38,7 +35,7 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
 
 **硬護欄**：執行期間新發現或新開的票只作為背景，初始票集一經凍結便不再擴張。
 
-完成判準：已選定且驗證 tracker 模式；已記錄常設授權；每張初始票都有發布出處、tracker
+完成判準：已選定且驗證 tracker 模式；每張初始票都有發布出處、tracker
 原生識別、所屬線與 blocker map；每條被他線佔用而排除的票都有佔用來源與解除條件；每條線
 都有從同一基底尖端建立的整合分支及 worktree。
 
@@ -150,8 +147,10 @@ Local Markdown 的 blocker 只在同一整合分支可讀到前置票的完整 `
 - **Local Markdown**：保留線整合分支供人審查與合併；記錄 branch name 與 tip SHA，再移除
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
 
-常設授權允許合併時，GitHub 模式在總 PR 的 CI 轉綠後直接合併並回報結果；授權缺漏時維持
-交給人，並在輸出中指名缺的是哪一條授權，不為此另開一輪提問。<!-- pending #8 -->
+GitHub 模式在總 PR 的 CI 轉綠後以 `gh pr merge` 送出合併。它是確認呼叫，留到清理之後送出；
+放不放行由 Claude Code 的權限設定決定，`bypassPermissions` 與 `auto` 模式下一律被 hook 擋下
+（`ASKING.md` 第 5 節）。放行就回報合併結果；被擋下或被拒就維持交給人，輸出附上能放行它的
+權限規則片段，不為此另開提問。
 
 線交付完成後清理：呼叫 Skill tool 帶入 `clean-it-up`，照它的證據規則收掉本輪產生的
 ticket worktree 與已合併的本地分支。**待人審查的交付物不在清理範圍**：Local Markdown 的
@@ -159,9 +158,9 @@ ticket worktree 與已合併的本地分支。**待人審查的交付物不在�
 降級為保留。遠端分支仍須使用者在本次明確授權，不為此另開提問。
 
 最終輸出每條線的總 PR 或整合分支、涵蓋全部初始票的**對帳表**與**本輪計量**（`ASKING.md`
-第 7 節）、本輪授權表（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
+第 7 節）、需授權動作的結果（第 5 節），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 
 完成判準：每條線都跑過一次線級精簡與一次完整驗證並收在綠燈，且恰有一項可供人合併的交付，
-或已依常設授權合併並回報；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
+或已經權限設定放行而合併並回報；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
-分支仍保留；輸出已列出本輪採用的授權與本輪計量。
+分支仍保留；輸出已列出需授權動作的結果與本輪計量。
