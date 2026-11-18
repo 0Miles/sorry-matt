@@ -2,6 +2,7 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 // Working trees may check files out as CRLF (core.autocrlf); every comparison and hash uses LF.
 export const readLF = (path) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
@@ -60,4 +61,20 @@ export function report(name, problems) {
   console.error(`${name}: ${problems.length} problem(s)`);
   for (const p of problems) console.error(`  - ${p}`);
   return 1;
+}
+
+// The Windows 8.3 short alias of an existing path (C:\Users\RUNNER~1\...), or null where there is none:
+// not Windows, 8.3 names disabled on the volume, or no component long enough to get one.
+export function shortPath(path) {
+  if (process.platform !== 'win32') return null;
+  try {
+    const out = execFileSync('cmd.exe', ['/d', '/s', '/c', `"for %I in ("${path}") do @echo %~sI"`], {
+      encoding: 'utf8',
+      windowsVerbatimArguments: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out && out.toLowerCase() !== path.toLowerCase() ? out : null;
+  } catch {
+    return null;
+  }
 }

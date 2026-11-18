@@ -44,7 +44,7 @@
 //
 // Exit codes: 0 done (survivors are data, not failure), 1 red baseline or runtime error (files restored),
 // 2 usage or invalid plan, 3 a file could not be restored byte for byte.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep, posix } from 'node:path';
@@ -99,14 +99,27 @@ export function changedLines(diffText) {
   return files.filter((f) => f.lines.length > 0);
 }
 
+// A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
+// text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
+// path when it exists, else through the real base.
+const realOr = (p, fallback) => {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return fallback;
+  }
+};
+const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
+
 // lcov text -> Map(path key -> Set of lines with hits > 0). SF paths may be absolute or relative to cwd.
 export function coveredLines(lcovText, cwd) {
   const out = new Map();
+  const root = canonical(cwd);
   let file = null;
   for (const raw of lcovText.split('\n')) {
     const line = raw.trim();
     if (line.startsWith('SF:')) {
-      file = keyOf(relative(cwd, resolve(cwd, line.slice(3))));
+      file = keyOf(relative(root, canonical(cwd, line.slice(3))));
       if (!out.has(file)) out.set(file, new Set());
     } else if (line.startsWith('DA:') && file) {
       const [n, hits] = line.slice(3).split(',');
