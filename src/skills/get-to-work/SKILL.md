@@ -108,7 +108,7 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗
    摘要），在從整合分支新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收票步驟 3 的集中修正
    （`recheck` 附上該票上一次的審查區塊）與步驟 4–7，整併不排隊。對不到票就由主持人或做那一步的 agent 在整合
-   worktree 修，commit、push。偶發紅燈的硬護欄照用。每輪修完都 push，下一次讀 CI 判結果。
+   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。每輪修完都 push，下一次讀 CI 判結果。
 5. **兩輪仍紅，對到票：撤回。** `git revert -m 1 <該票的 merge commit>`，並撤掉它的完成紀錄：
    - **GitHub**：依收票開卡住紀錄的 raw issue；之後的派票點把它從 `--done` 移到 `--stuck`。
    - **Local Markdown**：`git revert` 撤回完成紀錄那個 commit，再依收票追加 `## sorry-matt blocker`，原因寫
@@ -260,11 +260,15 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
    加 retry 與調大 timeout 都不算修好。兩輪修正內查不出根因就標卡住。
 4. **整併**：審查通過的票排進所屬線的**整併佇列**：一條線一次整併一張，照進佇列的順序；紅燈處置中的線
-   佇列暫停（「讀 CI」）。輪到時階段改為整併中，在整合 worktree 以 `git merge --no-ff <ticket 分支>` 合併，一張票一個
-   merge commit。有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
+   佇列暫停（「讀 CI」）。輪到時階段改為整併中，在整合 worktree 以 `git merge --no-ff --no-edit <ticket 分支>`
+   合併，一張票一個 merge commit，message 用 git 預設的 `Merge branch '<ticket 分支>'`：紅燈對票與收官的
+   **逐票導覽**都靠它認出是哪張票。這個 merge 的第二親代範圍 `<merge>^1..<merge>^2` 就是這張票的 commit。
+   有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
    以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與 commit
-   message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。它逐塊回報取捨摘要，主持人把
-   取捨記進自答清單。解完執行受影響範圍的針對性檢查。整併 agent 回報無法安全解決時 `git merge --abort`，
+   message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。解法只留在
+   這個 merge commit 裡（`git commit --no-edit` 收尾），不改寫 ticket 分支；`git show --remerge-diff <merge>`
+   只顯示解法那部分。它逐塊回報取捨摘要，主持人把取捨記進自答清單。解完執行受影響範圍的針對性檢查；還要再改
+   就在整合分支另做一個 commit，subject 不帶票 ID。整併 agent 回報無法安全解決時 `git merge --abort`，
    該票**退回重做**（下方），佇列換下一張。
 5. **完成交付**：
    - **GitHub**：票保持 open，關票交給總 PR（第 2 節）；本票的摘要在它的 commit message 裡
@@ -305,7 +309,8 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 完成判準：每張回報的票都沒等其他票就進了收票；每張票都恰好經過一次獨立審查（`prove-it` 的 `initial`，開審前的
 `stuck` 不算），每輪修正後各有一次 `recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；
 針對性檢查回到綠，並有通過驗收的模式原生交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；
-每條線同一時間至多一張票在整併，紅燈處置中的線沒有整併佇列裡的票被整併；每次整併之後都做了派票點；
+每條線同一時間至多一張票在整併，紅燈處置中的線沒有整併佇列裡的票被整併；每次整併都是帶 git 預設 message 的
+`--no-ff` merge commit，衝突解法只在 merge commit 裡，ticket 分支沒有被改寫；每次整併之後都做了派票點；
 每張退回的票都有 `sent-back` ref、接續紀錄裡的退回紀錄、對帳表的退回次數與加寬的預計檔案，且至多退回一次；
 每張票的接續紀錄都寫到最新；成功票已整併並清理 ticket worktree 與本地分支；有 `origin` 的線，每次整併都各
 push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合分支同一個 SHA。
@@ -334,12 +339,14 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
 
 1. **精簡**：在整合 worktree 呼叫 Skill tool 帶入 `simplify`，對整條線累積的改動做一次品質
    收斂 —— 復用、簡化、效率、抽象層級 —— 它會直接套用修法。跨票的重複只有整併之後才看得
-   見，所以精簡在這裡做一次，不在每張票各做一次。退掉的修法記進自答清單。
+   見，所以精簡在這裡做一次，不在每張票各做一次。退掉的修法記進自答清單。套用的修法收成**一個獨立
+   commit**（subject 如 `refactor: simplify <整合分支>`，不帶票 ID；沒有修法就不 commit），不 amend 進任何
+   merge 或票的 commit。
 2. **併入基底**：整合分支是第 0 節從當時的基底尖端建的，run 期間基底可能已前進，綠燈要跑在
    最新基底上才算數。在整合 worktree 把最新的基底尖端合併進整合分支：有 `origin` 時
    `git fetch origin <基底分支>` 再 `git merge origin/<基底分支>`；Local Markdown 沒有 remote 時
-   合併本地 `<基底分支>`。併入的基底 SHA 記進 ledger 第 4 欄。有 conflict 時交給第 1 節收票
-   步驟 4 的**整併 agent**，判準照用：一邊是這條線（各票票面與 commit message），另一邊是基底
+   合併本地 `<基底分支>`，都帶 `--no-edit`。併入的基底 SHA 記進 ledger 第 4 欄。有 conflict 時交給第 1 節收票
+   步驟 4 的**整併 agent**，判準與「解法只留在這個 merge commit 裡」照用：一邊是這條線（各票票面與 commit message），另一邊是基底
    （`git log --format=%B <merge-base>..<併入的基底 ref>`），合併目標是讓線的意圖落在最新基底上。
    主持人把取捨記進自答清單。整併 agent 回報無法安全解決時 `git merge --abort`，這條線就是
    **未併入**：ledger 第 4 欄記嘗試併入的基底 SHA 與「未併入」，交付物與人工作業清單寫明衝突的
@@ -363,10 +370,38 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
 
 接著依模式交付每條線：
 
-- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**。Body 為每張完成票寫一節：摘要與
-  `Closes #N`；退回重做過的票另註明退回次數與接續紀錄的位置。摘要由主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
-  `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`。
-  卡住與待裁決的票列為**缺口**，不寫 `Closes`。總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後每行 `Closes #N` 仍要在。
+- **GitHub**：建立「線整合分支 → 基底分支」的**總 PR**，body 的主體是**逐票導覽**。先在整合 worktree 執行
+  本 skill 的 `scripts/review-guide.mjs`：
+
+  ```bash
+  node "${CLAUDE_SKILL_DIR}/scripts/review-guide.mjs" sorry-matt/runs/<run>/guide/<line-slug>.plan.json
+  ```
+
+  計畫檔與輸出（同名的 `.json`）跟 ledger 同在共用目錄，格式寫在腳本檔頭：`base` 是併入的基底 ref
+  （`origin/<基底分支>`），`web` 取 `gh repo view --json url --jq .url`，`tickets` 是對帳表中整併過這條線的每張票
+  （含後來成為缺口的），帶 ticket 分支、票名、凍結時 frontier 輸出的 `blockedBy` 與接續紀錄的連結。腳本沿
+  `git log --first-parent` 以 merge 的 message 認出每張票的 merge，票的 commit 就是 `<merge>^1..<merge>^2`；其他
+  first-parent commit（精簡、併入基底、主持人 commit、對不到票的修正、撤回）是**線級 commit**。結束代碼 3 表示
+  `missing` 裡的票在線上找不到 merge：照 ledger 核對它的分支名，修正計畫檔重跑；仍找不到就在該票那節寫明
+  「commit 範圍對不到」，不猜範圍。
+
+  Body 依輸出寫，順序固定：
+
+  1. **審查門檻提醒**：`size.over` 為 true —— PR diff 的增刪合計（`git diff --shortstat <基底>...<線整合分支>`）
+     超過門檻，預設 400 行，約是一次審得完的量 —— 時，body 第一段寫出行數與門檻，建議照逐票導覽按 commit
+     範圍一張一張審，不要一次看整支 diff。
+  2. **逐票導覽**：每張完成票一節，照 `tickets` 的 `order` —— 阻擋邊的拓撲序，被依賴的票先讀。每節寫：
+     - 標題：順序、票號與票名；
+     - commit 範圍：每個 merge 的 `compare` 連結，附 commit 數與 `stat`；紅燈修正的 `-ci` merge 另列一段；
+     - 改了什麼：主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
+       `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`；
+     - 驗收證據：接續紀錄的連結；
+     - `resolved` 為 true 的 merge 寫明含衝突解法並附它的 `remergeDiff` 指令；退回重做過的票註明退回次數；
+     - 節末 `Closes #N`。
+  3. **線級 commit**：`lineCommits` 逐項附連結與用途；含衝突解法的附 `remergeDiff` 指令。
+  4. **缺口**：卡住與待裁決的票，不寫 `Closes`；在線上有 merge 的（上游撤回、被撤回）附它的 commit 範圍。
+
+  總 PR body 依 `ASKING.md` 第 6 節潤稿，潤稿後門檻提醒、每個 commit 連結與每行 `Closes #N` 仍要在。
 - **Local Markdown**：保留線整合分支供人審查與合併；記錄 branch name 與 tip SHA，再移除
   整合 worktree。票據狀態與實作一同留在該分支，不模擬 PR 或 close。
 
@@ -421,7 +456,9 @@ PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的總 PR，關�
 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
 
 完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證，收在綠燈或標明驗證未過並留給人
-合併；完整驗證是已併入最新基底的整合分支最新 SHA 的 CI 結果，或在步驟 3 的本機驗證條件下同一 SHA 的
+合併；精簡的修法與併入基底各是自己的 commit，沒有混進票的 commit；總 PR body 有依 `review-guide.mjs` 輸出寫的
+逐票導覽，每張完成票照阻擋邊的順序、有可點的 commit 範圍、摘要與接續紀錄連結，`size.over` 為 true 時開頭有
+門檻提醒；完整驗證是已併入最新基底的整合分支最新 SHA 的 CI 結果，或在步驟 3 的本機驗證條件下同一 SHA 的
 本機檢查且報告寫明原因，報告寫出驗證的 SHA 與基底 SHA；未併入的線寫明衝突檔案與嘗試的基底 SHA，在未併入的樹
 上驗證，並留給人合併；每條線恰有一項可供人合併的交付，或已經權限設定放行而合併（基底啟用
 merge queue 時走 queue）並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，

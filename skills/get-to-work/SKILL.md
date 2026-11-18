@@ -131,7 +131,7 @@ the fix leave it red, map the red back to the original ticket by mistake.
    `<run>/<NN>-<slug>-ci` branch freshly cut from the integration branch: the CI failure is the finding, and it goes
    through close-out step 3's batched fix (`recheck` attaching that ticket's previous review block) and steps 4–7,
    integrating without queueing. When it maps to no ticket, the host or the agent that ran that step fixes it in the
-   integration worktree, commits and pushes. The flaky-red hard rail applies. Every fix round ends with a push, and
+   integration worktree, commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies. Every fix round ends with a push, and
    the next CI read gives its result.
 5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and take
    back its completion record:
@@ -348,13 +348,18 @@ integration branch, CI runs in the background, the host does not wait, and the n
 4. **Integrate:** a ticket that passed review joins its line's **integration queue**: a line integrates one ticket at
    a time, in the order they joined; the queue of a line in red-light handling pauses (reading CI). When its turn
    comes its stage becomes integrating, and it is merged in the integration worktree with
-   `git merge --no-ff <ticket branch>`, one merge commit per ticket. Where there are conflicts, give them to a
-   **merge agent** to resolve hunk by hunk: it gets the integration worktree, both sides' ticket text and commit
-   messages, and this test — the choice is between two intents rather than two blocks of text, so trace each side
-   to its primary source (the ticket text and the commit message), keep both where they are compatible, and where
-   they are not, take the side that matches this merge's goal, with what lands limited to behaviour one side
-   actually wrote. It reports the trade-off per hunk, and the host records those trade-offs in the self-answer
-   log. Then run the targeted checks for the affected surface. When the merge agent reports it cannot resolve the
+   `git merge --no-ff --no-edit <ticket branch>`: one merge commit per ticket, carrying git's default message
+   `Merge branch '<ticket branch>'` — red-light mapping and the **per-ticket guide** at finishing both recognize the
+   ticket by it. That merge's second-parent range, `<merge>^1..<merge>^2`, is exactly this ticket's commits.
+   Where there are conflicts, give them to a **merge agent** to resolve hunk by hunk: it gets the integration
+   worktree, both sides' ticket text and commit messages, and this test — the choice is between two intents rather
+   than two blocks of text, so trace each side to its primary source (the ticket text and the commit message), keep
+   both where they are compatible, and where they are not, take the side that matches this merge's goal, with what
+   lands limited to behaviour one side actually wrote. The resolution lives only in this merge commit (finished
+   with `git commit --no-edit`), and the ticket branch is never rewritten; `git show --remerge-diff <merge>` shows
+   just the resolution. It reports the trade-off per hunk, and the host records those trade-offs in the self-answer
+   log. Then run the targeted checks for the affected surface; anything more to change goes into a separate commit
+   on the integration branch, with no ticket ID in its subject. When the merge agent reports it cannot resolve the
    conflict safely, run `git merge --abort`; the ticket is **sent back for a redo** (below), and the queue moves on
    to the next ticket.
 5. **Complete delivery:**
@@ -407,7 +412,9 @@ correction round had one `recheck`, every call came with that call's acceptance 
 snapshot, and every verdict is in the status record; its targeted checks are back to green, and it has either a
 reviewed, provider-native delivery or a traceable stuck record; every ticket that gained a specialist reviewer names
 the risk; each line integrated at most one ticket at a time, and no queued ticket was integrated into a line in
-red-light handling; every integration was followed by a dispatch point; every ticket sent back has its `sent-back`
+red-light handling; every integration is a `--no-ff` merge commit with git's default message, any conflict
+resolution lives only in that merge commit, and no ticket branch was rewritten; every integration was followed by a
+dispatch point; every ticket sent back has its `sent-back`
 ref, a send-back record in its status record, its send-back count in the reconciliation table and widened predicted
 files, and was sent back once at most; every ticket's status record is written current; successful tickets are
 integrated and their ticket worktrees and local branches removed; on a line with an `origin`, every integration was
@@ -440,13 +447,16 @@ Every line passes **three line-level gates** first, in this order:
 1. **Simplify:** in the integration worktree, call the Skill tool with `simplify` to make one quality pass over
    everything the line accumulated — reuse, simplification, efficiency, altitude — which it applies directly.
    Duplication across tickets is only visible after integration, so this pass runs here once rather than once per
-   ticket. Record any dropped simplification in the self-answer log.
+   ticket. Record any dropped simplification in the self-answer log. Commit the applied simplifications as **one
+   commit of their own** (a subject such as `refactor: simplify <integration branch>`, with no ticket ID; no
+   simplification, no commit), never amended into any merge or ticket commit.
 2. **Sync the base:** the integration branch was cut from the base tip in section 0, and the base may have moved
    during the run; a green only counts on the latest base. In the integration worktree, merge the latest base tip
    into the integration branch: with an `origin`, `git fetch origin <base branch>` then
-   `git merge origin/<base branch>`; in Local Markdown mode with no remote, merge the local `<base branch>`. Record
-   the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from section 1, close-out step 4,
-   under the same criterion: one side is the line (its tickets' text and commit messages), the other is the base
+   `git merge origin/<base branch>`; in Local Markdown mode with no remote, merge the local `<base branch>`; either
+   way with `--no-edit`. Record the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from
+   section 1, close-out step 4, under the same criterion and the same rule that the resolution lives only in this
+   merge commit: one side is the line (its tickets' text and commit messages), the other is the base
    (`git log --format=%B <merge-base>..<merged base ref>`), and the goal of this merge is the line's intent landing
    on the latest base. The host records the tradeoffs in the self-answer log. When the merge agent reports a
    conflict it cannot resolve safely, run `git merge --abort`; the line is then **unsynced**: ledger field 4 records
@@ -476,13 +486,49 @@ SHA holds.
 
 Then deliver each line according to its mode:
 
-- **GitHub:** create one aggregate PR from the line integration branch into the base branch. Its body gives each
-  completed ticket a section: a summary and `Closes #N`; a ticket that was sent back for a redo also notes its
-  send-back count and where its status record is. The host writes the summary from every commit message the
-  ticket integrated into the line, batched-fix commits included:
-  `git log --format=%B -E --grep='#N([^0-9]|$)' <base branch>..<line integration branch>`.
-  Stuck and awaiting-ruling tickets are listed as **gaps**, with no `Closes`. Polish the aggregate PR body per
-  `ASKING.md` section 6; every `Closes #N` line must survive the polish.
+- **GitHub:** create one aggregate PR from the line integration branch into the base branch; the body is built
+  around a **per-ticket guide**. First run this skill's `scripts/review-guide.mjs` in the integration worktree:
+
+  ```bash
+  node "${CLAUDE_SKILL_DIR}/scripts/review-guide.mjs" sorry-matt/runs/<run>/guide/<line-slug>.plan.json
+  ```
+
+  The plan and its output (the same name ending in `.json`) live in the common directory beside the ledger, in the
+  format the script's header documents: `base` is the merged base ref (`origin/<base branch>`), `web` comes from
+  `gh repo view --json url --jq .url`, and `tickets` lists every ticket in the reconciliation table that was
+  integrated into this line (including those that later became gaps), with its ticket branch, its title, the
+  `blockedBy` from the frontier output at the freeze, and a link to its status record. Walking
+  `git log --first-parent`, the script recognizes each ticket's merges by their message, and a ticket's commits are
+  `<merge>^1..<merge>^2`; every other first-parent commit (simplify, base sync, host commits, fixes mapped to no
+  ticket, reverts) is a **line-level commit**. Exit code 3 means a ticket in `missing` has no merge on the line:
+  check its branch name against the ledger, correct the plan and re-run; if it is still not found, say "commit range
+  not found" in that ticket's section rather than guessing a range.
+
+  Write the body from the output, in this fixed order:
+
+  1. **Review-threshold notice:** when `size.over` is true — the PR diff's insertions plus deletions
+     (`git diff --shortstat <base>...<line integration branch>`) exceed the threshold, 400 lines by default, about
+     what one review sitting can cover — the body's first paragraph gives the line count and the threshold, and
+     recommends reviewing commit range by commit range, one ticket at a time, following the per-ticket guide,
+     rather than the whole diff at once.
+  2. **Per-ticket guide:** one section per completed ticket, in the `order` of `tickets` — the topological order of
+     the blocker edges, so a ticket others depend on is read first. Each section gives:
+     - heading: the reading position, the ticket number and the title;
+     - commit range: each merge's `compare` link, with its commit count and `stat`; a red-light `-ci` merge gets
+       its own entry;
+     - what changed: the host's summary of every commit message the ticket integrated into the line, batched-fix
+       commits included: `git log --format=%B -E --grep='#N([^0-9]|$)' <base branch>..<line integration branch>`;
+     - acceptance evidence: the link to its status record;
+     - a merge whose `resolved` is true is marked as carrying a conflict resolution, with its `remergeDiff`
+       command; a ticket sent back for a redo notes its send-back count;
+     - `Closes #N` at the end of the section.
+  3. **Line-level commits:** each entry of `lineCommits` with its link and what it is for; those carrying a
+     conflict resolution with their `remergeDiff` command.
+  4. **Gaps:** stuck and awaiting-ruling tickets, with no `Closes`; those with a merge on the line (upstream
+     reverted, reverted) with their commit range.
+
+  Polish the aggregate PR body per `ASKING.md` section 6; the threshold notice, every commit link and every
+  `Closes #N` line must survive the polish.
 - **Local Markdown:** leave the line integration branch for human review and merge. Record its branch name and
   tip SHA, then remove the integration worktree. Ticket state travels with the implementation on that branch;
   do not simulate a PR or close operation.
@@ -549,7 +595,10 @@ run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry
 output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
 
 Done when: every line went through one line-level simplify, one base sync and one full verification, ending green
-or marked as failed verification and left for a human to merge; the full verification is the CI result for the
+or marked as failed verification and left for a human to merge; the simplify pass and the base sync are each their
+own commit, mixed into no ticket's commits; the aggregate PR body has a per-ticket guide written from the
+`review-guide.mjs` output, giving every completed ticket, in blocker order, a clickable commit range, a summary and
+its status-record link, with the threshold notice at the top when `size.over` is true; the full verification is the CI result for the
 latest SHA of the integration branch synced to the latest base, or, under step 3's local-verification conditions, a
 local run on that same SHA with the reason reported, and its report naming the verified SHA and the base SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified on its unsynced
 tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or was merged after the

@@ -173,6 +173,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 等人時間 | waiting time |
 | 併入基底 | sync the base |
 | 未併入 | unsynced |
+| 逐票導覽 | per-ticket guide |
+| 線級 commit | line-level commit |
+| 審查門檻 | review threshold |
 | 還在跑 | still running |
 | 沒有 run | no run |
 | 查詢失敗 | query failed |
