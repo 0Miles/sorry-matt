@@ -15,7 +15,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'hooks/spawns.mjs');
 
 const fixture = () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sorry-matt-budget-')));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-budget-')));
   const runs = join(dir, 'sorry-matt', 'runs');
   mkdirSync(runs, { recursive: true });
   return { dir, runs, git: () => ({ status: 0, stdout: `${dir}\n` }), done: () => rmSync(dir, { recursive: true, force: true }) };
@@ -278,7 +278,7 @@ test('hooks.json wires spawns.mjs to PreToolUse on Agent and to every SubagentSt
 });
 
 test('end to end: the entry counts in a real repo worktree, denies at the limit, and stops once the run ends', () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sorry-matt-budget-repo-')));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-budget-repo-')));
   try {
     const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
     git('init', '-q');

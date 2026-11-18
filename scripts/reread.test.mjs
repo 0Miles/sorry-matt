@@ -13,7 +13,7 @@ import { parseLedger, activeLedgers, reminder, respond } from '../hooks/runs.mjs
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const fixture = () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sorry-matt-reread-')));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-reread-')));
   const runs = join(dir, 'sorry-matt', 'runs');
   mkdirSync(runs, { recursive: true });
   return { dir, runs, done: () => rmSync(dir, { recursive: true, force: true }) };
@@ -115,7 +115,7 @@ test('hooks.json registers reread.mjs on SessionStart with matcher compact', () 
 });
 
 test('end to end: the entry prints plain text from a real repo worktree and nothing once the run ends', () => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'sorry-matt-reread-repo-')));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-reread-repo-')));
   try {
     const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
     git('init', '-q');
