@@ -1,6 +1,6 @@
 {
   "name": "sorry-matt",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "基於 mattpocock-skills 的自動工作流",
   "author": {
     "name": "Miles",
@@ -31,6 +31,7 @@
     "./skills/build-the-ui-right",
     "./skills/actually-look-at-the-ui",
     "./skills/make-the-ui-fast",
-    "./skills/make-this-shit-pretty"
+    "./skills/make-this-shit-pretty",
+    "./skills/set-up-ui-skills"
   ]
 }

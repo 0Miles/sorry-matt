@@ -10,13 +10,21 @@ Arguments name the page, component, route, or flow to rework. With no argument, 
 
 Before starting, take the base directory shown when this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full. It is the **frontend
-contract**; it defines the bold **state matrix**, **accessibility floor**, **evidence grade**, and **eyes-on
-list** below.
+contract**; it defines the bold **component reuse**, **state matrix**, **accessibility floor**, **evidence
+grade**, and **eyes-on list** below.
+
+Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
+step 1: create no branch, produce no findings, and ask the user to run `/set-up-ui-skills`.
 
 **Hard rail — behavior stays unchanged.** The **behavior baseline** is these five: routes, data flow, fields
 and validation rules, the requests sent, and event tracking; they are the same before and after. What may
 change is structure, hierarchy, semantic markup, styling, and the filling-in of missing states. A functional
 defect found along the way is recorded as a finding and handed back in the report for a separate change.
+
+Replacing a hand-rolled lookalike, or code that bypasses the component library, with a library component or a
+shared component from `ui.md` counts as "filling in missing states or semantics" and does not break "behavior
+stays unchanged"; the five **behavior baseline** items are still compared one by one, and the original event
+handlers, requests sent, and event tracking all move over to the new component.
 
 ## 1. Fix the scope and the behavior baseline
 
@@ -39,10 +47,25 @@ finding with five fields:
 
 `location (screen and file:line) | user-visible consequence | rule violated | evidence grade | evidence location`
 
-Sweep once with each of four lenses: purpose and hierarchy, blank cells in the **state matrix**, the
-**accessibility floor**, decoration without a reason. When `modern-web-guidance` is among the available
-skills, additionally call the Skill tool with `modern-web-guidance` to find outdated platform patterns in
-scope.
+Sweep once with each of five lenses: purpose and hierarchy, blank cells in the **state matrix**, the
+**accessibility floor**, decoration without a reason, bypassing the component library. When
+`modern-web-guidance` is among the available skills, additionally call the Skill tool with
+`modern-web-guidance` to find outdated platform patterns in scope.
+
+"Bypassing the component library" checks against the `Component library`, `Shared components`, and `Tokens`
+sections of `ui.md`, and catches three kinds:
+
+- **Hand-rolled lookalike**: a home-made element imitating a library component or a shared component. The
+  finding names the component it imitates, and that component's location or package in `ui.md`.
+- **Outside override**: the prohibitions spelled out in the customization ladder of **component reuse** —
+  overriding a component's internal styles from an outside selector, raising specificity or using
+  `!important`, a private class or private CSS variable.
+- **Hard-coded value**: a literal color, spacing, radius, or font value written where the token file recorded in
+  `ui.md` already has a matching token.
+
+The **evidence grade** of these findings: hand-rolled lookalikes and outside overrides are measured (the DOM and
+computed style read in the browser); hard-coded values are derived (computed values compared with the tokens'
+resolved values); with no browser they are unverified, with the source `file:line` attached.
 
 Done when: every step of the journey and the interruption were walked; every lens has findings or an explicit
 "nothing found"; every finding has all five fields.
@@ -55,7 +78,7 @@ first, states second, craft detail last.
 
 Next comes the only **ruling point** of the run: hand the user the findings, the UI brief, and the step list in
 one go, and ask them to rule on which to do. Mark each judged finding as a matter of taste and attach your
-recommendation.
+recommendation. A "bypassing the component library" finding is not judged and is never marked a matter of taste.
 
 Done when: every finding maps to a step or is marked "not addressed" with a reason, and the user has ruled on
 the scope.
@@ -70,6 +93,12 @@ When currently on the default branch, create a new branch first. For each step, 
 3. Rerun the automated checks; the step passes when the results match step 1.
 4. Make one commit containing this step alone.
 
+When a step migrates to a shared component (extracting one, switching to one, or changing what one is for) or
+merges duplicate implementations, the matching edit to `ui.md` goes into that step's own commit:
+`git show --name-only` lists both the code and `docs/agents/ui.md`. A mismatch between `ui.md` and the source
+found along the way and not caused by any step is fixed with the source winning, in a separate commit that
+changes only `docs/agents/ui.md`.
+
 When a step still fails after two fixes, revert it, record it as unfinished, and move on to the next.
 
 Done when: every step is exactly one of "finished with one commit" or "reverted with a reason", and every
@@ -82,8 +111,9 @@ finished step has a before/after pair and check results matching step 1.
 - **Behavior baseline recheck**: the five items compared before and after, one by one; check results set
   beside those from step 1.
 - **Before/after pairs**: one set per screen, with full screenshot paths.
+- **State of `ui.md`**: which rows this run updated and in which commit each, or why no update was needed.
 - The **eyes-on list**, and the functional defects recorded along the way.
 
 Done when: the reconciliation table covers every finding from step 2 exactly once; all five behavior-baseline
 items are marked "same"; check results match step 1; every "it looks better" in the report points to a
-before/after pair.
+before/after pair; `ui.md` matches this change, or is explicitly recorded as needing no update.

@@ -269,6 +269,48 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 超時延長次數 | timeout extensions |
 | 超時停止次數 | timeout stops |
 | 在途 agent | agent in flight |
+| 探查 | explore |
+| 元件庫 | component library |
+| 共用元件 | shared component |
+| 元件地圖 | component map |
+| 重複實作 | duplicate implementation |
+| 既有、不再新用 | existing, not for new use |
+| 指示檔 | instructions file |
+| 建議答案 | recommended answer |
+| 參考流程 | reference flow |
+| 元件複用 | component reuse |
+| 元件對照表 | component choice table |
+| 客製化梯 | customization ladder |
+| 客製化階 | customization rung |
+| 新造門檻 | new-component bar |
+| 沿用/客製化第 N 階/新造(客製化階的值) | reused / customized, rung N / new |
+| UI 元素/元件（位置）/客製化階/理由(元件對照表欄名) | UI element / Component (location) / Customization rung / Rationale |
+| 前置 | prerequisite |
+| 依工作選元件 | choose components by job |
+| 先讀 API 再用 | read the API before using it |
+| 自帶 skill(元件庫的) | bundled skill |
+| 「元件庫」段(`ui.md`) | `Component library` section |
+| 「共用元件」段(`ui.md`) | `Shared components` section |
+| 「慣例」段(`ui.md`) | `Conventions` section |
+| 「自帶 skill」欄(`ui.md`) | `Bundled skill` field |
+| 「位置」欄(`ui.md`) | `Location` column |
+| 「何時用」欄(`ui.md`) | `Use when` column |
+| 「不適用時改用」欄(`ui.md`) | `Instead` column |
+| 「既有、不再新用」(`ui.md`) | `Existing, not for new use` |
+| 「新共用元件」行(`ui.md`) | `New shared components` line |
+| 繞過元件庫 | bypassing the component library |
+| 手刻近似元件 | hand-rolled lookalike |
+| 外部覆寫 | outside override |
+| 寫死的值 | hard-coded value |
+| 元件庫 findings | component library findings |
+| 套件與版本/瓶頸與量測證據/為什麼不在專案內改/建議去處(元件庫 findings 欄名) | package and version / bottleneck and measured evidence / why not changed in the project / suggested destination |
+| 就地 fork | fork in place |
+| 進入點(元件庫的) | entry point |
+| 執行期解析值 | resolved runtime value |
+| `ui.md` 不一致 | `ui.md` mismatches |
+| 「Tokens」段(`ui.md`) | `Tokens` section |
+| 「檔案位置」行(`ui.md` 的 Tokens 段) | `Location` line |
+| 「載入方式」行(`ui.md`) | `Loading` line |
 
 ## 外部語義來源
 
@@ -286,6 +328,11 @@ Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不
 缺席時的行為寫在 `build-the-ui-right/FRONTEND.md` 的「仲裁順序」一節。`FRONTEND.md` 的狀態矩陣、
 無障礙底線與證據等級對帳 Master Design 的 `principles.md`、`accessibility.md` 與 `evidence.md`
 (寫入時為 0.3.7),上游改了就回來對一次。
+
+`FRONTEND.md` 的「元件複用」一節對帳 master-co/ui 的 `master-ui`(`SKILL.md`、
+`references/customizing.md`、`references/choosing.md`)與 `master-ui-components` 的
+`references/tiers.md`(寫入時 commit 為 `a06ab9608601cee635b427fc65c2d2004ec062e2`)。規則已一般化
+寫進契約本文,runtime 不讀、不 vendor,所以不進 `references/upstream/`;上游改了就回來對一次。
 
 ## 收尾檢查
 

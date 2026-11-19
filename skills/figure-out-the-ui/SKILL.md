@@ -11,7 +11,11 @@ what it solves, and how it is ordered before any code exists.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**precedence** and **state matrix** below.
+**precedence**, **component reuse**, and **state matrix** below.
+
+Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop, produce
+no UI brief, and ask the user to run `/set-up-ui-skills`. This skill only reads `ui.md`: when it finds `ui.md`
+and the source disagreeing, it proceeds on the source and writes the mismatch into the brief's assumptions part.
 
 Write any fact that cannot be found as an **assumption** and proceed on it; collect the assumptions at the end
 of the brief so a reader can overturn them at a glance.
@@ -25,13 +29,15 @@ Done when: each of the three is one sentence that names its source or is labeled
 
 ## 2. Familiar behavior
 
-Every interactive element reuses the closest existing pattern in the project or on the platform: links for
-going somewhere, buttons for doing something, forms keeping their native semantics. Tabs that change the URL
-and panels that switch in place are different things. One visual state means one thing across the whole
-product. Look up detail following the **precedence**.
+Every interactive element maps to a named component: one from the `Shared components` table in `ui.md`, a
+component library component, or a native element, chosen under "choose components by job" in **component
+reuse**. Links for going somewhere, buttons for doing something, forms keeping their native semantics. Tabs that
+change the URL and panels that switch in place are different things. One visual state means one thing across
+the whole product. Look up detail following the **precedence**.
 
-Done when: every interactive element maps to an existing pattern or a native element, and every newly invented
-pattern is listed with why the existing ones fall short.
+Done when: every interactive element is written as "element → named component", the component being a shared
+component, a component library component, or a native element, and every new one is listed separately with why
+existing components fall short.
 
 ## 3. Hierarchy
 
