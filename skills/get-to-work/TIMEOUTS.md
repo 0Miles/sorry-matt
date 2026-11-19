@@ -4,13 +4,11 @@ This file is the second half of the deadline scan in time limits in [`SKILL.md`]
 scan finds an overdue agent, and handle each overdue agent with the four steps below. Section names and steps with no
 file attached (dispatch, budget and breaker, the wake-up steps, the assignment record) are in `SKILL.md`.
 
-1. **Judge progress:** recompute the progress fingerprint with the same commands as at the assignment. A different
-   HEAD (new commits) or a different tree (working-tree changes, a conflict half resolved) is progress; for an
-   expansion agent, it is any ticket's `expansions` count going up.
-2. **Progress, and this assignment not yet extended → extend once:** set the deadline to now plus the same stage time
-   limit, and record extended as `yes`. An extended agent that is overdue again always goes to the next step,
-   without judging progress.
-3. **No progress, or already extended → stop it:** `TaskStop` the agent; if it happens to have finished already,
+1. **Take the handling:** this agent's `action` in the output of `deadline.mjs scan` (the rules are in the script's
+   header). Do not recompute the progress fingerprint or judge progress yourself.
+2. **`extend` → extend once:** set the deadline in that row of the reconciliation table to the output's `deadline`,
+   and record extended as `yes`.
+3. **`stop` (no progress, or already extended) → stop it:** `TaskStop` the agent; if it happens to have finished already,
    close it out under wake-up step 2, "handle the agents that reported", instead. Once stopped, take the first of
    these cases that applies:
    - **The cause needs a person** — the ticket's status record names, under blockers, a decision for a person, a
@@ -48,7 +46,7 @@ trigger a dispatch point per dispatch; a reassignment and a red-light fix's seco
 at its stage.
 
 Done when: every overdue
-agent had its progress judged by its fingerprint and was extended at most once per assignment, and every other one
+agent was handled per `scan`'s action and extended at most once per assignment, and every other one
 was `TaskStop`ped and reassigned, sent back for a redo, marked stuck, marked awaiting ruling, or (a red-light fix)
 counted as one failed fix round; after a merge agent was stopped, the integration worktree was back at the HEAD of
 its assignment; no ticket was reassigned for a timeout more than once per stage; every handling is in the ticket's
