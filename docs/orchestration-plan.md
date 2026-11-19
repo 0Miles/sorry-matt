@@ -245,3 +245,161 @@ ledger 的 ended 標記是 `ledger --ended`。
 | | 由驗收比對與分流推得；`rule` 出自 verifier | 保留文字 |
 | §6 輸出 | 區塊格式；只有一個最新 review 區塊；沒有 PR 評語；worktree 已移除 | 保留文字（tracker 內容） |
 | §7 複驗 | 每則舊 finding 有 Fix Verifier 裁決；實跑與突變範圍；新 finding 在修正行上；寫進接續紀錄 | 保留文字；「每輪修正後一次複驗」由 `review/recheck-per-fix` 在主持人側檢查 |
+
+## 7. #124 的改寫：刪掉的規則交給誰
+
+`get-to-work/SKILL.md` 改成以 tick 契約為主的入口，`ASKING.md` 第 4、5、7 節與四份按需 reference 刪掉腳本、gate 與
+hook 已涵蓋的部分。下表是刪掉的每條規則與接手者；沒有接手者的規則留在文字裡（它們就是新檔的內容）。「接手」欄的
+規則以該腳本檔頭為正本，「測試」欄是釘住它的測試檔（都在 `scripts/`）。
+
+### 大小（dist，LF 正規化的 bytes）
+
+| 檔 | 改前 | 改後 |
+| --- | ---: | ---: |
+| `skills/get-to-work/SKILL.md` | 50,095 | 12,037 |
+| `skills/have-it-all-done/ASKING.md` | 26,861 | 22,323 |
+| `skills/get-to-work/FINISH.md` | 16,648 | 8,139 |
+| `skills/get-to-work/RED-LIGHT.md` | 8,844 | 4,425 |
+| `skills/get-to-work/TIMEOUTS.md` | 6,811 | 3,416 |
+| `skills/get-to-work/SEND-BACK.md` | 2,640 | 2,400 |
+| 每次喚醒重讀的兩份（`SKILL.md` + `ASKING.md`） | 76,956 | 34,360 |
+
+票面寫的 50,698 B 與 27,215 B 是 CRLF 工作樹量的；這裡一律量 `git show HEAD:<path>` 與 LF 正規化後的檔。
+
+`SKILL.md` 達標（≤ 12 KB）。`ASKING.md` 沒有達到 10 KB：這張票只動第 4、5、7 節（3,315 + 5,883 + 9,646 →
+4,142 + 4,378 + 5,786 B），其餘第 0–3、6 節與標題共 8,017 B 不在範圍內，單它們就接近 10 KB。第 4 節反而變長，因為
+run profile 的宣告點（#100）寫進了裁決點。第 5 節留下的「需要授權的動作」「以後都這樣」與確認類清單沒有腳本接手：
+清單是 hook 沒攔下時 agent 仍不得自己執行的依據。第 7 節留下的是 ledger 的敘事欄位、`budget:`／`session:`／`rule:`
+行的寫法（hook 讀它們）、恢復時重讀的護欄（#97 第 3 組的裁決照舊）與上下文預算。
+
+### 重複規則的正本
+
+| 規則 | 正本 | 其他地方 |
+| --- | --- | --- |
+| 預算公式 | `ASKING.md` 第 4 節 | 無 |
+| 階段時限名稱與預設 | `ASKING.md` 第 7 節第 9 欄 | `tick.mjs` 的 `LIMIT_DEFAULTS` 是同一組預設的程式碼 |
+| 派送紀錄欄位 | `state.mjs` 檔頭（`assignment`） | 無 |
+| 階段列舉與邊 | `state.mjs` 檔頭（Stages） | 無 |
+| 本機驗證的做法與逐 SHA 紀錄格式 | `verify.mjs` 檔頭 | 無 |
+| 用量更新時機 | `tick.mjs` 檔頭（派票點） | 無 |
+| 三個中途出口 | `ASKING.md` 第 4 節 | `SKILL.md` 第 3 節只指向它 |
+| 合併授權 | `ASKING.md` 第 5 節「需要授權的動作」 | `FINISH.md` 只指向它 |
+| `counters.json` 只讀 | `ASKING.md` 第 7 節 | `FINISH.md` 只給路徑 |
+| spawn `description` 前綴 | `brief.mjs` 檔頭 | `SKILL.md`、`REVIEWER.md`、`RED-LIGHT.md`、`FINISH.md` 只指向它或只寫角色字 |
+| 合併衝突判準 | `SKILL.md` 第 2 節「合併衝突」 | `FINISH.md` 步驟 2 只指向它 |
+
+以 grep 驗證（`src/skills/get-to-work` 與 `src/skills/have-it-all-done` 的 `.md`）：`後接票的識別碼` 0 處；
+`20 × 票數` 只在 `ASKING.md`；`兩個意圖` 只在 `SKILL.md`；`permissions.allow` 只在 `ASKING.md`；`timeout-implement`
+在 prose 裡只在 `ASKING.md`；`merge_group` 0 處（在 `merge-gate.mjs`）；`local: ` 0 處（在 `verify.mjs`、`state.mjs`）。
+
+### `get-to-work/SKILL.md`
+
+| 刪掉的規則（原段落） | 接手 | 測試 |
+| --- | --- | --- |
+| §0 確認工作樹乾淨、`gh` 已登入 | `freeze.mjs` preflight（`git-repo`、`clean`、`gh-auth`、`repo-match`） | `freeze.test.mjs` |
+| §0 以 worktree、未合併分支、open PR 推他線佔用的檔，排除重疊的票 | `freeze.mjs` 的 `held`、`excluded` | `freeze.test.mjs` |
+| §0 排除後重跑 frontier 定線 | `freeze.mjs` 的 `lines`（扣掉排除的票重算） | `freeze.test.mjs` |
+| §0 合線（重疊的線反覆合併）與組成紀錄 | `freeze.mjs` 的 `lines.members`／`joins`；`state.mjs line --lines` | `freeze.test.mjs`、`state.test.mjs` |
+| §0 從同一基底尖端建整合分支與 worktree | `integrate.mjs line-init`；gate `freeze/line-branch`、`line-base`、`line-worktree` | `integrate.test.mjs`、`gates.test.mjs` |
+| §0 `commands.md` 在派出任何票之前 commit | gate `freeze/commands-contract`、`not-dispatched` | `gates.test.mjs` |
+| §0 完成判準：每票有所屬線、每線有分支與 worktree | gate `freeze`（主持人在凍結的步驟 8 跑） | `gates.test.mjs` |
+| §1 互斥只看預計檔案、跨線也判 | `overlap.mjs`（tick 在派票點跑） | `overlap.test.mjs`、`tick.test.mjs` |
+| §1 階段列舉、在途的定義 | `state.mjs` 檔頭 Stages | `state.test.mjs` |
+| §1 喚醒的七步順序 | `tick.mjs` 檔頭「A wake-up」 | `tick.test.mjs` |
+| §1 步驟 2 只收 agent id 一致的回報，舊 agent 的回報記一行不收 | `tick.mjs` 的 `reports` 與 `ignore` | `tick.test.mjs`（重複回報、超時被取代的 agent） |
+| 讀 CI：時機、以 `origin` 的 SHA 為準、落後先 push | `tick.mjs`（`ciRead`）；gate `ci/ci-latest` | `tick.test.mjs`（紅線） |
+| 讀 CI：查詢失敗、還在跑、被取消（`gh run rerun`） | `tick.mjs` 派票點步驟 2 | `tick.test.mjs` |
+| 讀 CI：連兩次空清單加 `gh run list` 定案 CI 不涵蓋（原 `pending #100`） | `state.mjs ci`（`noRun`、`--branch-runs`）與 tick 的 `ci-branch` | `state.test.mjs` |
+| 本機驗證：條件、讀 `Full checks`、`self-found`、樹在 SHA 才跑、存輸出 | `verify.mjs`（結束代碼 4、5）；tick 的 `localVerify` | `verify.test.mjs`、`tick.test.mjs`（沒有 origin） |
+| 本機驗證逐 SHA 紀錄格式、一個 SHA 一筆 | `verify.mjs`、`state.mjs local`；gate `ci/local-record` | `verify.test.mjs`、`state.test.mjs` |
+| 預算與斷路：派票點先更新用量、判進展、寫 `noProgress`／`snapshot`／`rounds` | `tick.mjs` 派票點步驟 1、`deadline.mjs progress`、`state.mjs progress` | `tick.test.mjs`（上限停下）、`deadline.test.mjs` |
+| 停下後不派票、未派的票標待裁決並寫上限與用量 | `tick.mjs` 的 `stepStop`；gate `stopped/*`（tick 在收官前跑） | `tick.test.mjs`、`gates.test.mjs` |
+| 時限：派送的定義、審查不設時限 | `tick.mjs`（審查是前景動作，不發派送紀錄） | `tick.test.mjs` |
+| 時限：spawn `description` 的角色字 | `brief.mjs` 檔頭 | `brief.test.mjs`、`spawns.test.mjs` |
+| 時限：派送紀錄（`deadline.mjs record` 與 agent 類型）、先記再派 | `tick.mjs` 的 `dispatchAgent`（`rec`、`assign` 在 spawn 之前）；`state.mjs assign`；gate `dispatch/assignment` | `tick.test.mjs`（批次順序） |
+| 時限：`record` 失敗時不派送 | `tick.mjs`（exec 失敗 → `failed` judge，後面的 spawn 等它） | `tick.test.mjs` |
+| 時限：時限掃描、`error` 的處理 | `tick.mjs` 的 `stepTimeouts`、`deadline.mjs scan` | `tick.test.mjs`、`deadline.test.mjs` |
+| 時限：fallback 喚醒的秒數、背景 `sleep` 只留一個 | `deadline.mjs scan` 的 `fallback`、tick 的 `wakeup-end`、`state.mjs usage --sleep-task` | `deadline.test.mjs`、`tick.test.mjs` |
+| 派票：派票點的觸發條件、一次喚醒至多一個、先判上限再讀 CI | `tick.mjs` 的 `dueReasons`、`stepDispatch` | `tick.test.mjs` |
+| 派票：frontier 的 `--done`／`--stuck`、Local Markdown 逐線 `--ref`／`--line` | `tick.mjs` 的 `frontier` | `tick.test.mjs` |
+| 派票：`stalled` 與驗證未過的線上的候選標待裁決 | `tick.mjs` 派票點步驟 4 | `tick.test.mjs` |
+| 派票：候選順序（解鎖最多者先） | `tick.mjs`、`freeze.mjs` 的 `candidates` | `freeze.test.mjs` |
+| 派票：驗收、展開、展開中不重複送 | `tick.mjs`（`acceptance`、`expandDispatch`）；`state.mjs` 擋 expanding → expanding | `tick.test.mjs`（profile 對照） |
+| 派票：驗收快照只存一次、`sha256` 記進 state | `tick.mjs`；`state.mjs` 的 implementing 守門；gate `dispatch/snapshot` | `state.test.mjs`、`gates.test.mjs` |
+| 派票：`overlap.mjs` 計畫檔與 `start`／`wait` | `tick.mjs` 派票點步驟 6 | `tick.test.mjs`、`overlap.test.mjs` |
+| 派票：ticket 分支從整合分支最新尖端切出 | `integrate.mjs ticket-init`（tick 的 `createTicketBranch`） | `integrate.test.mjs`、`tick.test.mjs` |
+| 派票：填 `IMPLEMENTER.md` 的佔位、退回後 SendMessage 原 agent | `brief.mjs`；`tick.mjs` 的 `createDispatch` | `brief.test.mjs`、`tick.test.mjs` |
+| 收票：順序固定、驗收比對 `--against --sha` | `state.mjs` 的邊；tick 的 `against` | `state.test.mjs`、`tick.test.mjs` |
+| 收票：一張票至多兩輪修正、每輪後一次複驗 | `state.mjs` 的 fixing 守門；gate `review/fix-rounds`、`recheck-per-fix` | `state.test.mjs`、`gates.test.mjs` |
+| 收票：審查 `stuck` 的重試、`budget` 標待裁決 | tick 的 `review-stuck`（outcome 加了 `awaiting-ruling`） | `tick.test.mjs` |
+| 收票：整併佇列一次一張、照順序、紅燈暫停 | `tick.mjs` 的 `stepIntegration`；gate `dispatch/one-integrating` | `tick.test.mjs` |
+| 收票：`--no-ff --no-edit`、SHA 記進 state、一票一個 merge | `integrate.mjs merge`；gate `merged/no-ff`、`one-merge` | `integrate.test.mjs`、`tick.test.mjs` |
+| 收票：衝突時 `merge --abort` | `integrate.mjs merge`（結束代碼 4） | `tick.test.mjs`（衝突） |
+| 收票：Local Markdown 的完成交付 | `integrate.mjs merge` 步驟 3 | `integrate.test.mjs` |
+| 收票：每次整併各 push 一次、移除 ticket worktree 與分支 | `integrate.mjs merge` 步驟 5、6；gate `integrated/pushed`、`cleaned` | `integrate.test.mjs`、`tick.test.mjs` |
+| 收票：整併後做派票點 | `tick.mjs` 的 `dueReasons` | `tick.test.mjs` |
+| 期間開票：停止條件 | `tick.mjs` 的 `stepFinish`（所有票到終局） | `tick.test.mjs` |
+| 完成判準：七段裡可斷言的項目 | 第 6 節的 gate；tick 在收官前跑 `stopped`、`finish`，主持人在凍結時跑 `freeze` | `gates.test.mjs`、`tick.test.mjs` |
+
+### 四份 reference
+
+| 刪掉的規則 | 接手 | 測試 |
+| --- | --- | --- |
+| `RED-LIGHT.md` 開頭：紅線不派新票、佇列暫停 | `tick.mjs`（`book.red` 擋派票與佇列） | `tick.test.mjs`（紅線） |
+| `RED-LIGHT.md` 第 1 點：計畫檔逐欄說明 | `ci.mjs` 檔頭 | `ci.test.mjs` |
+| `RED-LIGHT.md` 第 3 點：本機驗證的 log 路徑 | `verify.mjs` 的 `log` | `verify.test.mjs` |
+| `RED-LIGHT.md` 第 4 點：`-ci` 分支的切法與整併 | `integrate.mjs ci-init`、`merge --ci` | `integrate.test.mjs` |
+| `RED-LIGHT.md` 第 5 點：`git revert -m 1`、撤完成紀錄、blocker、依賴票的處置與 ref | `integrate.mjs revert` | `integrate.test.mjs` |
+| `RED-LIGHT.md` 第 5 點：`--done` 移到 `--stuck` | tick 由 state 的階段算 `--done`／`--stuck` | `tick.test.mjs` |
+| `RED-LIGHT.md` 第 6 點：驗證未過後候選標待裁決、佇列不再暫停、觸發派票點 | `tick.mjs`（record `failed` → `book.failed`） | `tick.test.mjs` |
+| `TIMEOUTS.md` 第 1、2 點：取處置、延長一次 | tick 的 `extend`；`state.mjs extend` 拒絕第二次 | `tick.test.mjs`、`state.test.mjs` |
+| `TIMEOUTS.md` 改派：重記派送、改派次數加一、每階段至多一次 | tick 的 `reassign`；`state.mjs assign --reassign` 守門 | `tick.test.mjs`、`state.test.mjs` |
+| `TIMEOUTS.md` 第 4 點：第 9 欄延長／停止次數加一 | `state.mjs extend`、`release --stopped` | `state.test.mjs` |
+| `TIMEOUTS.md` 末段：了結後觸發派票點 | `tick.mjs` 的 `dueReasons` | `tick.test.mjs` |
+| `SEND-BACK.md` 第 1、3 點：`update-ref`、退回次數、階段改回候選、移除 worktree 與分支 | `integrate.mjs send-back` | `integrate.test.mjs` |
+| `SEND-BACK.md`：一張票只退回一次 | `state.mjs` 守門、`integrate.mjs send-back` 拒絕 | `state.test.mjs`、`integrate.test.mjs` |
+| `SEND-BACK.md` 第 4 點：重派的細節 | `tick.mjs` 的 `createDispatch` | `tick.test.mjs` |
+| `SEND-BACK.md` 標卡住：Local Markdown blocker、審查用 worktree、push | `integrate.mjs stuck` | `integrate.test.mjs` |
+| `FINISH.md` 步驟 2：fetch、merge、記基底 SHA 或未併入 | tick 的 `finishLine`；gate `finish/base-sync` | `tick.test.mjs`、`gates.test.mjs` |
+| `FINISH.md` 步驟 3：push、讀 CI、`gh run watch`、本機驗證 | tick 的 `finalVerify`、`verify.mjs`；gate `finish/full-verification` | `tick.test.mjs`、`gates.test.mjs` |
+| `FINISH.md` merge queue 的三段查詢與判定 | `merge-gate.mjs` | `merge-gate.test.mjs` |
+| `FINISH.md` 合併授權的重述 | `ASKING.md` 第 5 節（正本） | — |
+| `FINISH.md` 分段計量的類別說明 | `spawns.mjs` 檔頭 | `spawns.test.mjs` |
+| `FINISH.md` 完成判準：三道關都跑過、驗證的 SHA、worktree 已移除 | gate `finish/*` | `gates.test.mjs` |
+
+### `ASKING.md` 第 4、5、7 節
+
+| 刪掉的規則 | 接手 | 測試 |
+| --- | --- | --- |
+| 第 4 節：上限照 `get-to-work`「預算與斷路」停下、時限照「時限」延長或停下 | `deadline.mjs`、`tick.mjs` | `deadline.test.mjs`、`tick.test.mjs` |
+| 第 4 節：已用 spawn 數取自第 9 欄 | `state.mjs usage`（讀 `counters.json`） | `state.test.mjs` |
+| 第 5 節：兩段確認的機制（`confirm.mjs`、MCP 的擋下訊息） | `hooks/confirm.mjs`、`hooks/guard.mjs` | `guard.test.mjs` |
+| 第 5 節：各類動作的指令細目（`terraform`／`pulumi destroy`、部署工具、`git send-email`…） | `hooks/classify.mjs` | `guard.test.mjs`、`deploy-on-merge.test.mjs` |
+| 第 5 節：hook 認不出的寫法與各權限模式的行為 | `hooks/classify.mjs`；規則本身（沒攔下也不自己執行）留在文字 | `guard.test.mjs` |
+| 第 7 節：第 4 欄（線、tip、CI、本機驗證紀錄、基底） | `state.mjs` 的 `lines` | `state.test.mjs` |
+| 第 7 節：第 8 欄對帳表的欄位 | `state.mjs` 的 `tickets` | `state.test.mjs` |
+| 第 7 節：第 9 欄用量的十三項與停止原因 | `state.mjs` 的 `usage`、`stop` | `state.test.mjs` |
+| 第 7 節：`counters.json` 的 `log` 與分段計量 | `hooks/budget.mjs`、`spawns.mjs` | `budget.test.mjs`、`spawns.test.mjs` |
+| 第 7 節：hook 只計相符 session 的 spawn | `hooks/runs.mjs`、`hooks/budget.mjs` | `budget.test.mjs` |
+| 第 7 節完成判準：標記、十個欄位、`budget:` 行、`session:`、第 10 欄 | gate `ledger/*`（主持人在凍結後與改 ended 後跑） | `gates.test.mjs` |
+
+### tick 的接線
+
+`tick.mjs` 的 `OPERATIONS` 改成各腳本的 `exec`：`createTicketBranch` → `integrate.mjs ticket-init`；`merge` →
+`integrate.mjs merge`（`okExit` 0 與 4，push 與清理在裡面；對帳時也是再跑一次同一條指令）；`verifyLocal` →
+`verify.mjs`（4 時發 `self-find` 再以 `--self-found` 跑，5 時這次喚醒略過）；新增 `gate`（收官前的 `stopped` 與
+`finish`；`finish` 只在 profile 是 `integrate: aggregate-pr`、`ci: read` 時跑，因為 `gates.mjs` 的 finish 斷言假設了
+這兩項）。`removeWorktree`、`removeBranch`、`merge-record` 與 Local Markdown 的 `deliver-ticket` judge 刪除；
+`integrate: direct` 的基底分支由 tick 另發 `git push`，讓 guard hook 看得到。
+
+#101 審查的兩個不一致：N1 —— `integrate.mjs merge` 衝突時 abort 並以 4 結束，tick 改成讀它的輸出（`files`）把票交給
+整併 agent，整併 agent 自己重做 merge；N3 —— 背景 spawn 發下後沒有 record 就再跑 `next`，改發 `spawn-check` 的 judge
+（那個 agent 在不在跑），不再盲目重派。兩者在 `tick.test.mjs` 各有測試；`gates.mjs` 的 `cleaned` 同時改成不把整併
+agent 派送紀錄裡的整合 worktree 當成 ticket 的 worktree（`gates.test.mjs` 有測試）。
+
+### 怎麼量效果
+
+改前改後的對照 run 併入 #97 第 3 組：同一組票、同一個 repo 尖端，各跑一次改前（`28aa17b` 時的 skill）與改後。比較
+主持人的 token 與 cache 讀取（session 的用量）、spawn 數（`counters.json`，`spawns.mjs` 的 `byType`）、修正輪數與退回
+次數（state 的 `usage`）、blocking finding 數（審查回報）與交付品質（總 PR 的逐票導覽與 CI）。除了上面的檔案大小，
+這裡的數字都還沒有量。

@@ -619,6 +619,22 @@ test('integrated fails on cleaned: the ticket branch and its worktree are still 
   failsOnly(v.check('integrated', '#1'), 'cleaned', /worktree is still there/);
 });
 
+test('integrated passes cleaned when the recorded worktree is the integration worktree a merge agent worked in', (t) => {
+  const w = world(t, { origin: true });
+  const lwt = line(w);
+  const { wt, branch } = ticket(w, lwt, '#1', 'queued', { cleaned: false });
+  w.ok('stage', 'integrating', '#1');
+  assign(w, '#1', lwt); // the merge agent's assignment: its worktree is the line's
+  w.ok('release', '#1');
+  git(lwt, 'merge', '--no-ff', '--no-edit', branch);
+  w.ok('merge', '#1', git(lwt, 'rev-parse', 'HEAD'));
+  w.ok('stage', 'delivered', '#1');
+  w.git('push', '-q', 'origin', LINE);
+  w.git('worktree', 'remove', wt);
+  w.git('branch', '-D', branch);
+  passes(w.check('integrated', '#1'), ['cleaned']);
+});
+
 // ---- wake-end ------------------------------------------------------------------------------------------------------
 
 test('wake-end passes: every line pushed, agents in flight named, a fallback wake-up recorded', (t) => {

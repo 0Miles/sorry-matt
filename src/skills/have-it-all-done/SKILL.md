@@ -113,7 +113,7 @@ Local Markdown 路徑）作為它的明確引數，沿用本 run 的 ledger。�
 - 每條線的交付（GitHub 總 PR，或 Local Markdown 整合分支與 tip SHA）與**對帳表**，含每張票的退回次數與
   退回紀錄的位置。
 - 期間開票產生的 raw tickets、請使用者執行 `/triage` 的建議，以及所有待裁決項目。
-- **本 run 的計量與預算**（ledger 第 9 欄）：上限與用量；run 因上限或無進展斷路停下時，寫出停在哪一項與卡在哪裡。
+- **本 run 的計量與預算**（ledger 第 9 欄的上限，`get-to-work` state 的 `usage` 與 `stop`）：上限與用量；run 因上限或無進展斷路停下時，寫出停在哪一項與卡在哪裡。
 
 報告送出後，步驟 5 不執行時，把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`。
 

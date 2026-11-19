@@ -46,11 +46,11 @@ claude plugin validate .
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs`、`scripts/tick.test.mjs`、`scripts/integrate.test.mjs`（`tick.mjs` import 它） |
   | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`（`verify.mjs` import 它） |
-  | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs` |
+  | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs`、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的指令） |
   | `src/skills/prove-it/scripts/scope.mjs` | `scripts/scope.test.mjs` |
   | `src/skills/prove-it/scripts/worktree.mjs` | `scripts/worktree.test.mjs` |
-  | `src/skills/get-to-work/scripts/integrate.mjs` | `scripts/integrate.test.mjs` |
-  | `src/skills/get-to-work/scripts/gates.mjs` | `scripts/gates.test.mjs` |
+  | `src/skills/get-to-work/scripts/integrate.mjs` | `scripts/integrate.test.mjs`、`scripts/tick.test.mjs`（同上） |
+  | `src/skills/get-to-work/scripts/gates.mjs` | `scripts/gates.test.mjs`、`scripts/tick.test.mjs`（同上） |
   | `src/skills/get-to-work/scripts/tick.mjs` | `scripts/tick.test.mjs` |
   | `src/skills/get-to-work/scripts/merge-gate.mjs` | `scripts/merge-gate.test.mjs` |
   | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |

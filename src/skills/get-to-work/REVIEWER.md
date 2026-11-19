@@ -1,8 +1,9 @@
 # REVIEWER：審查主持 agent 的交付說明
 
-主持人在收票（`SKILL.md` 收票步驟 2、3）填好 `{…}` 佔位，把分隔線以下的全文作為 prompt，以**前景** spawn 一個
-審查主持 agent，不另加規則：`subagent_type` 用通用 agent，Agent tool 的 `description` 是 `review` 後接票的識別碼。
-本檔刻意自足。輸入清單與 `prove-it` 第 1 節、回報格式與 `prove-it` 第 6 節末的審查回報、收票步驟 2、3 要一起改。
+主持人在收票（`SKILL.md` 第 2 節「收票的檢查與審查」，tick 的 `review` 動作）填好 `{…}` 佔位，把分隔線以下的全文作為
+prompt，以**前景** spawn 一個審查主持 agent，不另加規則：`subagent_type` 用通用 agent，`description` 照 `brief.mjs`
+檔頭的角色字 `review`。本檔刻意自足。輸入清單與 `prove-it` 第 1 節、回報格式與 `prove-it` 第 6 節末的審查回報、
+`SKILL.md` 那一段要一起改。
 
 ---
 

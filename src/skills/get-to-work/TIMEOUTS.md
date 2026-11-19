@@ -1,45 +1,29 @@
 # get-to-work：超時 agent 的處置
 
-本檔是 [`SKILL.md`](SKILL.md)「時限」裡時限掃描的後半：掃描發現超時的 agent 時全文讀取，對每個超時的 agent 照下列四步處置。文中沒有點名檔案的節名與步驟（「派票」「預算與斷路」、喚醒步驟、派送紀錄）都指 `SKILL.md`。
+本檔是時限掃描的後半：tick 發下 `timeout` 的 `judge` 時全文讀取。掃描（`deadline.mjs scan`）與延長由 tick 做；
+來到這裡的 agent 都是要停下的 —— 沒有進展、已延長過，或進度指紋算不出來（`judge` 寫了 `error`）。
 
-1. **取處置**：`deadline.mjs scan` 輸出裡這個 agent 的 `action`（判法在腳本檔頭）。不自己重算進度指紋，
-   也不自己判進展。`action` 是 `null` 而有 `error` 的 agent，照 `SKILL.md`「時限」再掃一次後仍有 `error`，就當成
-   `stop` 走第 3 步，`error` 寫進第 4 步的紀錄。
-2. **`extend` → 延長一次**：對帳表該列的到期時間改為輸出的 `deadline`，延長記 `yes`。
-3. **`stop`（沒有進展，或已延長過）→ 停下**：`TaskStop` 這個 agent；它若剛好已經結束，改照喚醒步驟 2「處理已回報的
-   agents」收。停下後依下列情況，先符合的為準：
-   - **進度指紋算不出來** —— 這個 agent 是因為再掃一次仍有 `error` 而停下的。worktree 的狀態要人處理：不改派，
-     也不在同一個 worktree 再派送 —— `record` 在那裡同樣會失敗，沒有派送紀錄的派送不成立（`SKILL.md`「時限」）。
-     依這個 agent 在做的事了結，原因寫那個 `error`（展開 agent 沒有 worktree，不會走到這一項）：
-     - **實作中、修正中**（紅燈修正除外）→ 該票標**待裁決**。
-     - **整併中** → 先照下面「整併中」那一項的指令把整合 worktree 還原到派送時的 HEAD，再把該票標**待裁決**
-       （不退回重做），佇列換下一張。
-     - **紅燈修正** → 這次停下算一輪修正失敗，不計改派，也不開第二輪：對到票就直接照 `RED-LIGHT.md` 紅燈處置
-       第 5 點撤回；對不到票就先 `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>` 清掉它留下的改動，
-       再照第 6 點判這條線驗證未過。
-   - **原因要人裁** —— 該票接續紀錄的「阻擋」寫了要人做的決定、缺的權限或查不到的事實 → 標**待裁決**，寫出原因。
-   - **整併中** → 先查 `git -C <整合 worktree> rev-parse -q --verify MERGE_HEAD`：有輸出就
-     `git -C <整合 worktree> merge --abort`；沒有輸出（整併 agent 已經 commit）就
-     `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>`。整併 agent 不 push，還原只動本機。該票照 [`SEND-BACK.md`](SEND-BACK.md) 的
-     **退回重做**，佇列換下一張。
-   - **紅燈修正**（[`RED-LIGHT.md`](RED-LIGHT.md) 紅燈處置第 4 點）→ 這次停下算一輪修正失敗，不計改派。還在第一輪就照第 4 點開第二輪：
-     對到票時照 `IMPLEMENTER.md` spawn 新的 agent（`description` 是 `ci-fix` 後接票的識別碼）接手同一個 worktree，票面附上失敗摘要與下一點的超時說明；對不到
-     票時先 `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>` 清掉停下的 agent 留下的改動，再由主持人或新的
-     agent（`description` 是 `ci-fix` 後接該線的整合分支）修。已是第二輪就照第 5、6 點撤回或判驗證未過。不標卡住：沒有撤回或驗證未過，線一直紅、佇列一直暫停。
-   - **這個階段還沒因超時改派過**（實作中、修正中、展開中各自計）→ **改派**一次：實作中、修正中照
-     `IMPLEMENTER.md` spawn 新的實作 agent（`description` 在實作中是 `implement`、修正中是 `fix`，後接票的識別碼），接手同一個 worktree 與分支，票面附上一段說明 —— 上一個 agent 超時被
-     停下，已有的 commit 與未提交改動留著由它判斷要不要沿用，接續紀錄已存在就接手原地更新；修正中另附那一輪的
-     finding。展開中把它負責而還沒有展開區塊的票交給一個新的展開 agent，spawn 方式與 `description` 照「派票」步驟 1。
-     改派是一次新的派送：照上面重記，對帳表的 agent id 換成新的，該階段的超時改派次數加一。spawn 被預算擋下時照「預算與斷路」標待裁決。
-   - **這個階段已因超時改派過** → 實作中、修正中**標卡住**（`SEND-BACK.md`），原因寫兩次超時；展開中的票標**待裁決**。
-4. **留紀錄**：每次延長或停下，在該票接續紀錄寫一段時限處置 —— agent id、階段、派送與到期時間、派送時與現在的
-   進度指紋、處置 —— 並在 run 層自答清單記一列（`ASKING.md` 第 3 節的五欄）。第 9 欄的超時延長次數或超時停止
-   次數加一。
+1. **停下**：`TaskStop` 這個 agent。它若剛好已經結束，record `collected`，它的回報照常收。
+2. **依情況了結**，先符合的為準，record 括號裡的 outcome：
+   - **進度指紋算不出來**（`error`）：worktree 的狀態要人處理，不改派，也不在同一個 worktree 再派送 —— 那裡算不出
+     派送紀錄，沒有派送紀錄的派送不成立。實作中、修正中 → `awaiting-ruling`，原因寫那個 `error`；整併中 → 先照下面
+     「整併中」還原整合 worktree，再 `awaiting-ruling`；紅燈修正 → 算一輪修正失敗，不開下一輪：對到票就照
+     [`RED-LIGHT.md`](RED-LIGHT.md) 第 5 點撤回，對不到票就先 `git -C <整合 worktree> reset --hard <派送紀錄的 HEAD>`，
+     再照第 6 點判驗證未過。
+   - **原因要人裁** —— 該票接續紀錄的「阻擋」寫了要人做的決定、缺的權限或查不到的事實 → `awaiting-ruling`，寫出
+     原因。
+   - **整併中**：`git -C <整合 worktree> rev-parse -q --verify MERGE_HEAD` 有輸出就 `merge --abort`，沒有（整併 agent
+     已 commit）就 `reset --hard <派送紀錄的 HEAD>`。整併 agent 不 push，還原只動本機。該票照
+     [`SEND-BACK.md`](SEND-BACK.md) 退回重做（`send-back`）。
+   - **紅燈修正**（`RED-LIGHT.md` 第 4 點）：算一輪修正失敗，不計改派。還在第一輪就開第二輪 —— 對到票時照
+     `IMPLEMENTER.md` 新 spawn 一個 `ci-fix` agent 接手同一個 worktree，票面附上失敗摘要與超時說明；對不到票時先
+     `reset --hard <派送紀錄的 HEAD>` 再修。已是第二輪就照第 5、6 點撤回或判驗證未過；不標卡住。
+   - **這個階段還沒因超時改派過**（`judge` 會寫明）→ `reassign`：tick 發下新的派送紀錄與 spawn，接手同一個
+     worktree 與分支，交付說明附上一個 agent 超時被停下、它留下的 commit 與改動由新 agent 判斷要不要沿用。
+   - **這個階段已改派過** → 實作中、修正中標卡住（`stuck`，照 `SEND-BACK.md`，原因寫兩次超時）；展開中
+     `awaiting-ruling`。
+3. **留紀錄**：在該票接續紀錄寫一段時限處置 —— agent id、階段、派送與到期時間、派送時與現在的進度指紋、處置 ——
+   並在 run 層自答清單記一列（`ASKING.md` 第 3 節的五欄）。
 
-標卡住、待裁決、退回重做，以及紅燈處置的撤回或驗證未過，照「派票」觸發派票點；改派與紅燈修正的第二輪不觸發，
-票留在原階段。
-
-完成判準：每個超時的 agent 都照 `scan` 的
-處置做了，同一次派送至多延長一次，其餘都已 `TaskStop` 並改派、退回重做、標卡住、待裁決，或（紅燈修正）算作
-一輪修正失敗；整併 agent 停下後整合 worktree 已還原到派送時的 HEAD；每張票每個階段至多因超時改派一次；每個處置
-都寫進該票接續紀錄與自答清單。
+完成判準：每個超時的 agent 都已 `TaskStop` 並照上面了結；整併 agent 停下後整合 worktree 已還原到派送時的 HEAD；
+每個處置都寫進該票接續紀錄與自答清單。

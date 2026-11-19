@@ -104,23 +104,29 @@ grilling 中親自做出的決策屬於需求依據，不列入。
   3. 只有人能做 → 進**人工作業清單**，繼續跑其他票。
 - 最終報告做一次**複核**：一題多選「這些代答要翻哪一項」，選項取 run 層自答清單中反轉成本
   最高的四項，完整清單放在報告本文。
+- **流程設定**（run profile）：這個 run 要不要放寬流程 —— 審查深度、修正輪數、複驗、修不掉的 finding 的去處、
+  展開、整併方式、讀不讀 CI、精簡 —— 在裁決點定案（獨立執行的 `get-to-work` 在凍結時），以 `get-to-work` 的
+  `scripts/state.mjs profile` 寫一次，之後不能改；欄位、預設與它放寬的守門寫在該腳本檔頭。預設是嚴格流程，不列題；
+  使用者要求放寬，或專案例外指出某一項不適用時才寫，理由記進自答清單。profile 放寬不了需要確認的動作（第 5 節）
+  與下一點的上限。
 - run 層上限與階段時限（第 7 節第 9 欄）只有使用者能調整。`budget: spawns` 與 `budget: rounds` 依票數計：
   - `spawns` = max(`20 × 票數 + 50`, 已用 spawn 數 + `20 × 票數`)。每張票典型約 12 個 spawn —— 展開、實作、
     初審與複驗各一個審查主持 agent、`prove-it` 標準級的兩個 finder、至多三個 verifier 與一輪修正的 Fix Verifier、
-    整併 —— 每票 20 個留了將近一倍的餘裕當最後保險，常數 50
-    涵蓋規劃與收官；規劃已用掉超過 50 個時，改以已用數加上每票 20 個，票的份額不被規劃吃掉。已用數取自第 9 欄的用量。
+    整併 —— 每票 20 個留了將近一倍的餘裕當最後保險，常數 50 涵蓋規劃與收官；規劃已用掉超過 50 個時，改以已用數
+    加上每票 20 個，票的份額不被規劃吃掉。
   - `rounds` = `3 × 票數 + 1`：每張票至多帶出三個派票點（自己的整併、一次退回、一次卡住／撤回／紅轉綠），加上
     第一個。
 
   裁決點前以開局發布的票數改寫這兩行；獨立執行的 `get-to-work` 沒有裁決點，在凍結票集時改寫。上限與時限預設
-  不列題；有具體理由預期預設不夠（例如票面寫明的長時間資料遷移或大型測試）時，把調整列為
-  一題，照反轉成本與其他題一起排序。中途不夠用時不代答調高：上限照 `get-to-work` 第 1 節「預算與斷路」停下，
-  時限照同節「時限」延長一次或停下。
+  不列題；有具體理由預期預設不夠（例如票面寫明的長時間資料遷移或大型測試）時，把調整列為一題，照反轉成本與
+  其他題一起排序。中途不夠用時不代答調高：上限到了就停止派票，時限到了延長一次或停下，都由 `get-to-work` 的
+  腳本判。
 - 目視驗收（`have-it-all-done` 步驟 5）是驗收程序，不是裁決，不受本節限制。
 
 完成判準：風險閘門與最終複核之間恰好一個裁決點，且該裁決點之後沒有任何提問；
-每個中途事項都能在自答清單、待裁決或人工作業清單找到落點；`budget: spawns` 與 `budget: rounds` 已在裁決點前
-（獨立執行時在凍結票集時）依票數改寫，使用者在裁決點指定的值除外。
+每個中途事項都能在自答清單、待裁決或人工作業清單找到落點；放寬流程的 run 已在裁決點前（獨立執行時在凍結時）
+寫好 profile；`budget: spawns` 與 `budget: rounds` 已在裁決點前（獨立執行時在凍結票集時）依票數改寫，使用者
+在裁決點指定的值除外。
 
 ## 5. 授權與需要確認的動作
 
@@ -154,36 +160,22 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 
 ### 需要確認的動作
 
-下列動作 agent 可以執行，但只能在使用者於權限提示確認之後；plugin 的 `hooks/hooks.json` 以
-PreToolUse 在執行前跳出確認：
+下列動作 agent 可以執行，但只能在使用者於權限提示確認之後；plugin 的 `hooks/hooks.json` 以 PreToolUse 在
+執行前跳出確認，分類與提示的寫法在 `hooks/classify.mjs`：
 
-- **兩段確認類**
-  - 災難級操作：對家目錄、根目錄、磁碟根、上層目錄或專案外的路徑遞迴刪除；格式化或覆寫磁碟；刪資料庫、
-    schema 或資料表；刪 GitHub repo；銷毀整套基礎設施（`terraform`／`pulumi destroy`、刪雲端專案或資源群組、
-    刪 prod 的 namespace、bucket 或 stack）；force-push 或刪除受保護分支（main、master、remote 預設分支）。
-  - 對外發訊與第三方溝通：郵件（含 `git send-email`）、聊天、社群貼文、第三方訊息 API。
-  - 金流。
-- **確認一次類**
-  - 發布版本與部署正式環境：套件 publish、`gh release create`、`terraform apply`、`fly`／`wrangler`／`firebase`
-    deploy、指向正式環境的其他部署工具與 SQL 寫入。
-  - 寫入會改變 Claude Code 行為的設定：設定檔、hooks、MCP 設定、`~/.claude.json`、`.claude/sorry-matt.json`。
-  - 會立即觸發正式部署的合併：`gh pr merge` 或直接寫入受保護分支，而合併後的 workflow 一收到 push 就部署或發布。
+- **兩段確認類**：災難級操作（對家目錄、根目錄、磁碟根、上層目錄或專案外的路徑遞迴刪除；格式化或覆寫磁碟；
+  刪資料庫、schema 或資料表；刪 GitHub repo；銷毀整套基礎設施；force-push 或刪除受保護分支）；對外發訊與第三方
+  溝通；金流。
+- **確認一次類**：發布版本與部署正式環境；寫入會改變 Claude Code 行為的設定（設定檔、hooks、MCP 設定、
+  `~/.claude.json`、`.claude/sorry-matt.json`）；會立即觸發正式部署的合併。
 
-兩段確認時，hook 第一次把指令換成記錄確認的 `confirm.mjs` 並附上後果詳述詢問；允許後原樣重送原指令，hook
-再問第二次，允許才真的執行。不能換指令的工具（MCP）第一次會被擋下，擋下訊息附上要先跑的確認指令。只有 hook
-給的那一行能執行 `confirm.mjs`；不改寫、不串接，也不寫入確認紀錄。
+兩段確認只執行 hook 給的那一行確認指令，再原樣重送原指令；不改寫、不串接，也不自己寫確認紀錄。
 
-subagent 不執行這些動作，寫進回報交給主持人。主持人把它們當**確認呼叫**，排在所有其他步驟之後
-連續送出（`have-it-all-done` 第 0 節）；兩段確認的重送緊接在第一次確認之後。使用者在提示拒絕，或
-hook 擋下 —— `bypassPermissions` 模式不保證會跳提示，兩段確認類一律擋下；使用者開了無人值守模式時，
-每個需要確認的動作都直接擋下、不跳提示 —— 就記進人工作業清單，附上要執行的指令與 hook 給的後果說明；
-不換寫法重試，也不停下來等，繼續做其他做得了的事。無人值守模式只由使用者切換，不碰它的開關檔。
-
-hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node -e`、`python -c`）、變數展開或 `find / -delete`
-這類寫法它認不出；沒有 managed settings 時，其他 hook 回 allow 可能讓提示不出現；`dontAsk` 模式或把提示改成拒絕
-的設定會讓詢問變成拒絕；`bypassPermissions` 下確認一次類多半不跳提示。上列動作在 hook 沒攔下、提示沒出現，或
-使用者關掉 hook 時，同樣不自己執行，記進人工作業清單。force-push 一般分支、clone、套件安裝、讀寫憑證檔、權限
-指令與專案內的刪除不在此列，放不放行交給權限設定。
+subagent 不執行這些動作，寫進回報交給主持人。主持人把它們當**確認呼叫**，排在所有其他步驟之後連續送出
+（`have-it-all-done` 第 0 節）。使用者在提示拒絕、hook 擋下（無人值守模式下每一個都擋下），或 hook 沒攔下、
+提示沒出現 —— hook 比對的是指令文字，不是安全邊界 —— 都不自己執行、不換寫法重試、不停下來等：記進人工作業
+清單，附上要執行的指令與 hook 給的後果說明，繼續做其他做得了的事。無人值守模式只由使用者切換，不碰它的開關檔。
+force-push 一般分支、clone、套件安裝、讀寫憑證檔、權限指令與專案內的刪除不在此列，放不放行交給權限設定。
 
 完成判準：本輪每個需要授權的動作都以正規指令送出，放行結果已記進 ledger 第 5 欄；每個需要確認的
 動作都在使用者於提示確認後才執行，或已列在人工作業清單並附要執行的指令；被擋下的動作都在人工作業
@@ -202,63 +194,42 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
 
 ## 7. run ledger 與上下文預算
 
-**run ledger** 是本 run 狀態的正本，位置是**共用目錄**（`git rev-parse --path-format=absolute
+**run ledger** 是本 run 敘事狀態的正本，位置是**共用目錄**（`git rev-parse --path-format=absolute
 --git-common-dir`）下的 `sorry-matt/runs/<run>.md`。同一任務已有 ledger 時直接接手，不從對話的
-壓縮摘要重建；沒有時建立一份。
+壓縮摘要重建；沒有時建立一份。`get-to-work` 的機器狀態 —— 線、對帳表、用量與停止原因 —— 在 ledger 旁的
+`<run>.state.json`，只由它的腳本寫，schema 在 `get-to-work` 的 `scripts/state.mjs` 檔頭。
 
 第一行是狀態標記：建立時寫 `<!-- sorry-matt:run active -->`；整個 run 的最後一個步驟結束時改成
 `<!-- sorry-matt:run ended -->` —— 組合時是 `have-it-all-done` 的交棒（步驟 5 不執行時）或目視驗收
-之後，獨立執行的 `get-to-work` 是收官之後；各步驟寫明了這一步。plugin 的 SessionStart hook 只認第一行
-（BOM 不算）恰好是 active 標記的 ledger，標記前不能有空行。十個欄位：
+之後，獨立執行的 `get-to-work` 是收官之後。標記前不能有任何一行：plugin 的 hook 只認第一行（BOM 不算）。
+十個欄位：
 
 1. **下一個動作**：一行，恢復後照著做。
 2. 任務範圍與採用的 grilling 來源落點。
 3. 風險閘門三燈與放行紀錄。
-4. 線、整合分支與 tip SHA，以及最近一次讀到的 CI 結果與它的 SHA（`get-to-work` 第 1 節「讀 CI」的判法）；`get-to-work`
-   收官併入的基底 SHA（未併入時記嘗試的 SHA 與「未併入」）；**本機驗證逐 SHA 紀錄**（格式與規則見
-   `get-to-work` 的 `SKILL.md` 第 1 節「讀 CI」的「本機驗證」）。紀錄的行以 `local:` 開頭，不以 `rule:` 或 `budget:` 開頭。
+4. 線與整合分支：state 檔的路徑；線、tip、CI 結果、本機驗證逐 SHA 紀錄與併入的基底都在 state 裡。
 5. 需授權動作的結果：送出的每個需要授權或確認的動作（第 5 節）與放行或確認結果，擋下的附權限規則片段或要執行的指令。
 6. run 層自答清單。
 7. 人工作業清單。
-8. **對帳表**：一列一票 —— 票 ID、階段、交付物、驗證結果、該票接續紀錄的位置、驗收快照的 `sha256`
-   （`get-to-work` 派票時記）、負責 agent 的 id、**派送紀錄**（agent 類型、派送時間、階段時限、到期時間、是否已延長、進度
-   指紋；`get-to-work` 第 1 節「時限」，每次派送時記）、各階段的超時改派次數、退回次數、merge SHA（`get-to-work` 整併時記，含紅燈修正的
-   merge）。階段是候選、展開中、實作中、審查中、修正中、
-   待整併、整併中，或終局的已交付、卡住、待裁決（`get-to-work` 第 1 節）；恢復時靠它與 agent id 接回每張
-   沒到終局的票，靠到期時間接著掃描時限。
-9. **計量與預算**，五部分：
+8. **對帳表**：state 檔的路徑（`state.mjs show`；一列一票的階段、派送紀錄、計數與 merge SHA）。
+9. **計量與預算**：
    - **上限**：一行一項 `budget: <名稱> <整數>`，建立 ledger 時寫入預設值，接手沒有這幾行的 ledger 時補上：
-     `budget: spawns 200`（spawn 數）、`budget: rounds 40`（派票點次數，`get-to-work` 第 1 節「派票」；`rounds`
-     指派票點，不是審查或修正的輪）、`budget: hours 12`
-     （經過時間，算法見用量）、`budget: no-progress 3`（無進展斷路的連續次數）。`spawns` 與 `rounds` 在票數確定時
-     照第 4 節改寫。
-   - **階段時限**：同樣格式，單位分鐘：`budget: timeout-implement 30`（實作中）、`budget: timeout-fix 20`
-     （修正中，含紅燈修正）、`budget: timeout-expand 15`（展開中）、`budget: timeout-merge 15`（整併 agent）。
-     判法見 `get-to-work` 第 1 節「時限」。調整上限與時限見第 4 節。plugin 的 hook 收整份 ledger 裡每一行
-     `budget:`，只依 `spawns` 擋 spawn，所以其他欄不要以 `budget:` 開頭寫行。
-   - **用量**：開始時間（ISO 8601，第一個派票點時記，所以裁決點之前等使用者的時間不算；接手沒有開始時間的
-     ledger 時記接手的時刻，並註明之前的時間未計）、等人時間（之後每次向使用者提問，從送出到收到回答的
-     累計）、經過時間（現在減開始時間，再減等人時間）、spawn 數、派票點次數、連續無進展次數與上個派票點的
-     進度快照（判法見 `get-to-work` 第 1 節「預算與斷路」）、審查輪數、修正輪數、完整驗證次數（`get-to-work`
-     收官每得出一個結論算一次，CI 或本機都算；收票 push 觸發的 CI 不算）、退回重做次數、超時延長次數、超時停止
-     次數、壓縮與交接次數，以及還在跑的背景 `sleep` 的 task id（`get-to-work` 第 1 節「時限」的 fallback 喚醒，
-     沒有寫「無」）。spawn 數取自
-     ledger 旁由 hook 寫的 `<run>.counters.json` 的 `spawns`，主持人只讀不寫；這個檔另有 `log`，逐筆記下每個 spawn 的
-     agent 類型、Agent 呼叫的 `description` 與時間，主持人同樣只讀不寫，`get-to-work` 收官時依它輸出分段計量；沒有這個檔表示 hook 沒有
-     載入，主持人自己累計。token 數除非執行環境自己提供，一律標為未知，不以耗時或 agent 數量推算。
-     更新時機見 `get-to-work` 第 1 節「預算與斷路」。
-   - **停止原因**：run 因上限或無進展斷路停下時，記停在哪一項、當時的用量與卡在哪裡；沒有停下寫「無」。
+     `budget: spawns 200`、`budget: rounds 40`（派票點次數，不是審查或修正的輪）、`budget: hours 12`、
+     `budget: no-progress 3`。`spawns` 與 `rounds` 在票數確定時照第 4 節改寫。
+   - **階段時限**：同樣格式，單位分鐘：`budget: timeout-implement 30`、`budget: timeout-fix 20`（含紅燈修正）、
+     `budget: timeout-expand 15`、`budget: timeout-merge 15`。
+   - **用量與停止原因**在 state 的 `usage` 與 `stop`。spawn 數取自 hook 寫的 `<run>.counters.json`，只讀不寫。
+     向使用者提問時，從送出到收到回答的秒數以 `state.mjs usage --wait` 加進等人時間。token 數除非執行環境自己
+     提供，一律標為未知，不以耗時或 agent 數量推算。
    - **主持人 session**：一行 `session: <id>`，值是主持人自己的 shell 指令裡環境變數 `CLAUDE_CODE_SESSION_ID`
-     的值（以 `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"` 讀，任何 shell 都能跑）。建立 ledger
-     時寫入；接手 ledger 與每次恢復時（`/loop` 喚醒除外：同一個 session，值不會變）重讀一次，值不同就改寫成當前的。plugin 的 hook 只把 `session_id` 與這行相符的
-     spawn 記進本 run 的計數，也只擋相符的 session；讀不到值（空字串）時不寫這行，hook 退回整個 repo 都計數、
-     都擋。hook 只認第一行 `session:`，所以其他欄不要以 `session:` 開頭寫行。
-10. **規則檔**：主持人本 run 以讀檔帶入、全程要遵守的每份規則檔，一行一份
-    `rule: <絕對路徑>`，建立 ledger 時就填好，接手既有 ledger 時補齊缺的（例如 `have-it-all-done`
-    接手獨立 `get-to-work` 建的 ledger）。經 Skill tool 載入的那份 `SKILL.md` 也列：壓縮只重附它的
-    前 5,000 tokens。只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`
-    等）不列：用到的那一步本來就會重讀它。`get-to-work` 的 `RED-LIGHT.md`、`TIMEOUTS.md`、`SEND-BACK.md`、`FINISH.md` 也不列進第 10 欄：走到那個 branch 的那一步重讀。hook 收整份 ledger 裡每一行 `rule: <絕對路徑>`，所以
-    其他欄不要以 `rule:` 開頭寫行。
+     的值（以 `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"` 讀）。建立 ledger 時寫入；接手
+     ledger 與每次恢復時（`/loop` 喚醒除外）重讀一次，值不同就改寫成當前的。讀不到值時不寫這行。
+10. **規則檔**：主持人本 run 以讀檔帶入、全程要遵守的每份規則檔，一行一份 `rule: <絕對路徑>`，建立 ledger
+    時就填好，接手既有 ledger 時補齊缺的。經 Skill tool 載入的那份 `SKILL.md` 也列：壓縮只重附它的
+    前 5,000 tokens。只在某一步讀的檔（交付說明的模板、`get-to-work` 的 `RED-LIGHT.md`、`TIMEOUTS.md`、
+    `SEND-BACK.md`、`FINISH.md`）不列：用到的那一步本來就會讀它。
+
+plugin 的 hook 收整份 ledger 裡每一行 `budget:`、`rule:` 與第一行 `session:`，所以其他欄不要以這三個字開頭寫行。
 
 共用目錄不可寫，或當前目錄不在 git repo 內時沒有 ledger —— 正本改為最終報告，在報告明記，
 不為此停工。每個步驟結束、`get-to-work` 每次喚醒結束都把它寫到最新。
@@ -271,10 +242,9 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
 **主持人的上下文有預算。** diff、測試日誌、agent 報告與票面全文都留在 subagent 與檔案裡；
 主持人收的是固定格式的摘要（上限十五行）與證據路徑，需要細節時用指令只取那幾行。審查由收票時 spawn 的審查主持
 agent 主持，主持人只收它至多六行的審查回報（`get-to-work/REVIEWER.md`）；`prove-it` 的 finder、verifier 與 Fix
-Verifier 的回報留在審查主持 agent 那裡，欄位與行數寫在 `prove-it` 自己的規則裡。主持人交給 subagent 的任務以它的交付說明為界：交付說明
+Verifier 的回報留在審查主持 agent 那裡。主持人交給 subagent 的任務以它的交付說明為界：交付說明
 沒寫的檢查，要做就開成 raw ticket，留給下一個 run。
 
-完成判準：ledger 第一行是與 run 狀態相符的標記，十個欄位都有內容或明記「無」，第 9 欄有四行
-`budget:` 上限、四行階段時限、最新用量，以及讀得到 session id 時一行與當前 session 相符的 `session:`，第 10 欄從建立時就列出規則檔的絕對路徑；每次恢復的第一個動作都是重讀 ledger 與它列出的規則檔；
-沒有共用目錄時已明記正本改為最終報告；
-主持人的上下文裡沒有 diff、測試日誌或 agent 報告的原文。
+完成判準：`get-to-work` 的 run 在凍結之後與改成 ended 之後各跑一次 `state.mjs check <state> ledger --ledger <路徑>`
+（後者加 `--ended`）並通過；每次恢復的第一個動作都是重讀 ledger 與它列出的規則檔；沒有共用目錄時已明記正本
+改為最終報告；主持人的上下文裡沒有 diff、測試日誌或 agent 報告的原文。

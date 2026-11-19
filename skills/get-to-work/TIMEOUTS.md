@@ -1,70 +1,38 @@
-# get-to-work: Handling an overdue agent
+# get-to-work: handling an overdue agent
 
-This file is the second half of the deadline scan in time limits in [`SKILL.md`](SKILL.md): read it in full when the
-scan finds an overdue agent, and handle each overdue agent with the four steps below. Section names and steps with no
-file attached (dispatch, budget and breaker, the wake-up steps, the assignment record) are in `SKILL.md`.
+This file is the second half of the deadline scan: read it in full when tick hands out a `timeout` `judge`. tick runs
+the scan (`deadline.mjs scan`) and the extensions; every agent that comes here is to be stopped — no progress,
+already extended, or a progress fingerprint that could not be computed (the `judge` names the `error`).
 
-1. **Take the handling:** this agent's `action` in the output of `deadline.mjs scan` (the rules are in the script's
-   header). Do not recompute the progress fingerprint or judge progress yourself. An agent whose `action` is `null`
-   with an `error`, and that still has the `error` after the second scan time limits in `SKILL.md` asks for, is
-   handled as a `stop` under step 3, with the `error` written into step 4's record.
-2. **`extend` → extend once:** set the deadline in that row of the reconciliation table to the output's `deadline`,
-   and record extended as `yes`.
-3. **`stop` (no progress, or already extended) → stop it:** `TaskStop` the agent; if it happens to have finished already,
-   close it out under wake-up step 2, "handle the agents that reported", instead. Once stopped, take the first of
-   these cases that applies:
-   - **The progress fingerprint cannot be computed** — the agent was stopped because it still had an `error` after
-     the second scan. The worktree's state needs a person: do not reassign it, and assign nothing else on the same
-     worktree — `record` fails there the same way, and an assignment with no assignment record does not stand (time
-     limits in `SKILL.md`). Settle it by what the agent was doing, with that `error` as the reason (an expansion
-     agent has no worktree and never reaches this case):
-     - **Implementing, fixing** (a red-light fix excepted) → mark the ticket **awaiting ruling**.
-     - **Integrating** → first put the integration worktree back at the HEAD of the assignment with the commands
-       of the "integrating" case below, then mark the ticket **awaiting ruling** (not sent back for a redo); the
-       queue moves on to the next ticket.
-     - **A red-light fix** → this stop counts as one failed fix round, not as a reassignment, and no second round
-       is started: when it maps to a ticket, go straight to the revert in `RED-LIGHT.md`, red-light handling
-       point 5; when it maps to no ticket, first `git -C <integration worktree> reset --hard <the HEAD in the
-       assignment record>` to clear the changes it left, then find the line to have failed verification per
-       point 6.
-   - **The cause needs a person** — the ticket's status record names, under blockers, a decision for a person, a
-     missing permission or a fact that cannot be found → mark it **awaiting ruling** with the cause.
-   - **Integrating** → first check `git -C <integration worktree> rev-parse -q --verify MERGE_HEAD`: with output,
-     `git -C <integration worktree> merge --abort`; with none (the merge agent has already committed),
-     `git -C <integration worktree> reset --hard <the HEAD in the assignment record>`. The merge agent never pushes,
-     so this only touches the local branch. The ticket is **sent back for a redo** per [`SEND-BACK.md`](SEND-BACK.md), and the queue moves
-     on to the next ticket.
-   - **A red-light fix** ([`RED-LIGHT.md`](RED-LIGHT.md), red-light handling point 4) → this stop counts as one failed fix round, not as a
-     reassignment. In the first round, start the second per point 4: when it maps to a ticket, spawn a new agent per
-     `IMPLEMENTER.md` (its `description` is `ci-fix` followed by the ticket's identifier) on the same worktree, with the failure summary and the timeout note from the next case attached
-     to the ticket text; when it maps to no ticket, first clear what the stopped agent left with
-     `git -C <integration worktree> reset --hard <the HEAD in the assignment record>`, then the host or a new agent
-     (its `description` is `ci-fix` followed by that line's integration branch) fixes it. In the second round, revert or find the line failed verification per points 5 and 6. Do not mark it
-     stuck: without a revert or a failed verification, the line stays red and its queue stays paused.
-   - **This stage has not been reassigned for a timeout yet** (implementing, fixing and expanding each count
-     separately) → **reassign** it once: for implementing and fixing, spawn a new implementation agent per
-     `IMPLEMENTER.md` (its `description` is `implement` while implementing and `fix` while fixing, followed by the
-     ticket's identifier) on the same worktree and branch, attaching a note to the ticket text — the previous agent was
-     stopped for running over its time limit, its commits and uncommitted changes are left for the new agent to
-     judge whether to build on, and an existing status record is taken over and updated in place; for fixing, also
-     attach that round's findings. For expanding, give the tickets it covered that still have no expansion block to a
-     new expansion agent, spawned the way, and with the `description`, step 1 of dispatch says. A reassignment is a new assignment: record it as
-     above, replace the agent id in the reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
-     blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
-   - **This stage was already reassigned for a timeout** → for implementing and fixing, **mark it stuck** (`SEND-BACK.md`), giving the
-     two timeouts as the reason; expanding tickets are marked **awaiting ruling**.
-4. **Keep a record:** for every extension or stop, write a timeout-handling entry in that ticket's status record —
-   the agent id, the stage, the assigned time and deadline, the progress fingerprints at the assignment and now, and
-   the handling — and add a row to the run-level self-answer log (the five columns of `ASKING.md` section 3). Add
-   one to field 9's timeout extensions or timeout stops.
+1. **Stop**: `TaskStop` the agent. If it had just finished, record `collected`; its report is taken as usual.
+2. **Settle it**, the first case that applies winning; record the outcome in parentheses:
+   - **The fingerprint could not be computed** (`error`): the worktree's state needs a human. No reassignment and no
+     new dispatch into the same worktree — no assignment record can be computed there, and a dispatch without one does
+     not stand. Implementing or fixing → `awaiting-ruling`, the reason being that `error`; integrating → first restore
+     the integration worktree as under "integrating" below, then `awaiting-ruling`; a red-light fix → one failed fix
+     round, with no further round: mapped to a ticket, revert per [`RED-LIGHT.md`](RED-LIGHT.md) point 5; mapped to no
+     ticket, first `git -C <integration worktree> reset --hard <the assignment record's HEAD>`, then fail the line's
+     verification per point 6.
+   - **The cause needs a human** — the ticket's status record names under "blocked" a decision, a missing permission or
+     a fact that cannot be found → `awaiting-ruling`, with the reason.
+   - **Integrating**: if `git -C <integration worktree> rev-parse -q --verify MERGE_HEAD` prints something,
+     `merge --abort`; if not (the merge agent already committed), `reset --hard <the assignment record's HEAD>`. The
+     merge agent never pushes, so the restore is local. Send the ticket back for a redo per
+     [`SEND-BACK.md`](SEND-BACK.md) (`send-back`).
+   - **A red-light fix** (`RED-LIGHT.md` point 4): one failed fix round, not counted as a reassignment. In the first
+     round, open the second — mapped to a ticket, spawn a new `ci-fix` agent by `IMPLEMENTER.md` on the same worktree,
+     the failure summary and the timeout note added to the ticket text; mapped to no ticket, `reset --hard <the
+     assignment record's HEAD>` first, then fix. In the second round, revert or fail the line per points 5 and 6;
+     never mark it stuck.
+   - **Not yet reassigned for a timeout in this stage** (the `judge` says so) → `reassign`: tick hands out the new
+     assignment record and spawn on the same worktree and branch, the brief noting that the previous agent timed out
+     and was stopped and that the new one decides whether to keep its commits and changes.
+   - **Already reassigned in this stage** → implementing or fixing: stuck (`stuck`, per `SEND-BACK.md`, the reason
+     being two timeouts); expanding: `awaiting-ruling`.
+3. **Leave a record**: write a timeout-handling paragraph into the ticket's status record — agent id, stage, assigned
+   time and deadline, the fingerprint at assignment and now, the handling — and add a row to the run-level self-answer
+   log (the five columns of `ASKING.md` section 3).
 
-Marking a ticket stuck or awaiting ruling, sending it back for a redo, and a red-light revert or failed verification
-trigger a dispatch point per dispatch; a reassignment and a red-light fix's second round do not, and the ticket stays
-at its stage.
-
-Done when: every overdue
-agent was handled per `scan`'s action and extended at most once per assignment, and every other one
-was `TaskStop`ped and reassigned, sent back for a redo, marked stuck, marked awaiting ruling, or (a red-light fix)
-counted as one failed fix round; after a merge agent was stopped, the integration worktree was back at the HEAD of
-its assignment; no ticket was reassigned for a timeout more than once per stage; every handling is in the ticket's
-status record and the self-answer log.
+Done when: every overdue agent was stopped with `TaskStop` and settled as above; after a merge agent was stopped, the
+integration worktree is back at the assignment's HEAD; every handling is in the ticket's status record and the
+self-answer log.
