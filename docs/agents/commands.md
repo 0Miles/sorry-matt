@@ -8,7 +8,7 @@
 與 CI 相同的四條，依序跑，每條結束代碼 0 才算綠：
 
 ```bash
-node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs
+node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/state.test.mjs
 node scripts/check-structure.mjs
 node scripts/check-vendored.mjs
 claude plugin validate .
@@ -36,8 +36,10 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs` |
   | `src/skills/get-to-work/scripts/review-guide.mjs` | `scripts/review-guide.test.mjs` |
   | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs` |
+  | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs` |
+  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs` |
   | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs` |
-  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs` |
+  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs` |
   | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs` |
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/reread.test.mjs` |
   | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |
@@ -63,7 +65,7 @@ claude plugin validate .
 Node 內建的覆蓋率，產出 lcov 到指定的檔；測試檔清單可以縮到涵蓋改動行的那幾個：
 
 ```bash
-node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs
+node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/state.test.mjs
 ```
 
 `<lcov 檔>` 放在 repo 之外。repo 沒有另裝覆蓋工具。
