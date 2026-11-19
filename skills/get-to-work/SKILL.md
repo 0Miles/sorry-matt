@@ -41,12 +41,18 @@ Then **freeze** the initial ticket set:
    working in. Tickets overlapping those files are not frozen into this set: list them as **awaiting ruling**
    with the source of the hold and its clearing condition. When any ticket is excluded, re-run the script over the
    remaining set and take the lines from that run's `line` — an exclusion can split a line.
-4. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
+4. **Join lines:** a line delivers one aggregate PR, so tickets that change the same file belong on one line. Save
+   the predicted files of every ticket in the frozen set per step 3 of dispatch, then compare tickets on different
+   lines: two lines whose predicted files overlap (one path covers the other) become one line; repeat until no two
+   lines overlap. A joined line takes the `line` that sorts first among its members as its id, and ledger field 4
+   records which of the script's `line` values it is made of; from then on, wherever a `line` selects an
+   integration branch, all of those values select the same one.
+5. From the current branch tip, create one `<run>/<line-slug>` **integration branch** and integration worktree
    per line. Accumulate that line's results there ticket by ticket.
-5. When running standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket
+6. When running standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket
    count per `ASKING.md` section 4. When composed by `have-it-all-done`, they were set before the ruling point;
    leave them.
-6. When `docs/agents/commands.md` does not exist, generate it per the generation rules in `ASKING.md` section 0
+7. When `docs/agents/commands.md` does not exist, generate it per the generation rules in `ASKING.md` section 0
    and commit it to each line's integration branch, after that branch is created and before any ticket is
    dispatched: the subject carries no ticket ID, and the content is the same on every line. Do not commit it to
    the user's current branch. Ticket branches are cut from the integration branch, so the implementation agent's
@@ -57,7 +63,8 @@ the freeze.
 
 Done when: the tracker mode is selected and verified; every initial ticket has a publication source,
 provider-native identifier, line, and blocker map; every ticket excluded as held by another line has the source of
-the hold and a clearing condition; every line has an integration branch and worktree created from the same base
+the hold and a clearing condition; every ticket has predicted files, and no two lines' predicted files overlap;
+every line has an integration branch and worktree created from the same base
 tip; when running standalone, `budget: spawns` and `budget: rounds` have been set from the frozen ticket count;
 every line's integration branch has `docs/agents/commands.md`, and where it was missing it was generated and
 committed before any ticket was dispatched.
@@ -306,7 +313,8 @@ Then re-run `scripts/frontier.mjs`; the **frontier** is its `frontier` output:
   aggregate PR's merge), so take the integrated tickets from the ledger's reconciliation table and pass them with
   `--done <n,...>`; pass stuck tickets with `--stuck <n,...>`.
 - **Local Markdown:** run once per line, passing the whole frozen set with `--ref <that line's integration branch>`
-  and `--line <that line's line>` (the value from the freeze); the frontier is the union of each line's `frontier`.
+  and `--line <that line's line>` (the value from the freeze; for a joined line, run once for each `line` it is
+  made of, all with that one integration branch as `--ref`); the frontier is the union of each output's `frontier`.
   Done and stuck come from the `sorry-matt completion` / `sorry-matt blocker` records in the ticket files on that
   branch, and `ready-for-human` does not count as done.
 
@@ -314,7 +322,9 @@ A ticket whose `stalled` is not null (`cycle`, `missing`, `blocked-external`, `b
 startable within this run: list it as **awaiting ruling** with the reason and the blockers involved. Record
 `warnings` in the ledger; they do not change the result.
 
-The **candidates** are the frontier tickets at the candidate stage, in frontier order; expanding tickets, tickets in
+Order the **candidates** so that a ticket more tickets of the frozen set name as a blocker comes earlier, ties in
+frontier order: when files overlap, the ticket that unblocks the most goes first.
+The candidates are the frontier tickets at the candidate stage; expanding tickets, tickets in
 flight and tickets in an end state are not. Candidates on a line that failed verification are marked awaiting ruling
 (`RED-LIGHT.md`, red-light handling point 6) and go no further. Whoever writes the criteria must not be the one who has to
 pass them, so the implementation agent only reads the criteria; it neither writes nor changes them. For each
@@ -351,20 +361,24 @@ candidate, in order:
    reconciliation table as well: the snapshot's path can be worked out, so the acceptance diff uses this value to
    prove the snapshot itself was not edited. A ticket dispatched again after being sent back keeps its snapshot and
    is not expanded again.
-3. **Predicted files:** in the integration worktree, the host predicts which files the ticket will touch and saves
-   them as `sorry-matt/runs/<run>/files/<ticket>.txt`: one repository-relative path per line, each covering itself
-   and everything under it, `/` for the whole repository. The sources, in order:
+3. **Predicted files:** the files the ticket will touch, kept in `sorry-matt/runs/<run>/files/<ticket>.txt`: one
+   repository-relative path per line, each covering itself and everything under it, `/` for the whole repository.
+   At the freeze (section 0, join lines) the host already saved one for every ticket, working in the integration
+   worktree; for a ticket expanded at this dispatch point, add the paths its expansion block names that the list
+   does not cover. The sources, in order:
    - paths the ticket text, its expansion block and its criteria name;
    - for the modules, skills, commands, config keys or identifiers the ticket names, their definitions and main uses
      as `git grep -l` and `git ls-files` find them;
    - files the repository's rule files (`AGENTS.md`, `CLAUDE.md` and the like) require to change along with them,
-     such as translations, index tables and CI configuration.
+     such as translations.
 
-   Err wide: a wide prediction costs a little parallelism, a narrow one collides at integration and sends the
-   ticket back for a redo. When nothing can be inferred, write `/`. Do not have the implementation agent report its
-   files before starting: that costs one more spawn and round trip, and its guess before reading the code is no
-   better than the host's. Once saved the list does not change, except to widen it when the ticket is sent back
-   (`SEND-BACK.md`).
+   **Predict files:** write a directory only when the ticket names the whole directory, and `/` only when nothing
+   can be inferred. **Index files stay off the list:** files to which every ticket adds a line of its own — a
+   vocabulary table, an index table, CI's list of tests, a README table, an array in a manifest — are touched by
+   nearly every ticket, and listing them would make all tickets mutually exclusive; where two tickets each added a
+   line, the merge agent keeps both (close-out step 4). The list only grows: at expansion, and when the ticket is
+   sent back (`SEND-BACK.md`). The host makes the prediction; the implementation agent reports nothing before
+   starting.
 4. **File overlap:** write one plan per repository, `sorry-matt/runs/<run>/overlap/<n>.plan.json` (`<n>` is the
    dispatch-point number; with several repositories the name starts with `<repo>-`), covering every line in that
    repository: `running` lists the tickets in flight with their predicted files, their ticket worktrees and their
@@ -378,10 +392,9 @@ candidate, in order:
    The output format is in the script's header. A ticket in flight holds the files its worktree has already touched
    as well as its predicted files. Every ticket in `start` is dispatched at this dispatch point, so tickets on the
    same line whose files do not overlap start together; tickets in `wait` stay candidates and are judged again at
-   the next dispatch point. Overlap is judged across lines too: two lines changing the same file at once leaves
-   their two aggregate PRs in conflict, and holding one back keeps changes to the same place from running in
-   parallel. A ticket integrated into its own line's integration branch no longer holds its files; a conflict that
-   remains between aggregate PRs is handled by section 2's base sync and the human merge.
+   the next dispatch point. Overlap is judged across lines too: once lines are joined, no two lines' predicted
+   files overlap, so what can still collide is a file a ticket in flight actually touched and its prediction did not
+   cover; holding one back keeps changes to the same place from running in parallel.
 5. From the latest tip of its line integration branch, create the `<run>/<NN>-<slug>` ticket branch and a ticket
    worktree. With Local Markdown the expansion block is already committed on the integration branch, and the ticket
    branch is cut after it.
@@ -429,11 +442,18 @@ integration branch, CI runs in the background, the host does not wait, and the n
    stuck (`SEND-BACK.md`). **One ticket gets this one reviewer by default**, its lenses covering standards
    and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one, naming the
    risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
-3. **Batched fix:** hand this ticket's findings back to the original context-holding agent all at once, fixed in one
-   round rather than one finding at a time. Afterwards re-run the targeted checks for the affected surface and the
-   acceptance diff, then call the Skill tool with `prove-it` in mode `recheck`, attaching the previous review block
-   and the new acceptance diff output: it reruns the live run and mutation only on the lines the findings concern,
-   and is not a second review. At most two correction rounds; still failing after two, mark the ticket stuck (`SEND-BACK.md`).
+
+   **The host carries out the review block.** `prove-it`'s `tier` sets how deep the review goes, and its verifiers
+   judge what is blocking; the host's job is to act on the verdict: `findings` go to the fix, `observations` and
+   `pre-existing` go into one raw ticket per "Filing along the way", and the ticket moves on by `verdict`.
+3. **Batched fix:** hand the review block's `findings` back to the original context-holding agent all at once, as
+   the `summary`, `evidence` and `fix` text of those findings; the fix's scope is closing them, in one round.
+   Afterwards re-run the targeted checks for the affected surface and the acceptance diff, then call the Skill tool
+   with `prove-it` in mode `recheck`, attaching the previous review block and the new acceptance diff output: it
+   verifies only whether those findings are closed. **A ticket gets at most two correction rounds**, counted in the
+   ticket's verification result in the reconciliation table; a new finding raised by a recheck counts within the
+   same rounds. When the second round's `recheck` is still `fix`, mark the ticket stuck (`SEND-BACK.md`), attaching
+   the findings still open to the stuck record.
 
    **Hard rail — a flaky red is chased to its root cause.** A test that goes red and green on the same commit is
    treated as a real failure: find the root cause; when it lies in how the test is written, fix the test; when it
@@ -452,7 +472,7 @@ integration branch, CI runs in the background, the host does not wait, and the n
    `merge` followed by the ticket's identifier, time limits): it gets the integration
    worktree, both sides' ticket text and commit messages, and this test — the choice is between two intents rather
    than two blocks of text, so trace each side to its primary source (the ticket text and the commit message), keep
-   both where they are compatible, and where they are not, take the side that matches this merge's goal, with what
+   both where they are compatible (in an index file, every line either side added stays), and where they are not, take the side that matches this merge's goal, with what
    lands limited to behaviour one side actually wrote. The resolution lives only in this merge commit (finished
    with `git commit --no-edit`), and the ticket branch is never rewritten; a local
    `git show --remerge-diff <merge>` (git 2.36+) shows just the resolution, which GitHub's web views cannot show.
@@ -484,7 +504,9 @@ point, whatever cannot be answered accumulates until the next dispatch point and
 Done when: every ticket that reported entered close-out without waiting for other tickets; every ticket went through
 exactly one independent review (`prove-it` in `initial`; a `stuck` before the review opens does not count), each
 correction round had one `recheck`, every call came with that call's acceptance diff output against the acceptance
-snapshot, and every verdict is in the status record; its targeted checks are back to green, and it has either a
+snapshot, and every verdict is in the status record; what went to each fix was the text of the review block's
+`findings`, no ticket had more than two correction rounds and each count is in the reconciliation table, and every
+ticket with observations or pre-existing items has one raw ticket; its targeted checks are back to green, and it has either a
 provider-native delivery that passed acceptance or a traceable stuck record; every ticket that gained a specialist
 reviewer names the risk; each line integrated at most one ticket at a time, and no queued ticket was integrated into
 a line in red-light handling; every integration is a `--no-ff` merge commit with git's default message and its SHA
@@ -502,6 +524,10 @@ this scope, only as raw tickets linked to the source finding:
 - **GitHub:** use `gh issue create` without `ready-for-agent`; polish the body per `ASKING.md` section 6.
 - **Local Markdown:** follow the tracker convention to create the next unused ticket file, set `Status` to
   `needs-triage`, and commit it on the line integration branch where it was found.
+
+The `observations` and `pre-existing` of a `prove-it` review block: one raw ticket per reviewed ticket, listing each
+item's location, its one sentence and its evidence path, and linking back to that ticket's status record. When a
+recheck raises new observations, add them to the same raw ticket.
 
 Keep these raw tickets outside both the initial set and this run's frontier.
 

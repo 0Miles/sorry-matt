@@ -36,7 +36,12 @@ ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
   implementation agent starts; whoever writes the criteria is not the one who has to pass them. Upstream
   implementation rewrites the facts the downstream tickets rest on; the rulings made early are the ones that get
   redone. Mark it awaiting ruling only when a fact the expansion needs cannot be found anywhere; a needs-triage
-  ticket filed during the run is background, held to the handoff.
+  ticket filed during the run is background, held to the handoff. **A ticket whose design is not settled goes to
+  the ruling point at the first stage:** when it has to define a new set of permissions, trigger conditions or an
+  external interface, and neither the ticket nor the spec settles that design, it is a design decision under
+  `ASKING.md` section 2(d) — list it as one question at the ruling point with a recommendation; one that does not
+  make the four questions is marked awaiting ruling together with the tickets it blocks, and this run does not
+  dispatch them.
 - **The host's context has a budget**, per `ASKING.md` section 7.
 
 Whatever a subagent receives must be self-contained: every rule it has to follow is written into what it is

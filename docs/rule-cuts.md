@@ -546,3 +546,26 @@ run `2026-11-19-backlog-sweep` 的三張純文字票（#16、#49、#50），每�
 新增：`get-to-work/scripts/spawns.mjs`（零依賴，src/dist 逐位元組相同，輸出 `sorry-matt/spawns@1`），測試在
 `scripts/spawns.test.mjs`；hook 的新欄位測試加在 `scripts/budget.test.mjs`。真實事件的欄位以
 `scripts/spawn-deny.live.mjs` 在 Claude Code 2.1.328 實跑驗證：log 的 `type` 與 `description` 等於 Agent 呼叫給的值。
+
+## 審查收斂、主持人成本與合線（2026-11-19 的 run 檢討）
+
+來源是 run `2026-11-19-all-issues` 的檢討：107 個 spawn 中約 94 個是審查，兩張票超過兩輪修正上限，七條線互相衝突。
+這一批沒有走 `prove-it`，由使用者直接審 diff。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `prove-it` 第 2 節「每個 lens 一個 finder；單檔數十行或只動說明文字才派一個」 | 改為第 1 節的**審查分級** `tier`（`light`／`standard`／`full`），依改動行數、是否只動說明文字、是否碰敏感路徑判一次；finder 1／2／3 個，verifier 與突變上限同表 | fan-out 固定是五個 finder 加五到七個 verifier，跟票的大小與風險無關；`commands.md` 的「Sensitive paths」本來就是為判級留的欄。 |
+| `prove-it` 第 4 節「成立且 blocking（會改變這張票該不該整併的決定）」 | 改為五條 `rule`（`acceptance`、`regression`、`red`、`safety`、`unpinned`），由 verifier 判並引用依據；沒命中的成立候選是觀察 | 原判準沒有可檢查的邊界，主持人把十多則「成立但不 blocking」升成 blocking。 |
+| `prove-it` 第 4 節「依檔案＋失效機制分組，其餘各自一個 verifier」 | 改為依檔案分組，組數照 `tier`；verifier 回報每個候選至多五行，另看到的寫進 `noticed` | 每個候選一個 verifier，回報全文都進主持人的 context。 |
+| `prove-it` 第 5 節 | 加：結論以 verifier 的裁決為準；主持人要升級某則觀察，另派一個 verifier 只重判那一則的 `rule` | 給「我覺得這該擋」一條有界的路，取代直接改結論。 |
+| `prove-it` 第 7 節 Fix Verifier 四題（含「修正有沒有開出新的窗口」「其他呼叫端會不會壞」），每則 finding 一個 subagent | 改為兩題：`evidence` 的情境現在的結果；修正 diff 的改動行有沒有命中五條 `rule`。`light`／`standard` 一張票一個 Fix Verifier；範圍外的寫進 `noticed` | 開放式的題目讓每輪複驗都找到新東西，範圍只增不減。 |
+| `prove-it` 第 7 節「只突變 finding 涉及的行，上限 10」 | 改為只重跑上次存活的 mutant | 對修正新增的行再突變，會在複驗產生與原 finding 無關的新 finding。 |
+| `prove-it` 第 7 節「修正輪數由呼叫方控管」 | 改為一張票至多兩次 `recheck`，新 finding 算進同一個輪數 | 上限只寫在呼叫方，審查這邊沒有對應的停止條件。 |
+| `get-to-work`「收票」步驟 2、3 | 加：主持人照審查區塊執行；交修的是 `findings` 的原文；輪數記在對帳表；觀察與 pre-existing 一張票合開一張 raw ticket | 主持人加碼（升級、加輪、給 Fix Verifier 額外任務）是這次成本放大的主因。 |
+| `get-to-work` 第 0 節 | 加步驟 4**合線**：凍結時為每張票存預計檔案，預計檔案重疊的線併成一條 | 線只照 blocker 邊分，七條線改同一批檔，總 PR 互相衝突，主持人還得手動把一條線併進另一條。 |
+| `get-to-work`「派票」步驟 3「寧寬勿窄；什麼都推不出來就寫 `/`；規則檔要求一起改的索引表、CI 設定也列」 | 改為寫到檔案、目錄只在票面點名時寫；**索引檔**（各加一行的表與清單）留在清單外，衝突由整併 agent 兩邊都留 | 詞彙表、CI 測試清單幾乎每張票都碰，列進去等於全部互斥；寫成目錄會擋住無關的票。 |
+| `get-to-work`「派票」的候選順序「照 frontier 的順序」 | 改為被越多票當 blocker 的越前，同數照 frontier | 檔案重疊時先做哪一張決定了後面能並行多少。 |
+| `EXPANDER.md` 第 2 節 | 加：一張票至多十項驗收；設計還沒定的票回報待裁決 | 即時補出 15–25 項驗收，每一項都是審查面；設計票的驗收由展開 agent 現寫，等於沒人核過設計。 |
+| `have-it-all-done` 第 0 節兩段展開 | 加：設計還沒定的票在第一段就列進裁決點，沒排進的連同下游標待裁決 | 同上；讓設計定案在唯一的裁決點由人裁。 |
+| `ASKING.md` 第 4 節 `spawns` = `30 × 票數 + 50` | 改 `20 × 票數 + 50`，每票典型 10 個 | 分級後每張票的 spawn 少了；上限太寬，這次沒有擋住失控的審查。 |
+| `ASKING.md` 第 7 節上下文預算 | 加：交給 subagent 的任務以交付說明為界，沒寫的檢查開成 raw ticket | 同「主持人加碼」。 |

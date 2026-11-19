@@ -37,6 +37,13 @@ rewritten a fact, the current state wins. Read only: change no code, create no b
   acceptance".
 - Write only what is inside the ticket's scope. Where an open question inside that scope admits a recommendation,
   answer it on the user's behalf and write the answer as a criterion or a ruling.
+- **At most ten criteria per ticket.** Each criterion is a surface the review checks one by one: write the outcomes
+  the ticket delivers, folding several inputs of one behaviour into one criterion. When ten cannot hold it, the
+  ticket is two tickets: write no block, report it as awaiting ruling, and state the split you recommend.
+- **A ticket whose design is not settled goes back to a person.** When the ticket has to define a new set of
+  permissions, trigger conditions or an external interface, and neither the ticket nor the spec settles that
+  design, it is a design decision for a person to rule on: write no block, report it as awaiting ruling, and state
+  which design has to be settled and the option you recommend.
 - Leave the ticket's existing criteria alone — do not change or delete them; add only what is missing.
 - Implementation-level rulings (seams, interface shape, data formats) go under `rulings`; where the ticket or spec
   already settles one, use it rather than restating it.
@@ -83,5 +90,6 @@ awaiting ruling: <ticket: missing fact, or none>
 run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
 ```
 
-Done when: every ticket to expand has one expansion block, or is reported as awaiting ruling with the missing fact
-named; the tickets' existing criteria are unchanged; the report follows the format above.
+Done when: every ticket to expand has one expansion block, or is reported as awaiting ruling with the missing fact,
+the recommended split or the design to settle named; no expansion block holds more than ten criteria; the tickets'
+existing criteria are unchanged; the report follows the format above.

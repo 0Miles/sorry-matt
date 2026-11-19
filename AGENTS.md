@@ -379,6 +379,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 通用 agent | general-purpose agent |
 | 指令輸出 | command output |
 | 結尾摘要 | closing summary |
+| 審查分級 | review tier |
+| 合線 | join lines |
+| 索引檔 | index file |
+| 觀察(審查區塊的) | observation |
 
 ## 外部語義來源
 

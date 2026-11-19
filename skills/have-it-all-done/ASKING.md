@@ -130,10 +130,11 @@ filled.
   report body.
 - Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
   `budget: rounds` scale with the ticket count:
-  - `spawns` = max(`30 × tickets + 50`, spawns used + `30 × tickets`). A ticket typically takes about 15 spawns —
-    implementation, expansion, `prove-it`'s finders and verifiers, merging — doubled as a last-resort margin, and the
+  - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 10 spawns —
+    expansion, implementation, the two finders of a standard-tier `prove-it`, up to three verifiers and one fix
+    round's Fix Verifier, merging — doubled as a last-resort margin, and the
     constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
-    plus 30 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
+    plus 20 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
   - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
     send-back, one stuck / revert / red-to-green), plus the first one.
 
@@ -330,7 +331,9 @@ into context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
-when it needs detail, it pulls just those lines with a command.
+when it needs detail, it pulls just those lines with a command. The report fields and line counts of `prove-it`'s
+finders, verifiers and Fix Verifiers are in its own rules. A task the host hands a subagent is bounded by that
+subagent's brief: a check the brief does not name becomes a raw ticket for a later run.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
 "none", field 9 has the four `budget:` limits, the four stage time limits and current usage, and field 10 has listed the rule files' absolute
