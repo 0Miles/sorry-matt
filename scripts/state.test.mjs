@@ -255,6 +255,34 @@ test('the profile is written once; a rewrite, an unknown field and a bad value a
   assert.equal(r.ok('resume').profileWritten, true);
 });
 
+test('a first profile write is refused once a ticket has moved under the defaults', (t) => {
+  // the repro: a ticket stuck on its fix rounds is not let through by a profile written afterwards
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  for (let round = 1; round <= 2; round++) {
+    r.ok('review', '#1', '--mode', round === 1 ? 'initial' : 'recheck', '--verdict', 'fix');
+    r.ok('stage', 'fixing', '#1');
+    r.ok('stage', 'in-review', '#1');
+  }
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'fix');
+  r.refused(/queued needs the latest review verdict to be pass; it is fix/, 'stage', 'queued', '#1');
+  r.refused(/written before the first ticket moves; #1 is already in-review/, 'profile', '--onUnfixed', 'file-issue', '--review', 'minimal');
+  r.ok('set', '#1', '--unfixed-issue', '#200');
+  r.refused(/queued needs the latest review verdict to be pass; it is fix/, 'stage', 'queued', '#1');
+  assert.equal(r.state().profile, null);
+
+  // tickets still at candidate (the freeze) do not stop it
+  const fresh = run(t);
+  fresh.ok('add', '#1', '#2', '--line', LINE);
+  fresh.ok('set', '#1', '--snapshot', SNAP);
+  fresh.ok('profile', '--recheck', 'false');
+
+  // an imported ticket past candidate has no history, and still counts as moved
+  const imported = run(t, { init: false });
+  imported.ok('import', '--from', imported.file('seed.json', { run: 'run-1', tickets: { '#1': { line: LINE, stage: 'implementing', snapshotSha256: SNAP } } }));
+  imported.refused(/#1 is already implementing/, 'profile', '--review', 'minimal');
+});
+
 test('a profile cannot carry confirmations or budget limits', (t) => {
   const r = run(t, { init: false });
   const seed = r.file('seed.json', { run: 'run-1', profile: { review: 'minimal', budget: { spawns: 999 } } });

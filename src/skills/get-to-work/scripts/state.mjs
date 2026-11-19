@@ -106,9 +106,10 @@
 // A command naming several tickets is all or nothing.
 //
 // Profile: how strict this run's pipeline is, declared at the start and written once with `profile` (at the
-// ruling point, or at the freeze of a standalone run); a second write is refused. Fields not given, and every field
-// while nothing is written, take the defaults, which are the strict flow above. A relaxed field changes what the
-// guards accept, never what evidence they need:
+// ruling point, or at the freeze of a standalone run); a second write is refused, and so is a first one once
+// any ticket has left candidate or has a review: the defaults it moved under hold for the rest of the run. Fields
+// not given, and every field while nothing is written, take the defaults, which are the strict flow above. A
+// relaxed field changes what the guards accept, never what evidence they need:
 //   review     full (default: prove-it) | minimal (a single reviewer reporting blocking findings only). Under full,
 //              queued needs the passing review to be `--kind full`; under minimal either kind counts. A review is
 //              needed either way.
@@ -140,7 +141,8 @@
 //             import time is taken and `startedNote` says the time before it was not counted. The imported
 //             tickets must satisfy the guards of the seed's `profile` (queued and integrating as if entering
 //             queued, delivered with a merge SHA); refused when the file exists.
-//   profile   Writes the profile once (see Profile). Refused when one is already written.
+//   profile   Writes the profile once (see Profile). Refused when one is already written, or once any ticket has
+//             left candidate or has a review.
 //   show      Prints the state.
 //   resume    What a resumed host needs, from the state alone:
 //             { "format", "command": "resume", "run", "revision", "profile": <effective>, "profileWritten",
@@ -915,6 +917,10 @@ function profile(path, rest, flags, ctx) {
   }
   return update(path, ctx.now, (state) => {
     if (state.profile !== null) throw new Refusal(`the profile was written once already; it is not changed during a run (${JSON.stringify(state.profile)})`);
+    const moved = Object.entries(state.tickets).find(([, t]) => t.stage !== 'candidate' || t.history.length || t.reviews.length);
+    if (moved) {
+      throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
+    }
     state.profile = { ...PROFILE_DEFAULTS, ...given };
     return { profile: state.profile };
   });
