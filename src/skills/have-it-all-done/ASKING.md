@@ -193,7 +193,7 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
 3. 風險閘門三燈與放行紀錄。
 4. 線、整合分支與 tip SHA，以及最近一次讀到的 CI 結果與它的 SHA（`get-to-work` 第 1 節「讀 CI」的判法）；`get-to-work`
    收官併入的基底 SHA（未併入時記嘗試的 SHA 與「未併入」）；**本機驗證逐 SHA 紀錄**（格式與規則見
-   `get-to-work` 第 2 節步驟 3 的「本機驗證」）。紀錄的行以 `local:` 開頭，不以 `rule:` 或 `budget:` 開頭。
+   `get-to-work` 的 `SKILL.md` 第 1 節「讀 CI」的「本機驗證」）。紀錄的行以 `local:` 開頭，不以 `rule:` 或 `budget:` 開頭。
 5. 需授權動作的結果：送出的每個需要授權或確認的動作（第 5 節）與放行或確認結果，擋下的附權限規則片段或要執行的指令。
 6. run 層自答清單。
 7. 人工作業清單。
@@ -228,7 +228,7 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
     `rule: <絕對路徑>`，建立 ledger 時就填好，接手既有 ledger 時補齊缺的（例如 `have-it-all-done`
     接手獨立 `get-to-work` 建的 ledger）。經 Skill tool 載入的那份 `SKILL.md` 也列：壓縮只重附它的
     前 5,000 tokens。只在某一步讀來填交付內容的檔（`EXPANDER.md`、`IMPLEMENTER.md`、`TEMPLATES.md`
-    等）不列：用到的那一步本來就會重讀它。hook 收整份 ledger 裡每一行 `rule: <絕對路徑>`，所以
+    等）不列：用到的那一步本來就會重讀它。`get-to-work` 的 `RED-LIGHT.md`、`TIMEOUTS.md`、`SEND-BACK.md`、`FINISH.md` 也不列進第 10 欄：走到那個 branch 的那一步重讀。hook 收整份 ledger 裡每一行 `rule: <絕對路徑>`，所以
     其他欄不要以 `rule:` 開頭寫行。
 
 共用目錄不可寫，或當前目錄不在 git repo 內時沒有 ledger —— 正本改為最終報告，在報告明記，
