@@ -70,9 +70,8 @@ Give each lens to its own finder subagent, all dispatched in one message. Two ki
 that applies every lens:
 
 - A single file of no more than a few dozen lines.
-- Markdown or other documentation only, with no executable code: every changed file is prose (`.md`, `.txt`, and
-  the like), with no code, tests, scripts, configuration, or generated files. Skill text changed in both src and
-  dist counts.
+- Prose only: every changed file is documentation such as `.md` or `.txt`, with no code, tests, scripts,
+  configuration, or generated files.
 
 This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground,
 never in the background: the caller waits within its own turn until every one of them is back. `get-to-work` puts
@@ -128,7 +127,7 @@ mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
-  baseline, so skip it this time and record why in the mutation record.
+  baseline, so skip it this time; the mutation record says `skipped: red baseline` (format in section 6).
 
 ### Mutation
 
@@ -219,9 +218,6 @@ Check both:
   implementation follows the spec, and what needs changing is the spec.
 - Neither holds → treat it as `none` and take the normal path below, starting from disproof.
 
-A short-path ruling carries `file:line` evidence too: the location on the fixed point, or where the spec text
-comes from.
-
 A candidate with `suspected: none` takes the normal path. **Disprove first:** find and cite the code that would overturn the candidate. Settle uncertain technical facts by
 running a throwaway program. For a surviving mutant, disproving means showing it is an equivalent mutant — no input
 makes the original and the mutant differ observably. Only when disproof fails, go through the gates in order:
@@ -236,7 +232,7 @@ There are four rulings, each with `file:line` evidence: **confirmed** (all three
 (fails only the second gate, or the short path found it on the fixed point too), **spec-level** (from the short
 path only), and **invalid**. Every citation names its source: the ticket branch (the default), the fixed point, or
 the ticket text / acceptance snapshot. Only when a citation does not match the source it names, have another
-verifier re-check that candidate; a citation of the fixed point or of spec text that matches is not re-checked.
+verifier re-check that candidate.
 
 Routing:
 
@@ -347,8 +343,7 @@ Rebuild the review worktree per section 1 at the fixed ticket branch tip.
 2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added.
 3. **Mutation:** mutate only the lines the findings concern, under the rules of section 3 (one per line, cap 10),
    with a new ledger for this round. If a previously surviving mutant's line is unchanged, rerun the same mutant;
-   this time it must be killed. When the finding lines hold no executable code line, skip it per section 3 and
-   write `skipped: no executable lines`.
+   this time it must be killed.
 4. **Acceptance diff:** read the new acceptance diff output the caller attached. The `acceptance` finding is closed
    only when `check.changed` is false; when it is true the finding stays open, and if there was none before, record
    one as a new finding in this round per section 1.

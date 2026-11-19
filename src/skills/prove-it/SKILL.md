@@ -59,8 +59,7 @@ diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>
 由它套用全部 lens：
 
 - 只有一個檔案，而且不超過數十行。
-- 只動 Markdown 或其他文件，沒有可執行程式碼：每個改動檔都是說明文字（`.md`、`.txt` 這類），
-  不含程式、測試、腳本、設定或產生檔。src 與 dist 兩版都改的 skill 文字也算。
+- 只動說明文字：每個改動檔都是 `.md`、`.txt` 這類文件，不含程式、測試、腳本、設定或產生檔。
 
 本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送，不在背景跑：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
@@ -107,7 +106,7 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，
-  這次不突變，突變紀錄寫明原因。
+  這次不突變，突變紀錄寫 `skipped: red baseline`（格式見第 6 節）。
 
 ### 突變
 
@@ -184,8 +183,6 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
   **spec 層級**：實作照 spec 做，要改的是 spec。
 - 兩項都不成立 → 當成 `none`，照下面的一般流程從反駁開始。
 
-簡化流程的裁決同樣附 `file:line` 證據：fixed point 上的位置，或 spec 原文的出處。
-
 `suspected: none` 的候選走一般流程。先嘗試**反駁**：找出能推翻候選的程式碼並引用。不確定的
 技術事實用一次性的程式實跑查證。
 存活 mutant 的反駁是證明它是等價 mutant —— 沒有任何輸入能讓原碼與 mutant 的可觀察結果不同。
@@ -200,7 +197,7 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
 裁決四種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗，或簡化
 流程查到 fixed point 也有）、**spec 層級**（只出自簡化流程）、**不成立**。每則引用標明出自哪裡：
 ticket 分支（預設）、fixed point，或票面／驗收快照。引用與它標明的來源對不上時，才換一個
-verifier 重驗；引用 fixed point 或 spec 原文、而且對得上的，不重驗。
+verifier 重驗。
 
 分流：
 
@@ -299,8 +296,7 @@ ticket 分支尖端重建。
    的成為本輪新 finding。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。
 3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10），用本輪新的
-   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。finding 涉及的行
-   沒有可執行程式行時，照第 3 節跳過，寫 `skipped: no executable lines`。
+   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
 4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
    關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
