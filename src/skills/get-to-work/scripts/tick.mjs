@@ -1,0 +1,1959 @@
+#!/usr/bin/env node
+// tick: the action list of one wake-up of get-to-work's pipeline. It reads the run state (state.mjs), git and the
+// files of the run directory, and says what the host does now: which agent reports to take and which to ignore,
+// which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
+// what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
+// The host runs the actions and writes each result back with `tick.mjs record`. tick spawns nothing, stops no
+// agent, runs no network call and changes no branch: those are the host's actions. No dependencies: runs on a bare
+// Node 20+ with git on PATH.
+//
+// Usage
+//   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
+//                        [--repo <owner>/<repo>] [--ledger <ledger.md>] [--tickets-dir <repo-relative dir>]
+//                        [--worktrees <dir>] [--spec <identifier or path>]
+//   node tick.mjs next   <state> [--reported <agent id>]... [--now <UTC>]
+//   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
+//                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
+//                        [--now <UTC>]
+//
+// setup writes the run's configuration into the state file once at the freeze (again to change it; the bookkeeping
+// below is kept). `--repo` is required with github, `--tickets-dir` (where the ticket files are, e.g.
+// `.scratch/feat/issues`) with local. `--ledger` is where the `budget:` lines are read (limits and stage time
+// limits; the defaults of ASKING section 7 without it). `--worktrees` is the directory the ticket worktrees are made
+// in, default `<root>/../<root name>.worktrees/<run>`. `--spec` goes into the expansion brief (default none).
+//
+// What tick reads, and which side wins
+//   The state file is the source of truth for stages, reviews, assignments, merge SHAs and usage. git is the source
+//   of truth for branches: when the two disagree, tick follows git and says so in `reconcile`:
+//   - a ticket queued or integrating whose branch is already merged into its target is not merged again: tick
+//     records the merge SHA and gives what is left of close-out steps 5–8 (delivery record, push, removing the
+//     worktree and branch, delivered). Merged means: with the ticket branch present, `git merge-base --is-ancestor
+//     <ticket branch> <target>` and a first-parent merge of the target that brought it in; with the branch gone, a
+//     first-parent merge matched by the rules of merges.mjs (the header of review-guide.mjs).
+//   - an integration branch whose tip differs from the state's `tip` (another ticket's merge, a host commit) gets
+//     the state's tip moved to git's; CI evidence for the old SHA no longer counts.
+//   - a delivered ticket whose recorded merge SHA is not in its target's history is asked about (`ask`): a ruling,
+//     not a guess.
+//   The target of a line is its integration branch, or the base branch under profile `integrate: direct`.
+//
+// The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
+//   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`; spawns.mjs does not know that
+//                    role word yet and counts it as general-purpose) instead of prove-it's `judge`, with a brief tick
+//                    writes: blocking findings only, `verdict: pass | fix`
+//   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
+//   onUnfixed: file-issue  findings still open → a `judge` to file a raw issue; queued only once its id is recorded
+//   expand: skip     no expansion; a ticket with no criteria goes on with its own text
+//   ci: skip         no CI read and no local verification, in the pipeline or at the finish
+//   simplify: false  no simplify pass at the finish
+//   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
+//
+// A wake-up
+//   The host runs `next` (with `--reported` for each agent whose completion notice arrived), runs the actions,
+//   records each, and runs `next` again, until `then` is "end": the last action is then the wake-up's closing one
+//   (ledger narrative and the fallback wake-up), and recording it starts the next wake-up. `then` "done" means the
+//   run is over (the finish's wrap-up was recorded).
+//   Order within a wake-up: reports; red lines (CI read, red-light handling); the deadline scan; each ticket by its
+//   stage (in-review, fixing, implementing, expanding, then the integration queue per target); the dispatch point,
+//   only when nothing else is left to do and at most once per wake-up; the finish once every ticket is at an end
+//   state.
+//   A dispatch point runs when: it is the first; since the last one a ticket was merged or delivered, went stuck or
+//   awaiting ruling, was sent back, or came back from expansion; a red line turned green or a line failed
+//   verification; or no ticket is in flight while candidates remain. It is: usage and the progress check
+//   (deadline.mjs progress; a stop ends the dispatching for good), CI per line, frontier.mjs, stalled tickets to
+//   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
+//   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
+//
+// Output of next (stdout, JSON, format "sorry-matt/tick@1"; fields are only ever added, never renamed)
+//   { "format": "sorry-matt/tick@1", "command": "next", "run": "<run>", "wakeup": <n>, "now": "<UTC>",
+//     "profile": { ...the effective profile },
+//     "reports":   [{ "agent": "<id>", "accepted": true | false, "tickets": [<ticket>],
+//                     "why": "current" | "duplicate" | "superseded" | "stopped" | "unknown" }],
+//     "reconcile": [{ "ticket" | "line": "<id>", "state": "<what the state says>", "git": "<what git says>",
+//                     "follow": "git" | "ruling" }],
+//     "dispatch":  null | { "round": <n>, "reasons": ["<why>"], "closed": true | false },
+//     "wrote":     ["<file tick wrote: a plan, a values file, an acceptance snapshot>"],
+//     "actions":   [<action>],
+//     "fallback":  null | { "deadline", "seconds", "scheduleWakeup" },     // deadline.mjs scan's, for this wake-up
+//     "then":      "tick" | "end" | "done" }
+//   An action:
+//   { "id": "<stable id>", "kind": "exec" | "spawn" | "judge" | "ask", "step": "<registry name>",
+//     "batch": <n>,                       // all actions of one batch go out in the same turn; batch n+1 after n
+//     "after": ["<action id>"],           // the ones it waits for (this list only)
+//     "tickets": [<ticket>], "line": "<integration branch>" | null,
+//     "reference": [{ "path": "<file>", "part": "<where in it>" } | { "skill": "<name>", "part": "…" }],
+//     "record": "<the record command to run afterwards, with <placeholders>>",
+//     exec:  "argv": [...], "command": "<one POSIX shell line>", "stdout": "<file>" | null, "cwd": "<dir>" | null,
+//            "okExit": [0, …]             // run it in bash (Git Bash on Windows); record its exit code
+//     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false }
+//     judge, ask: "do": "<what to settle>", "outcomes": ["<word>"] }
+//   The same id is never issued for a different thing; an action the host already recorded is not issued again.
+//
+// record
+//   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
+//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`).
+//   judge and ask: `--outcome <one of outcomes>`, with what the outcome needs: `--agent` for a spawn the judge did,
+//   `--value` for a reason, an issue id or a task id, `--findings` with a review's fix, `--fixed` / `--unfixed` with
+//   a fix report under `recheck: false`, `--type` when the spawn had to use another agent type. The state writes
+//   that follow from it (release, stage, review, report, agent, local, usage…) go through state.mjs, so its guards
+//   hold; recording the same result twice changes nothing, a different result for a recorded action is refused.
+//   Output: { "format", "command": "record", "id", "applied": ["<state.mjs command run>"], "wakeup" }
+//
+// The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
+// this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
+//   "agents": { "<id>": { "tickets", "role", "type", "status": "current" | "collected" | "stopped", "at" } },
+//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"? } },
+//   "flags": { "<ticket>": {…} }, "red": { "<line>": { "sha", "at" } }, "failed": { "<line>": "<UTC>" },
+//   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
+//   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
+// So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
+//
+// The registry (OPERATIONS below) holds one builder per operation the host is handed. A later script that takes an
+// operation over (integrate.mjs #121: merge, push, ticket branch and cleanup; verify.mjs #122: local verification;
+// the gates of #118) replaces that one entry with an `exec` of itself.
+//
+// Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
+// names them); tick's own plans and outputs go under its `tick/`.
+//
+// Exit codes: 0 output written; 1 the state, the ledger or git could not be read, or a state write failed;
+// 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs refusal).
+// On 1, 2 or 3 nothing is written to stdout.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
+import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './state.mjs';
+import { main as deadlineMain } from './deadline.mjs';
+import { parseWorktrees } from './freeze.mjs';
+import { ticketOwners } from './merges.mjs';
+import { description as roleDescription, ticketName } from './brief.mjs';
+
+export const FORMAT = 'sorry-matt/tick@1';
+const SCRIPTS = dirname(fileURLToPath(import.meta.url));
+const SKILL = dirname(SCRIPTS);
+const SELF = join(SCRIPTS, 'tick.mjs');
+const js = (name) => join(SCRIPTS, name);
+const doc = (file, part) => ({ path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : join(SKILL, file), part });
+const skill = (name, part) => ({ skill: name, part });
+
+const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
+const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
+export const LIMIT_DEFAULTS = Object.freeze({
+  spawns: 200,
+  rounds: 40,
+  hours: 12,
+  'no-progress': 3,
+  'timeout-implement': 30,
+  'timeout-fix': 20,
+  'timeout-expand': 15,
+  'timeout-merge': 15,
+});
+// The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
+const BUDGET_LINE = /^\s*(?:[-*+]\s+)?(?:`\s*)?budget:\s*(?:`\s*)?([a-z][a-z-]*)\s+(\d+)\s*(?:`\s*)?$/;
+const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const formatTime = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/** The command is well-formed but not allowed: exit 3. */
+class Refused extends Error {}
+
+// ---- small helpers --------------------------------------------------------------------------------------------------
+
+const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+const keyOf = (id) => String(id).replace(/^#/, '').replace(/[\\/:*?"<>|\s#]+/g, '_');
+const numOf = (id) => String(id).replace(/^#/, '');
+const slugOf = (text) => String(text).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+const hist = (t) => t.history.length;
+const lastEntry = (t, stage) => t.history.findLastIndex((h) => h.to === stage);
+const currentReview = (t) => {
+  const r = t.reviews.at(-1);
+  return r && r.after > lastEntry(t, 'in-review') ? r : null;
+};
+const currentReport = (t) => {
+  const r = t.fixReports.at(-1);
+  return r && r.after > lastEntry(t, 'fixing') ? r : null;
+};
+const list = (text, where) => {
+  const items = String(text).split(',').map((x) => x.trim()).filter(Boolean);
+  if (!items.length) throw new UsageError(`${where}: expected comma-separated ids`);
+  return items;
+};
+
+/** One POSIX shell word. */
+const q = (s) => (/^[A-Za-z0-9_/.:=@%+,-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, `'\\''`)}'`);
+const commandLine = (argv, stdout, cwd) => `${cwd ? `cd ${q(cwd)} && ` : ''}${argv.map(q).join(' ')}${stdout ? ` > ${q(stdout)}` : ''}`;
+
+function readJsonFile(deps, path) {
+  try {
+    return parseJson(deps.read(path));
+  } catch {
+    return null;
+  }
+}
+
+// ---- git ------------------------------------------------------------------------------------------------------------
+
+function gitView(root, deps) {
+  const memo = new Map();
+  const tryGit = (cwd, args) => {
+    const k = `${cwd}\0${args.join('\0')}`;
+    if (!memo.has(k)) {
+      let v;
+      try {
+        v = deps.git(cwd, args).trim();
+      } catch {
+        v = null;
+      }
+      memo.set(k, v);
+    }
+    return memo.get(k);
+  };
+  const top = tryGit(root, ['rev-parse', '--show-toplevel']);
+  if (top === null) throw new Error(`${root} is not a git working tree`);
+  const worktrees = parseWorktrees(tryGit(root, ['worktree', 'list', '--porcelain']) ?? '').filter((w) => !w.bare && !w.prunable);
+  const hasOrigin = tryGit(root, ['remote', 'get-url', 'origin']) !== null;
+  const ref = (b) => (b ? tryGit(root, ['rev-parse', '-q', '--verify', `refs/heads/${b}^{commit}`]) : null);
+  const view = {
+    root,
+    hasOrigin,
+    wtOf: (branch) => worktrees.find((w) => w.branch === branch)?.path ?? null,
+    ref,
+    remote: (b) => (hasOrigin ? tryGit(root, ['rev-parse', '-q', '--verify', `refs/remotes/origin/${b}^{commit}`]) : null),
+    commit: (r) => tryGit(root, ['rev-parse', '-q', '--verify', `${r}^{commit}`]),
+    ancestor: (a, b) => tryGit(root, ['merge-base', '--is-ancestor', a, b]) !== null,
+    mergeHead: (wt) => (wt ? tryGit(wt, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']) : null),
+    merges: (tip) =>
+      (tryGit(root, ['log', '--first-parent', '--merges', '--format=%H %P%x09%s', '-n', '2000', tip]) ?? '')
+        .split('\n')
+        .filter(Boolean)
+        .map((row) => {
+          const [shas, ...subject] = row.split('\t');
+          const [sha, ...parents] = shas.split(' ');
+          return { sha, parents, subject: subject.join('\t') };
+        }),
+  };
+  return view;
+}
+
+/** The merge commit that brought ticket `t` into `target`, or null when it is not merged. */
+function mergedSha(c, id, t, target) {
+  const g = c.git;
+  const tip = g.ref(target);
+  if (!tip) return null;
+  const merges = g.merges(tip).reverse(); // oldest first
+  const branchSha = g.ref(t.branch);
+  if (branchSha) {
+    if (!g.ancestor(branchSha, tip)) return null;
+    const exact = merges.find((m) => m.parents[1] === branchSha);
+    if (exact) return { sha: exact.sha, by: 'branch' };
+    const brought = merges.find((m) => m.parents.length === 2 && g.ancestor(branchSha, m.parents[1]) && !g.ancestor(branchSha, m.parents[0]));
+    return brought ? { sha: brought.sha, by: 'branch' } : null;
+  }
+  const { owners } = ticketOwners([{ id, branch: t.branch, merges: [] }], (r) => g.commit(r) ?? r);
+  const found = merges.find((m) => owners(m).owners.some((o) => o.id === id));
+  return found ? { sha: found.sha, by: 'subject' } : null;
+}
+
+// ---- the registry -----------------------------------------------------------------------------------------------------
+
+function exec(id, step, argv, { stdout = null, cwd = null, okExit = [0], tickets = [], line = null, after = [], note = null } = {}) {
+  return { id, kind: 'exec', step, tickets, line, after, argv, stdout, cwd, okExit, command: commandLine(argv, stdout, cwd), ...(note ? { note } : {}) };
+}
+function judge(id, step, what, outcomes, reference, { tickets = [], line = null, after = [], kind = 'judge', meta = null, needs = null } = {}) {
+  return { id, kind, step, tickets, line, after, do: what, outcomes, reference, ...(meta ? { meta } : {}), ...(needs ? { needs } : {}) };
+}
+const stateArgv = (c, ...args) => ['node', js('state.mjs'), args[0], c.path, ...args.slice(1)];
+
+/**
+ * One builder per operation the host is handed. A later script that takes an operation over replaces its entry
+ * with an exec of itself; nothing else in this file changes.
+ */
+export const OPERATIONS = {
+  // #121 integrate.mjs
+  createTicketBranch: (c, { id, branch, worktree, base, exists }) =>
+    exec(`branch:${id}:${basename(worktree)}`, 'ticket-branch', ['git', '-C', c.git.wtOf(base) ?? c.cfg.root, 'worktree', 'add', ...(exists ? [worktree, branch] : ['-b', branch, worktree, base])], { tickets: [id] }),
+  merge: (c, { id, t, wt, tag }) =>
+    exec(`merge:${id}:${tag}`, 'merge', ['git', '-C', wt, 'merge', '--no-ff', '--no-edit', t.branch], { okExit: [0, 1], tickets: [id], line: t.line }),
+  push: (c, { target, tag, after }) => exec(`push:${target}:${tag}`, 'push', ['git', '-C', c.git.wtOf(target) ?? c.cfg.root, 'push', '-u', 'origin', target], { line: target, after }),
+  removeWorktree: (c, { id, path, tag, after }) => exec(`rm-worktree:${id}:${tag}`, 'cleanup', ['git', '-C', c.cfg.root, 'worktree', 'remove', '--force', path], { tickets: [id], after }),
+  removeBranch: (c, { id, branch, tag, after }) => exec(`rm-branch:${id}:${tag}`, 'cleanup', ['git', '-C', c.cfg.root, 'branch', '-D', branch], { tickets: [id], after }),
+  // #122 verify.mjs
+  verifyLocal: (c, { line, sha, reason, wt }) =>
+    judge(
+      `verify:${line}@${sha}`,
+      'verify-local',
+      `Local verification of ${line} at ${sha} (reason ${reason}): run the repo's full automatic checks in ${wt ?? 'the integration worktree'} with its tree at exactly that SHA, save the output, and record green or red.`,
+      ['green', 'red'],
+      [doc('SKILL.md', 'Reading CI: local verification'), doc('RED-LIGHT.md', 'point 3: saving the output')],
+      { line, meta: { sha, reason } },
+    ),
+};
+
+// ---- context --------------------------------------------------------------------------------------------------------
+
+function context(path, state, now, deps) {
+  if (!isObject(state.tick) || state.tick.format !== FORMAT) throw new UsageError(`${path} has no tick configuration: run tick.mjs setup first`);
+  const book = structuredClone(state.tick);
+  const cfg = book.config;
+  const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
+  const W = join(dirname(path), state.run);
+  const limits = { ...LIMIT_DEFAULTS };
+  if (cfg.ledger) {
+    let text;
+    try {
+      text = deps.read(cfg.ledger);
+    } catch (e) {
+      throw new Error(`could not read the ledger ${cfg.ledger} (${e.message})`);
+    }
+    const seen = new Set();
+    for (const row of text.split(/\r?\n/)) {
+      const m = BUDGET_LINE.exec(row);
+      if (m && !seen.has(m[1])) {
+        seen.add(m[1]);
+        limits[m[1]] = Number(m[2]);
+      }
+    }
+  }
+  const c = {
+    path,
+    state,
+    book,
+    cfg,
+    profile,
+    now,
+    nowMs: Date.parse(now),
+    W,
+    deps,
+    limits,
+    git: gitView(cfg.root, deps),
+    actions: [],
+    reports: [],
+    reconcile: [],
+    wrote: [],
+    dispatch: null,
+    fallback: null,
+  };
+  c.tick = (...p) => join(W, 'tick', ...p);
+  c.snapshot = (id) => join(W, 'acceptance', `${keyOf(id)}.json`);
+  c.predicted = (id) => join(W, 'files', `${keyOf(id)}.txt`);
+  c.sendBack = (id) => join(W, 'sendback', `${keyOf(id)}.md`);
+  c.target = (line) => (profile.integrate === 'direct' ? cfg.base : line);
+  c.ticketPath = (id) => `${cfg.ticketsDir.replace(/\\/g, '/').replace(/\/+$/, '')}/${id}`;
+  c.write = (file, text) => {
+    deps.write(file, text);
+    c.wrote.push(file);
+  };
+  c.status = (id) => {
+    const d = book.done[id];
+    if (!d) return 'open';
+    const ok = book.issued[id]?.okExit;
+    if (d.exit !== undefined && ok && !ok.includes(d.exit)) return 'failed';
+    return 'done';
+  };
+  c.done = (id) => c.status(id) === 'done';
+  c.flag = (id) => (book.flags[id] ??= {});
+  /** Adds an action; returns its id while it is pending, null when it is already done. */
+  c.emit = (a) => {
+    const s = c.status(a.id);
+    if (s === 'done') return null;
+    let action = a;
+    if (s === 'failed') {
+      const fid = `failed:${a.id}`;
+      if (c.done(fid)) return null; // settled by the host
+      action = judge(
+        fid,
+        'failed',
+        `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
+        ['retry', 'settled'],
+        a.reference ?? [doc('SKILL.md', 'the step that issued it')],
+        { tickets: a.tickets, line: a.line, meta: { of: a.id } },
+      );
+    }
+    if (!c.actions.some((x) => x.id === action.id)) {
+      action.after = (action.after ?? []).filter((x) => x && c.actions.some((y) => y.id === x));
+      c.actions.push(action);
+    }
+    return action.id;
+  };
+  return c;
+}
+
+const limitFor = (c, stage) => c.limits[{ implementing: 'timeout-implement', fixing: 'timeout-fix', expanding: 'timeout-expand', integrating: 'timeout-merge' }[stage]];
+
+// ---- steps ----------------------------------------------------------------------------------------------------------
+
+/** Every agent id the state names joins the registry, so a later report from it can be told apart. */
+function syncAgents(c) {
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    const a = t.assignment;
+    if (!a || !a.agentId) continue;
+    const known = (c.book.agents[a.agentId] ??= { tickets: [], role: null, type: a.type, status: 'current', at: a.assigned });
+    if (!known.tickets.includes(id)) known.tickets.push(id);
+  }
+}
+
+/** The state's tip of each line follows git's. */
+function stepTips(c) {
+  for (const [line, L] of Object.entries(c.state.lines)) {
+    const tip = c.git.ref(c.target(line));
+    if (!tip || tip === L.tip) continue;
+    c.reconcile.push({ line, state: `tip ${L.tip ?? 'none'}`, git: `tip ${tip}`, follow: 'git' });
+    c.emit(exec(`tip:${line}@${tip}`, 'tip', stateArgv(c, 'line', line, '--tip', tip), { line }));
+  }
+}
+
+const COLLECT = {
+  implementing: {
+    outcomes: ['green', 'red', 'blocked'],
+    what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
+    reference: [doc('SKILL.md', 'Close-out, step 1 (targeted checks)'), doc('IMPLEMENTER.md', 'the report it returns')],
+  },
+  expanding: {
+    outcomes: ['reported'],
+    what: (ids) => `Take the expansion agent's report for ${ids.join(', ')}. Record reported; --value lists, comma-separated, the tickets it reported as awaiting ruling (they leave the run), the others go back to candidate.`,
+    reference: [doc('SKILL.md', 'Dispatch, step 1 (expansion)'), doc('EXPANDER.md', 'the report it returns')],
+  },
+  fixing: {
+    outcomes: ['fixed', 'blocked'],
+    what: (ids) => `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
+    reference: [doc('SKILL.md', 'Close-out, step 3 (batched fix)')],
+  },
+  integrating: {
+    outcomes: ['resolved', 'unresolved'],
+    what: (ids) => `Take the merge agent's report for ${ids.join(', ')}: record each trade-off in the self-answer log. resolved: the merge is committed; unresolved: it could not be resolved safely and the ticket is sent back.`,
+    reference: [doc('SKILL.md', 'Close-out, step 4 (integration)')],
+  },
+};
+
+function stepReports(c) {
+  const { book, state } = c;
+  const keep = [];
+  for (const agent of book.inbox) {
+    const current = Object.entries(state.tickets).filter(([, t]) => t.assignment?.agentId === agent && t.assignment.deadline !== null);
+    if (current.length) {
+      const ids = current.map(([id]) => id);
+      const t0 = current[0][1];
+      const spec = COLLECT[t0.stage];
+      c.reports.push({ agent, accepted: true, tickets: ids, why: 'current' });
+      keep.push(agent);
+      const id = `collect:${agent}@${t0.assignment.assigned}`;
+      if (!spec) {
+        c.emit(
+          judge(id, 'collect', `Take ${agent}'s report for ${ids.join(', ')} (stage ${t0.stage}) into the status record.`, ['logged'], [doc('SKILL.md', 'Wake-up, step 2')], {
+            tickets: ids,
+            line: t0.line,
+            meta: { agent, stage: t0.stage },
+          }),
+        );
+        continue;
+      }
+      const needs = t0.stage === 'fixing' && !c.profile.recheck ? { fixed: 'the finding ids it fixed', unfixed: 'the ones still open' } : null;
+      c.emit(judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta: { agent, stage: t0.stage }, needs }));
+      continue;
+    }
+    const known = book.agents[agent];
+    const duplicate = Object.keys(book.done).some((k) => k.startsWith(`collect:${agent}@`) || k === `ignore:${agent}`);
+    if (duplicate && (!known || known.status !== 'stopped')) {
+      c.reports.push({ agent, accepted: false, tickets: known?.tickets ?? [], why: 'duplicate' });
+      continue; // already taken (or already logged): nothing more
+    }
+    const why = known?.status === 'stopped' ? 'stopped' : known ? 'superseded' : 'unknown';
+    const tickets = known?.tickets ?? [];
+    c.reports.push({ agent, accepted: false, tickets, why });
+    if (c.done(`ignore:${agent}`)) continue;
+    keep.push(agent);
+    c.emit(
+      judge(
+        `ignore:${agent}`,
+        'ignore',
+        tickets.length
+          ? `Do not take this report: ${agent} is no longer the agent of ${tickets.join(', ')} (${why}). Add one line to each one's status record: \`${agent} reported ${c.now}: ignored (${why})\`.`
+          : `Do not take this report: ${agent} is no agent of this run. Note it in the run's self-answer log.`,
+        ['logged'],
+        [doc('SKILL.md', 'Wake-up, step 2 (reports of replaced agents)')],
+        { tickets },
+      ),
+    );
+  }
+  book.inbox = keep;
+}
+
+/** A line in red-light handling: its CI read every wake-up, and the red-light procedure per red SHA. */
+function stepRed(c) {
+  const { book, state } = c;
+  for (const [line, L] of Object.entries(state.lines)) {
+    const lastLocal = L.local.at(-1);
+    if (L.ci?.verdict === 'red' && !book.red[line]) book.red[line] = { sha: L.ci.sha, at: c.now };
+    if (lastLocal?.result === 'red' && !book.red[line]) book.red[line] = { sha: lastLocal.sha, at: c.now };
+    const red = book.red[line];
+    if (!red) continue;
+    const greenCi = L.ci?.verdict === 'green' && L.ci.sha !== red.sha;
+    const greenLocal = lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
+    if (greenCi || greenLocal || book.failed[line]) {
+      delete book.red[line];
+      continue;
+    }
+    const target = c.target(line);
+    const tip = c.git.ref(target);
+    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
+    c.emit(
+      judge(
+        `red-light:${line}@${latestRed}`,
+        'red-light',
+        `${line} is red at ${latestRed}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds).`,
+        ['handled', 'reverted', 'failed'],
+        [doc('RED-LIGHT.md', 'all of it')],
+        { line },
+      ),
+    );
+    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
+    if (!c.git.hasOrigin || L.ciNotCovering) {
+      if (!L.local.some((r) => r.sha === tip)) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt: c.git.wtOf(target) }));
+      continue;
+    }
+    ciRead(c, line, target, tip, `w${book.wakeup}`, false);
+  }
+}
+
+/** Push when the remote lags, read CI at `tip` and record it. Returns true while that is still to be done. */
+function ciRead(c, line, target, tip, tag, dispatch) {
+  if (c.git.remote(target) !== tip) {
+    c.emit(OPERATIONS.push(c, { target, tag: `@${tip}`, after: [] }));
+    return true;
+  }
+  const out = c.tick('ci', `${slugOf(line)}-${tag}.json`);
+  const readId = `ci-read:${line}:${tag}`;
+  const recordId = `ci-record:${line}:${tag}`;
+  if (c.done(recordId)) return false;
+  const argv = ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), target, tip];
+  const r = c.emit(exec(readId, 'ci-read', argv, { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, line }));
+  c.emit(exec(recordId, 'ci-record', stateArgv(c, 'ci', line, '--from', out, ...(dispatch ? ['--dispatch'] : [])), { line, after: [r] }));
+  return true;
+}
+
+/** deadline.mjs scan over the named agents in flight; extensions are exec, stops are TIMEOUTS.md judges. */
+function stepTimeouts(c) {
+  const { state, book } = c;
+  const agents = new Map();
+  for (const [id, t] of Object.entries(state.tickets)) {
+    const a = t.assignment;
+    if (!a || a.deadline === null || !a.agentId) continue;
+    const seen = agents.get(a.agentId);
+    if (seen) {
+      seen.tickets.push(id);
+      continue;
+    }
+    agents.set(a.agentId, { id: a.agentId, tickets: [id], stage: t.stage, a });
+  }
+  const plan = [];
+  let pending = false;
+  for (const x of agents.values()) {
+    const { a } = x;
+    const entry = { id: x.id, assigned: a.assigned, limit: a.limit, deadline: a.deadline, extended: a.extended, fingerprint: a.fingerprint };
+    if (a.fingerprint.expansions) {
+      entry.expansions = { ...a.fingerprint.expansions };
+      if (a.deadline < c.now) {
+        // Overdue: its progress is the tickets' expansion counts now, read with acceptance.mjs.
+        const dir = c.tick('expansions', `${slugOf(x.id)}-${a.deadline.replace(/[-:]/g, '')}`);
+        let complete = true;
+        for (const id of Object.keys(a.fingerprint.expansions)) {
+          const out = join(dir, `${keyOf(id)}.json`);
+          const read = c.done(`expansions:${x.id}:${a.deadline}:${id}`) ? readJsonFile(c.deps, out) : null;
+          if (read && Array.isArray(read.expansions)) entry.expansions[id] = read.expansions.length;
+          else {
+            complete = false;
+            c.emit(exec(`expansions:${x.id}:${a.deadline}:${id}`, 'expansions', acceptanceArgv(c, id, state.tickets[id]), { stdout: out, cwd: acceptanceCwd(c), tickets: [id] }));
+          }
+        }
+        if (!complete) {
+          pending = true;
+          continue;
+        }
+      }
+    } else {
+      entry.worktree = a.worktree;
+    }
+    plan.push({ entry, x });
+  }
+  if (!plan.length) return;
+  const planPath = c.tick('scan', `w${book.wakeup}.plan.json`);
+  c.write(planPath, `${JSON.stringify({ now: c.now, agents: plan.map((p) => p.entry) }, null, 2)}\n`);
+  const r = deadlineMain(['scan', planPath, '--now', c.now], { read: c.deps.read, git: c.deps.git, clock: () => c.nowMs });
+  if (r.code !== 0) throw new Error(`deadline.mjs scan failed: ${r.err.trim()}`);
+  const scan = JSON.parse(r.out);
+  if (!pending) c.fallback = scan.fallback;
+  for (const result of scan.agents) {
+    const { x } = plan.find((p) => p.entry.id === result.id);
+    const t = state.tickets[x.tickets[0]];
+    if (result.action === 'extend') {
+      c.emit(exec(`extend:${x.id}@${x.a.assigned}`, 'extend', stateArgv(c, 'extend', ...x.tickets, '--deadline', result.deadline), { tickets: x.tickets, line: t.line }));
+    } else if (result.action === 'stop' || result.error) {
+      const used = t.timeoutReassignments[x.stage] ?? 0;
+      const hint = result.error
+        ? 'the fingerprint could not be computed: no reassignment, settle it as the error branch says'
+        : x.stage === 'integrating'
+          ? 'restore the integration worktree, then send back'
+          : used >= 1
+            ? x.stage === 'expanding'
+              ? 'already reassigned once: awaiting ruling'
+              : 'already reassigned once: stuck'
+            : 'not yet reassigned in this stage: reassign';
+      c.emit(
+        judge(
+          `timeout:${x.id}@${x.a.assigned}`,
+          'timeout',
+          `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md step 3 (${hint}); write the timeout handling into the status record (step 4). Record the branch taken; collected when it had already finished (its report is then taken).`,
+          ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
+          [doc('TIMEOUTS.md', 'steps 3 and 4')],
+          { tickets: x.tickets, line: t.line, meta: { agent: x.id, stage: x.stage, hint } },
+        ),
+      );
+    }
+  }
+}
+
+function acceptanceArgv(c, id, t, extra = []) {
+  if (c.cfg.tracker === 'github') return ['node', js('acceptance.mjs'), 'github', '--repo', c.cfg.repo, numOf(id), ...extra];
+  return ['node', js('acceptance.mjs'), 'local', '--ref', t?.branch && c.git.ref(t.branch) ? t.branch : c.target(t?.line ?? c.cfg.base), c.ticketPath(id), ...extra];
+}
+const acceptanceCwd = (c) => (c.cfg.tracker === 'github' ? null : c.cfg.root);
+
+// ---- one ticket's agent -----------------------------------------------------------------------------------------------
+
+/** The latest implementer (or fix agent) the registry knows for a ticket, unless it was stopped. */
+function implementerOf(c, id) {
+  const entries = Object.entries(c.book.agents).filter(([, a]) => a.tickets.includes(id) && (a.role === 'implement' || a.role === 'fix'));
+  entries.sort((x, y) => (x[1].at < y[1].at ? -1 : 1));
+  const last = entries.at(-1);
+  return last && last.status !== 'stopped' ? last[0] : null;
+}
+
+function bodyFile(c, id, t, after) {
+  if (c.cfg.tracker === 'local') return { file: join(c.git.wtOf(c.target(t.line)) ?? c.cfg.root, c.ticketPath(id)), id: null };
+  const file = c.tick('body', `${keyOf(id)}.md`);
+  if (c.deps.exists(file) && c.done(`body:${id}`)) return { file, id: null };
+  return { file, id: c.emit(exec(`body:${id}`, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
+}
+
+/**
+ * Hand a ticket to an agent: the assignment record (deadline.mjs record, then state.mjs assign), then the spawn, the
+ * SendMessage to the agent that has the context, or the merge agent. `create` is set for a fresh dispatch from
+ * candidate: the worktree and branch actions it waits for, and the stage move to implementing.
+ */
+function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null }) {
+  const n = (c.book.dispatches[id] ?? 0) + 1;
+  const tag = `${keyOf(id)}-${n}`;
+  const rec = c.tick('rec', `${tag}.json`);
+  const before = create?.after ?? [];
+  const r1 = c.emit(exec(`rec:${id}:${n}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', worktree, '--limit', String(limitFor(c, stage))], { stdout: rec, tickets: [id], line: t.line, after: before }));
+  const type = mode === 'send' ? (c.book.agents[prevAgent]?.type ?? 'general-purpose') : 'general-purpose';
+  const r2 = c.emit(
+    exec(`assign:${id}:${n}`, 'assignment', stateArgv(c, 'assign', id, '--record', rec, '--type', type, '--worktree', worktree, ...(reassign ? ['--reassign'] : [])), {
+      tickets: [id],
+      line: t.line,
+      after: [r1],
+    }),
+  );
+  let r3 = null;
+  if (create) r3 = c.emit(exec(`stage:${id}:implementing:h${hist(t)}`, 'stage', stateArgv(c, 'stage', 'implementing', id), { tickets: [id], line: t.line, after: [r2, ...(create.stageAfter ?? [])] }));
+  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}) };
+  c.flag(id).pending = pending;
+  agentTail(c, id, t, pending, [r2, r3, ...before]);
+}
+
+const WHY = {
+  red: 'its targeted checks were red: fix them to green (close-out step 1)',
+  fix: "the review's findings, verbatim (summary, evidence, fix) from the status record: close them all in this one round (close-out step 3)",
+  'send-back': 'the send-back record and the rebuilt worktree: redo the ticket from the latest integration branch (SEND-BACK.md)',
+};
+
+/** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
+function agentTail(c, id, t, p, after) {
+  const spawnRecord = (n) => `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:${id}:${n}`)} --agent <agent id>`;
+  if (p.mode === 'send') {
+    c.emit(
+      judge(
+        `send:${id}:${p.n}`,
+        'send',
+        `SendMessage ${p.prevAgent} (it keeps its context) for ${id}: ${WHY[p.why] ?? p.why}. sent: it has the work again; gone: it no longer exists (a new agent is spawned instead).`,
+        ['sent', 'gone'],
+        [doc('SKILL.md', p.why === 'red' ? 'Close-out, step 1' : p.why === 'fix' ? 'Close-out, step 3' : 'Dispatch, step 6'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
+        { tickets: [id], line: t.line, after },
+      ),
+    );
+    return;
+  }
+  if (p.mode === 'merge') {
+    c.emit(
+      judge(
+        `merge-agent:${id}:${p.n}`,
+        'merge-agent',
+        `${id}'s merge conflicts in ${p.worktree}. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the brief close-out step 4 gives (the integration worktree, both sides' ticket text and commit messages, the intent rule). Record spawned with --agent.`,
+        ['spawned'],
+        [doc('SKILL.md', 'Close-out, step 4 (integration)')],
+        { tickets: [id], line: t.line, after, needs: { agent: 'the merge agent id' } },
+      ),
+    );
+    return;
+  }
+  // spawn: the brief from brief.mjs, then the Agent call
+  const body = bodyFile(c, id, t, []);
+  const values = c.tick('brief', `${keyOf(id)}-${p.n}.values.json`);
+  const out = c.tick('brief', `${keyOf(id)}-${p.n}.md`);
+  let bodyPath = body.file;
+  if (p.note) {
+    if (body.id) return; // the ticket text comes first; the note is added to it next time
+    bodyPath = c.tick('body', `${keyOf(id)}-${p.n}.md`);
+    c.write(bodyPath, `${c.deps.read(body.file).replace(/\s+$/, '')}\n\n${p.note}\n`);
+  }
+  c.write(
+    values,
+    `${JSON.stringify(
+      {
+        out,
+        role: p.role,
+        snapshot: c.snapshot(id),
+        worktree: p.worktree,
+        branch: p.branch,
+        integration: c.target(t.line),
+        bodyFile: bodyPath,
+        sendBackFile: c.deps.exists(c.sendBack(id)) ? c.sendBack(id) : null,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const b = c.emit(exec(`brief:${id}:${p.n}`, 'brief', ['node', js('brief.mjs'), 'implement', values], { stdout: c.tick('brief', `${keyOf(id)}-${p.n}.json`), tickets: [id], line: t.line, after: [body.id, ...after] }));
+  const a = {
+    id: `spawn:${id}:${p.n}`,
+    kind: 'spawn',
+    step: 'spawn',
+    tickets: [id],
+    line: t.line,
+    after: [b, ...after],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription(p.role, [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
+    reference: [doc('SKILL.md', 'Dispatch, step 6')],
+    record: spawnRecord(p.n),
+  };
+  c.emit(a);
+}
+
+/** An assignment with no agent id yet: the spawn or SendMessage that fills it. */
+function pendingAgent(c, id, t) {
+  const p = c.flag(id).pending;
+  if (p?.mode === 'expand') return expandTail(c, p.round);
+  if (p) return agentTail(c, id, t, p, []);
+  c.emit(
+    judge(
+      `unnamed:${id}:h${hist(t)}`,
+      'unnamed',
+      `${id} has an assignment record with no agent id and no dispatch tick knows of. If an agent was spawned for it, record spawned with --agent <its id>; else record none (the assignment is released and the ticket dispatched again).`,
+      ['spawned', 'none'],
+      [doc('SKILL.md', 'Time limits: no dispatch without an assignment record')],
+      { tickets: [id], line: t.line },
+    ),
+  );
+}
+
+// ---- stages ---------------------------------------------------------------------------------------------------------
+
+const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
+  c.emit(exec(`stage:${id}:${to}:h${hist(t)}`, 'stage', stateArgv(c, 'stage', to, id, ...(reason ? ['--reason', reason] : [])), { tickets: [id], line: t.line, after }));
+
+/** Findings still open with no fix round left: a raw issue (onUnfixed: file-issue) or stuck. */
+function unfixed(c, id, t, what) {
+  if (c.profile.onUnfixed === 'file-issue') {
+    if (t.unfixedIssue) return stageTo(c, id, t, 'queued');
+    return c.emit(
+      judge(
+        `file-issue:${id}:h${hist(t)}`,
+        'file-issue',
+        `${id}: ${what}. File one raw issue listing the open findings (location, one sentence, evidence path) linked to the status record, polished by ASKING section 6. Record filed with --value <issue id>; the ticket is then integrated.`,
+        ['filed'],
+        [doc('SKILL.md', 'Filing along the way'), doc('ASKING.md', 'section 6')],
+        { tickets: [id], line: t.line, needs: { value: 'the issue id' } },
+      ),
+    );
+  }
+  return c.emit(
+    judge(
+      `stuck:${id}:h${hist(t)}`,
+      'mark-stuck',
+      `${id}: ${what}. Mark it stuck as SEND-BACK.md says (the stuck record with the open findings, worktree and branch removed). Record stuck with --value <reason>.`,
+      ['stuck'],
+      [doc('SEND-BACK.md', 'Mark stuck')],
+      { tickets: [id], line: t.line },
+    ),
+  );
+}
+
+function stepInReview(c, id, t) {
+  const k = t.history.filter((h) => h.to === 'in-review').length;
+  const mode = t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial';
+  const flag = c.flag(id);
+  let cr = currentReview(t);
+  const retrying = cr?.verdict === 'stuck' && flag.retryReviews === t.reviews.length;
+  if (retrying) cr = null;
+  if (cr) {
+    if (cr.verdict === 'pass') return stageTo(c, id, t, 'queued');
+    if (cr.verdict === 'fix') {
+      if (t.fixRounds < c.profile.fixRounds) return stageTo(c, id, t, 'fixing');
+      return unfixed(c, id, t, `the ${cr.mode} review still says fix and the ${c.profile.fixRounds} fix rounds are used`);
+    }
+    return c.emit(
+      judge(
+        `review-stuck:${id}:${t.reviews.length}`,
+        'review-stuck',
+        `prove-it returned stuck for ${id} with a release condition. Clear it and call prove-it again (record retry), or, when it cannot be cleared, record stuck with --value <reason> (SEND-BACK.md).`,
+        ['retry', 'stuck'],
+        [skill('prove-it', 'section 5'), doc('SEND-BACK.md', 'Mark stuck')],
+        { tickets: [id], line: t.line },
+      ),
+    );
+  }
+  const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}`;
+  const against = c.tick('against', `${keyOf(id)}-${tag}.json`);
+  const ag = c.emit(
+    exec(`against:${id}:${tag}`, 'acceptance-check', acceptanceArgv(c, id, t, ['--against', c.snapshot(id), '--sha', t.snapshotSha256 ?? '<sha256>']), {
+      stdout: against,
+      cwd: acceptanceCwd(c),
+      okExit: [0, 3],
+      tickets: [id],
+      line: t.line,
+    }),
+  );
+  if (c.profile.review === 'minimal') {
+    const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
+    c.write(
+      brief,
+      [
+        `# Review ${id}`,
+        '',
+        `You review one ticket's change and report blocking findings only. You cannot ask anyone; this is all of your brief.`,
+        '',
+        `- Ticket branch: ${t.branch}; compare it with ${c.target(t.line)} (\`git diff ${c.target(t.line)}...${t.branch}\`).`,
+        `- Acceptance snapshot: ${c.snapshot(id)}; the comparison with the ticket now: ${against}.`,
+        `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
+        '',
+        'Report in at most 15 lines: `verdict: pass | fix`, then one line per finding: `<id>: <file:line> <what is wrong> <evidence>`.',
+        '',
+      ].join('\n'),
+    );
+    return c.emit({
+      id: `review:${id}:${tag}`,
+      kind: 'spawn',
+      step: 'review',
+      tickets: [id],
+      line: t.line,
+      after: [ag],
+      spawn: { subagent_type: 'general-purpose', description: `review ${ticketName(id) ?? id}`, prompt: `Read ${brief} in full and follow it.`, background: false },
+      reference: [doc('SKILL.md', 'Close-out, step 2 (independent review)')],
+      outcomes: ['pass', 'fix'],
+      meta: { mode, kind: 'minimal' },
+      record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
+    });
+  }
+  return c.emit(
+    judge(
+      `review:${id}:${tag}`,
+      'review',
+      `Call the Skill tool with prove-it, mode ${mode}, for ${id}: the ticket (id, ticket text and expansion block), the snapshot ${c.snapshot(id)} and the comparison ${against}, the fixed point ${c.target(t.line)}, the ticket branch ${t.branch} and the targeted-check result${mode === 'recheck' ? ', with the previous review block' : ''}. Act on its review block: findings go to the fix, observations and pre-existing ones to one raw ticket. Record its verdict, and with fix --findings <the finding ids>.`,
+      ['pass', 'fix', 'stuck'],
+      [skill('prove-it', `mode ${mode}`), doc('SKILL.md', 'Close-out, steps 2 and 3')],
+      { tickets: [id], line: t.line, after: [ag], meta: { mode, kind: 'full' } },
+    ),
+  );
+}
+
+function stepFixing(c, id, t) {
+  const report = currentReport(t);
+  if (report) {
+    if (!report.unfixed.length) return stageTo(c, id, t, 'queued');
+    return unfixed(c, id, t, `findings ${report.unfixed.join(', ')} are still open after the fix round`);
+  }
+  const a = t.assignment;
+  if (a && a.deadline !== null) {
+    if (!a.agentId) pendingAgent(c, id, t);
+    return;
+  }
+  const flag = c.flag(id);
+  const prev = implementerOf(c, id);
+  const respawn = flag.redispatch?.mode === 'spawn' || !prev;
+  dispatchAgent(c, id, t, {
+    role: 'fix',
+    stage: 'fixing',
+    mode: respawn ? 'spawn' : 'send',
+    worktree: a?.worktree,
+    reassign: !!flag.redispatch?.reassign,
+    prevAgent: prev,
+    why: 'fix',
+    note: respawn ? reassignNote(c, id, t, flag.redispatch) : null,
+  });
+}
+
+function reassignNote(c, id, t, r) {
+  if (!r?.reassign) return `The fix round of ${id}: the findings are in the latest review block of its status record${t.statusRecord ? ` (${t.statusRecord})` : ''}; close them all.`;
+  return `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them. Update the existing status record in place${t.statusRecord ? ` (${t.statusRecord})` : ''}.${t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : ''}`;
+}
+
+function stepImplementing(c, id, t) {
+  const a = t.assignment;
+  if (a && a.deadline !== null) {
+    if (!a.agentId) pendingAgent(c, id, t);
+    return;
+  }
+  const r = c.flag(id).redispatch;
+  if (!r) return pendingAgent(c, id, t);
+  const prev = implementerOf(c, id);
+  const mode = r.mode === 'send' && prev ? 'send' : 'spawn';
+  dispatchAgent(c, id, t, {
+    role: 'implement',
+    stage: 'implementing',
+    mode,
+    worktree: a?.worktree,
+    reassign: !!r.reassign,
+    prevAgent: prev,
+    why: r.why ?? 'red',
+    note: mode === 'spawn' ? (r.reassign ? reassignNote(c, id, t, r) : `Taking over from an agent that is gone: ${WHY[r.why ?? 'red']}.`) : null,
+  });
+}
+
+function stepExpanding(c, id, t) {
+  const a = t.assignment;
+  if (a && a.deadline !== null && !a.agentId) pendingAgent(c, id, t);
+}
+
+/** Expansion agents stopped for a timeout and to be reassigned: one new agent for all of them. */
+function stepExpandReassign(c) {
+  const group = Object.entries(c.state.tickets)
+    .filter(([id, t]) => t.stage === 'expanding' && t.assignment?.deadline === null && c.book.flags[id]?.redispatch?.reassign)
+    .map(([id, t]) => ({ id, count: t.assignment.fingerprint?.expansions?.[id] ?? 0 }));
+  if (!group.length) return;
+  const n = Math.max(...group.map((x) => c.book.dispatches[x.id] ?? 0)) + 1;
+  expandDispatch(c, `${Math.max(1, c.state.usage.rounds)}x${n}`, group, { reassign: true });
+}
+
+// ---- integration ----------------------------------------------------------------------------------------------------
+
+function stepIntegration(c) {
+  const { state, book } = c;
+  const byTarget = new Map();
+  for (const [id, t] of Object.entries(state.tickets)) {
+    const target = c.target(t.line);
+    if (!byTarget.has(target)) byTarget.set(target, []);
+    byTarget.get(target).push([id, t]);
+  }
+  for (const [target, tickets] of byTarget) {
+    const wt = c.git.wtOf(target);
+    const tip = c.git.ref(target);
+    let busy = false;
+    for (const [id, t] of tickets) {
+      if (t.stage === 'delivered' && t.merges.length && tip) {
+        const sha = t.merges.at(-1).sha;
+        if (!c.git.ancestor(sha, tip)) {
+          c.reconcile.push({ ticket: id, state: `delivered, merged at ${sha}`, git: `${sha} is not in ${target}`, follow: 'ruling' });
+          c.emit(
+            judge(`ask:merge-missing:${id}@${sha}`, 'merge-missing', `The state records ${id} delivered with merge ${sha}, but ${target} does not contain it (the branch was rewritten or reset). Ask the user what happened before going on; record settled when it is put right.`, ['settled'], [doc('ASKING.md', 'section 4 (ruling points)')], {
+              kind: 'ask',
+              tickets: [id],
+              line: t.line,
+            }),
+          );
+        }
+      }
+      if (t.stage !== 'queued' && t.stage !== 'integrating') continue;
+      const m = mergedSha(c, id, t, target);
+      if (m && t.assignment?.deadline && t.assignment.agentId) {
+        busy = true; // the merge agent committed; its report (and any follow-up commit) comes first
+        continue;
+      }
+      if (m) {
+        closeOut(c, id, t, target, m);
+        busy = true;
+        continue;
+      }
+      if (t.stage === 'integrating') {
+        busy = true;
+        integrating(c, id, t, target, wt);
+      }
+    }
+    if (busy || !tip) continue;
+    const lines = new Set(tickets.map(([, t]) => t.line));
+    if ([...lines].some((l) => book.red[l] && !book.failed[l])) continue; // the queue pauses on a red line
+    const queued = tickets
+      .filter(([, t]) => t.stage === 'queued')
+      .sort((x, y) => ((x[1].history[lastEntry(x[1], 'queued')]?.at ?? '') < (y[1].history[lastEntry(y[1], 'queued')]?.at ?? '') ? -1 : 1));
+    if (!queued.length) continue;
+    const [id, t] = queued[0];
+    if (!wt) {
+      c.emit(judge(`no-worktree:${target}`, 'no-worktree', `No worktree has ${target} checked out, so ${id} cannot be merged. Create the integration worktree for it (git worktree add) and record done.`, ['done'], [doc('SKILL.md', 'Freeze, step 5')], { line: t.line }));
+      continue;
+    }
+    const s = stageTo(c, id, t, 'integrating');
+    if (!t.branch) continue;
+    const m = OPERATIONS.merge(c, { id, t, wt, tag: `h${hist(t) + 1}` });
+    m.after = [s];
+    c.emit(m);
+  }
+}
+
+/** The ticket is merged in git: whatever of close-out steps 5–8 is not done yet, and never another merge. */
+function closeOut(c, id, t, target, m) {
+  const recorded = t.merges.some((x) => x.sha === m.sha || m.sha.startsWith(x.sha));
+  if (t.stage === 'queued' || !recorded) {
+    c.reconcile.push({ ticket: id, state: `${t.stage}${recorded ? '' : ', no merge SHA recorded'}`, git: `merged into ${target} at ${m.sha}`, follow: 'git' });
+  }
+  const s1 = t.stage === 'queued' ? stageTo(c, id, t, 'integrating') : null;
+  const s2 = recorded ? null : c.emit(exec(`merge-record:${id}@${m.sha}`, 'merge-record', stateArgv(c, 'merge', id, m.sha), { tickets: [id], line: t.line, after: [s1] }));
+  let s5 = null;
+  if (c.cfg.tracker === 'local') {
+    s5 = c.emit(
+      judge(`deliver:${id}@${m.sha}`, 'deliver-ticket', `Close-out step 5 for ${id} (Local Markdown): on ${target}, tick each verified criterion (expansion ones too), set Status to ready-for-human, append \`## sorry-matt completion\` with the implementation commit, the integration branch and the checks passed, and commit it.`, ['done'], [doc('SKILL.md', 'Close-out, step 5')], {
+        tickets: [id],
+        line: t.line,
+        after: [s2],
+      }),
+    );
+  }
+  let push = null;
+  if (c.git.hasOrigin) {
+    const tip = c.git.ref(target);
+    if (s5) push = c.emit(OPERATIONS.push(c, { target, tag: `after-deliver:${id}`, after: [s5] }));
+    else if (c.git.remote(target) !== tip) push = c.emit(OPERATIONS.push(c, { target, tag: `@${tip}`, after: [s2] }));
+  }
+  const wtPath = t.branch ? c.git.wtOf(t.branch) : null;
+  const rw = wtPath ? c.emit(OPERATIONS.removeWorktree(c, { id, path: wtPath, tag: `h${hist(t)}`, after: [s2] })) : null;
+  const rb = t.branch && c.git.ref(t.branch) ? c.emit(OPERATIONS.removeBranch(c, { id, branch: t.branch, tag: `h${hist(t)}`, after: [rw, s2] })) : null;
+  stageTo(c, id, t, 'delivered', { after: [s1, s2, s5, push, rw, rb] });
+}
+
+function integrating(c, id, t, target, wt) {
+  const flag = c.flag(id);
+  const mh = c.git.mergeHead(wt);
+  if (flag.sendBack) {
+    const abort = mh ? c.emit(exec(`abort:${id}:h${hist(t)}`, 'abort', ['git', '-C', wt, 'merge', '--abort'], { tickets: [id], line: t.line })) : null;
+    c.emit(
+      judge(
+        `send-back:${id}:h${hist(t)}`,
+        'send-back',
+        `Send ${id} back for a redo as SEND-BACK.md says: the sent-back ref, the send-back record (write it to ${c.sendBack(id)} as well), the widened prediction, worktree and branch removed. Record sent-back; stuck when it was sent back once already (with --value <reason>).`,
+        ['sent-back', 'stuck'],
+        [doc('SEND-BACK.md', 'Send back for a redo')],
+        { tickets: [id], line: t.line, after: [abort] },
+      ),
+    );
+    return;
+  }
+  const a = t.assignment;
+  if (a && a.deadline !== null) {
+    if (!a.agentId) pendingAgent(c, id, t);
+    return; // the merge agent is at work
+  }
+  if (mh) {
+    dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: wt });
+    return;
+  }
+  const tag = `h${hist(t)}`;
+  if (c.done(`merge:${id}:${tag}`)) {
+    c.emit(
+      judge(`merge-check:${id}:${tag}`, 'merge-check', `The merge of ${t.branch} into ${target} ended with neither a merge nor a conflict. Find out why; record retry to merge again, or stuck / awaiting-ruling with --value <reason>.`, ['retry', 'stuck', 'awaiting-ruling'], [doc('SKILL.md', 'Close-out, step 4')], {
+        tickets: [id],
+        line: t.line,
+      }),
+    );
+    return;
+  }
+  if (!t.branch) {
+    c.emit(judge(`merge-manual:${id}:${tag}`, 'merge-manual', `${id} has no ticket branch in the state; merge it by close-out step 4 and record done.`, ['done'], [doc('SKILL.md', 'Close-out, step 4')], { tickets: [id], line: t.line }));
+    return;
+  }
+  c.emit(OPERATIONS.merge(c, { id, t, wt: wt ?? c.cfg.root, tag }));
+}
+
+// ---- dispatch point -------------------------------------------------------------------------------------------------
+
+function dueReasons(c) {
+  const { book, state } = c;
+  const last = book.lastDispatch;
+  if (!last) return ['first wake-up'];
+  if (last.wakeup === book.wakeup) return [];
+  const reasons = new Set();
+  for (const [id, t] of Object.entries(state.tickets)) {
+    for (const h of t.history.slice(last.history[id] ?? 0)) {
+      if (h.to === 'delivered') reasons.add('a ticket was integrated');
+      else if (h.to === 'stuck' || h.to === 'awaiting-ruling') reasons.add('a ticket left the pipeline');
+      else if (h.from === 'integrating' && h.to === 'candidate') reasons.add('a ticket was sent back');
+      else if (h.from === 'expanding') reasons.add('an expansion agent reported');
+    }
+    if (t.merges.length > (last.merges[id] ?? 0)) reasons.add('a ticket was merged');
+  }
+  for (const line of last.red) if (!book.red[line]) reasons.add('a red line turned green');
+  for (const line of Object.keys(book.failed)) if (!last.failed.includes(line)) reasons.add('a line failed verification');
+  const tickets = Object.values(state.tickets);
+  const dispatchable = (t) => t.stage === 'candidate' && !book.red[t.line] && !book.failed[t.line];
+  if (!tickets.some((t) => BUSY.includes(t.stage)) && tickets.some(dispatchable)) reasons.add('nothing in flight while candidates remain');
+  return [...reasons];
+}
+
+function stepDispatch(c) {
+  const { book, state } = c;
+  let d = book.dispatch;
+  if (!d) {
+    if (state.stop || c.actions.length) return;
+    const reasons = dueReasons(c);
+    if (!reasons.length) return;
+    d = book.dispatch = {
+      round: state.usage.rounds + 1,
+      wakeup: book.wakeup,
+      opened: c.now,
+      reasons,
+      marks: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, hist(t)])),
+      touched: [],
+    };
+  }
+  c.dispatch = { round: d.round, reasons: d.reasons, closed: false };
+  const before = c.actions.length;
+  dispatchSteps(c, d);
+  if (c.actions.length === before) {
+    const touched = new Set(d.touched);
+    book.lastDispatch = {
+      round: d.round,
+      wakeup: book.wakeup,
+      at: c.now,
+      history: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, touched.has(id) ? hist(t) : (d.marks[id] ?? 0)])),
+      merges: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, t.merges.length])),
+      red: Object.keys(book.red),
+      failed: Object.keys(book.failed),
+    };
+    book.dispatch = null;
+    c.dispatch.closed = true;
+  }
+}
+
+function dispatchSteps(c, d) {
+  const { state, book, profile } = c;
+  const r = d.round;
+  // 1. usage, then progress and the limits
+  if (state.usage.rounds < r && !state.stop) {
+    const u = c.emit(exec(`usage:r${r}`, 'usage', stateArgv(c, 'usage', ...(state.usage.started === null ? ['--started', c.now] : [])), {}));
+    const plan = c.tick('progress', `r${r}.plan.json`);
+    const out = c.tick('progress', `r${r}.json`);
+    c.write(plan, `${JSON.stringify(progressPlan(c), null, 2)}\n`);
+    const p = c.emit(exec(`progress:r${r}`, 'progress', ['node', js('deadline.mjs'), 'progress', plan], { stdout: out, after: [u] }));
+    c.emit(exec(`progress-record:r${r}`, 'progress', stateArgv(c, 'progress', '--from', out), { after: [p] }));
+    return;
+  }
+  if (state.stop) return; // stepStop marks the rest
+  // 2. CI per line
+  let waiting = false;
+  for (const [line, L] of Object.entries(state.lines)) {
+    if (profile.ci === 'skip') break;
+    const target = c.target(line);
+    if (target !== line) continue; // state.mjs records CI per line; under direct only the base's own line has it
+    const tip = c.git.ref(target);
+    if (!tip) continue;
+    if (!c.git.hasOrigin || L.ciNotCovering) {
+      if (!L.local.some((x) => x.sha === tip)) {
+        c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt: c.git.wtOf(target) }));
+        waiting = true;
+      }
+      continue;
+    }
+    if (c.git.remote(target) === null) continue; // never pushed: not read
+    if (ciRead(c, line, target, tip, `r${r}`, true)) {
+      waiting = true;
+      continue;
+    }
+    // after the read
+    const verdictFile = c.tick('ci', `${slugOf(line)}-r${r}.json`);
+    if (L.ci?.verdict === 'cancelled') {
+      const v = readJsonFile(c.deps, verdictFile);
+      for (const run of v?.rerun ?? []) c.emit(exec(`rerun:${line}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { line }));
+    }
+    if (L.ci?.verdict === 'query-failed' && !L.local.some((x) => x.sha === tip)) {
+      c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: 'no-verdict', wt: c.git.wtOf(target) }));
+      waiting = true;
+    }
+    if (L.ci?.verdict === 'no-run' && L.ci.reason === 'empty' && L.noRun.count >= 2 && !L.ciNotCovering) {
+      const runs = c.tick('ci', `${slugOf(line)}-r${r}-branch.json`);
+      const id = `ci-branch:${line}:r${r}`;
+      if (!c.done(id)) {
+        c.emit(exec(id, 'ci-branch', ['gh', 'run', 'list', '--branch', target, '--limit', '1', '--json', 'databaseId', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: runs, cwd: c.cfg.repo ? null : c.cfg.root, line }));
+        waiting = true;
+      } else {
+        const listed = readJsonFile(c.deps, runs);
+        if (Array.isArray(listed) && !c.done(`ci-branch-record:${line}:r${r}`)) {
+          c.emit(exec(`ci-branch-record:${line}:r${r}`, 'ci-record', stateArgv(c, 'ci', line, '--from', verdictFile, '--dispatch', '--branch-runs', String(listed.length)), { line }));
+          waiting = true;
+        }
+      }
+    }
+  }
+  if (waiting) return;
+  // 3. frontier
+  const fr = frontier(c, r);
+  if (!fr) return;
+  const known = (fid) => (fid in state.tickets ? fid : basename(String(fid)) in state.tickets ? basename(String(fid)) : null);
+  const info = new Map(fr.tickets.map((x) => [known(x.id), x]).filter(([k]) => k));
+  // 4. stalled tickets and the lines that failed verification leave the pipeline
+  for (const [id, t] of Object.entries(state.tickets)) {
+    if (t.stage !== 'candidate') continue;
+    const f = info.get(id);
+    let reason = null;
+    if (f?.stalled) reason = `stalled (${f.stalled}): ${f.blockedBy.filter((b) => b.state !== 'done').map((b) => `${b.id} ${b.state}`).join(', ') || 'see frontier'}`;
+    else if (book.failed[t.line]) reason = `line failed verification (${t.line})`;
+    if (reason) {
+      d.touched.push(id);
+      stageTo(c, id, t, 'awaiting-ruling', { reason });
+    }
+  }
+  // 5. candidates, the most unblocking first
+  const dependents = (id) => fr.tickets.filter((x) => (x.blockedBy ?? []).some((b) => b.inSet && known(b.id) === id)).length;
+  const order = fr.frontier.map(known).filter(Boolean);
+  const candidates = order
+    .filter((id) => state.tickets[id].stage === 'candidate' && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
+    .map((id, i) => ({ id, i, n: dependents(id) }))
+    .sort((x, y) => y.n - x.n || x.i - y.i)
+    .map((x) => x.id);
+  const ready = [];
+  const expand = [];
+  let pending = false;
+  for (const id of candidates) {
+    const t = state.tickets[id];
+    const snap = c.snapshot(id);
+    let acc = c.deps.exists(snap) ? readJsonFile(c.deps, snap) : null;
+    if (!acc) {
+      const out = c.tick('acceptance', `r${r}-${keyOf(id)}.json`);
+      acc = c.done(`acceptance:${id}:r${r}`) ? readJsonFile(c.deps, out) : null;
+      if (!acc) {
+        c.emit(exec(`acceptance:${id}:r${r}`, 'acceptance', acceptanceArgv(c, id, t), { stdout: out, cwd: acceptanceCwd(c), tickets: [id], line: t.line }));
+        pending = true;
+        continue;
+      }
+      if (acc.needsExpansion && profile.expand === 'agent') {
+        expand.push({ id, count: Array.isArray(acc.expansions) ? acc.expansions.length : 0 });
+        continue;
+      }
+      c.write(snap, `${JSON.stringify(acc, null, 2)}\n`); // the snapshot, saved once
+    }
+    if (t.snapshotSha256 === null) {
+      c.emit(exec(`snapshot:${id}`, 'snapshot', stateArgv(c, 'set', id, '--snapshot', acc.sha256), { tickets: [id], line: t.line }));
+      pending = true;
+    }
+    if (!c.deps.exists(c.predicted(id))) {
+      c.emit(
+        judge(`predict:${id}`, 'predict', `Write ${id}'s predicted files to ${c.predicted(id)}: one repo-relative path per line, \`/\` only when nothing narrower can be inferred, index files left out. Record written.`, ['written'], [doc('SKILL.md', 'Dispatch, step 3 (predicted files)')], {
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+      pending = true;
+    }
+    ready.push({ id, title: info.get(id)?.title ?? null });
+  }
+  if (expand.length) expandDispatch(c, r, expand);
+  if (pending || !ready.length) return;
+  // 6. overlap, then a ticket branch and an implementation agent for each `start`
+  const planPath = join(c.W, 'overlap', `${r}.plan.json`);
+  const outPath = join(c.W, 'overlap', `${r}.json`);
+  const ov = c.done(`overlap:r${r}`) ? readJsonFile(c.deps, outPath) : null;
+  if (!ov) {
+    const running = Object.entries(state.tickets)
+      .filter(([, t]) => IN_FLIGHT.includes(t.stage))
+      .map(([id, t]) => {
+        let files = c.predicted(id);
+        if (!c.deps.exists(files)) {
+          files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
+          c.write(files, '/\n'); // no prediction on record: it holds the whole repository
+        }
+        const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
+        return { id, files, ...(wt ? { worktree: wt, base: c.target(t.line) } : {}) };
+      });
+    c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: c.predicted(id) })) }, null, 2)}\n`);
+    c.emit(exec(`overlap:r${r}`, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
+    return;
+  }
+  for (const id of ov.start ?? []) {
+    const t = state.tickets[id];
+    if (!t || t.stage !== 'candidate') continue;
+    createDispatch(c, id, t, ready.find((x) => x.id === id)?.title);
+  }
+}
+
+function progressPlan(c) {
+  const { state } = c;
+  const u = state.usage;
+  let spawns = u.spawns;
+  const counters = c.path.replace(/\.state\.json$/i, '.counters.json');
+  if (counters !== c.path && c.deps.exists(counters)) {
+    const data = readJsonFile(c.deps, counters);
+    if (data && Number.isInteger(data.spawns)) spawns = data.spawns;
+  }
+  const hours = u.started === null ? 0 : Math.max(0, (c.nowMs - Date.parse(u.started)) / 1000 - u.waitingSeconds) / 3600;
+  return {
+    previous: u.snapshot,
+    tips: Object.fromEntries(Object.entries(state.lines).map(([line, L]) => [line, c.git.ref(c.target(line)) ?? L.tip]).filter(([, sha]) => sha)),
+    terminal: Object.entries(state.tickets).filter(([, t]) => TERMINAL.includes(t.stage)).map(([id]) => id),
+    noProgress: u.noProgress,
+    usage: { rounds: u.rounds, spawns, hours },
+    limits: { rounds: c.limits.rounds, spawns: c.limits.spawns, hours: c.limits.hours, 'no-progress': c.limits['no-progress'] },
+  };
+}
+
+/** frontier.mjs for the whole set (GitHub), or per line with --ref (Local Markdown); null while it is being read. */
+function frontier(c, r) {
+  const { state } = c;
+  const ids = Object.keys(state.tickets);
+  if (c.cfg.tracker === 'github') {
+    const out = c.tick('frontier', `r${r}.json`);
+    const read = c.done(`frontier:r${r}`) ? readJsonFile(c.deps, out) : null;
+    if (read) return read;
+    const done = ids.filter((id) => state.tickets[id].stage === 'delivered').map(numOf);
+    const stuck = ids.filter((id) => state.tickets[id].stage === 'stuck').map(numOf);
+    const argv = ['node', js('frontier.mjs'), 'github', '--repo', c.cfg.repo, ...(done.length ? ['--done', done.join(',')] : []), ...(stuck.length ? ['--stuck', stuck.join(',')] : []), ...ids];
+    c.emit(exec(`frontier:r${r}`, 'frontier', argv, { stdout: out }));
+    return null;
+  }
+  const parts = [];
+  let missing = false;
+  for (const [line, L] of Object.entries(state.lines)) {
+    const target = c.target(line);
+    for (const lineId of L.lines.length ? L.lines : [null]) {
+      const tag = `r${r}-${slugOf(line)}${lineId ? `-${slugOf(lineId)}` : ''}`;
+      const out = c.tick('frontier', `${tag}.json`);
+      const read = c.done(`frontier:${tag}`) ? readJsonFile(c.deps, out) : null;
+      if (read) {
+        parts.push(read);
+        continue;
+      }
+      missing = true;
+      c.emit(exec(`frontier:${tag}`, 'frontier', ['node', js('frontier.mjs'), 'local', '--ref', target, ...(lineId ? ['--line', lineId] : []), ...ids.map((id) => c.ticketPath(id))], { stdout: out, cwd: c.cfg.root, line }));
+    }
+  }
+  if (missing) return null;
+  const tickets = new Map();
+  for (const p of parts) for (const x of p.tickets) if (!tickets.has(x.id)) tickets.set(x.id, x);
+  return { tickets: [...tickets.values()], frontier: [...new Set(parts.flatMap((p) => p.frontier))] };
+}
+
+function createDispatch(c, id, t, title) {
+  const target = c.target(t.line);
+  const name = c.cfg.tracker === 'github' ? `${numOf(id).padStart(2, '0')}-${slugOf(String(title ?? 'ticket').toLowerCase()).slice(0, 40).replace(/-+$/, '') || 'ticket'}` : slugOf(basename(id).replace(/\.md$/i, ''));
+  const branch = t.branch ?? `${c.state.run}/${name}`;
+  const present = c.git.wtOf(branch);
+  const worktree = present ?? join(c.cfg.worktrees, basename(branch));
+  const w = present ? null : c.emit(OPERATIONS.createTicketBranch(c, { id, branch, worktree, base: target, exists: !!c.git.ref(branch) }));
+  const sb = t.branch === branch ? null : c.emit(exec(`set-branch:${id}:${branch}`, 'set-branch', stateArgv(c, 'set', id, '--branch', branch), { tickets: [id], line: t.line }));
+  const prev = t.sendBacks ? implementerOf(c, id) : null;
+  dispatchAgent(c, id, t, {
+    role: 'implement',
+    stage: 'implementing',
+    mode: prev ? 'send' : 'spawn',
+    worktree,
+    prevAgent: prev,
+    why: 'send-back',
+    create: { after: [w], stageAfter: [sb], branch },
+  });
+}
+
+function expandDispatch(c, r, group, { reassign = false } = {}) {
+  const { state } = c;
+  const ids = group.map((x) => x.id);
+  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], []));
+  const lines = [...new Set(ids.map((id) => c.target(state.tickets[id].line)))];
+  const values = c.tick('brief', `expand-r${r}.values.json`);
+  const out = c.tick('brief', `expand-r${r}.md`);
+  c.write(
+    values,
+    `${JSON.stringify(
+      {
+        out,
+        run: state.run,
+        round: Number.parseInt(String(r), 10) || 1,
+        tracker: c.cfg.tracker,
+        ...(c.cfg.tracker === 'github' ? { repo: c.cfg.repo } : {}),
+        lines: lines.map((branch) => ({ branch, worktree: resolve(c.git.wtOf(branch) ?? c.cfg.root) })),
+        spec: c.cfg.spec ?? null,
+        tickets: ids.map((id, i) => ({ id, line: c.target(state.tickets[id].line), bodyFile: bodies[i].file })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const rec = c.tick('rec', `expand-r${r}.json`);
+  const r1 = c.emit(exec(`rec:expand:r${r}`, 'assignment', ['node', js('deadline.mjs'), 'record', ...group.flatMap((x) => ['--expansions', `${x.id}=${x.count}`]), '--limit', String(c.limits['timeout-expand'])], { stdout: rec, tickets: ids }));
+  const r2 = c.emit(exec(`assign:expand:r${r}`, 'assignment', stateArgv(c, 'assign', ...ids, '--record', rec, '--type', 'sorry-matt:expander', ...(reassign ? ['--reassign'] : [])), { tickets: ids, after: [r1] }));
+  const r3 = reassign ? null : c.emit(exec(`stage:expanding:r${r}`, 'stage', stateArgv(c, 'stage', 'expanding', ...ids), { tickets: ids, after: [r2] }));
+  c.book.expansions[r] = ids;
+  for (const id of ids) c.flag(id).pending = { mode: 'expand', round: r };
+  expandTail(c, r, [r2, r3, ...bodies.map((b) => b.id)]);
+}
+
+function expandTail(c, r, after = []) {
+  const ids = c.book.expansions[r];
+  const values = c.tick('brief', `expand-r${r}.values.json`);
+  const out = c.tick('brief', `expand-r${r}.md`);
+  const b = c.emit(exec(`brief:expand:r${r}`, 'brief', ['node', js('brief.mjs'), 'expand', values], { stdout: c.tick('brief', `expand-r${r}.json`), tickets: ids, after }));
+  c.emit({
+    id: `spawn:expand:r${r}`,
+    kind: 'spawn',
+    step: 'spawn',
+    tickets: ids,
+    line: null,
+    after: [b, ...after],
+    spawn: { subagent_type: 'sorry-matt:expander', description: roleDescription('expand', ids), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
+    reference: [doc('SKILL.md', 'Dispatch, step 1 (expansion agent; general-purpose when the type is not available)')],
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:expand:r${r}`)} --agent <agent id> [--type general-purpose]`,
+  });
+}
+
+/** After a stop: everything not dispatched, and every expansion, is awaiting ruling. */
+function stepStop(c) {
+  const stop = c.state.stop;
+  if (!stop) return;
+  const u = stop.usage ?? {};
+  const reason = `run stopped at ${stop.stoppedBy.join(', ')} (rounds ${u.rounds}, spawns ${u.spawns}, hours ${u.hours === null || u.hours === undefined ? 'unknown' : Number(u.hours).toFixed(1)})`;
+  for (const [id, t] of Object.entries(c.state.tickets)) if (t.stage === 'candidate' || t.stage === 'expanding') stageTo(c, id, t, 'awaiting-ruling', { reason });
+}
+
+// ---- the finish -----------------------------------------------------------------------------------------------------
+
+function stepFinish(c) {
+  const { state, book, profile } = c;
+  const tickets = Object.values(state.tickets);
+  if (!tickets.every((t) => TERMINAL.includes(t.stage)) || book.dispatch || book.finished) return;
+  // One finish per target: under direct every line's target is the base, finished once (on its own line when the
+  // state has one, which is where its CI is recorded).
+  const byTarget = new Map();
+  for (const line of Object.keys(state.lines)) {
+    const target = c.target(line);
+    if (!byTarget.has(target) || line === target) byTarget.set(target, line);
+  }
+  let all = true;
+  for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
+  if (!all) return;
+  c.emit(
+    judge(
+      'wrap-up',
+      'wrap-up',
+      `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone. Record done.`,
+      ['done'],
+      [doc('FINISH.md', 'after the delivery of each line')],
+    ),
+  );
+}
+
+/** One line's simplify pass, base sync, full verification and delivery; true once all are done. */
+function finishLine(c, line, target) {
+  const { state, book, profile, git } = c;
+  const L = state.lines[line];
+  const wt = git.wtOf(target) ?? c.cfg.root;
+  const merged = Object.values(state.tickets).some((t) => c.target(t.line) === target && t.merges.length);
+  if (!merged) return true; // nothing was integrated: nothing to deliver
+  if (profile.simplify && c.emit(judge(`simplify:${line}`, 'simplify', `Simplify pass on ${line}: call the Skill tool with simplify in ${wt}; commit the applied fixes as one commit without a ticket id (none: no commit); log the rejected ones in the self-answer log. Record done.`, ['done'], [doc('FINISH.md', 'step 1 (simplify pass)')], { line })))
+    return false;
+  if (profile.integrate !== 'direct' && !L.base) {
+    const baseRef = git.hasOrigin ? `origin/${c.cfg.base}` : c.cfg.base;
+    if (git.hasOrigin && c.emit(exec(`fetch:${line}`, 'sync-base', ['git', '-C', wt, 'fetch', 'origin', c.cfg.base], { line }))) return false;
+    const baseSha = git.commit(baseRef);
+    const tip = git.ref(target);
+    const flag = book.flags[`line:${line}`] ?? {};
+    if (flag.unsynced) {
+      const abort = git.mergeHead(wt) ? c.emit(exec(`sync-abort:${line}`, 'sync-base', ['git', '-C', wt, 'merge', '--abort'], { line })) : null;
+      c.emit(exec(`unsynced:${line}`, 'sync-base', stateArgv(c, 'line', line, '--base', flag.unsynced, '--synced', 'no'), { line, after: [abort] }));
+      return false;
+    }
+    if (baseSha && tip && git.ancestor(baseSha, tip)) {
+      c.emit(exec(`synced:${line}@${baseSha}`, 'sync-base', stateArgv(c, 'line', line, '--base', baseSha, '--synced', 'yes'), { line }));
+      return false;
+    }
+    if (git.mergeHead(wt)) {
+      c.emit(
+        judge(`sync-agent:${line}`, 'sync-base', `Merging ${baseRef} into ${line} conflicts. Spawn the merge agent of close-out step 4 for it (description \`${roleDescription('merge', [line])}\`): one side the line, the other the base, the goal the line's intent on the latest base. resolved: it committed the merge; unresolved: it could not (record --value ${baseSha}).`, ['resolved', 'unresolved'], [doc('FINISH.md', 'step 2 (sync the base)')], {
+          line,
+          meta: { baseSha },
+        }),
+      );
+      return false;
+    }
+    if (c.done(`sync:${line}`)) {
+      c.emit(judge(`sync-check:${line}`, 'sync-base', `Merging ${baseRef} into ${line} ended with neither a merge nor a conflict; settle it and record retry or settled.`, ['retry', 'settled'], [doc('FINISH.md', 'step 2')], { line }));
+      return false;
+    }
+    c.emit(exec(`sync:${line}`, 'sync-base', ['git', '-C', wt, 'merge', '--no-edit', baseRef], { okExit: [0, 1], line }));
+    return false;
+  }
+  if (!finalVerify(c, line, target, wt)) return false;
+  if (profile.integrate === 'direct') return true;
+  return !c.emit(
+    judge(`deliver-line:${line}`, 'deliver-line', `Deliver ${line} as FINISH.md says: ${c.cfg.tracker === 'github' ? 'review-guide.mjs, then the aggregate PR with the per-ticket guide' : 'keep the integration branch, record its name and tip, remove the integration worktree'}. Record done.`, ['done'], [doc('FINISH.md', 'delivering each line')], { line }),
+  );
+}
+
+/** The full verification at the line's latest SHA; true once it has a conclusion (or the line failed). */
+function finalVerify(c, line, target, wt) {
+  const { state, book, profile, git } = c;
+  const L = state.lines[line];
+  if (book.failed[line] || profile.ci === 'skip' || target !== line) return true; // direct: CI is recorded on the base's own line only
+  const tip = git.ref(target);
+  if (!tip) return true;
+  if (!git.hasOrigin || L.ciNotCovering) {
+    const rec = L.local.find((x) => x.sha === tip);
+    if (!rec) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt }));
+    return rec ? rec.result === 'green' : false;
+  }
+  if (L.ci?.sha === tip && L.ci.verdict === 'green') return true;
+  if (L.ci?.sha === tip && L.ci.verdict === 'red') return false; // red-light handling is on
+  if (L.ci?.sha === tip && L.ci.verdict === 'query-failed') {
+    const rec = L.local.find((x) => x.sha === tip);
+    if (!rec) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: 'no-verdict', wt }));
+    return rec ? rec.result === 'green' : false;
+  }
+  const tag = `final-w${book.wakeup}-${tip.slice(0, 12)}`;
+  if (L.ci?.sha === tip && L.ci.verdict === 'running' && c.done(`ci-record:${line}:${tag}`)) {
+    const v = readJsonFile(c.deps, c.tick('ci', `${slugOf(line)}-${tag}.json`));
+    const runs = (v?.runs ?? []).filter((x) => x.status !== 'completed');
+    const watched = runs.map((x) => c.emit(exec(`watch:${line}:${x.id}`, 'ci-watch', ['gh', 'run', 'watch', String(x.id), '--exit-status', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { okExit: [0, 1], line })));
+    if (watched.some(Boolean)) return false;
+    ciRead(c, line, target, tip, `${tag}-again`, false);
+    return false;
+  }
+  ciRead(c, line, target, tip, tag, false);
+  return false;
+}
+
+// ---- next -------------------------------------------------------------------------------------------------------------
+
+// Where a git or gh command of the pipeline is described (node commands point to their script's header).
+const EXEC_REFERENCE = {
+  'ticket-branch': doc('SKILL.md', 'Dispatch, step 5'),
+  body: doc('SKILL.md', 'Dispatch, step 6'),
+  merge: doc('SKILL.md', 'Close-out, step 4'),
+  abort: doc('SEND-BACK.md', 'Send back for a redo'),
+  push: doc('SKILL.md', 'Close-out, step 6'),
+  cleanup: doc('SKILL.md', 'Close-out, step 7'),
+  'ci-rerun': doc('SKILL.md', 'Reading CI: cancelled'),
+  'ci-branch': doc('SKILL.md', 'Reading CI: no run'),
+  'ci-watch': doc('FINISH.md', 'step 3 (full verification)'),
+  'sync-base': doc('FINISH.md', 'step 2 (sync the base)'),
+};
+
+function batches(actions) {
+  const at = new Map();
+  for (const a of actions) {
+    a.batch = 1 + Math.max(0, ...a.after.map((x) => at.get(x) ?? 0));
+    at.set(a.id, a.batch);
+  }
+}
+
+function recordLine(c, a) {
+  if (a.record) return a.record;
+  const head = `node ${q(SELF)} record ${q(c.path)} ${q(a.id)}`;
+  if (a.kind === 'exec') return `${head} --exit <exit code>`;
+  const extra = [];
+  if (a.needs?.agent) extra.push('--agent <agent id>');
+  if (a.needs?.value) extra.push(`--value <${a.needs.value}>`);
+  if (a.needs?.fixed) extra.push('--fixed <id>,<id> --unfixed <id>,<id>');
+  return `${head} --outcome ${a.outcomes.join('|')}${extra.length ? ` ${extra.join(' ')}` : ''}`;
+}
+
+export function next(path, reported, now, deps) {
+  const state = load(path);
+  const c = context(path, state, now, deps);
+  const { book } = c;
+  for (const id of reported) if (!book.inbox.includes(id)) book.inbox.push(id);
+  syncAgents(c);
+  if (book.finished) {
+    return finish(c, 'done');
+  }
+  stepTips(c);
+  stepReports(c);
+  stepRed(c);
+  stepTimeouts(c);
+  stepStop(c);
+  for (const [id, t] of Object.entries(state.tickets)) {
+    if (t.stage === 'in-review') stepInReview(c, id, t);
+    else if (t.stage === 'fixing') stepFixing(c, id, t);
+    else if (t.stage === 'implementing') stepImplementing(c, id, t);
+    else if (t.stage === 'expanding') stepExpanding(c, id, t);
+  }
+  stepExpandReassign(c);
+  stepIntegration(c);
+  stepDispatch(c);
+  stepFinish(c);
+  if (c.actions.length) return finish(c, 'tick');
+  if (book.finished) return finish(c, 'done');
+  const f = c.fallback;
+  c.emit(
+    judge(
+      `wakeup-end:${book.wakeup}`,
+      'wakeup-end',
+      `Nothing else this wake-up. Write the ledger's narrative fields up to date (next action, self-answer log, human-work list). ${
+        f
+          ? `Then schedule the fallback wake-up: ScheduleWakeup ${f.scheduleWakeup} seconds; without it, stop the previous background sleep and start \`sleep ${Math.ceil(f.seconds)}\` in the background, recording its task id with --value.`
+          : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep).'
+      } Record done.`,
+      ['done'],
+      [doc('SKILL.md', 'Time limits: fallback wake-up'), doc('ASKING.md', 'section 7 (the ledger)')],
+    ),
+  );
+  return finish(c, 'end');
+}
+
+function finish(c, then) {
+  const { book } = c;
+  batches(c.actions);
+  for (const a of c.actions) {
+    a.reference ??= a.argv?.[0] === 'node' ? [{ path: a.argv[1], part: 'header' }] : [EXEC_REFERENCE[a.step] ?? doc('SKILL.md', 'the pipeline')];
+    a.record = recordLine(c, a);
+    book.issued[a.id] = { kind: a.kind, step: a.step, tickets: a.tickets, line: a.line, ...(a.okExit ? { okExit: a.okExit } : {}), ...(a.outcomes ? { outcomes: a.outcomes } : {}), ...(a.meta ? { meta: a.meta } : {}) };
+  }
+  update(c.path, c.now, (s) => {
+    s.tick = book;
+    return {};
+  });
+  return {
+    format: FORMAT,
+    command: 'next',
+    run: c.state.run,
+    wakeup: book.wakeup,
+    now: c.now,
+    profile: c.profile,
+    reports: c.reports,
+    reconcile: c.reconcile,
+    dispatch: c.dispatch,
+    wrote: [...new Set(c.wrote)],
+    actions: c.actions,
+    fallback: c.fallback,
+    then,
+  };
+}
+
+// ---- record -----------------------------------------------------------------------------------------------------------
+
+export function record(path, id, flags, now, deps) {
+  const state = load(path);
+  if (!isObject(state.tick) || state.tick.format !== FORMAT) throw new UsageError(`${path} has no tick configuration: run tick.mjs setup first`);
+  const book = structuredClone(state.tick);
+  const issued = book.issued[id];
+  if (!issued) throw new Refused(`${id} is not an action tick issued for this run`);
+  const outcome = flags.outcome ?? null;
+  const entry = { at: now };
+  if (issued.kind === 'exec') {
+    if (flags.exit === undefined || !/^-?\d+$/.test(flags.exit)) throw new UsageError(`${id} is an exec action: record it with --exit <exit code>`);
+    entry.exit = Number(flags.exit);
+  } else {
+    const allowed = issued.outcomes ?? [];
+    if (issued.kind === 'spawn' && !allowed.length) {
+      if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
+    } else if (!allowed.includes(outcome)) throw new UsageError(`${id}: --outcome must be one of ${allowed.join(', ')}`);
+    if (outcome !== null) entry.outcome = outcome;
+  }
+  if (flags.value !== undefined) entry.value = flags.value;
+  if (flags.agent !== undefined) entry.agent = flags.agent;
+  const seen = book.done[id];
+  if (seen) {
+    const same = seen.exit === entry.exit && seen.outcome === entry.outcome && seen.agent === entry.agent;
+    if (!same) throw new Refused(`${id} was already recorded (${JSON.stringify(seen)}); a different result is not taken`);
+    return { format: FORMAT, command: 'record', id, applied: [], wakeup: book.wakeup, already: true };
+  }
+  const applied = [];
+  const S = (...args) => {
+    const r = deps.stateMain([args[0], path, ...args.slice(1), '--now', now]);
+    if (r.code === 3) throw new Refused(r.err.trim());
+    if (r.code !== 0) throw new Error(r.err.trim());
+    applied.push(`state.mjs ${args.join(' ')}`);
+    return JSON.parse(r.out);
+  };
+  const live = () => load(path);
+  const ticket = (tid) => live().tickets[tid];
+  const flag = (tid) => (book.flags[tid] ??= {});
+  const stageIf = (tid, to, reason) => {
+    const t = ticket(tid);
+    if (t && t.stage !== to) S('stage', to, tid, ...(reason ? ['--reason', reason] : []));
+  };
+  const release = (tids, stopped = false) => {
+    const held = tids.filter((tid) => ticket(tid)?.assignment?.deadline);
+    if (held.length) S('release', ...held, ...(stopped ? ['--stopped'] : []));
+  };
+  const named = (tids, agent) => {
+    const open = tids.filter((tid) => ticket(tid)?.assignment?.deadline && ticket(tid).assignment.agentId !== agent);
+    if (open.length) S('agent', ...open, '--id', agent);
+  };
+  const meta = issued.meta ?? {};
+  const tickets = issued.tickets ?? [];
+  const register = (agent, role, type) => {
+    book.agents[agent] = { tickets: [...new Set([...(book.agents[agent]?.tickets ?? []), ...tickets])], role, type, status: 'current', at: now };
+    for (const tid of tickets) {
+      book.dispatches[tid] = (book.dispatches[tid] ?? 0) + 1;
+      delete flag(tid).pending;
+      delete flag(tid).redispatch;
+    }
+  };
+
+  switch (issued.step) {
+    case 'collect': {
+      release(tickets);
+      if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
+      book.inbox = book.inbox.filter((x) => x !== meta.agent);
+      const [tid] = tickets;
+      if (meta.stage === 'implementing') {
+        if (outcome === 'green') stageIf(tid, 'in-review');
+        else if (outcome === 'red') flag(tid).redispatch = { mode: 'send', why: 'red' };
+        else stageIf(tid, 'awaiting-ruling', flags.value ?? 'blocked: see the status record');
+      } else if (meta.stage === 'expanding') {
+        const ruling = flags.value ? list(flags.value, '--value') : [];
+        for (const x of tickets) stageIf(x, ruling.includes(x) ? 'awaiting-ruling' : 'candidate', ruling.includes(x) ? 'the expansion agent reported it as awaiting ruling' : undefined);
+      } else if (meta.stage === 'fixing') {
+        if (outcome === 'blocked') stageIf(tid, 'awaiting-ruling', flags.value ?? 'blocked: see the status record');
+        else if (live().profile?.recheck === false) {
+          if (flags.fixed === undefined && flags.unfixed === undefined) throw new UsageError(`${id}: under recheck: false the fix report needs --fixed and/or --unfixed`);
+          if (!currentReport(ticket(tid))) S('report', tid, ...(flags.fixed ? ['--fixed', flags.fixed] : []), ...(flags.unfixed ? ['--unfixed', flags.unfixed] : []));
+        } else stageIf(tid, 'in-review');
+      } else if (meta.stage === 'integrating' && outcome === 'unresolved') flag(tid).sendBack = true;
+      break;
+    }
+    case 'ignore':
+      book.inbox = book.inbox.filter((x) => `ignore:${x}` !== id);
+      break;
+    case 'spawn': {
+      if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
+      const pending = flag(tickets[0]).pending;
+      if (flags.type) {
+        const rec = pending?.mode === 'expand' ? join(dirname(path), state.run, 'tick', 'rec', `expand-r${pending.round}.json`) : null;
+        if (rec) S('assign', ...tickets, '--record', rec, '--type', flags.type);
+      }
+      named(tickets, flags.agent);
+      register(flags.agent, pending?.mode === 'expand' ? 'expand' : (pending?.role ?? 'implement'), flags.type ?? (pending?.mode === 'expand' ? 'sorry-matt:expander' : 'general-purpose'));
+      break;
+    }
+    case 'send': {
+      const [tid] = tickets;
+      const pending = flag(tid).pending;
+      if (outcome === 'sent') {
+        named(tickets, pending.prevAgent);
+        register(pending.prevAgent, pending.role, book.agents[pending.prevAgent]?.type ?? 'general-purpose');
+      } else {
+        flag(tid).redispatch = { ...(flag(tid).redispatch ?? {}), mode: 'spawn' };
+        flag(tid).pending = { ...pending, mode: 'spawn', note: `Taking over from an agent that is gone: ${WHY[pending.why] ?? pending.why}.` };
+      }
+      break;
+    }
+    case 'merge-agent': {
+      if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <the merge agent id>`);
+      named(tickets, flags.agent);
+      register(flags.agent, 'merge', flags.type ?? 'general-purpose');
+      break;
+    }
+    case 'unnamed':
+      if (outcome === 'spawned') {
+        if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <its id>`);
+        named(tickets, flags.agent);
+        register(flags.agent, 'implement', flags.type ?? 'general-purpose');
+      } else {
+        release(tickets);
+        flag(tickets[0]).redispatch = { mode: 'spawn' };
+      }
+      break;
+    case 'review': {
+      const [tid] = tickets;
+      const t = ticket(tid);
+      if (issued.kind === 'spawn') {
+        if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
+        book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
+      }
+      if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
+        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []));
+      }
+      break;
+    }
+    case 'review-stuck':
+      if (outcome === 'retry') flag(tickets[0]).retryReviews = ticket(tickets[0]).reviews.length;
+      else stageIf(tickets[0], 'stuck', flags.value ?? 'prove-it stuck could not be cleared');
+      break;
+    case 'mark-stuck':
+      stageIf(tickets[0], 'stuck', flags.value ?? 'findings still open after the fix rounds');
+      break;
+    case 'file-issue':
+      if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
+      if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
+      break;
+    case 'send-back':
+      delete flag(tickets[0]).sendBack;
+      stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
+      break;
+    case 'timeout': {
+      release(tickets, true);
+      if (book.agents[meta.agent]) book.agents[meta.agent].status = 'stopped';
+      const [tid] = tickets;
+      if (outcome === 'reassign') for (const x of tickets) flag(x).redispatch = { mode: 'spawn', reassign: true };
+      else if (outcome === 'stuck') for (const x of tickets) stageIf(x, 'stuck', flags.value ?? 'timed out twice');
+      else if (outcome === 'awaiting-ruling') for (const x of tickets) stageIf(x, 'awaiting-ruling', flags.value ?? 'timed out');
+      else if (outcome === 'send-back') stageIf(tid, 'candidate', flags.value ?? 'the merge agent timed out: sent back');
+      else if (outcome === 'collected') {
+        if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
+        if (meta.stage === 'implementing') stageIf(tid, 'in-review');
+        else if (meta.stage === 'expanding') for (const x of tickets) stageIf(x, 'candidate');
+        else if (meta.stage === 'fixing') stageIf(tid, 'in-review');
+      }
+      break;
+    }
+    case 'red-light':
+      if (outcome === 'failed') book.failed[issued.line] = now;
+      break;
+    case 'verify-local': {
+      const L = live().lines[issued.line];
+      if (!L.local.some((x) => x.sha === meta.sha)) {
+        S('local', issued.line, meta.sha, outcome, meta.reason);
+        S('usage', '--add', 'fullVerifications=1');
+      }
+      break;
+    }
+    case 'merge-check':
+    case 'sync-base':
+      if (outcome === 'retry') delete book.done[id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`];
+      else if (outcome === 'stuck' || outcome === 'awaiting-ruling') stageIf(tickets[0], outcome, flags.value ?? 'the merge failed');
+      else if (outcome === 'unresolved') book.flags[`line:${issued.line}`] = { unsynced: flags.value ?? meta.baseSha };
+      break;
+    case 'failed':
+      if (outcome === 'retry') delete book.done[meta.of];
+      break;
+    case 'wakeup-end':
+      book.wakeup += 1;
+      if (flags.value !== undefined) S('usage', '--sleep-task', flags.value);
+      break;
+    case 'wrap-up':
+      book.finished = now;
+      break;
+    case 'ci-record': {
+      const L = live().lines[issued.line];
+      if (id.includes(':final-') && L.ci && ['green', 'red'].includes(L.ci.verdict)) S('usage', '--add', 'fullVerifications=1');
+      break;
+    }
+    default:
+      break;
+  }
+  if (outcome !== 'retry') book.done[id] = entry; // a retry issues the same thing again
+  update(path, now, (s) => {
+    s.tick = book;
+    return {};
+  });
+  return { format: FORMAT, command: 'record', id, applied, wakeup: book.wakeup };
+}
+
+// ---- setup ----------------------------------------------------------------------------------------------------------
+
+export function setup(path, flags, now) {
+  if (!['github', 'local'].includes(flags.tracker)) throw new UsageError('setup needs --tracker github|local');
+  if (!flags.root || !flags.base) throw new UsageError('setup needs --root <repo working tree> and --base <base branch>');
+  if (flags.tracker === 'github' && !/^[^/\s]+\/[^/\s]+$/.test(flags.repo ?? '')) throw new UsageError('--repo <owner>/<repo> is required with --tracker github');
+  if (flags.tracker === 'local' && !flags['tickets-dir']) throw new UsageError('--tickets-dir <repo-relative dir> is required with --tracker local');
+  const root = resolve(flags.root);
+  return update(path, now, (s) => {
+    const config = {
+      tracker: flags.tracker,
+      repo: flags.repo ?? null,
+      root,
+      base: flags.base,
+      ledger: flags.ledger ? resolve(flags.ledger) : null,
+      ticketsDir: flags['tickets-dir'] ?? null,
+      worktrees: resolve(flags.worktrees ?? join(dirname(root), `${basename(root)}.worktrees`, s.run)),
+      spec: flags.spec ?? null,
+    };
+    s.tick = isObject(s.tick) && s.tick.format === FORMAT ? { ...s.tick, config } : newBook(config);
+    return { config };
+  });
+}
+
+function newBook(config) {
+  return {
+    format: FORMAT,
+    config,
+    wakeup: 1,
+    inbox: [],
+    agents: {},
+    issued: {},
+    done: {},
+    flags: {},
+    red: {},
+    failed: {},
+    expansions: {},
+    dispatches: {},
+    dispatch: null,
+    lastDispatch: null,
+    finished: null,
+  };
+}
+
+// ---- entry ------------------------------------------------------------------------------------------------------------
+
+function parseArgs(argv, spec) {
+  const flags = {};
+  const rest = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (!a.startsWith('--')) {
+      rest.push(a);
+      continue;
+    }
+    const name = a.slice(2);
+    if (!(name in spec)) throw new UsageError(`unknown flag ${a}`);
+    if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+    const value = argv[(i += 1)];
+    if (spec[name] === 'many') (flags[name] ??= []).push(value);
+    else if (name in flags) throw new UsageError(`${a} is given twice`);
+    else flags[name] = value;
+  }
+  return { flags, rest };
+}
+
+export function defaultDeps() {
+  return {
+    read: (p) => readFileSync(p, 'utf8'),
+    exists: (p) => existsSync(p),
+    write: (p, text) => {
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, text);
+    },
+    git: (cwd, args, env = {}) =>
+      execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
+    stateMain,
+    clock: () => Date.now(),
+  };
+}
+
+const SPECS = {
+  setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
+  next: { reported: 'many', now: 'one' },
+  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', now: 'one' },
+};
+
+// Returns { code, out, err } instead of touching the process, so tests can drive it.
+export function main(argv, deps = defaultDeps()) {
+  try {
+    const command = argv[0];
+    if (!(command in SPECS)) throw new UsageError('expected setup, next or record');
+    const { flags, rest } = parseArgs(argv.slice(1), SPECS[command]);
+    if (!rest.length) throw new UsageError(`${command} needs the state file first`);
+    const path = resolve(rest[0]);
+    if (flags.now !== undefined && (!TIME.test(flags.now) || Number.isNaN(Date.parse(flags.now)))) throw new UsageError(`--now: expected a UTC time like 2026-01-31T23:59:59Z`);
+    const now = flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    let out;
+    if (command === 'setup') {
+      if (rest.length !== 1) throw new UsageError('setup takes the state file and flags');
+      out = { format: FORMAT, command, ...setup(path, flags, now) };
+    } else if (command === 'next') {
+      if (rest.length !== 1) throw new UsageError('next takes the state file and flags');
+      out = next(path, flags.reported ?? [], now, deps);
+    } else {
+      if (rest.length !== 2) throw new UsageError('record takes the state file and one action id');
+      out = record(path, rest[1], flags, now, deps);
+    }
+    return { code: 0, out: `${JSON.stringify(out, null, 2)}\n`, err: '' };
+  } catch (e) {
+    if (e instanceof Refused) return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
+    if (e?.constructor?.name === 'Refusal') return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
+    return failure('tick', e);
+  }
+}
+
+runIfEntry(import.meta.url, main);
