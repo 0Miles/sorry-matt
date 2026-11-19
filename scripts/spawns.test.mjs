@@ -169,6 +169,12 @@ test('an empty run sums to zero', (t) => {
   assert.deepEqual(summarize(t, counters([])).json, { format: 'sorry-matt/spawns@1', spawns: 0, byType: {}, byTicket: {} });
 });
 
+test('a counters file that starts with a UTF-8 BOM is read like one without', (t) => {
+  const r = summarize(t, `﻿${JSON.stringify(counters([gp('implement #72')]))}`);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json, { format: 'sorry-matt/spawns@1', spawns: 1, byType: { implement: 1 }, byTicket: { '#72': { implement: 1 } } });
+});
+
 test('a missing file, a file that is not JSON, and one that is not a counters file: an error and no output', (t) => {
   const missing = main([join(scratch(t), 'nope.counters.json')]);
   assert.equal(missing.code, 1);

@@ -58,6 +58,9 @@ export const DEFAULT_CAP = 10;
 class UsageError extends Error {}
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
+// JSON.parse for a file the host wrote. Windows PowerShell 5.1 starts the files it writes with `>` or
+// `Out-File -Encoding utf8` with a UTF-8 BOM, which JSON.parse rejects; one leading BOM is dropped first.
+const parseJson = (text) => JSON.parse(String(text).replace(/^﻿/, ''));
 const unquote = (p) => (p.startsWith('"') && p.endsWith('"') ? JSON.parse(p) : p);
 
 // One key per file: forward slashes, `./` and `a/../` folded, case-insensitive on Windows.
@@ -305,7 +308,7 @@ function parseArgs(argv) {
 function readLedger(deps, path) {
   if (!deps.exists(path)) return [];
   try {
-    const ledger = JSON.parse(deps.read(path).toString('utf8'));
+    const ledger = parseJson(deps.read(path).toString('utf8'));
     if (!Array.isArray(ledger.mutants)) throw new Error('no "mutants" array');
     return ledger.mutants;
   } catch (e) {
@@ -324,7 +327,7 @@ export function main(argv, deps = defaultDeps()) {
 
     let plan;
     try {
-      plan = JSON.parse(deps.read(args.plan).toString('utf8'));
+      plan = parseJson(deps.read(args.plan).toString('utf8'));
     } catch (e) {
       throw new UsageError(`cannot read plan ${args.plan}: ${e.message}`);
     }
