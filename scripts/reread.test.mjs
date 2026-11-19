@@ -55,6 +55,10 @@ test('parseLedger: a rule line wrapped whole in backticks counts, with or withou
   assert.deepEqual(parseLedger(ledger('* `rule: C:\\abs\\x.md`')).rules, ['C:\\abs\\x.md']);
 });
 
+test('parseLedger: trailing spaces or tabs after a rule path are not part of the path', () => {
+  assert.deepEqual(parseLedger('<!-- sorry-matt:run active -->\nrule: /a/b.md  \nrule: /a/b.md\t\n').rules, ['/a/b.md']);
+});
+
 test('ledgerLine: one line shape for any key, bullets and backticks around the value or the whole line', () => {
   const line = ledgerLine('size', /(\d+)/);
   for (const ok of ['size: 7', '  - size: 7  ', '* size: `7`', '+ `size: 7`', '`size: 7`']) assert.equal(line.exec(ok)?.[1], '7', ok);
