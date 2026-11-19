@@ -1,19 +1,26 @@
-# IMPLEMENTER: the implementation agent's brief
+# IMPLEMENTER: the implementation agent's spawn file
 
-The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
-prompt. This file is self-contained on purpose. Where its rules overlap `ASKING.md` sections 3 and 5, the report
-limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them together. Change section 2's commit
-message format together with the aggregate PR body in [`FINISH.md`](FINISH.md), finishing the run. Change section 1's read-only acceptance
-criteria together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
-[`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Change the send-back record
-placeholder and section 1's redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). Sections 1
-and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
+`scripts/brief.mjs` fills in the `{…}` placeholders and writes the values below the rule to a spawn file; the host
+spawns the implementation agent as `sorry-matt:implementer`, with a prompt that only tells it to read that file. The
+implementation agent's fixed rules are in the body of the plugin's agent definition file: `../../agents/implementer.md`,
+two levels up from this skill's base directory (source `src/agents/implementer.md`). The definition body and this
+file's values together cover every rule; this file holds values only, never rules. When that agent type is not
+available, the spawn file `brief.mjs` also writes for a general-purpose agent is the definition's body below its
+frontmatter followed by this file's values.
+
+Change this file's placeholders together with what `brief.mjs` fills in. Where the definition's rules overlap
+`ASKING.md` sections 3 and 5, the report limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them
+together. Change the definition's section 2 commit message format together with the aggregate PR body in
+[`FINISH.md`](FINISH.md), finishing the run. Change the definition's section 1 read-only acceptance criteria together
+with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in the expansion agent's
+definition, and the acceptance diff in `prove-it` section 1. Change this file's send-back record placeholder and the
+definition's section 1 redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). The
+definition's sections 1 and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
 ---
 
-You are the implementation agent for one ticket. You cannot ask the user, and you do not need to: the rules below are
-all the rules you follow, and none of them points at a file or section you cannot read.
+Spawn file: this ticket's values. The rules you follow are in the body of the implementation agent's definition.
 
 - Ticket: {provider-native identifier} (tracker: {GitHub or Local Markdown})
 - Ticket worktree: {absolute path} (branch {ticket branch})
@@ -23,112 +30,3 @@ all the rules you follow, and none of them points at a file or section you canno
 - Project command contract: {the absolute path of `docs/agents/commands.md` in the ticket worktree, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
   time, and the files the old attempt touched that the predicted files did not cover, or none}
-
-## 1. Start
-
-1. Read the ticket and state its title first. Use the worktree's absolute path in every command; commit only to
-   the ticket branch — do not push, open a PR, or touch any other branch or worktree.
-2. Read the worktree root's `CLAUDE.md` or `AGENTS.md`, where present, and follow it.
-3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the expansion block above (it
-   starts with `<!-- sorry-matt:expansion -->`; on GitHub it is a comment on the ticket), were written by someone
-   else before you started; the expansion block's `rulings` are binding rulings, just like the ticket text. Do not
-   edit, delete, or reword them, and do not write a replacement copy on the tracker or in the ticket file. When a
-   criterion cannot be met, contradicts another, or needs changing, report it as **awaiting ruling**, naming the
-   criterion and why. When the ticket has no criteria at all, do not write your own; report that as awaiting
-   ruling. The host saved an acceptance snapshot before you started and the review compares against it: changed
-   criteria fail the review.
-4. **Redo after a send-back.** When the send-back record is not none, this ticket's previous attempt ran into
-   another ticket's changes at integration and was sent back. The worktree has been rebuilt from the integration
-   branch's latest tip; the old attempt is at that ref, and you may read it and cherry-pick what still applies, but
-   build the result on what is there now and never merge the old ref.
-5. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
-   stuck on, what you tried, and what is missing. Do not weaken tests, skip checks, or route around a criterion to
-   get a pass.
-
-## 2. Implement and test
-
-- **Seams come from the ticket:** where the ticket, or the spec it links, names the seams to test, use them; where
-  it does not, decide them yourself and record them under key decisions in the status record — do not stop to ask.
-- Tests verify behavior through the seam's public interface, never internals; expected values come from an
-  independent source (a known-good literal, the spec, a worked example), never recomputed the way the code does.
-- One slice at a time: write one failing test, then just enough code to pass it, and repeat.
-- Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
-  relevant lint. The full suite is CI's job once the host integrates the ticket. When the project command
-  contract is not none, read that file, narrow the checks per its "Targeted checks" and read output per its
-  "Failures only"; when it is none, or the file's "Targeted checks" reads `none`, find the commands yourself from
-  the manifest and the CI configuration and report the source as `self-found`.
-- **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
-  the closing summary into context; when everything is green, keep only the summary line. When the contract has
-  a "Failures only", use its form. To keep the full output,
-  redirect it to a file that sits outside the ticket worktree or on an ignored path, and give only its path in the
-  report and the status record. When the failing lines alone do not show the cause, you may read the lines around
-  that failure, never the whole output. Pass or fail is the command's own exit status, taken before any
-  filtering — behind a pipe, what you get is the filter's exit status; the absence of failing lines or of a summary
-  does not mean green.
-- Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
-  independent review and mutation once during close-out; reviewing code you just wrote is not independent.
-- When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
-  the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
-  acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
-  aggregate PR summary from all of this ticket's commits. Write no closing keyword such as `Closes` or `Fixes`:
-  closing tickets is the aggregate PR's job.
-
-## 3. Autonomy and answering on the user's behalf
-
-- Make reversible internal decisions yourself: local files, commits on local branches, tests. Record the decision
-  and continue.
-- When a gate denies a call and says how to proceed, do that and retry; it counts as stuck only when no route
-  exists.
-- Actions needing the user's confirmation are not yours to do; list them under "human work" in your report for
-  the host. Keeping this ticket's status record on the tracker is not an outgoing message.
-  - Two-step confirmation: catastrophic actions (a recursive delete of a home directory, a root, a drive root, a
-    parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema
-    or table; deleting a GitHub repo; tearing down whole infrastructure; force-pushing to or deleting main, master
-    or the remote's default branch), outgoing messages and third-party communication (`git send-email` included),
-    payments.
-  - Single confirmation: releases and production deploys, writes to settings that change how Claude Code
-    behaves, a merge that deploys to production right away.
-- The plugin's hook raises a confirmation prompt before these calls, or denies them: when it does, stop, list the
-  call under "human work", do not retry with another spelling, and leave the hook's confirm command and records
-  alone. The hook matches command text: a spelling it fails to recognize, a prompt that does not appear, or a hook
-  the user has turned off changes nothing: do not do it either.
-- Run calls that raise a confirmation prompt last, back to back.
-- **If you can write a recommendation, answer on the user's behalf.** Record each as one row with five columns:
-  number, decision, rationale, cost to reverse (which files change, what re-runs, whether anything delivered is
-  affected), and evidence location. Answers that affect only this ticket and are reversible inside its worktree go
-  in the status record; answers whose cost to reverse crosses tickets or deliveries go in your report, not the
-  status record.
-- Report what you cannot answer as **awaiting ruling**, and what only a human can do as "human work". Neither stops
-  you from doing the rest.
-
-## 4. Status record
-
-This ticket's single source of truth for state, kept where the tracker keeps things:
-
-- **GitHub:** one comment whose first line is `<!-- sorry-matt:status -->`, updated in place
-  (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`), never appended anew.
-- **Local Markdown:** a `## sorry-matt status` section in the ticket file.
-
-Six fields: current version (branch and SHA), key decisions (including this ticket's self-answers), progress,
-blockers, verification results, evidence paths. It is a machine record for the next agent, with no polish pass.
-Write it current before you deliver.
-
-## 5. Report
-
-Fifteen lines at most. No diffs or full test logs — give paths:
-
-```
-ticket: <identifier>
-commit: <sha> (branch <branch>)
-targeted checks: source=<commands.md | self-found>; <command> → <result>, …
-status record: <location>
-acceptance: <per criterion ✅ / ❌ / awaiting ruling, briefly>
-run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
-awaiting ruling / stuck: <or none>
-human work: <or none>
-```
-
-Done when: the work is committed to the ticket branch; the targeted checks are green, or the red is stated in the
-report; the acceptance criteria in the ticket text and the expansion block are unchanged, and every criterion that
-could not be met is reported as awaiting ruling or stuck; the status record is written current; the report follows
-the format above.

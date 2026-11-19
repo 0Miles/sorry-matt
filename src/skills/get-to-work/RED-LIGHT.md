@@ -15,7 +15,8 @@
    `failed` 的每個 id；本機驗證的紅取 `verify.mjs` 輸出的 `log`。主持人只取失敗那幾行。
 4. **修，最多兩輪**：
    - 對到票：`integrate.mjs ci-init` 從整合分支切 `<ticket 分支>-ci` 與 worktree，交回那張票的原 agent；不在了就照
-     `IMPLEMENTER.md` 以 `brief.mjs` 的角色字 `ci-fix` 新 spawn，票面附上失敗摘要。CI 失敗就是 finding，走
+     `IMPLEMENTER.md` 以 `brief.mjs` 的角色字 `ci-fix` 新 spawn（agent 類型與退回通用 agent 照 `SKILL.md` 第 1 節的
+     spawn），票面附上失敗摘要。CI 失敗就是 finding，走
      集中修正（`recheck` 附上該票上一次的審查區塊），修完 `integrate.mjs merge --ci --push`，不排隊。
    - 對不到票：主持人或新 spawn 的 `ci-fix` agent（目標是整合分支）在整合 worktree 修，commit（subject 不帶票 ID）、
      push。

@@ -68,10 +68,12 @@ Each wake-up:
    action needs you to read.
    - **exec**: run `command` as written in bash (Git Bash on Windows); record its exit code. One not in `okExit`
      comes back in the next list as a `judge`.
-   - **spawn**: send the Agent tool the `spawn` fields as they are, adding no rules: `scripts/brief.mjs` filled the
-     brief, and its header holds the `description` rule. When `sorry-matt:expander` is not in the available list, use
-     the general-purpose agent with no model, the same prompt and `description`, and add `--type general-purpose` to
-     the record.
+   - **spawn**: send the Agent tool the `spawn` fields as they are, adding no rules: the implementation and expansion
+     agents' fixed rules are in the plugin's agent definitions (`sorry-matt:implementer`, `sorry-matt:expander`),
+     `scripts/brief.mjs` filled the spawn file's values, and its header holds the `description` rule. When the
+     `subagent_type` is not in the available list, send the general-purpose agent and prompt of the `fallback` field
+     instead (the definition body followed by the same values), with no model and the same `description`, and add
+     `--type general-purpose` to the record.
    - **judge**: something for you to decide. Read the `reference`, do what `do` says, and record one of `outcomes`.
    - **ask**: something only a human can rule on: section 3.
 3. Run `next` again until `then` is `end` or `done` (the run has finished). `end`'s last action closes the wake-up:

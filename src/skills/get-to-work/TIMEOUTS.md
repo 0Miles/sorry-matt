@@ -16,7 +16,7 @@
      已 commit）就 `reset --hard <派送紀錄的 HEAD>`。整併 agent 不 push，還原只動本機。該票照
      [`SEND-BACK.md`](SEND-BACK.md) 退回重做（`send-back`）。
    - **紅燈修正**（`RED-LIGHT.md` 第 4 點）：算一輪修正失敗，不計改派。還在第一輪就開第二輪 —— 對到票時照
-     `IMPLEMENTER.md` 新 spawn 一個 `ci-fix` agent 接手同一個 worktree，票面附上失敗摘要與超時說明；對不到票時先
+     `IMPLEMENTER.md` 新 spawn 一個 `ci-fix` agent（agent 類型與退回照 `SKILL.md` 第 1 節的 spawn）接手同一個 worktree，票面附上失敗摘要與超時說明；對不到票時先
      `reset --hard <派送紀錄的 HEAD>` 再修。已是第二輪就照第 5、6 點撤回或判驗證未過；不標卡住。
    - **這個階段還沒因超時改派過**（`judge` 會寫明）→ `reassign`：tick 發下新的派送紀錄與 spawn，接手同一個
      worktree 與分支，交付說明附上一個 agent 超時被停下、它留下的 commit 與改動由新 agent 判斷要不要沿用。

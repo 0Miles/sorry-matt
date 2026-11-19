@@ -12,9 +12,9 @@ SHA-256 is taken over LF-normalized content, so it holds however a working tree 
 
 Adapted, not vendored: the spec and ticket procedure in the parent `SKILL.md` (steps 3 and 4) and the templates in
 `TEMPLATES.md` are rewritten from `skills/engineering/to-spec/SKILL.md` and
-`skills/engineering/to-tickets/SKILL.md` at the same pin, and sections 1 and 2 of the implementation brief in
-`../../../get-to-work/IMPLEMENTER.md` are rewritten from `skills/engineering/implement/SKILL.md` and
-`skills/engineering/tdd/SKILL.md` at the same pin. Their pinned hashes and the reason they are no longer
+`skills/engineering/to-tickets/SKILL.md` at the same pin, and sections 1 and 2 of the implementation agent's
+definition `../../../../agents/implementer.md` (source `src/agents/implementer.md` in the sorry-matt repository) are
+rewritten from `skills/engineering/implement/SKILL.md` and `skills/engineering/tdd/SKILL.md` at the same pin. Their pinned hashes and the reason they are no longer
 vendored are recorded in `docs/matt-skills.md` of the sorry-matt repository.
 
 ## MIT License

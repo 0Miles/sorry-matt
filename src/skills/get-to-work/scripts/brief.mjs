@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// brief: the filled-in brief an agent of get-to-work's pipeline is spawned with, and the `description` its Agent call
-// carries. It fills the `{…}` placeholders of IMPLEMENTER.md or EXPANDER.md — read from this skill's own directory,
-// so the templates stay the only copy of the rules — writes the text below the template's `---` rule to a file, and
-// prints where it is. It spawns nothing and calls no tracker. No dependencies: runs on a bare Node 20+.
+// brief: the spawn file an agent of get-to-work's pipeline is spawned with, and the `description` its Agent call
+// carries. It fills the `{…}` placeholders of IMPLEMENTER.md or EXPANDER.md — read from this skill's own directory —
+// writes the values below the template's `---` rule to a file, and prints where it is. The agents' fixed rules are
+// not in the templates: they are the body of the plugin's agent definition files, `agents/implementer.md` and
+// `agents/expander.md` two levels up from this skill's directory (`sorry-matt:implementer`, `sorry-matt:expander`).
+// Beside the spawn file it writes the general-purpose fallback: the definition's body below its frontmatter (with
+// `${CLAUDE_PLUGIN_ROOT}` replaced by the plugin's directory) followed by the same values, for a session where the
+// agent type is not available. It spawns nothing and calls no tracker. No dependencies: runs on a bare Node 20+.
 //
 // Usage
 //   node brief.mjs implement <values.json>
@@ -30,7 +34,7 @@
 //   a file name with whitespace or the punctuation spawns.mjs stops at is refused. A Local Markdown path is reduced
 //   to its file name.
 //
-// implement — the implementation agent's brief, IMPLEMENTER.md
+// implement — the implementation agent's spawn file, IMPLEMENTER.md, and the definition agents/implementer.md
 //   values.json:
 //   { "out":          "<file to write the filled brief to>",
 //     "role":         "implement" | "fix" | "ci-fix",          // optional, default "implement"
@@ -44,7 +48,7 @@
 //   `expansions[].text` of the snapshot, a blank line apart, or none; the project command contract is
 //   `<worktree>/docs/agents/commands.md` when that file exists, else none.
 //
-// expand — the expansion agent's brief, EXPANDER.md
+// expand — the expansion agent's spawn file, EXPANDER.md, and the definition agents/expander.md
 //   values.json:
 //   { "out":     "<file to write the filled brief to>",
 //     "run":     "<run name>",
@@ -58,22 +62,26 @@
 //
 // Every key above is required; `null` is how a value says none. Files are read as UTF-8; a byte order mark is
 // dropped and CRLF line ends read as LF. A value of several lines has its following lines indented under the list
-// item it fills. The output file is written with LF line ends and no trailing whitespace; its directory is created
-// when missing.
+// item it fills. The output files are written with LF line ends and no trailing whitespace; their directory is
+// created when missing. The fallback is written next to `out`, its name `out`'s with `.general-purpose` before the
+// extension (`72-1.md` → `72-1.general-purpose.md`; `fallbackPath`).
 //
 // Output (stdout, JSON, format "sorry-matt/brief@1"; fields are only ever added, never renamed)
 //   implement / expand:
 //   { "format": "sorry-matt/brief@1", "kind": "implement" | "expand", "role": "<role word>",
-//     "brief": "<absolute path of the filled brief>", "description": "implement #72",
-//     "prompt": "Read <brief> in full and follow it." }
+//     "brief": "<absolute path of the spawn file>", "description": "implement #72",
+//     "prompt": "Read <brief> in full and follow it.",
+//     "agentType": "sorry-matt:implementer" | "sorry-matt:expander",            // the Agent call's subagent_type
+//     "fallback": "<absolute path of the general-purpose fallback>",
+//     "fallbackPrompt": "Read <fallback> in full and follow it." }             // with subagent_type general-purpose
 //   description:
 //   { "format": "sorry-matt/brief@1", "kind": "description", "role": "<role word>", "description": "merge #72" }
 //
-// Exit codes: 0 output written; 1 a file is missing or unreadable, the snapshot is not an acceptance snapshot, or a
-// template's placeholders are not the ones this script fills (the template and the script changed apart; nothing is
-// written); 2 bad arguments, or a value missing or malformed.
+// Exit codes: 0 output written; 1 a file is missing or unreadable, the snapshot is not an acceptance snapshot, a
+// definition file has no frontmatter, or a template's placeholders are not the ones this script fills (the template
+// and the script changed apart); nothing is written; 2 bad arguments, or a value missing or malformed.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname, join, resolve, isAbsolute, basename } from 'node:path';
+import { dirname, join, resolve, isAbsolute, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, failure, runIfEntry } from './cli.mjs';
 import { ticketOf } from './spawns.mjs';
@@ -81,6 +89,10 @@ import { ticketOf } from './spawns.mjs';
 export const FORMAT = 'sorry-matt/brief@1';
 export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review'];
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
+const PLUGIN_ROOT = join(SKILL_DIR, '..', '..');
+/** The agent type each spawn file is for, and its definition file's name under `<plugin>/agents/`. */
+export const AGENT_TYPES = { implement: 'sorry-matt:implementer', expand: 'sorry-matt:expander' };
+const DEFINITIONS = { implement: 'implementer.md', expand: 'expander.md' };
 // A placeholder is `{…}` with no brace inside; it may run over several lines.
 const PLACEHOLDER = /\{[^{}]*\}/g;
 
@@ -139,6 +151,20 @@ export function fill(templatePath, fills) {
     throw new Error(`${templatePath} has ${found.length} placeholders, brief.mjs fills ${fills.length}: the template and the script changed apart`);
   let i = 0;
   return body.replace(PLACEHOLDER, () => fills[i++]).replace(/[ \t]+$/gm, '');
+}
+
+/** Where the general-purpose fallback of the spawn file `out` is written. */
+export function fallbackPath(out) {
+  const ext = extname(out);
+  return `${out.slice(0, out.length - ext.length)}.general-purpose${ext}`;
+}
+
+/** The body of a plugin agent definition below its frontmatter, `${CLAUDE_PLUGIN_ROOT}` replaced by `root`. */
+export function definitionBody(path, root) {
+  const text = read(path);
+  const m = /^---\n[\s\S]*?\n---\n/.exec(text);
+  if (!m) throw new Error(`${path} has no frontmatter`);
+  return text.slice(m[0].length).split('${CLAUDE_PLUGIN_ROOT}').join(root).replace(/^\n+/, '').replace(/\s+$/, '').replace(/[ \t]+$/gm, '');
 }
 
 const trackerText = (tracker, repo) => (tracker === 'github' ? `GitHub (${repo})` : 'Local Markdown');
@@ -225,10 +251,23 @@ export function main(argv) {
     const values = readJson(rest[0]);
     if (!values || typeof values !== 'object' || Array.isArray(values)) throw new UsageError(`${rest[0]} must hold a JSON object`);
     const { out, role, desc, filled } = kind === 'implement' ? implement(values) : expand(values);
+    const body = definitionBody(join(PLUGIN_ROOT, 'agents', DEFINITIONS[kind]), resolve(PLUGIN_ROOT));
     const brief = resolve(out);
+    const fallback = fallbackPath(brief);
     mkdirSync(dirname(brief), { recursive: true });
     writeFileSync(brief, filled);
-    const result = { format: FORMAT, kind, role, brief, description: desc, prompt: `Read ${brief} in full and follow it.` };
+    writeFileSync(fallback, `${body}\n\n---\n\n${filled}`);
+    const result = {
+      format: FORMAT,
+      kind,
+      role,
+      brief,
+      description: desc,
+      prompt: `Read ${brief} in full and follow it.`,
+      agentType: AGENT_TYPES[kind],
+      fallback,
+      fallbackPrompt: `Read ${fallback} in full and follow it.`,
+    };
     return { code: 0, out: JSON.stringify(result, null, 2) + '\n', err: '' };
   } catch (e) {
     return failure('brief', e);

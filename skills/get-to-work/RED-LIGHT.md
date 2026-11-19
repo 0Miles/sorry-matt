@@ -22,7 +22,8 @@ do not queue.
 4. **Fix, at most two rounds**:
    - Maps to a ticket: `integrate.mjs ci-init` cuts `<ticket branch>-ci` and its worktree from the integration branch;
      hand it to that ticket's original agent, or, when it is gone, spawn a new one by `IMPLEMENTER.md` with the
-     `ci-fix` role word of `brief.mjs`, the failure summary added to the ticket text. The CI failure is the finding:
+     `ci-fix` role word of `brief.mjs` (agent type and general-purpose fallback per the spawn in `SKILL.md` section 1),
+     the failure summary added to the ticket text. The CI failure is the finding:
      it goes through the batched fix (`recheck` with the ticket's previous review block), then
      `integrate.mjs merge --ci --push`, without queueing.
    - Maps to no ticket: the host, or a newly spawned `ci-fix` agent whose target is the integration branch, fixes it in

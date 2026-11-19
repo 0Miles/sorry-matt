@@ -6,7 +6,7 @@
 // as SKILL.md states them, written here by hand.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -291,7 +291,7 @@ test('a plain run: dispatch, close-out, finish, in batches', (t) => {
   assert.deepEqual(w1[0].dispatch.reasons, ['first wake-up']);
   const spawns = a1.filter((a) => a.kind === 'spawn');
   assert.deepEqual(spawns.map((a) => a.spawn.description).sort(), ['implement #1', 'implement #2']);
-  assert.ok(spawns.every((a) => a.spawn.subagent_type === 'general-purpose' && a.spawn.background));
+  assert.ok(spawns.every((a) => a.spawn.subagent_type === 'sorry-matt:implementer' && a.spawn.background));
   // #107: what does not depend on each other goes out in one batch; the assignment record comes before the spawn
   const last = w1.find((o) => o.actions.some((a) => a.kind === 'spawn'));
   const at = Object.fromEntries(last.actions.map((a) => [a.id, a.batch]));
@@ -593,6 +593,34 @@ test('a failed command comes back as a judge; retry issues it again', (t) => {
   assert.ok(a1.some((a) => a.id === 'failed:frontier:r1' && a.kind === 'judge'));
   assert.equal(a1.filter((a) => a.id === 'frontier:r1').length, 2, 'issued again after the retry');
   assert.equal(stage(h, '#1'), 'implementing');
+});
+
+test('#126: implementation agents spawn as sorry-matt:implementer with a general-purpose fallback; --type re-records the assignment', (t) => {
+  const h = world(t);
+  const spawn = h.spawn;
+  // #2's host has no sorry-matt:implementer: it sends the fallback and records the type it used
+  h.spawn = (a) => {
+    const r = spawn(a);
+    if (a.tickets[0] === '#2') r.flags.push('--type', 'general-purpose');
+    return r;
+  };
+  const spawns = h.actions(h.wake()).filter((a) => a.kind === 'spawn');
+  assert.deepEqual(spawns.map((a) => a.spawn.description).sort(), ['implement #1', 'implement #2']);
+  for (const a of spawns) {
+    assert.equal(a.spawn.subagent_type, 'sorry-matt:implementer');
+    const brief = a.spawn.prompt.match(/^Read (.+) in full and follow it\.$/)[1];
+    assert.equal(a.spawn.fallback.subagent_type, 'general-purpose');
+    assert.equal(a.spawn.fallback.prompt, `Read ${brief.replace(/\.md$/, '.general-purpose.md')} in full and follow it.`);
+    assert.ok(existsSync(brief.replace(/\.md$/, '.general-purpose.md')), 'brief.mjs wrote the fallback');
+    assert.match(a.record, /--agent <agent id> \[--type general-purpose\]$/);
+  }
+  const st = h.state();
+  const [one, two] = ['#1', '#2'].map((id) => st.tickets[id].assignment);
+  assert.equal(one.type, 'sorry-matt:implementer');
+  assert.equal(two.type, 'general-purpose', 'the fallback re-recorded the assignment');
+  assert.ok(two.agentId && two.worktree, 'with its agent and worktree');
+  assert.equal(st.tick.agents[one.agentId].type, 'sorry-matt:implementer');
+  assert.equal(st.tick.agents[two.agentId].type, 'general-purpose');
 });
 
 test('record refuses what tick did not issue and a second, different result', (t) => {
