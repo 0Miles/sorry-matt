@@ -36,7 +36,7 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 | --- | --- | --- | --- |
 | `setup-matt-pocock-skills` | `set-up-ui-skills` | 參考流程，改為一次問完 | 沿用上游的骨架：探查不預設、提出發現、寫入前出示草稿可修改、指示檔挑選（`CLAUDE.md` 優先、只有 `AGENTS.md` 改它、都沒有時問）、`## Agent skills` 區塊就地更新、回報說明誰會讀與重跑時機。與上游不同：上游一段問一題、答完再問下一段；這裡把發現與全部題目集中成一次裁決，每題附建議答案（帶建議的提問，絕大多數得到的就是那個建議）。runtime 不讀上游，也不呼叫它（它是 user-invoked）。兩邊的參數檔不同（`docs/agents/ui.md` 對 `issue-tracker.md` 等），但寫的是指示檔裡同一個 `## Agent skills` 區塊：上游就地更新區塊時可能拿掉 `### UI`，重跑 `/set-up-ui-skills` 會把它補回。前端 skills 直接讀 `docs/agents/ui.md`，不依賴 `### UI`。上游改了指示檔挑選或區塊更新規則時回來對一次。 |
 
-不是 matt skill、不在本表範圍：`simplify`（Claude Code 內建）、`speak-human`、`no-bullshit`、
+不是 matt skill、不在本表範圍：`simplify`（Claude Code 內建）、`no-bullshit`、
 `issue-chain`、`clean-it-up`、`grill-them`、`prove-it`（sorry-matt 自家）。
 
 ## 取代後的上游對帳

@@ -25,9 +25,8 @@ disable-model-invocation: true
 - **想單獨重審 sorry-matt 流程裡的一張票（不發 PR 評語）** → `/prove-it <票>`。以整合分支為 fixed
   point，用證據鏈、實跑與只限本票 diff 的突變審 ticket 分支，結論寫進該票的接續紀錄；
   `get-to-work` 收票會自己呼叫它。
-- **當 Agent 不講人話時** → `/speak-human`。保留事實、條件、責任與不確定程度，
-  改成目標語言與地區中自然、常用的說法。
-- **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。
+- **當 Agent 講太多廢話、抓不到重點時** → `/no-bullshit`。結論先講，客套全砍；
+  事實、條件與不確定程度照留。
 - **工作已合併，想安全收掉本地分支與多餘 worktrees** → `/clean-it-up`。只刪除有合併證據且
   狀態乾淨的項目；遠端分支必須另外明確授權。
 - **要在前端專案第一次用前端 skills，或想從頭重建專案的元件地圖** → `/set-up-ui-skills`。
