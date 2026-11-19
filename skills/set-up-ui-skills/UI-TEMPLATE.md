@@ -38,11 +38,22 @@ with nothing to say reads "None" instead of being removed. Angle brackets mark w
 - storybook: `<command>`
 ```
 
-When the project uses no ready-made component library, the "Component library" section is the single line "None".
+When the whole project uses no ready-made component library (no frontend package has one), the "Component
+library" section is the single line "None".
 
-When different packages each use one component library (a monorepo), the "Component library" section has one entry
-per library, each with a "Scope" line giving the package path it covers; every one is active. When one package has
-two at once, "Existing, not for new use" goes under that package's entry:
+When the frontend packages' libraries are not all the same (a monorepo; a package with no library counts), each
+entry of the "Component library" section is one active library, with a "Scope" line giving the package paths it
+covers; the packages with no library get one "None" entry holding only a "Scope" line.
+
+- A library entry's "Scope" line lists only the packages where that library is **active** (new code uses it); a
+  package that has it only as "Existing, not for new use" is not listed.
+- When a "Scope" line lists several paths, each path gets its own backticks, separated by commas.
+- Only packages with the same active library (or equally none) and the same "Existing, not for new use" marking
+  merge into one entry, whose "Scope" line lists those packages' paths; packages whose marking differs each get
+  their own entry, so one active library can have two entries.
+- When one package has two libraries at once, "Existing, not for new use" is nested under the entry for the
+  active one whose "Scope" is exactly the packages that have that old library; it applies only inside that
+  entry's "Scope" and leaves the other entries alone.
 
 ```markdown
 ## Component library
@@ -51,13 +62,69 @@ two at once, "Existing, not for new use" goes under that package's entry:
   - Scope: `<path of package A>`
   - Loading: <package A's import route, and where styles and providers are loaded>
   - Bundled skill: <the skill that belongs to package A; "none" if there is none>
+  - Existing, not for new use: `<package B>@<version the lockfile resolves>`
 - `<package B>@<version the lockfile resolves>`
-  - Scope: `<path of package B>`
+  - Scope: `<path of package B>`, `<path of package C>`
   - Loading: <package B's import route, and where styles and providers are loaded>
   - Bundled skill: <the skill that belongs to package B; "none" if there is none>
+- None
+  - Scope: `<path of the package with no component library>`
 ```
 
-A single-package project writes no "Scope" line and follows the first template; its format is unchanged.
+When every package's library is different and none repeats, each entry's "Scope" line holds one path; when no
+package lacks a library, leave out the "None" entry.
+
+A single-package project, or a monorepo where every frontend package's library is the same, writes no "Scope"
+line and follows the first template; its format is unchanged.
+
+The "Tokens" section, the "New shared components" line of "Conventions", the "Shared components" table, and the
+"Mechanical checks" section are each judged on their own: one whose content is the same in every package follows
+the first template and writes no "Scope"; one whose content differs between packages is written as below.
+"Scope" is written the same way as in the "Component library" section.
+
+- **Tokens**: one entry per distinct value: the top level is "Location: `<path>`", with "Scope" and "Naming rule"
+  indented under it; the packages with no tokens get one "None" entry holding only a "Scope" line. Files of
+  different packages never share one "Location" line.
+- **New shared components**: one "New shared components" line per distinct value, each with a "Scope" line
+  indented under it.
+- **Shared components table**: when some component cannot be used from every package, add a "Scope" column at
+  the end of the table, each row giving the paths of the packages that can use that component; it is still one
+  table, one row each, sorted by name.
+- **Mechanical checks**: when one check's command differs between packages, write one line per distinct
+  command, each with a "Scope" line indented under it; a package that lacks that check is not listed.
+
+```markdown
+## Tokens
+
+- Location: `<path of the token file package A and package B share>`
+  - Scope: `<path of package A>`, `<path of package B>`
+  - Naming rule: <rule and one example>
+- None
+  - Scope: `<path of the package with no tokens>`
+
+## Shared components
+
+| Component | Location | Use when | Instead | Wraps | Scope |
+| --- | --- | --- | --- | --- | --- |
+| `<Name>` | `<path>` | <the job this component does> | <the component or approach to use when the job does not fit> | <the wrapped library component, or "—"> | `<path of package A>`, `<path of package B>` |
+
+## Conventions
+
+- Wrappers: <whether library components are wrapped, and the wrapper layer's naming and location>
+- New shared components: go in `<package A's shared directory>`; come with <what package A requires>
+  - Scope: `<path of package A>`
+- New shared components: go in `<package B's shared directory>`; come with <what package B requires>
+  - Scope: `<path of package B>`
+- Duplicates: `<Name>` in `<losing path>` is not for new use; use `<source-of-truth path>` instead
+
+## Mechanical checks
+
+- lint: `<the command every package shares>`
+- typecheck: `<package A's command>`
+  - Scope: `<path of package A>`
+- typecheck: `<package B's command>`
+  - Scope: `<path of package B>`
+```
 
 ## Rules
 
