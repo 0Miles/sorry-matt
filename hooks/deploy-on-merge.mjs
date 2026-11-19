@@ -412,33 +412,26 @@ export function mergeDeploys(target, { cwd = process.cwd(), env = process.env, r
   const dir = target.dir || cwd;
   const top = run('git', ['-C', dir, 'rev-parse', '--show-toplevel']);
   const root = top.ok ? top.stdout.trim() : '';
-  const setting = explicitSetting(env, root, fs.read);
+  // A PR in another repo than this clone's origin: this clone's `.claude/sorry-matt.json` is not about it.
+  let remote = false;
+  if (target.kind === 'pr' && target.repo) {
+    const origin = root ? run('git', ['-C', root, 'remote', 'get-url', 'origin']) : { ok: false, stdout: '' };
+    remote = !origin.ok || !sameRepo(origin.stdout, target.repo);
+  }
+  const setting = explicitSetting(env, remote ? '' : root, fs.read);
   if (setting) return { deploys: setting.deploys, reason: `依 ${setting.source} 的設定` };
   if (target.kind === 'unknown') return { deploys: null, reason: target.why || '看不出合併的目標分支' };
+  if (remote) return remotePr(target, run, root || dir);
   if (!root) return { deploys: null, reason: `${dir} 不在 git repo 內，讀不到 workflow` };
 
   let branch = target.branch;
   let refs;
   let releasePr = false;
   if (target.kind === 'pr') {
-    if (target.repo) {
-      const origin = run('git', ['-C', root, 'remote', 'get-url', 'origin']);
-      if (!origin.ok || !origin.stdout.toLowerCase().includes(target.repo.toLowerCase())) {
-        return { deploys: null, reason: `PR 屬於 ${target.repo}，不是這個 clone 的 origin，讀不到它的 workflow` };
-      }
-    }
-    const args = ['pr', 'view', ...(target.arg ? [target.arg] : []), ...(target.repo ? ['--repo', target.repo] : []), '--json', 'baseRefName,headRefName,headRefOid,labels'];
-    const view = run('gh', args, { cwd: root, timeout: 10000 });
-    let pr = null;
-    try {
-      pr = view.ok ? JSON.parse(view.stdout) : null;
-    } catch {
-      pr = null;
-    }
-    branch = typeof pr?.baseRefName === 'string' ? pr.baseRefName : '';
-    if (!branch) return { deploys: null, reason: `查不到 PR ${target.arg || '(目前分支)'} 的目標分支（gh pr view 失敗）` };
-    const labels = [].concat(pr.labels ?? []).map((l) => String(l?.name ?? l));
-    releasePr = RELEASE_HEAD.test(String(pr.headRefName ?? '')) || labels.includes('autorelease: pending');
+    const pr = viewPr(target, run, root);
+    if (!pr) return { deploys: null, reason: `查不到 PR ${target.arg || '(目前分支)'} 的目標分支（gh pr view 失敗）` };
+    branch = pr.baseRefName;
+    releasePr = pr.releasePr;
     refs = [pr.headRefOid, pr.headRefName && `origin/${pr.headRefName}`, `origin/${branch}`];
   } else {
     refs = [target.source, `origin/${branch}`];
@@ -446,6 +439,79 @@ export function mergeDeploys(target, { cwd = process.cwd(), env = process.env, r
   const found = workflowsAt(root, refs, run, fs);
   if (!found) return { deploys: null, reason: `讀不到 ${refs.filter(Boolean).join(' 或 ')} 上的 workflow` };
   const fallback = target.kind === 'pr' && found.source === `origin/${branch}` ? '；讀不到 PR head，改讀 base' : '';
+  return judge(found, branch, releasePr, fallback);
+}
+
+/** The PR's base, head and whether it is a release tool's own release PR; null when `gh pr view` fails. */
+function viewPr(target, run, cwd) {
+  const args = ['pr', 'view', ...(target.arg ? [target.arg] : []), ...(target.repo ? ['--repo', target.repo] : []), '--json', 'baseRefName,headRefName,headRefOid,labels'];
+  const view = run('gh', args, { cwd, timeout: 10000 });
+  let pr = null;
+  try {
+    pr = view.ok ? JSON.parse(view.stdout) : null;
+  } catch {
+    pr = null;
+  }
+  if (typeof pr?.baseRefName !== 'string' || !pr.baseRefName) return null;
+  const labels = [].concat(pr.labels ?? []).map((l) => String(l?.name ?? l));
+  return { ...pr, releasePr: RELEASE_HEAD.test(String(pr.headRefName ?? '')) || labels.includes('autorelease: pending') };
+}
+
+// `--repo` takes `[HOST/]OWNER/REPO`; an origin URL ends in `OWNER/REPO` or `OWNER/REPO.git`.
+const repoParts = (spec) => String(spec).trim().replace(/\.git$/i, '').split(/[/:]/).filter(Boolean);
+function sameRepo(originUrl, spec) {
+  const want = repoParts(spec).slice(-2).join('/').toLowerCase();
+  return want.includes('/') && repoParts(originUrl).slice(-2).join('/').toLowerCase() === want;
+}
+
+const REMOTE_QUERY = `query($owner: String!, $name: String!, $head: String!, $headDir: String!, $baseDir: String!) {
+  repository(owner: $owner, name: $name) {
+    head: object(expression: $head) { oid }
+    headDir: object(expression: $headDir) { ...files }
+    baseDir: object(expression: $baseDir) { ...files }
+  }
+}
+fragment files on GitObject { ... on Tree { entries { name type object { ... on Blob { text } } } } }`;
+
+/**
+ * A PR in a repo this clone does not track: its base, head and workflows come from GitHub through `gh`.
+ * The head commit's `.github/workflows` is read; the base's when the head commit is not reachable (noted).
+ */
+function remotePr(target, run, cwd) {
+  const parts = repoParts(target.repo);
+  if (parts.length < 2 || parts.some((p) => /[$%\s]/.test(p))) {
+    return { deploys: null, reason: `看不懂 --repo ${target.repo}（可能是沒有展開的變數），讀不到它的 workflow` };
+  }
+  const [owner, name] = parts.slice(-2);
+  const host = parts.length > 2 ? parts.slice(-3, -2)[0] : '';
+  const pr = viewPr(target, run, cwd);
+  if (!pr) return { deploys: null, reason: `查不到 ${target.repo} PR ${target.arg || '(目前分支)'} 的目標分支（gh pr view 失敗）` };
+  const branch = pr.baseRefName;
+  const head = typeof pr.headRefOid === 'string' ? pr.headRefOid : '';
+  const args = [
+    'api', 'graphql', ...(host ? ['--hostname', host] : []),
+    '-f', `query=${REMOTE_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`,
+    '-f', `head=${head || branch}`, '-f', `headDir=${head || branch}:.github/workflows`, '-f', `baseDir=${branch}:.github/workflows`,
+  ];
+  const res = run('gh', args, { cwd, timeout: 15000 });
+  let data = null;
+  try {
+    data = res.ok ? JSON.parse(res.stdout) : null;
+  } catch {
+    data = null;
+  }
+  const repository = data?.data?.repository;
+  if (!repository || data.errors) return { deploys: null, reason: `從 GitHub 讀不到 ${target.repo} 的 workflow（gh api graphql 失敗）` };
+  const useHead = Boolean(head && repository.head);
+  const tree = useHead ? repository.headDir : repository.baseDir;
+  const files = [].concat(tree?.entries ?? []).filter((e) => e?.type === 'blob' && /\.ya?ml$/i.test(String(e.name)));
+  if (files.some((f) => typeof f.object?.text !== 'string')) return { deploys: null, reason: `${target.repo} 有讀不出內容的 workflow 檔` };
+  const source = useHead ? `${target.repo}@${head.slice(0, 7)}` : `${target.repo}@${branch}`;
+  const workflows = files.map((f) => ({ name: f.name, text: f.object.text }));
+  return judge({ source, workflows }, branch, pr.releasePr, useHead ? '' : '；讀不到 PR head，改讀 base');
+}
+
+function judge(found, branch, releasePr, fallback) {
   const from = `讀自 ${found.source}${fallback}`;
   const { findings, gated, unsure } = analyzeWorkflows(found.workflows, branch, { releasePr });
   if (findings.length) return { deploys: true, reason: `合併到 ${branch} 會觸發：${findings.join('；')}（${from}）` };
