@@ -46,7 +46,8 @@ commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起
 - 一次一個切片：先寫一個會失敗的測試，再寫剛好讓它通過的程式，重複。
 - 只跑受影響範圍的**針對性檢查**：typecheck、這張票碰到的測試檔、相關的 lint。完整套件由
   主持人整併後交給 CI 跑。專案指令契約不是 none 時，讀那份檔，照它的「Targeted checks」縮範圍、照它的
-  「Failures only」讀輸出；是 none 時自己從 manifest 與 CI 設定找指令。
+  「Failures only」讀輸出；是 none，或那份檔的「Targeted checks」寫 `none` 時，自己從 manifest 與 CI 設定找指令，
+  回報的來源寫 `self-found`。
 - **指令輸出先縮小再讀**：測試、build 與 lint 的輸出只把失敗的行與結尾摘要讀進 context；全綠時只留摘要
   那一行。契約有「Failures only」時用它的寫法。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外或不 commit，回報與接續紀錄只給路徑。
   只留失敗的行看不出原因時，可以再讀該失敗前後的片段，不讀整份輸出。通過與否以指令本身的結束狀態判定，

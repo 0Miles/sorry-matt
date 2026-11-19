@@ -27,11 +27,28 @@ claude plugin validate .
   node --test scripts/<name>.test.mjs
   ```
 
-  改到的檔對應哪個測試檔：`src/skills/<skill>/scripts/<name>.mjs` 對 `scripts/<name>.test.mjs`；`hooks/` 對
-  `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、
-  `scripts/reread.test.mjs`；`scripts/check-*.mjs` 與 `scripts/lib.mjs` 對 `scripts/checks.test.mjs`。
-- 單一 skill（改了 `src/skills/<skill>/` 或 `skills/<skill>/` 的 Markdown、metadata 或 vendored 檔）：結構與
-  hash 檢查沒有單一 skill 的參數，整個 repo 跑一次，輸出只看該 skill 名稱開頭的行：
+  改到的檔對應哪個測試檔：
+
+  | 改到的檔 | 測試檔 |
+  | --- | --- |
+  | `src/skills/get-to-work/scripts/acceptance.mjs` | `scripts/acceptance.test.mjs` |
+  | `src/skills/get-to-work/scripts/frontier.mjs` | `scripts/frontier.test.mjs` |
+  | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs` |
+  | `src/skills/get-to-work/scripts/review-guide.mjs` | `scripts/review-guide.test.mjs` |
+  | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs` |
+  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs` |
+  | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs` |
+  | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/reread.test.mjs` |
+  | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |
+
+  新增的 skill 腳本沒有列在表裡時，跑 import 它的測試檔（`scripts/*.test.mjs` 的 import，或 import 它的腳本
+  的測試檔）。`skills/<skill>/scripts/` 是 src 逐位元組的副本，沒有自己的測試：改到它就跑
+  `node scripts/check-structure.mjs`，它比對兩邊是否相同。
+- 單一 skill（改了 `src/skills/<skill>/` 或 `skills/<skill>/` 的任何檔，含 Markdown、metadata、腳本與 vendored
+  檔）：結構與 hash 檢查沒有單一 skill 的參數，整個 repo 跑一次。結束代碼不是 0 時，讀輸出裡**含有**該 skill
+  名稱的行（不只是以它開頭的：`check-vendored.mjs` 的行以 `src/skills/<skill>/` 或 `skills/<skill>/` 開頭），
+  加上不屬於任何單一 skill 的 repo 層行 —— 以 `skill `、`plugin.json skills ` 或 `README.md skills table `
+  開頭的：
 
   ```bash
   node scripts/check-structure.mjs

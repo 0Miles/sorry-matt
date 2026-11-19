@@ -111,7 +111,8 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 **本機驗證**（本 skill 唯一的正本，其他地方引用這裡）：沒有 `origin`、這條線已定案為 CI 不涵蓋整合
 分支，或這個 SHA 讀不到結論（查詢失敗，或再讀一次仍沒有 run）時，改在這個 SHA 上本機跑一次 repo
 完整的自動檢查，報告寫明是哪一種。repo 完整的自動檢查，在這個 SHA 的樹有 `docs/agents/commands.md` 時就是它的
-「Full checks」，逐條照跑；沒有時照現況自己從 manifest 與 CI 設定找。完整驗證的報告在來源旁寫明指令取自
+「Full checks」，逐條照跑；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found` —— `none` 不是「沒有檢查、直接記綠」。完整驗證的報告在來源旁寫明指令取自
 `commands.md` 或自行找到（`self-found`）。在整合 worktree、樹正是這個 SHA 時跑：收官時整併 agent 還在
 解 conflict 就等它結束；流水線的派票點或喚醒遇到整合 worktree 的樹不是這個 SHA（整併進行中）時不等，這次
 不驗，這條線沿用上一次的結果 —— 不在紅燈處置中就照常派票 —— 由該次整併觸發的派票點驗那時的最新 SHA。前兩種線在流水線中就照第 1 節「讀 CI」逐 SHA 驗證，不只在收官。

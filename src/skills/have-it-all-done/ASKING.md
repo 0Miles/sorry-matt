@@ -27,7 +27,8 @@
 
 **缺檔時。** `get-to-work` 的主持人在凍結票集前產生它（`get-to-work` 第 0 節）；其他 skill 不產生。讀取點
 —— 實作 agent 的針對性檢查、`prove-it` 的實跑、`get-to-work` 的本機驗證 —— 在沒有這份檔時照現況自己從
-manifest 與 CI 設定找指令。每個讀取點都在回報寫明用的是哪一種：`commands.md` 或 `self-found`。
+manifest 與 CI 設定找指令。有這份檔、但讀取點要用的那一欄是 `none` 時，那一欄照缺檔處理：自己找，回報寫
+`self-found`；`none` 不代表沒有檢查要跑。每個讀取點都在回報寫明用的是哪一種：`commands.md` 或 `self-found`。
 
 **產生規則。** 內容只從 repo 讀出來：manifest 的 scripts、CI 設定的執行步驟、既有的覆蓋率設定；敏感路徑取
 repo 裡實際存在的 CI 設定、hook 與 guard、發布與部署設定、權限設定與資料庫 migration 的路徑。每一欄附來源檔案

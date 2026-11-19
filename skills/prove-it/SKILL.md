@@ -123,8 +123,9 @@ The reviewer does this step; it is never handed to the implementer.
 ### Live run
 
 In the review worktree, run the project's test, typecheck, and lint scripts once each. When the review worktree
-has `docs/agents/commands.md`, take the commands from its "Full checks"; without it, find them yourself from the
-manifest and the CI configuration, as before. This is the baseline for mutation:
+has `docs/agents/commands.md`, take the commands from its "Full checks"; without the file, or when its "Full checks"
+reads `none`, find them yourself from the manifest and the CI configuration, as before, and give the source as
+`self-found`. This is the baseline for mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red

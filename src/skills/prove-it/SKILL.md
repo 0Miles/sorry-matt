@@ -103,7 +103,8 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
 ### 實跑
 
 在審查用 worktree 跑專案定義的 test、typecheck、lint，各一次。審查用 worktree 有 `docs/agents/commands.md`
-時，指令取它的「Full checks」；沒有時照現況自己從 manifest 與 CI 設定找。這是突變的基準：
+時，指令取它的「Full checks」；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found`。這是突變的基準：
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，

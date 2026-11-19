@@ -55,7 +55,8 @@ all the rules you follow, and none of them points at a file or section you canno
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
   relevant lint. The full suite is CI's job once the host integrates the ticket. When the project command
   contract is not none, read that file, narrow the checks per its "Targeted checks" and read output per its
-  "Failures only"; when it is none, find the commands yourself from the manifest and the CI configuration.
+  "Failures only"; when it is none, or the file's "Targeted checks" reads `none`, find the commands yourself from
+  the manifest and the CI configuration and report the source as `self-found`.
 - **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
   the closing summary into context; when everything is green, keep only the summary line. When the contract has
   a "Failures only", use its form. To keep the full output,

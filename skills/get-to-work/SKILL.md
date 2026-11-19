@@ -133,7 +133,9 @@ line whose CI is red, and goes through the red-light handling in `RED-LIGHT.md`.
 line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second read),
 run the repository's full checks locally once on this SHA instead, and the report says which case it was. The
 repository's full checks are the "Full checks" of `docs/agents/commands.md` when this SHA's tree has that file,
-each command run as written; without it, find them yourself from the manifest and the CI configuration, as before.
+each command run as written; without the file, or when its "Full checks" reads `none`, find them yourself from the
+manifest and the CI configuration, as before, and give the source as `self-found` — `none` never means "no checks,
+record a green".
 The full verification report states, next to the source, whether the commands came from `commands.md` or were
 found by the host (`self-found`). Run them in the integration worktree while its tree is exactly this SHA: when finishing the run, wait for a merge
 agent still resolving a conflict; at a dispatch point or wake-up in the pipeline, when the integration worktree's

@@ -33,7 +33,9 @@ say reads `none`.
 **When the file is missing.** The `get-to-work` host generates it before freezing the ticket set (`get-to-work`
 section 0); no other skill generates it. The readers — the implementation agent's targeted checks, the `prove-it`
 live run, and `get-to-work`'s local verification — find the commands themselves from the manifest and the CI
-configuration, as they did before, when the file is not there. Every reader states in its report which one it
+configuration, as they did before, when the file is not there. When the file exists but the field a reader needs
+reads `none`, that field is treated like a missing file: the reader finds the commands itself and reports
+`self-found`; `none` never means there is nothing to run. Every reader states in its report which one it
 used: `commands.md` or `self-found`.
 
 **Generation rules.** The content is read out of the repo and nowhere else: the manifest's scripts, the run steps
