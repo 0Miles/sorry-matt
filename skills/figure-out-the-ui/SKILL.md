@@ -11,7 +11,7 @@ what it solves, and how it is ordered before any code exists.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**precedence**, **component reuse**, and **state matrix** below.
+**precedence**, **component reuse**, **page-local component**, **new-component bar**, and **state matrix** below.
 
 Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop, produce
 no UI brief, and ask the user to run `/set-up-ui-skills`. This skill only reads `ui.md`: when it finds `ui.md`
@@ -30,14 +30,15 @@ Done when: each of the three is one sentence that names its source or is labeled
 ## 2. Familiar behavior
 
 Every interactive element maps to a named component: one from the `Shared components` table in `ui.md`, a
-component library component, or a native element, chosen under "choose components by job" in **component
-reuse**. Links for going somewhere, buttons for doing something, forms keeping their native semantics. Tabs that
+component library component, a native element, or a **page-local component**, chosen under "choose components by
+job" in **component reuse**. A native element is written "native `<tag>`", and a page-local component with its
+file path; both count as reused and do not go through the **new-component bar**. Links for going somewhere, buttons for doing something, forms keeping their native semantics. Tabs that
 change the URL and panels that switch in place are different things. One visual state means one thing across
 the whole product. Look up detail following the **precedence**.
 
-Done when: every interactive element is written as "element → named component", the component being a shared
-component, a component library component, or a native element, and every new one is listed separately with why
-existing components fall short.
+Done when: every interactive element is written as "element → named component", the component being one of four:
+a shared component, a component library component, a native element (written "native `<tag>`"), or a page-local
+component (with its file path); every new one is listed separately with why existing components fall short.
 
 ## 3. Hierarchy
 

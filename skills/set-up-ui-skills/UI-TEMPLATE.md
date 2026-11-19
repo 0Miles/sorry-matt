@@ -11,7 +11,7 @@ with nothing to say reads "None" instead of being removed. Angle brackets mark w
 - Package and version: `<package>@<version the lockfile resolves>`
 - Loading: <the one import route, and where styles and providers are loaded>
 - Bundled skill: <the skill in the available-skills list that belongs to it; "none" if there is none>
-- Existing, not for new use: <the other library's package and version; delete this line when there is only one>
+- Existing, not for new use: <the other library's package and version in the same package; delete this line when there is only one>
 
 ## Tokens
 
@@ -34,10 +34,30 @@ with nothing to say reads "None" instead of being removed. Angle brackets mark w
 
 - lint: `<command>`
 - typecheck: `<command>`
+- test: `<command>`
 - storybook: `<command>`
 ```
 
 When the project uses no ready-made component library, the "Component library" section is the single line "None".
+
+When different packages each use one component library (a monorepo), the "Component library" section has one entry
+per library, each with a "Scope" line giving the package path it covers; every one is active. When one package has
+two at once, "Existing, not for new use" goes under that package's entry:
+
+```markdown
+## Component library
+
+- `<package A>@<version the lockfile resolves>`
+  - Scope: `<path of package A>`
+  - Loading: <package A's import route, and where styles and providers are loaded>
+  - Bundled skill: <the skill that belongs to package A; "none" if there is none>
+- `<package B>@<version the lockfile resolves>`
+  - Scope: `<path of package B>`
+  - Loading: <package B's import route, and where styles and providers are loaded>
+  - Bundled skill: <the skill that belongs to package B; "none" if there is none>
+```
+
+A single-package project writes no "Scope" line and follows the first template; its format is unchanged.
 
 ## Rules
 

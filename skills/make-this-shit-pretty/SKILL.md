@@ -10,33 +10,39 @@ Arguments name the page, component, route, or flow to rework. With no argument, 
 
 Before starting, take the base directory shown when this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full. It is the **frontend
-contract**; it defines the bold **component reuse**, **state matrix**, **accessibility floor**, **evidence
-grade**, and **eyes-on list** below.
+contract**; it defines the bold **component reuse**, **hard-coded value**, **state matrix**, **accessibility
+floor**, **evidence grade**, and **eyes-on list** below.
 
 Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
 step 1: create no branch, produce no findings, and ask the user to run `/set-up-ui-skills`.
 
-**Hard rail — behavior stays unchanged.** The **behavior baseline** is these five: routes, data flow, fields
-and validation rules, the requests sent, and event tracking; they are the same before and after. What may
-change is structure, hierarchy, semantic markup, styling, and the filling-in of missing states. A functional
-defect found along the way is recorded as a finding and handed back in the report for a separate change.
+**Hard rail — behavior stays unchanged.** The **behavior baseline** is these six: routes, data flow, fields
+and validation rules, the requests sent, event tracking, and keyboard operation; they are the same before and
+after. "Keyboard operation" means every action is triggered by the same keys before and after the rework, and
+triggered only once. What may change is structure, hierarchy, semantic markup, styling, and the filling-in of
+missing states. A functional defect found along the way is recorded as a finding and handed back in the report
+for a separate change.
 
 Replacing a hand-rolled lookalike, or code that bypasses the component library, with a library component or a
 shared component from `ui.md` counts as "filling in missing states or semantics" and does not break "behavior
-stays unchanged"; the five **behavior baseline** items are still compared one by one, and the original event
-handlers, requests sent, and event tracking all move over to the new component.
+stays unchanged"; the six **behavior baseline** items are still compared one by one. A migration moves only the
+business logic over to the new component: submits, requests, event tracking, navigation. Keyboard, focus, and
+state handlers the target component already provides do not move — the Enter / Space key handler on a
+hand-rolled button, for example, or self-managed focus and disabled state; moving them makes one key press fire
+twice, and breaks the **component reuse** prohibition on hand-writing behavior a component already has.
 
 ## 1. Fix the scope and the behavior baseline
 
 Confirm the working tree is clean, list the screens and component files in scope, then record three things:
 
-- The current state and code location of each of the five behavior-baseline items.
+- The current state and code location of each of the six behavior-baseline items; for keyboard operation, which
+  keys trigger each action and how many times each fires.
 - The results of one run each of the project's existing tests, typecheck, and lint; pre-existing red lights
   are pinned down now.
 - A screenshot of every screen in each applicable cell of the **state matrix**, saved to the scratchpad as the
   **before**.
 
-Done when: every file in scope is listed; all five behavior-baseline items have a record of their current
+Done when: every file in scope is listed; all six behavior-baseline items have a record of their current
 state; the check results and the paths of the "before" screenshots are recorded.
 
 ## 2. Walk the whole journey
@@ -60,12 +66,12 @@ sections of `ui.md`, and catches three kinds:
 - **Outside override**: the prohibitions spelled out in the customization ladder of **component reuse** —
   overriding a component's internal styles from an outside selector, raising specificity or using
   `!important`, a private class or private CSS variable.
-- **Hard-coded value**: a literal color, spacing, radius, or font value written where the token file recorded in
-  `ui.md` already has a matching token.
+- **Hard-coded value**: judged by the **hard-coded value** definition in **component reuse**, with no criterion
+  of its own; the finding names the token that matches it. A literal outside the definition gets no finding.
 
 The **evidence grade** of these findings: hand-rolled lookalikes and outside overrides are measured (the DOM and
-computed style read in the browser); hard-coded values are derived (computed values compared with the tokens'
-resolved values); with no browser they are unverified, with the source `file:line` attached.
+computed style read in the browser), and with no browser they are unverified, with the source `file:line`
+attached; the evidence grade and evidence for hard-coded values follow the **hard-coded value** definition.
 
 Done when: every step of the journey and the interruption were walked; every lens has findings or an explicit
 "nothing found"; every finding has all five fields.
@@ -96,8 +102,8 @@ When currently on the default branch, create a new branch first. For each step, 
 When a step migrates to a shared component (extracting one, switching to one, or changing what one is for) or
 merges duplicate implementations, the matching edit to `ui.md` goes into that step's own commit:
 `git show --name-only` lists both the code and `docs/agents/ui.md`. A mismatch between `ui.md` and the source
-found along the way and not caused by any step is fixed with the source winning, in a separate commit that
-changes only `docs/agents/ui.md`.
+found along the way and not caused by any step leaves `ui.md` alone, goes into the **`ui.md` mismatches** of
+step 5, and gets no commit of its own.
 
 When a step still fails after two fixes, revert it, record it as unfinished, and move on to the next.
 
@@ -108,12 +114,17 @@ finished step has a before/after pair and check results matching step 1.
 
 - **Findings reconciliation table**: one row per finding, with a result of fixed, not addressed, or out of
   scope, each with its commit or reason.
-- **Behavior baseline recheck**: the five items compared before and after, one by one; check results set
-  beside those from step 1.
+- **Behavior baseline recheck**: the six items compared before and after, one by one, with the "keyboard
+  operation" row giving each action's keys and fire count before and after; check results set beside those from
+  step 1.
 - **Before/after pairs**: one set per screen, with full screenshot paths.
 - **State of `ui.md`**: which rows this run updated and in which commit each, or why no update was needed.
+- **`ui.md` mismatches**: every mismatch found along the way, not caused by any step, and not fixed (including
+  those `actually-look-at-the-ui` reports), naming the `ui.md` section and row and the source location; "none"
+  when there are none.
 - The **eyes-on list**, and the functional defects recorded along the way.
 
-Done when: the reconciliation table covers every finding from step 2 exactly once; all five behavior-baseline
+Done when: the reconciliation table covers every finding from step 2 exactly once; all six behavior-baseline
 items are marked "same"; check results match step 1; every "it looks better" in the report points to a
-before/after pair; `ui.md` matches this change, or is explicitly recorded as needing no update.
+before/after pair; `ui.md` matches this change, or is explicitly recorded as needing no update; the `ui.md`
+mismatches are listed one by one, or stated as "none".

@@ -311,6 +311,30 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「Tokens」段(`ui.md`) | `Tokens` section |
 | 「檔案位置」行(`ui.md` 的 Tokens 段) | `Location` line |
 | 「載入方式」行(`ui.md`) | `Loading` line |
+| 專案自己的樣式 | the project's own styles |
+| 對應的 token | matching token |
+| 重設值 | reset value |
+| 繼承來的值 | inherited value |
+| 元件庫套件內部的值 | values inside the component library's package |
+| 禁止事項(元件複用的) | prohibitions |
+| 原生 `<tag>` | native `<tag>` |
+| 頁內元件 | page-local component |
+| 單頁的新元件 | new component used on a single page |
+| 鍵盤操作(行為基準第六項) | keyboard operation |
+| 業務邏輯 | business logic |
+| 適用範圍 | scope |
+| 「適用範圍」行(`ui.md`) | `Scope` line |
+| 逐 package 判定 | judged per package |
+| 現役(元件庫) | active |
+| 外框排版(客製化第 1 階) | outer layout |
+| 本次改動碰到的不一致 | mismatch this change touches |
+| 途中發現的不一致 | mismatch found along the way |
+| 預期元件 | expected component |
+| 公開替代方式 | public alternative |
+| 迴圈停止 | loop stop |
+| 決定下一步 | decide what comes next |
+| 目標(`make-the-ui-fast` 回報項) | target |
+| 畫面確認 | UI check |
 
 ## 外部語義來源
 
