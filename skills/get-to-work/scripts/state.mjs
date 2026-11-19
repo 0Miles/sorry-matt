@@ -1,0 +1,1198 @@
+#!/usr/bin/env node
+// state: the machine-written run state of get-to-work's pipeline, `<run>.state.json` next to the run ledger
+// (`<git common dir>/sorry-matt/runs/<run>.state.json`). It holds what used to be ledger field 4 (lines, tip SHAs,
+// CI results, the per-SHA local verification records, the base sync), field 8 (the reconciliation table: one row
+// per ticket with its stage, assignment record, counts and merge SHAs) and field 9 (usage and the stop reason).
+// Only this script writes it; the host never edits the file by hand. The narrative fields (next action, self-answer
+// log, human-work list, rule files) and the `rule:` / `budget:` lines that hooks/runs.mjs and hooks/budget.mjs read
+// stay in the ledger. This header is the single source of truth for the file's schema and for the stage rules.
+// No dependencies: runs on a bare Node 20+.
+//
+// Usage (every command takes the state file first; `--now <UTC>` fixes the clock on the commands that write)
+//   node state.mjs init     <state> --run <run>
+//   node state.mjs import   <state> --from <seed.json> [--ledger <ledger.md>]
+//   node state.mjs profile  <state> [--review full|minimal] [--fixRounds 0|1|2] [--recheck true|false]
+//                           [--onUnfixed stuck|file-issue] [--expand agent|skip] [--integrate aggregate-pr|direct]
+//                           [--ci read|skip] [--simplify true|false]
+//   node state.mjs show     <state>
+//   node state.mjs resume   <state>
+//   node state.mjs add      <state> <ticket>... --line <integration branch>
+//   node state.mjs line     <state> <integration branch> [--lines <line>,<line>] [--tip <sha>]
+//                           [--base <sha> --synced yes|no]
+//   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
+//                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
+//   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
+//   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
+//                           [--findings <id>,<id>]
+//   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
+//   node state.mjs merge    <state> <ticket> <merge sha>
+//   node state.mjs assign   <state> <ticket>... --record <record.json> --type <agent type> [--worktree <path>] [--reassign]
+//   node state.mjs agent    <state> <ticket>... --id <agent id>
+//   node state.mjs extend   <state> <ticket>... --deadline <UTC>
+//   node state.mjs release  <state> <ticket>... [--stopped]
+//   node state.mjs ci       <state> <integration branch> --from <verdict.json> [--dispatch] [--branch-runs <n>]
+//   node state.mjs local    <state> <integration branch> <full sha> green|red no-origin|ci-not-covering|no-verdict
+//   node state.mjs usage    <state> [--started <UTC>] [--wait <seconds>] [--spawns <n>] [--add <counter>=<n>]...
+//                           [--sleep-task <task id>|none] [--tokens <n>|unknown]
+//   node state.mjs progress <state> --from <progress.json> [--note <text>]
+//
+// Times are UTC, written `YYYY-MM-DDTHH:MM:SSZ`, as in deadline.mjs. A ticket id is the tracker's id (`#12`) or the
+// ticket file name; an integration branch is the `<run>/<line-slug>` name. SHAs are lowercase hex, 7–64 digits
+// (`local` takes the full 40 or 64).
+//
+// The file (format "sorry-matt/state@1"; fields are only ever added, never renamed; keys this version does not
+// know are kept as they are on every write, so fields a later script adds survive)
+//   { "format": "sorry-matt/state@1", "run": "<run>",
+//     "created": "<UTC>", "updated": "<UTC>", "revision": <writes so far>,
+//     "imported": "<UTC>" | null,                         // set by import
+//     "profile": null | { "review", "fixRounds", "recheck", "onUnfixed", "expand", "integrate", "ci", "simplify" },
+//                                                          // written once (see Profile); null: the defaults
+//     "lines": { "<integration branch>": {
+//         "lines": ["<frontier.mjs line>"],                // the lines joined into this branch at the freeze
+//         "tip": "<sha>" | null,                           // set by `line --tip` and by every `merge`
+//         "ci": { "sha", "verdict", "reason", "at" } | null,   // the latest ci.mjs verdict recorded
+//         "noRun": { "count": <n>, "round": <dispatch point> | null },   // consecutive dispatch points that
+//                                                          // read an empty run list
+//         "ciNotCovering": { "sha", "at" } | null,         // settled: CI does not cover the branch
+//         "local": [{ "sha", "result": "green" | "red", "reason", "at" }],   // per-SHA local verification
+//         "base": { "sha", "synced": true | false, "at" } | null } },        // the finish's base sync
+//     "tickets": { "<ticket>": {
+//         "line": "<integration branch>", "stage": "<stage>", "branch": "<ticket branch>" | null,
+//         "deliverable", "verification", "statusRecord": <text> | null,   // free text the host gives
+//         "snapshotSha256": "<sha256 of the acceptance snapshot>" | null,
+//         "assignment": null | {                           // the current assignment record
+//           "agentId": "<id>" | null, "type": "<subagent_type>", "worktree": "<path>" | null,
+//           "assigned", "limit", "deadline": "<UTC>" | null, "extended": "no" | "yes",
+//           "fingerprint": { "head", "tree" } | { "expansions": { "<ticket>": <n> } } },
+//         "timeoutReassignments": { "implementing": <n>, "fixing": <n>, "expanding": <n> },
+//         "sendBacks": <n>, "fixRounds": <n>,
+//         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
+//                       "findings": ["<finding id>"] | null, "at", "after": <history length when recorded> }],
+//         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
+//                                                          // implementer's per-finding report (recheck: false)
+//         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
+//         "merges": [{ "sha", "at" }],                     // every merge of the ticket, `-ci` merges included
+//         "reason": "<why stuck or awaiting ruling>" | null,
+//         "history": [{ "from", "to", "at", "reason" }] } },
+//     "usage": { "started": "<UTC>" | null, "startedNote": <text> | null, "waitingSeconds": <n>,
+//                "spawns": <n>, "spawnsSource": "counters" | "host", "rounds": <dispatch points>,
+//                "noProgress": <n>, "snapshot": { "tips", "terminal" } | null,
+//                "reviewRounds", "fixRounds", "fullVerifications", "sendBacks", "timeoutExtensions",
+//                "timeoutStops", "compactions": <n>,
+//                "sleepTask": "<task id>" | null, "tokens": <n> | null },   // tokens null: unknown
+//     "stop": null | { "at", "stoppedBy": [<limit>], "usage": { "rounds", "spawns", "hours" }, "note" } }
+//
+// Stages: candidate → expanding → implementing → in-review → fixing → queued → integrating → an end state:
+// delivered, stuck, awaiting-ruling. In flight means implementing through integrating. `stage` moves tickets only
+// along these edges; every other move is refused:
+//   candidate     → expanding, implementing, awaiting-ruling, stuck
+//   expanding     → candidate, awaiting-ruling, stuck          (the expansion agent reported, or timed out twice)
+//   implementing  → in-review, awaiting-ruling, stuck
+//   in-review     → fixing, queued, awaiting-ruling, stuck
+//   fixing        → in-review, awaiting-ruling, stuck          (the recheck after a fix round)
+//   queued        → integrating, awaiting-ruling, stuck
+//   integrating   → delivered, candidate (send back for a redo), awaiting-ruling, stuck
+//   delivered     → stuck                                       (red-light revert, or upstream reverted)
+//   stuck, awaiting-ruling → nothing
+// and these guards hold on top, each refused with what is missing (the profile's defaults shown; see Profile):
+//   - implementing from candidate needs the acceptance snapshot's sha256 (`set --snapshot`);
+//   - queued needs a `pass` from a full review as the latest review recorded since the ticket last entered
+//     in-review; fixing needs a `fix` there, and at most two fix rounds per ticket (a third is refused: mark it
+//     stuck);
+//   - delivered needs a merge SHA recorded with `merge`;
+//   - integrating → candidate (send back) at most once per ticket (a second is refused: mark it stuck);
+//   - an end state never returns to a stage in flight or to candidate; implementing and fixing never skip
+//     in-review to queued or integrating.
+// A command naming several tickets is all or nothing.
+//
+// Profile: how strict this run's pipeline is, declared at the start and written once with `profile` (at the
+// ruling point, or at the freeze of a standalone run); a second write is refused, and so is a first one once
+// any ticket has left candidate or has a review: the defaults it moved under hold for the rest of the run. Fields
+// not given, and every field while nothing is written, take the defaults, which are the strict flow above. A
+// relaxed field changes what the guards accept, never what evidence they need:
+//   review     full (default: prove-it) | minimal (a single reviewer reporting blocking findings only). Under full,
+//              queued needs the passing review to be `--kind full`; under minimal either kind counts. A review is
+//              needed either way.
+//   fixRounds  2 (default) | 1 | 0: the most fix rounds per ticket; fixing beyond it is refused.
+//   recheck    true (default) | false: after a fix round, no re-review. fixing → queued is then allowed, but only
+//              with the implementer's per-finding report for that round (`report`), naming every finding id of the
+//              fix review (`review --findings`) once as fixed or unfixed.
+//   onUnfixed  stuck (default) | file-issue: findings still open go to a raw issue and the ticket is integrated
+//              anyway. queued is then allowed with a latest `fix` once the fix rounds are used up, or with unfixed
+//              findings in the report — only with that issue recorded (`set --unfixed-issue`).
+//   expand     agent (default) | skip: the ticket's own done-when is the acceptance; expanding is refused. The
+//              snapshot sha256 is still needed for implementing.
+//   integrate  aggregate-pr (default) | direct (merge straight into the base branch);
+//   ci         read (default) | skip;
+//   simplify   true (default) | false.
+//              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
+//              still needs its merge SHA).
+// A profile holds these fields only: it cannot relax the guard hook's actions needing confirmation (pushing to a
+// branch that deploys, writing settings files) or the budget and breaker limits, which stay in the ledger's
+// `budget:` lines; an unknown field is refused.
+//
+// Commands
+//   init      Creates the state with no lines and no tickets. Refused when the file exists.
+//   import    One-time takeover of a ledger that has no state file. seed.json is written by the host from the
+//             ledger: { "run", "profile", "lines", "tickets", "usage", "stop" } in the shape above, any field left out
+//             taking its default (a ticket needs `line` and `stage`). `--ledger` also reads every
+//             `local: <branch> <full sha> <green|red> <reason>` line of the ledger (a list bullet and backticks
+//             allowed) into the lines' `local`, the first record of a SHA winning. Without `usage.started` the
+//             import time is taken and `startedNote` says the time before it was not counted. The imported
+//             tickets must satisfy the guards of the seed's `profile` (queued and integrating as if entering
+//             queued, delivered with a merge SHA); refused when the file exists.
+//   profile   Writes the profile once (see Profile). Refused when one is already written, or once any ticket has
+//             left candidate or has a review.
+//   show      Prints the state.
+//   resume    What a resumed host needs, from the state alone:
+//             { "format", "command": "resume", "run", "revision", "profile": <effective>, "profileWritten",
+//               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline" }],  // not at an end
+//               "inFlight": [{ "id": "<agent id>", "type", "tickets": [<ticket>], "assigned", "limit", "deadline",
+//                              "extended", "fingerprint", "worktree"? }],   // one per agent with a deadline;
+//                                                         // the agent list of a `deadline.mjs scan` plan (add the
+//                                                         // current `expansions` counts for an expansion agent)
+//               "unnamed": [<ticket>],                    // a deadline but no agent id: record ran, the spawn
+//                                                         // or `agent` did not
+//               "terminal": { "delivered": [], "stuck": [], "awaiting-ruling": [] },
+//               "lines": { "<branch>": { "tip", "ci", "ciNotCovering",
+//                                        "local": ["local: <branch> <sha> <result> <reason>"] } },  // for ci.mjs
+//               "usage", "stop" }
+//   add       Adds tickets at candidate on an integration branch (created when new). Refused for a known ticket.
+//   line      Creates or updates an integration branch: the joined frontier lines, the tip, the base sync.
+//   set       Fills a ticket's free-text, snapshot and unfixed-issue fields.
+//   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
+//             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
+//   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--findings` (with
+//             `fix`) lists the finding ids. Adds one to usage `reviewRounds`.
+//   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
+//             the latest (fix) review exactly once.
+//   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
+//             line's tip.
+//   assign    Records an assignment from `deadline.mjs record`'s output (record.json) with the agent type, for
+//             each ticket the agent covers. `--worktree` is required with a { head, tree } fingerprint and not
+//             allowed with { expansions }. The agent id is filled by `agent` after the spawn. `--reassign` marks a
+//             timeout reassignment: it adds one to the ticket's count for its stage (implementing, fixing or
+//             expanding) and is refused when that count is already 1.
+//   agent     Fills the agent id of the current assignment. Refused without an assignment in flight, or when
+//             another id is already there.
+//   extend    Sets the deadline from `deadline.mjs scan`'s `extend` and `extended` to "yes"; refused when already
+//             extended. One call per agent, naming every ticket it covers: usage `timeoutExtensions` + 1.
+//   release   The agent reported or was stopped: deadline null. `--stopped` (one call per agent) adds one to
+//             usage `timeoutStops`.
+//   ci        Records a `ci.mjs verdict` output for its branch. An empty `no-run` read with `--dispatch` counts one
+//             dispatch point (once per value of usage `rounds`); any other verdict resets the count. At a count of
+//             two, `--branch-runs <n>` (the length of `gh run list --branch <branch> --limit 1`) of 0 settles the
+//             branch as CI not covering it. Refused on a settled branch.
+//             Output: { "format", "command": "ci", "revision", "branch", "noRun": <count>,
+//                       "ciNotCovering": true | false, "branchCheckNeeded": true | false }
+//   local     Appends a per-SHA local verification record. Refused when the SHA already has one on that branch:
+//             reuse it.
+//   usage     Updates field-9 usage. `--started` sets the start once. `--wait` adds waiting seconds. The spawn count
+//             is read from `<run>.counters.json` next to the state file when it exists (written by the budget
+//             hook; read only), else taken from `--spawns`. `--add` adds to `fullVerifications` or `compactions`.
+//             Output: { "format", "command": "usage", "revision", "usage",
+//                       "progressUsage": { "rounds", "spawns", "hours" } }   // for a `deadline.mjs progress` plan;
+//                                                         // hours: now − started − waiting, null before a start
+//   progress  Records a `deadline.mjs progress` output: `noProgress`, `snapshot`, and `rounds` when not stopped;
+//             when stopped, `stop` with the limits, the usage at the time and `--note`. Refused once stopped.
+//
+// Output (stdout, JSON): `show` and `resume` as above; a write prints { "format", "command", "revision", ... }
+// with the tickets, line or usage it changed. Every write takes `<state>.lock` (created exclusively; a lock older
+// than two seconds is left over from a killed process and removed), reads, checks, and replaces the file through
+// a temporary file and a rename — the same scheme as the budget hook's counters.json — so a reader never sees a
+// half-written file and two writers never lose an update.
+//
+// Exit codes: 0 done; 1 the state (or the ledger, or a file named by a flag) could not be read or written, is
+// missing, is not JSON or not a state file, or the lock could not be taken; 2 bad arguments or a bad input file;
+// 3 refused: the command is well-formed but the state does not allow it (the message says what is missing).
+// On 1, 2 or 3 nothing is written to stdout and the state file is unchanged.
+import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { UsageError, failure, runIfEntry } from './cli.mjs';
+
+export const FORMAT = 'sorry-matt/state@1';
+export const STAGES = ['candidate', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered', 'stuck', 'awaiting-ruling'];
+export const TERMINAL = ['delivered', 'stuck', 'awaiting-ruling'];
+const EDGES = {
+  candidate: ['expanding', 'implementing', 'awaiting-ruling', 'stuck'],
+  expanding: ['candidate', 'awaiting-ruling', 'stuck'],
+  implementing: ['in-review', 'awaiting-ruling', 'stuck'],
+  'in-review': ['fixing', 'queued', 'awaiting-ruling', 'stuck'],
+  fixing: ['in-review', 'awaiting-ruling', 'stuck'],
+  queued: ['integrating', 'awaiting-ruling', 'stuck'],
+  integrating: ['delivered', 'candidate', 'awaiting-ruling', 'stuck'],
+  delivered: ['stuck'],
+  stuck: [],
+  'awaiting-ruling': [],
+};
+const TIMEOUT_STAGES = ['implementing', 'fixing', 'expanding'];
+export const PROFILE_DEFAULTS = Object.freeze({
+  review: 'full',
+  fixRounds: 2,
+  recheck: true,
+  onUnfixed: 'stuck',
+  expand: 'agent',
+  integrate: 'aggregate-pr',
+  ci: 'read',
+  simplify: true,
+});
+const PROFILE_VALUES = {
+  review: ['full', 'minimal'],
+  fixRounds: [0, 1, 2],
+  recheck: [true, false],
+  onUnfixed: ['stuck', 'file-issue'],
+  expand: ['agent', 'skip'],
+  integrate: ['aggregate-pr', 'direct'],
+  ci: ['read', 'skip'],
+  simplify: [true, false],
+};
+const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
+const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
+const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
+const ADDABLE = ['fullVerifications', 'compactions'];
+const COUNTERS = ['reviewRounds', 'fixRounds', 'fullVerifications', 'sendBacks', 'timeoutExtensions', 'timeoutStops', 'compactions'];
+
+/** The command is well-formed but the state does not allow it: exit 3, state unchanged. */
+export class Refusal extends Error {}
+/** The state file is missing, unreadable or not a state file: exit 1. */
+class StateError extends Error {}
+
+// ---- values ------------------------------------------------------------------------------------------------------
+
+const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const SHA = /^[0-9a-f]{7,64}$/;
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const formatTime = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+const isTime = (x) => typeof x === 'string' && TIME.test(x) && !Number.isNaN(Date.parse(x));
+const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+const isCount = (x) => Number.isInteger(x) && x >= 0;
+const isText = (x) => typeof x === 'string' && x.length > 0;
+const isId = (x) => isText(x) && !/\s/.test(x);
+
+function time(text, where) {
+  if (!isTime(text)) throw new UsageError(`${where}: expected a UTC time like 2026-01-31T23:59:59Z, got ${JSON.stringify(text)}`);
+  return text;
+}
+function sha(text, where, full = false) {
+  if (typeof text !== 'string' || !(full ? FULL_SHA : SHA).test(text)) {
+    throw new UsageError(`${where}: expected a ${full ? 'full 40- or 64-digit' : '7–64 digit'} lowercase hex SHA, got ${JSON.stringify(text)}`);
+  }
+  return text;
+}
+function oneOf(text, list, where) {
+  if (!list.includes(text)) throw new UsageError(`${where}: expected one of ${list.join(', ')}, got ${JSON.stringify(text)}`);
+  return text;
+}
+function count(text, where) {
+  if (!/^\d+$/.test(String(text))) throw new UsageError(`${where}: expected a whole number, 0 or more, got ${JSON.stringify(text)}`);
+  return Number(text);
+}
+
+// ---- the shape -----------------------------------------------------------------------------------------------------
+
+const newUsage = () => ({
+  started: null,
+  startedNote: null,
+  waitingSeconds: 0,
+  spawns: 0,
+  spawnsSource: 'host',
+  rounds: 0,
+  noProgress: 0,
+  snapshot: null,
+  reviewRounds: 0,
+  fixRounds: 0,
+  fullVerifications: 0,
+  sendBacks: 0,
+  timeoutExtensions: 0,
+  timeoutStops: 0,
+  compactions: 0,
+  sleepTask: null,
+  tokens: null,
+});
+const newLine = () => ({ lines: [], tip: null, ci: null, noRun: { count: 0, round: null }, ciNotCovering: null, local: [], base: null });
+const newTicket = (line) => ({
+  line,
+  stage: 'candidate',
+  branch: null,
+  deliverable: null,
+  verification: null,
+  statusRecord: null,
+  snapshotSha256: null,
+  assignment: null,
+  timeoutReassignments: { implementing: 0, fixing: 0, expanding: 0 },
+  sendBacks: 0,
+  fixRounds: 0,
+  reviews: [],
+  fixReports: [],
+  unfixedIssue: null,
+  merges: [],
+  reason: null,
+  history: [],
+});
+const newState = (run, now) => ({
+  format: FORMAT,
+  run,
+  created: now,
+  updated: now,
+  revision: 0,
+  imported: null,
+  profile: null,
+  lines: {},
+  tickets: {},
+  usage: newUsage(),
+  stop: null,
+});
+
+// Every check throws `bad(where, what)`; the caller decides whether that is a corrupt file (1) or bad input (2).
+function check(state, bad) {
+  const need = (ok, where, what) => {
+    if (!ok) bad(where, what);
+  };
+  const optText = (x) => x === null || typeof x === 'string';
+  need(isObject(state) && state.format === FORMAT, 'format', `is not "${FORMAT}"`);
+  need(isText(state.run), 'run', 'is not a run name');
+  need(isTime(state.created) && isTime(state.updated), 'created/updated', 'are not UTC times');
+  need(isCount(state.revision), 'revision', 'is not a count');
+  need(state.imported === null || isTime(state.imported), 'imported', 'is not a UTC time or null');
+  const why = profileProblem(state.profile ?? null);
+  need(why === null, 'profile', why);
+  need(isObject(state.lines) && isObject(state.tickets) && isObject(state.usage), 'lines/tickets/usage', 'are not objects');
+  for (const [name, l] of Object.entries(state.lines)) {
+    const w = `lines.${name}`;
+    need(isObject(l), w, 'is not an object');
+    need(Array.isArray(l.lines) && l.lines.every(isText), `${w}.lines`, 'is not a list of line names');
+    need(l.tip === null || SHA.test(l.tip), `${w}.tip`, 'is not a SHA or null');
+    need(l.ci === null || (isObject(l.ci) && SHA.test(l.ci.sha) && VERDICTS.includes(l.ci.verdict) && isTime(l.ci.at)), `${w}.ci`, 'is not a recorded verdict or null');
+    need(isObject(l.noRun) && isCount(l.noRun.count) && (l.noRun.round === null || isCount(l.noRun.round)), `${w}.noRun`, 'is not { count, round }');
+    need(l.ciNotCovering === null || (isObject(l.ciNotCovering) && isTime(l.ciNotCovering.at)), `${w}.ciNotCovering`, 'is not a settlement or null');
+    need(Array.isArray(l.local), `${w}.local`, 'is not a list');
+    l.local.forEach((r, i) =>
+      need(isObject(r) && FULL_SHA.test(r.sha) && ['green', 'red'].includes(r.result) && LOCAL_REASONS.includes(r.reason) && isTime(r.at), `${w}.local[${i}]`, 'is not { sha, result, reason, at }'),
+    );
+    need(l.base === null || (isObject(l.base) && SHA.test(l.base.sha) && typeof l.base.synced === 'boolean'), `${w}.base`, 'is not { sha, synced } or null');
+  }
+  for (const [id, t] of Object.entries(state.tickets)) {
+    const w = `tickets.${id}`;
+    need(isId(id) && isObject(t), w, 'is not a ticket');
+    need(isText(t.line) && t.line in state.lines, `${w}.line`, 'is not a known integration branch');
+    need(STAGES.includes(t.stage), `${w}.stage`, `is not one of ${STAGES.join(', ')}`);
+    for (const k of ['branch', 'deliverable', 'verification', 'statusRecord', 'snapshotSha256', 'reason']) need(optText(t[k]), `${w}.${k}`, 'is not text or null');
+    const a = t.assignment;
+    if (a !== null) {
+      need(isObject(a), `${w}.assignment`, 'is not an object or null');
+      need(a.agentId === null || isText(a.agentId), `${w}.assignment.agentId`, 'is not an id or null');
+      need(isText(a.type), `${w}.assignment.type`, 'is not an agent type');
+      need(isTime(a.assigned) && (a.deadline === null || isTime(a.deadline)), `${w}.assignment`, 'has no assigned time, or a deadline that is not a time or null');
+      need(Number.isInteger(a.limit) && a.limit > 0, `${w}.assignment.limit`, 'is not minutes above 0');
+      need(a.extended === 'no' || a.extended === 'yes', `${w}.assignment.extended`, 'is not "no" or "yes"');
+      need(isObject(a.fingerprint), `${w}.assignment.fingerprint`, 'is not an object');
+      need(a.worktree === null || isText(a.worktree), `${w}.assignment.worktree`, 'is not a path or null');
+    }
+    need(isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s])), `${w}.timeoutReassignments`, 'is not a count per stage');
+    need(isCount(t.sendBacks) && isCount(t.fixRounds), `${w}.sendBacks/fixRounds`, 'are not counts');
+    need(Array.isArray(t.reviews), `${w}.reviews`, 'is not a list');
+    t.reviews.forEach((r, i) =>
+      need(
+        isObject(r) && ['initial', 'recheck'].includes(r.mode) && ['pass', 'fix', 'stuck'].includes(r.verdict) && ['full', 'minimal'].includes(r.kind) &&
+          isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))),
+        `${w}.reviews[${i}]`,
+        'is not { mode, verdict, kind, findings, after }',
+      ),
+    );
+    need(
+      Array.isArray(t.fixReports) && t.fixReports.every((r) => isObject(r) && Array.isArray(r.fixed) && Array.isArray(r.unfixed) && isCount(r.after)),
+      `${w}.fixReports`,
+      'is not a list of { fixed, unfixed, after }',
+    );
+    need(t.unfixedIssue === null || isId(t.unfixedIssue), `${w}.unfixedIssue`, 'is not an issue id or null');
+    need(Array.isArray(t.merges) && t.merges.every((m) => isObject(m) && SHA.test(m.sha)), `${w}.merges`, 'is not a list of { sha }');
+    need(Array.isArray(t.history) && t.history.every((h) => isObject(h) && STAGES.includes(h.to)), `${w}.history`, 'is not a list of transitions');
+  }
+  const u = state.usage;
+  need(u.started === null || isTime(u.started), 'usage.started', 'is not a UTC time or null');
+  need(typeof u.waitingSeconds === 'number' && u.waitingSeconds >= 0, 'usage.waitingSeconds', 'is not seconds');
+  for (const k of ['spawns', 'rounds', 'noProgress', ...COUNTERS]) need(isCount(u[k]), `usage.${k}`, 'is not a count');
+  need(u.tokens === null || isCount(u.tokens), 'usage.tokens', 'is not a count or null');
+  need(u.sleepTask === null || isText(u.sleepTask), 'usage.sleepTask', 'is not a task id or null');
+  need(u.snapshot === null || (isObject(u.snapshot) && isObject(u.snapshot.tips) && Array.isArray(u.snapshot.terminal)), 'usage.snapshot', 'is not { tips, terminal } or null');
+  need(state.stop === null || (isObject(state.stop) && Array.isArray(state.stop.stoppedBy)), 'stop', 'is not { stoppedBy, … } or null');
+}
+
+// ---- the stage rules -----------------------------------------------------------------------------------------------
+
+/** Why a profile object is not valid, or null. Unknown keys are refused: nothing outside these fields is relaxable. */
+function profileProblem(p) {
+  if (p === null) return null;
+  if (!isObject(p)) return 'is not an object or null';
+  for (const [k, v] of Object.entries(p)) {
+    if (!(k in PROFILE_VALUES)) return `has ${k}, which is not a profile field (${Object.keys(PROFILE_VALUES).join(', ')}); confirmations and budget limits are not in a profile`;
+    if (!PROFILE_VALUES[k].includes(v)) return `${k} is ${JSON.stringify(v)}, expected one of ${PROFILE_VALUES[k].map((x) => JSON.stringify(x)).join(', ')}`;
+  }
+  return null;
+}
+
+const lastEntry = (t, stage) => t.history.findLastIndex((h) => h.to === stage);
+
+/** The latest review recorded since the ticket last entered in-review, or null. */
+function currentReview(t) {
+  const latest = t.reviews.at(-1);
+  return latest && latest.after > lastEntry(t, 'in-review') ? latest : null;
+}
+
+/** The latest per-finding report recorded since the ticket last entered fixing, or null. */
+function currentReport(t) {
+  const latest = t.fixReports.at(-1);
+  return latest && latest.after > lastEntry(t, 'fixing') ? latest : null;
+}
+
+// Unfixed findings may go on only with `onUnfixed: file-issue` and the issue recorded.
+function unfixedGate(id, t, profile, what) {
+  if (profile.onUnfixed !== 'file-issue') return `${id}: queued with ${what} needs profile onUnfixed: file-issue; this run's is stuck (mark it stuck)`;
+  if (t.unfixedIssue === null) return `${id}: queued with ${what} needs the issue filed for them recorded (set --unfixed-issue <id>)`;
+  return null;
+}
+
+/** Why a ticket may not enter queued from in-review, or null. */
+function queueFromReview(id, t, profile) {
+  const r = currentReview(t);
+  if (!r) return `${id}: queued needs a review recorded since it entered in-review; there is none (record it with review)`;
+  if (profile.review === 'full' && r.kind !== 'full') return `${id}: queued needs a full review (profile review: full); the latest is ${r.kind}`;
+  if (r.verdict === 'pass') return null;
+  if (r.verdict !== 'fix') return `${id}: queued needs the latest review verdict to be pass; it is ${r.verdict} (${r.mode})`;
+  if (profile.onUnfixed !== 'file-issue') return `${id}: queued needs the latest review verdict to be pass; it is fix (${r.mode})`;
+  if (t.fixRounds < profile.fixRounds) return `${id}: queued with a fix verdict: ${t.fixRounds} of ${profile.fixRounds} fix rounds used; fix it first`;
+  return unfixedGate(id, t, profile, 'unfixed findings');
+}
+
+/** Why a ticket may not enter queued from fixing (profile recheck: false), or null. */
+function queueFromFix(id, t, profile) {
+  if (profile.recheck) return `${id}: queued cannot skip in-review: move it to in-review and record a review pass first`;
+  const report = currentReport(t);
+  if (!report) return `${id}: queued without a recheck (profile recheck: false) needs the implementer's per-finding report for this fix round (record it with report)`;
+  return report.unfixed.length ? unfixedGate(id, t, profile, `unfixed findings ${report.unfixed.join(', ')}`) : null;
+}
+
+/** Why a ticket may not be at `to` coming from `from` (null for an import), or null; shared by `stage` and `import`. */
+function stageGuard(id, t, to, from, profile) {
+  if (to === 'expanding' && profile.expand === 'skip') return `${id}: expanding: this run's profile has expand: skip`;
+  if (to === 'implementing' && from === 'candidate' && t.snapshotSha256 === null) {
+    return `${id}: implementing needs the acceptance snapshot's sha256 recorded (set --snapshot)`;
+  }
+  if (to === 'fixing') {
+    const r = currentReview(t);
+    if (!r || r.verdict !== 'fix') return `${id}: fixing needs the latest review since it entered in-review to be fix; it is ${r ? r.verdict : 'missing'}`;
+    if (t.fixRounds >= profile.fixRounds) return `${id}: fixing: ${t.fixRounds} of ${profile.fixRounds} fix rounds used; mark it stuck${profile.onUnfixed === 'file-issue' ? ', or file an issue and queue it' : ''}`;
+  }
+  if (to === 'queued') {
+    if (from === 'fixing') return queueFromFix(id, t, profile);
+    const viaReview = queueFromReview(id, t, profile);
+    // An imported ticket (from null) may also have got there without a recheck.
+    if (viaReview === null || from !== null || profile.recheck) return viaReview;
+    return queueFromFix(id, t, profile) === null ? null : viaReview;
+  }
+  if (to === 'delivered' && !t.merges.length) return `${id}: delivered needs a merge SHA; none is recorded (record it with merge)`;
+  return null;
+}
+
+function transition(state, id, to, reason, now) {
+  const t = state.tickets[id];
+  const from = t.stage;
+  const profile = profileOf(state);
+  if (from === to) throw new Refusal(`${id} is already ${to}`);
+  const relaxed = from === 'fixing' && to === 'queued' && !profile.recheck;
+  if (!EDGES[from].includes(to) && !relaxed) {
+    let why;
+    if (TERMINAL.includes(from)) why = `${from} is an end state; it never returns to ${to}`;
+    else if ((from === 'implementing' || from === 'fixing') && (to === 'queued' || to === 'integrating')) {
+      why = `${to} cannot skip in-review: move it to in-review and record a review pass first`;
+    } else why = `there is no edge ${from} → ${to}`;
+    throw new Refusal(`${id}: ${why} (from ${from}: ${EDGES[from].join(', ') || 'none'})`);
+  }
+  const guard = stageGuard(id, t, to, from, profile);
+  if (guard) throw new Refusal(guard);
+  if (to === 'fixing') {
+    t.fixRounds += 1;
+    state.usage.fixRounds += 1;
+  }
+  if (from === 'integrating' && to === 'candidate') {
+    if (t.sendBacks >= 1) throw new Refusal(`${id}: it was already sent back once; a second send back is not allowed, mark it stuck`);
+    t.sendBacks += 1;
+    state.usage.sendBacks += 1;
+  }
+  if (reason !== undefined) t.reason = reason;
+  t.stage = to;
+  t.history.push({ from, to, at: now, reason: reason ?? null });
+}
+
+// ---- the file ------------------------------------------------------------------------------------------------------
+
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Errors Windows raises while another process (antivirus, indexer, a rename in flight) holds the file.
+const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+function retrying(fn, attempts = 20) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return fn();
+    } catch (error) {
+      if (attempt >= attempts || !TRANSIENT.has(error.code)) throw error;
+      pause(25);
+    }
+  }
+}
+
+/** Run fn while holding `<path>.lock`; a lock older than `stale` ms is left over from a killed process. */
+export function withLock(path, fn, { wait = 5000, stale = 2000, now = Date.now } = {}) {
+  const lock = `${path}.lock`;
+  const deadline = now() + wait;
+  for (;;) {
+    let fd;
+    try {
+      fd = openSync(lock, 'wx');
+    } catch (error) {
+      if (error.code !== 'EEXIST' && !TRANSIENT.has(error.code)) throw new StateError(`could not lock ${path} (${error.message})`);
+      try {
+        const seen = statSync(lock);
+        if (now() - seen.mtimeMs > stale) {
+          const again = statSync(lock);
+          if (again.ino === seen.ino && again.mtimeMs === seen.mtimeMs) unlinkSync(lock);
+        }
+      } catch {
+        // gone already, or another process is removing it
+      }
+      if (now() > deadline) throw new StateError(`could not lock ${path}: ${lock} is held`);
+      pause(10);
+      continue;
+    }
+    try {
+      return fn();
+    } finally {
+      closeSync(fd);
+      try {
+        unlinkSync(lock);
+      } catch {
+        // removed as stale by another process; nothing left to release
+      }
+    }
+  }
+}
+
+function writeAtomic(path, text) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, text);
+  try {
+    retrying(() => renameSync(tmp, path));
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // nothing to clean up
+    }
+    throw new StateError(`could not write ${path} (${error.message})`);
+  }
+}
+
+/** The state at `path`; throws a StateError (exit 1) when it is missing or not a state file. */
+export function load(path) {
+  let text;
+  try {
+    text = retrying(() => readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new StateError(`${path} does not exist: create it with init, or import a ledger`);
+    throw new StateError(`could not read ${path} (${error.message})`);
+  }
+  let state;
+  try {
+    state = JSON.parse(text.replace(/^﻿/, ''));
+  } catch (error) {
+    throw new StateError(`${path} is not JSON (${error.message})`);
+  }
+  check(state, (where, what) => {
+    throw new StateError(`${path} is not a sorry-matt state file: ${where} ${what}`);
+  });
+  return state;
+}
+
+const save = (path, state) => writeAtomic(path, `${JSON.stringify(state, null, 2)}\n`);
+
+/**
+ * Apply `change(state)` under the lock and save, bumping the revision. `change` returns the command's output fields;
+ * a throw leaves the file as it was. The module's API for later scripts (integrate.mjs, verify.mjs).
+ */
+export function update(path, now, change) {
+  return withLock(path, () => {
+    const state = load(path);
+    const result = change(state);
+    state.revision += 1;
+    state.updated = now;
+    check(state, (where, what) => {
+      throw new Error(`internal: the change left ${where} ${what}`);
+    });
+    save(path, state);
+    return { revision: state.revision, ...result };
+  });
+}
+
+function create(path, state) {
+  return withLock(path, () => {
+    if (existsSync(path)) throw new Refusal(`${path} already exists; import and init only start a state`);
+    save(path, state);
+    return state;
+  });
+}
+
+// ---- arguments -----------------------------------------------------------------------------------------------------
+
+function parseArgs(argv, spec) {
+  const flags = {};
+  const rest = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (!a.startsWith('--')) {
+      rest.push(a);
+      continue;
+    }
+    const name = a.slice(2);
+    if (!(name in spec)) throw new UsageError(`unknown flag ${a}`);
+    if (spec[name] === 'bool') {
+      if (name in flags) throw new UsageError(`${a} is given twice`);
+      flags[name] = true;
+      continue;
+    }
+    if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+    const value = argv[(i += 1)];
+    if (spec[name] === 'many') (flags[name] ??= []).push(value);
+    else if (name in flags) throw new UsageError(`${a} is given twice`);
+    else flags[name] = value;
+  }
+  return { flags, rest };
+}
+
+function readJson(path, what, read) {
+  let text;
+  try {
+    text = read(resolve(path));
+  } catch (error) {
+    throw new StateError(`could not read ${what} ${path} (${error.message})`);
+  }
+  try {
+    return JSON.parse(text.replace(/^﻿/, ''));
+  } catch (error) {
+    throw new UsageError(`${what} ${path} is not JSON (${error.message})`);
+  }
+}
+
+const ids = (text, where) => {
+  const list = text.split(',').map((x) => x.trim()).filter(Boolean);
+  if (!list.length || !list.every(isId)) throw new UsageError(`${where}: expected comma-separated ids`);
+  return list;
+};
+const ticketsOf = (state, ids) => {
+  if (!ids.length) throw new UsageError('name at least one ticket');
+  if (new Set(ids).size !== ids.length) throw new UsageError('a ticket is named twice');
+  for (const id of ids) if (!(id in state.tickets)) throw new Refusal(`${id} is not a ticket of this run (add it first)`);
+  return ids;
+};
+const lineOf = (state, branch) => {
+  if (!(branch in state.lines)) throw new Refusal(`${branch} is not an integration branch of this run (create it with line or add)`);
+  return state.lines[branch];
+};
+const view = (state, ids) => Object.fromEntries(ids.map((id) => [id, state.tickets[id]]));
+
+const hoursAt = (usage, nowMs) =>
+  usage.started === null ? null : Math.max(0, (nowMs - Date.parse(usage.started)) / 1000 - usage.waitingSeconds) / 3600;
+
+// The budget hook's spawn count next to the state, or null when there is none.
+function hookSpawns(path, read) {
+  if (!/\.state\.json$/i.test(path)) return null;
+  const counters = path.replace(/\.state\.json$/i, '.counters.json');
+  let text;
+  try {
+    text = read(counters);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new StateError(`could not read ${counters} (${error.message})`);
+  }
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new StateError(`${counters} is not JSON (${error.message})`);
+  }
+  if (!isObject(data) || !isCount(data.spawns)) throw new StateError(`${counters} is not a sorry-matt counters file`);
+  return data.spawns;
+}
+
+// ---- commands ------------------------------------------------------------------------------------------------------
+
+function init(path, rest, flags, ctx) {
+  if (rest.length) throw new UsageError(`init takes no more arguments, got ${rest[0]}`);
+  if (!isText(flags.run)) throw new UsageError('init needs --run <run>');
+  const state = create(path, newState(flags.run, ctx.now));
+  return { revision: state.revision, run: state.run };
+}
+
+const LEDGER_LOCAL = /^\s*(?:[-*]\s+)?`?local:\s+(\S+)\s+([0-9a-f]{40}|[0-9a-f]{64})\s+(green|red)\s+(\S+)/;
+
+function importLedger(path, rest, flags, ctx) {
+  if (rest.length) throw new UsageError(`import takes no more arguments, got ${rest[0]}`);
+  if (flags.from === undefined) throw new UsageError('import needs --from <seed.json>');
+  const seed = readJson(flags.from, 'seed', ctx.read);
+  if (!isObject(seed) || !isText(seed.run)) throw new UsageError(`seed ${flags.from}: needs { "run": "<run>", … }`);
+  const state = newState(seed.run, ctx.now);
+  state.imported = ctx.now;
+  for (const [branch, l] of Object.entries(seed.lines ?? {})) {
+    if (!isObject(l)) throw new UsageError(`seed: lines.${branch} is not an object`);
+    state.lines[branch] = { ...newLine(), ...l };
+  }
+  for (const [id, t] of Object.entries(seed.tickets ?? {})) {
+    if (!isObject(t) || !isText(t.line) || !isText(t.stage)) throw new UsageError(`seed: tickets.${id} needs line and stage`);
+    state.lines[t.line] ??= newLine();
+    const ticket = { ...newTicket(t.line), ...t };
+    ticket.timeoutReassignments = { ...newTicket().timeoutReassignments, ...(t.timeoutReassignments ?? {}) };
+    ticket.reviews = (t.reviews ?? []).map((r) => ({ kind: 'full', findings: null, at: ctx.now, after: 0, ...r }));
+    ticket.fixReports = (t.fixReports ?? []).map((r) => ({ at: ctx.now, after: 0, ...r }));
+    ticket.merges = (t.merges ?? []).map((m) => (typeof m === 'string' ? { sha: m, at: ctx.now } : { at: ctx.now, ...m }));
+    state.tickets[id] = ticket;
+  }
+  state.usage = { ...newUsage(), ...(seed.usage ?? {}) };
+  if (state.usage.started === null) {
+    state.usage.started = ctx.now;
+    state.usage.startedNote = `imported ${ctx.now}: the time before the import is not counted`;
+  }
+  if (seed.stop !== undefined) state.stop = seed.stop;
+  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, ...seed.profile };
+  let records = 0;
+  if (flags.ledger !== undefined) {
+    let text;
+    try {
+      text = ctx.read(resolve(flags.ledger));
+    } catch (error) {
+      throw new StateError(`could not read ledger ${flags.ledger} (${error.message})`);
+    }
+    for (const row of text.split(/\r?\n/)) {
+      const m = LEDGER_LOCAL.exec(row);
+      if (!m || !LOCAL_REASONS.includes(m[4].replace(/`$/, ''))) continue;
+      const line = (state.lines[m[1]] ??= newLine());
+      if (line.local.some((r) => r.sha === m[2])) continue;
+      line.local.push({ sha: m[2], result: m[3], reason: m[4].replace(/`$/, ''), at: ctx.now });
+      records += 1;
+    }
+  }
+  const spawns = hookSpawns(path, ctx.read);
+  if (spawns !== null) Object.assign(state.usage, { spawns, spawnsSource: 'counters' });
+  check(state, (where, what) => {
+    throw new UsageError(`seed ${flags.from}: ${where} ${what}`);
+  });
+  const profile = profileOf(state);
+  for (const [id, t] of Object.entries(state.tickets)) {
+    if (!['queued', 'integrating', 'delivered'].includes(t.stage)) continue;
+    const guard = stageGuard(id, t, t.stage === 'delivered' ? 'delivered' : 'queued', null, profile);
+    if (guard) throw new Refusal(`seed: ${guard}`);
+  }
+  create(path, state);
+  return { revision: state.revision, run: state.run, tickets: Object.keys(state.tickets).length, lines: Object.keys(state.lines).length, localRecords: records };
+}
+
+const localLine = (branch, r) => `local: ${branch} ${r.sha} ${r.result} ${r.reason}`;
+
+function resume(state) {
+  const open = [];
+  const terminal = Object.fromEntries(TERMINAL.map((s) => [s, []]));
+  const agents = new Map();
+  const unnamed = [];
+  for (const [id, t] of Object.entries(state.tickets)) {
+    const a = t.assignment;
+    if (TERMINAL.includes(t.stage)) terminal[t.stage].push(id);
+    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null });
+    if (!a || a.deadline === null) continue;
+    if (a.agentId === null) {
+      unnamed.push(id);
+      continue;
+    }
+    const seen = agents.get(a.agentId);
+    if (seen) {
+      seen.tickets.push(id);
+      continue;
+    }
+    const entry = { id: a.agentId, type: a.type, tickets: [id], assigned: a.assigned, limit: a.limit, deadline: a.deadline, extended: a.extended, fingerprint: a.fingerprint };
+    if (a.worktree !== null) entry.worktree = a.worktree;
+    agents.set(a.agentId, entry);
+  }
+  const lines = Object.fromEntries(
+    Object.entries(state.lines).map(([branch, l]) => [
+      branch,
+      { tip: l.tip, ci: l.ci, ciNotCovering: l.ciNotCovering !== null, local: l.local.map((r) => localLine(branch, r)) },
+    ]),
+  );
+  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, terminal, lines, usage: state.usage, stop: state.stop };
+}
+
+function add(path, rest, flags, ctx) {
+  if (!isText(flags.line)) throw new UsageError('add needs --line <integration branch>');
+  if (!rest.length) throw new UsageError('add needs at least one ticket');
+  for (const id of rest) if (!isId(id)) throw new UsageError(`${JSON.stringify(id)} is not a ticket id`);
+  if (new Set(rest).size !== rest.length) throw new UsageError('a ticket is named twice');
+  return update(path, ctx.now, (state) => {
+    for (const id of rest) if (id in state.tickets) throw new Refusal(`${id} is already a ticket of this run (on ${state.tickets[id].line})`);
+    state.lines[flags.line] ??= newLine();
+    for (const id of rest) state.tickets[id] = newTicket(flags.line);
+    return { tickets: view(state, rest) };
+  });
+}
+
+function line(path, rest, flags, ctx) {
+  if (rest.length !== 1) throw new UsageError('line takes exactly one integration branch');
+  const [branch] = rest;
+  const lines = flags.lines === undefined ? undefined : flags.lines.split(',').map((s) => s.trim()).filter(Boolean);
+  if (flags.tip !== undefined) sha(flags.tip, '--tip');
+  if ((flags.base === undefined) !== (flags.synced === undefined)) throw new UsageError('--base and --synced go together');
+  if (flags.base !== undefined) {
+    sha(flags.base, '--base');
+    oneOf(flags.synced, ['yes', 'no'], '--synced');
+  }
+  return update(path, ctx.now, (state) => {
+    const l = (state.lines[branch] ??= newLine());
+    if (lines !== undefined) l.lines = lines;
+    if (flags.tip !== undefined) l.tip = flags.tip;
+    if (flags.base !== undefined) l.base = { sha: flags.base, synced: flags.synced === 'yes', at: ctx.now };
+    return { branch, line: l };
+  });
+}
+
+function set(path, rest, flags, ctx) {
+  if (rest.length !== 1) throw new UsageError('set takes exactly one ticket');
+  const fields = {
+    snapshot: 'snapshotSha256',
+    'status-record': 'statusRecord',
+    branch: 'branch',
+    deliverable: 'deliverable',
+    verification: 'verification',
+    'unfixed-issue': 'unfixedIssue',
+  };
+  const given = Object.keys(fields).filter((k) => flags[k] !== undefined);
+  if (!given.length) throw new UsageError(`set needs at least one of ${Object.keys(fields).map((k) => `--${k}`).join(', ')}`);
+  if (flags.snapshot !== undefined && !/^[0-9a-f]{64}$/.test(flags.snapshot)) throw new UsageError('--snapshot: expected the 64-digit sha256 of the acceptance snapshot');
+  if (flags['unfixed-issue'] !== undefined && !isId(flags['unfixed-issue'])) throw new UsageError('--unfixed-issue: expected an issue id');
+  return update(path, ctx.now, (state) => {
+    const [id] = ticketsOf(state, rest);
+    for (const k of given) state.tickets[id][fields[k]] = flags[k];
+    return { tickets: view(state, [id]) };
+  });
+}
+
+function stage(path, rest, flags, ctx) {
+  const [to, ...ids] = rest;
+  oneOf(to, STAGES, 'stage');
+  return update(path, ctx.now, (state) => {
+    for (const id of ticketsOf(state, ids)) transition(state, id, to, flags.reason, ctx.now);
+    return { tickets: view(state, ids) };
+  });
+}
+
+function review(path, rest, flags, ctx) {
+  if (rest.length !== 1) throw new UsageError('review takes exactly one ticket');
+  const mode = oneOf(flags.mode, ['initial', 'recheck'], '--mode');
+  const verdict = oneOf(flags.verdict, ['pass', 'fix', 'stuck'], '--verdict');
+  const kind = oneOf(flags.kind ?? 'full', ['full', 'minimal'], '--kind');
+  const findings = flags.findings === undefined ? null : ids(flags.findings, '--findings');
+  if (findings !== null && verdict !== 'fix') throw new UsageError('--findings goes with --verdict fix');
+  return update(path, ctx.now, (state) => {
+    const [id] = ticketsOf(state, rest);
+    const t = state.tickets[id];
+    if (t.stage !== 'in-review') throw new Refusal(`${id}: a review is recorded only in in-review; it is ${t.stage}`);
+    t.reviews.push({ mode, verdict, kind, findings, at: ctx.now, after: t.history.length });
+    state.usage.reviewRounds += 1;
+    return { tickets: view(state, [id]) };
+  });
+}
+
+function profile(path, rest, flags, ctx) {
+  if (rest.length) throw new UsageError(`profile takes flags only, got ${rest[0]}`);
+  const given = {};
+  for (const k of Object.keys(PROFILE_VALUES)) {
+    if (flags[k] === undefined) continue;
+    const typed = typeof PROFILE_DEFAULTS[k] === 'boolean' ? { true: true, false: false }[flags[k]] : typeof PROFILE_DEFAULTS[k] === 'number' ? Number(flags[k]) : flags[k];
+    if (!PROFILE_VALUES[k].includes(typed)) throw new UsageError(`--${k}: expected one of ${PROFILE_VALUES[k].join(', ')}, got ${JSON.stringify(flags[k])}`);
+    given[k] = typed;
+  }
+  return update(path, ctx.now, (state) => {
+    if (state.profile !== null) throw new Refusal(`the profile was written once already; it is not changed during a run (${JSON.stringify(state.profile)})`);
+    const moved = Object.entries(state.tickets).find(([, t]) => t.stage !== 'candidate' || t.history.length || t.reviews.length);
+    if (moved) {
+      throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
+    }
+    state.profile = { ...PROFILE_DEFAULTS, ...given };
+    return { profile: state.profile };
+  });
+}
+
+function report(path, rest, flags, ctx) {
+  if (rest.length !== 1) throw new UsageError('report takes exactly one ticket');
+  const fixed = flags.fixed === undefined ? [] : ids(flags.fixed, '--fixed');
+  const unfixed = flags.unfixed === undefined ? [] : ids(flags.unfixed, '--unfixed');
+  if (!fixed.length && !unfixed.length) throw new UsageError('report needs --fixed and/or --unfixed');
+  return update(path, ctx.now, (state) => {
+    const [id] = ticketsOf(state, rest);
+    const t = state.tickets[id];
+    if (t.stage !== 'fixing') throw new Refusal(`${id}: a per-finding report is recorded only in fixing; it is ${t.stage}`);
+    const r = t.reviews.at(-1);
+    if (!r || r.verdict !== 'fix' || r.findings === null) {
+      throw new Refusal(`${id}: the fix review recorded no finding ids (review --findings), so the report cannot be checked against them`);
+    }
+    const named = [...fixed, ...unfixed];
+    const missing = r.findings.filter((f) => !named.includes(f));
+    const extra = named.filter((f) => !r.findings.includes(f));
+    if (missing.length || extra.length || new Set(named).size !== named.length) {
+      throw new Refusal(`${id}: the report must name each finding of the fix review (${r.findings.join(', ')}) exactly once${missing.length ? `; missing ${missing.join(', ')}` : ''}${extra.length ? `; not in the review ${extra.join(', ')}` : ''}`);
+    }
+    t.fixReports.push({ fixed, unfixed, at: ctx.now, after: t.history.length });
+    return { tickets: view(state, [id]) };
+  });
+}
+
+function merge(path, rest, flags, ctx) {
+  if (rest.length !== 2) throw new UsageError('merge takes a ticket and a merge SHA');
+  const merged = sha(rest[1], 'merge SHA');
+  return update(path, ctx.now, (state) => {
+    const [id] = ticketsOf(state, [rest[0]]);
+    const t = state.tickets[id];
+    if (t.stage !== 'integrating' && t.stage !== 'delivered') {
+      throw new Refusal(`${id}: a merge SHA is recorded in integrating (or delivered, for a -ci merge); it is ${t.stage}`);
+    }
+    if (t.merges.some((m) => m.sha === merged)) throw new Refusal(`${id}: ${merged} is already recorded`);
+    t.merges.push({ sha: merged, at: ctx.now });
+    state.lines[t.line].tip = merged;
+    return { tickets: view(state, [id]) };
+  });
+}
+
+function assign(path, rest, flags, ctx) {
+  if (flags.record === undefined || !isText(flags.type)) throw new UsageError('assign needs --record <record.json> and --type <agent type>');
+  const r = readJson(flags.record, 'record', ctx.read);
+  if (!isObject(r) || r.format !== 'sorry-matt/deadline@1' || r.command !== 'record') {
+    throw new UsageError(`record ${flags.record}: not the output of deadline.mjs record`);
+  }
+  time(r.assigned, 'record.assigned');
+  time(r.deadline, 'record.deadline');
+  if (!Number.isInteger(r.limit) || r.limit <= 0) throw new UsageError('record.limit: not minutes above 0');
+  const f = r.fingerprint;
+  const expander = isObject(f) && isObject(f.expansions);
+  if (!expander && !(isObject(f) && isText(f.head) && isText(f.tree))) throw new UsageError('record.fingerprint: not { head, tree } or { expansions }');
+  if (expander && flags.worktree !== undefined) throw new UsageError('--worktree: an expansion agent works in no worktree');
+  if (!expander && flags.worktree === undefined) throw new UsageError('--worktree is required with a { head, tree } fingerprint');
+  return update(path, ctx.now, (state) => {
+    const ids = ticketsOf(state, rest);
+    for (const id of ids) {
+      const t = state.tickets[id];
+      if (!flags.reassign) continue;
+      if (!TIMEOUT_STAGES.includes(t.stage)) throw new Refusal(`${id}: a timeout reassignment is for ${TIMEOUT_STAGES.join(', ')}; it is ${t.stage}`);
+      if (t.timeoutReassignments[t.stage] >= 1) throw new Refusal(`${id}: it was already reassigned for a timeout in ${t.stage}; the rule is stuck (awaiting-ruling for expanding)`);
+    }
+    for (const id of ids) {
+      const t = state.tickets[id];
+      if (flags.reassign) t.timeoutReassignments[t.stage] += 1;
+      t.assignment = {
+        agentId: null,
+        type: flags.type,
+        worktree: expander ? null : resolve(flags.worktree),
+        assigned: r.assigned,
+        limit: r.limit,
+        deadline: r.deadline,
+        extended: r.extended === 'yes' ? 'yes' : 'no',
+        fingerprint: f,
+      };
+    }
+    return { tickets: view(state, ids) };
+  });
+}
+
+function agent(path, rest, flags, ctx) {
+  if (!isText(flags.id)) throw new UsageError('agent needs --id <agent id>');
+  return update(path, ctx.now, (state) => {
+    const ids = ticketsOf(state, rest);
+    for (const id of ids) {
+      const a = state.tickets[id].assignment;
+      if (!a || a.deadline === null) throw new Refusal(`${id}: no assignment in flight; run deadline.mjs record and assign before the spawn`);
+      if (a.agentId !== null && a.agentId !== flags.id) throw new Refusal(`${id}: the assignment already belongs to ${a.agentId}; a new dispatch needs a new assign`);
+    }
+    for (const id of ids) state.tickets[id].assignment.agentId = flags.id;
+    return { tickets: view(state, ids) };
+  });
+}
+
+function inFlight(state, ids) {
+  for (const id of ids) {
+    const a = state.tickets[id].assignment;
+    if (!a || a.deadline === null) throw new Refusal(`${id}: no assignment in flight`);
+  }
+}
+
+function extend(path, rest, flags, ctx) {
+  const deadline = time(flags.deadline, '--deadline');
+  return update(path, ctx.now, (state) => {
+    const ids = ticketsOf(state, rest);
+    inFlight(state, ids);
+    for (const id of ids) if (state.tickets[id].assignment.extended === 'yes') throw new Refusal(`${id}: the assignment was already extended once; stop it`);
+    for (const id of ids) Object.assign(state.tickets[id].assignment, { deadline, extended: 'yes' });
+    state.usage.timeoutExtensions += 1;
+    return { tickets: view(state, ids) };
+  });
+}
+
+function release(path, rest, flags, ctx) {
+  return update(path, ctx.now, (state) => {
+    const ids = ticketsOf(state, rest);
+    inFlight(state, ids);
+    for (const id of ids) state.tickets[id].assignment.deadline = null;
+    if (flags.stopped) state.usage.timeoutStops += 1;
+    return { tickets: view(state, ids) };
+  });
+}
+
+function ci(path, rest, flags, ctx) {
+  if (rest.length !== 1) throw new UsageError('ci takes exactly one integration branch');
+  const [branch] = rest;
+  if (flags.from === undefined) throw new UsageError('ci needs --from <verdict.json>');
+  const v = readJson(flags.from, 'verdict', ctx.read);
+  if (!isObject(v) || v.format !== 'sorry-matt/ci@1' || v.command !== 'verdict') throw new UsageError(`verdict ${flags.from}: not the output of ci.mjs verdict`);
+  if (v.branch !== branch) throw new UsageError(`verdict ${flags.from}: it is for ${v.branch}, not ${branch}`);
+  sha(v.sha, 'verdict.sha');
+  oneOf(v.verdict, VERDICTS, 'verdict.verdict');
+  const branchRuns = flags['branch-runs'] === undefined ? undefined : count(flags['branch-runs'], '--branch-runs');
+  return update(path, ctx.now, (state) => {
+    const l = lineOf(state, branch);
+    if (l.ciNotCovering !== null) throw new Refusal(`${branch}: settled as CI not covering it at ${l.ciNotCovering.at}; it is not read again`);
+    l.ci = { sha: v.sha, verdict: v.verdict, reason: v.reason ?? null, at: ctx.now };
+    const empty = v.verdict === 'no-run' && v.reason === 'empty';
+    if (!empty) l.noRun = { count: 0, round: null };
+    else if (flags.dispatch && l.noRun.round !== state.usage.rounds) l.noRun = { count: l.noRun.count + 1, round: state.usage.rounds };
+    if (empty && l.noRun.count >= 2 && branchRuns === 0) l.ciNotCovering = { sha: v.sha, at: ctx.now };
+    return {
+      branch,
+      noRun: l.noRun.count,
+      ciNotCovering: l.ciNotCovering !== null,
+      branchCheckNeeded: empty && l.noRun.count >= 2 && l.ciNotCovering === null && branchRuns === undefined,
+    };
+  });
+}
+
+function local(path, rest, flags, ctx) {
+  if (rest.length !== 4) throw new UsageError('local takes a branch, a full SHA, green|red and a reason');
+  const [branch, at, result, reason] = rest;
+  sha(at, 'SHA', true);
+  oneOf(result, ['green', 'red'], 'result');
+  oneOf(reason, LOCAL_REASONS, 'reason');
+  return update(path, ctx.now, (state) => {
+    const l = lineOf(state, branch);
+    const seen = l.local.find((r) => r.sha === at);
+    if (seen) throw new Refusal(`${branch}: ${at} already has a local verification record (${seen.result}, ${seen.reason}); reuse it`);
+    const record = { sha: at, result, reason, at: ctx.now };
+    l.local.push(record);
+    return { branch, record, line: localLine(branch, record) };
+  });
+}
+
+function usage(path, rest, flags, ctx) {
+  if (rest.length) throw new UsageError(`usage takes flags only, got ${rest[0]}`);
+  if (flags.started !== undefined) time(flags.started, '--started');
+  const wait = flags.wait === undefined ? 0 : count(flags.wait, '--wait');
+  const spawnsFlag = flags.spawns === undefined ? undefined : count(flags.spawns, '--spawns');
+  const adds = (flags.add ?? []).map((pair) => {
+    const [name, n] = pair.split('=');
+    oneOf(name, ADDABLE, '--add');
+    return [name, count(n, `--add ${name}`)];
+  });
+  const tokens = flags.tokens === undefined ? undefined : flags.tokens === 'unknown' ? null : count(flags.tokens, '--tokens');
+  if (flags['sleep-task'] !== undefined && !isText(flags['sleep-task'])) throw new UsageError('--sleep-task: a task id or none');
+  const spawns = hookSpawns(path, ctx.read);
+  return update(path, ctx.now, (state) => {
+    const u = state.usage;
+    if (flags.started !== undefined) {
+      if (u.started !== null && u.started !== flags.started) throw new Refusal(`usage: the start is already ${u.started}; it is set once`);
+      u.started = flags.started;
+    }
+    u.waitingSeconds += wait;
+    if (spawns !== null) Object.assign(u, { spawns, spawnsSource: 'counters' });
+    else if (spawnsFlag !== undefined) Object.assign(u, { spawns: spawnsFlag, spawnsSource: 'host' });
+    for (const [name, n] of adds) u[name] += n;
+    if (tokens !== undefined) u.tokens = tokens;
+    if (flags['sleep-task'] !== undefined) u.sleepTask = flags['sleep-task'] === 'none' ? null : flags['sleep-task'];
+    return { usage: u, progressUsage: { rounds: u.rounds, spawns: u.spawns, hours: hoursAt(u, Date.parse(ctx.now)) } };
+  });
+}
+
+function progress(path, rest, flags, ctx) {
+  if (rest.length) throw new UsageError(`progress takes flags only, got ${rest[0]}`);
+  if (flags.from === undefined) throw new UsageError('progress needs --from <progress.json>');
+  const p = readJson(flags.from, 'progress', ctx.read);
+  if (!isObject(p) || p.format !== 'sorry-matt/deadline@1' || p.command !== 'progress') throw new UsageError(`progress ${flags.from}: not the output of deadline.mjs progress`);
+  if (!isCount(p.noProgress) || !isCount(p.rounds) || typeof p.stop !== 'boolean' || !Array.isArray(p.stoppedBy) || !isObject(p.snapshot)) {
+    throw new UsageError(`progress ${flags.from}: missing noProgress, rounds, stop, stoppedBy or snapshot`);
+  }
+  return update(path, ctx.now, (state) => {
+    if (state.stop !== null) throw new Refusal(`the run stopped at ${state.stop.at} (${state.stop.stoppedBy.join(', ')}); there are no more dispatch points`);
+    const u = state.usage;
+    u.noProgress = p.noProgress;
+    u.snapshot = p.snapshot;
+    if (p.stop) {
+      state.stop = {
+        at: ctx.now,
+        stoppedBy: p.stoppedBy,
+        usage: { rounds: u.rounds, spawns: u.spawns, hours: hoursAt(u, Date.parse(ctx.now)) },
+        note: flags.note ?? null,
+      };
+    } else u.rounds = p.rounds;
+    return { usage: u, stop: state.stop };
+  });
+}
+
+// ---- entry ---------------------------------------------------------------------------------------------------------
+
+const NOW = { now: 'one' };
+const COMMANDS = {
+  init: [init, { run: 'one', ...NOW }],
+  import: [importLedger, { from: 'one', ledger: 'one', ...NOW }],
+  show: [(path) => load(path), {}],
+  resume: [(path) => resume(load(path)), {}],
+  add: [add, { line: 'one', ...NOW }],
+  line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],
+  profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
+  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
+  stage: [stage, { reason: 'one', ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', findings: 'one', ...NOW }],
+  report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
+  merge: [merge, NOW],
+  assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', ...NOW }],
+  agent: [agent, { id: 'one', ...NOW }],
+  extend: [extend, { deadline: 'one', ...NOW }],
+  release: [release, { stopped: 'bool', ...NOW }],
+  ci: [ci, { from: 'one', dispatch: 'bool', 'branch-runs': 'one', ...NOW }],
+  local: [local, NOW],
+  usage: [usage, { started: 'one', wait: 'one', spawns: 'one', add: 'many', 'sleep-task': 'one', tokens: 'one', ...NOW }],
+  progress: [progress, { from: 'one', note: 'one', ...NOW }],
+};
+
+export function defaultDeps() {
+  return { read: (p) => readFileSync(p, 'utf8'), clock: () => Date.now() };
+}
+
+// Returns { code, out, err } instead of touching the process, so tests can drive it.
+export function main(argv, deps = defaultDeps()) {
+  try {
+    const entry = COMMANDS[argv[0]];
+    if (!entry) throw new UsageError(`expected one of ${Object.keys(COMMANDS).join(', ')}`);
+    const [run, spec] = entry;
+    const { flags, rest } = parseArgs(argv.slice(1), spec);
+    if (!rest.length) throw new UsageError(`${argv[0]} needs the state file first`);
+    const path = resolve(rest[0]);
+    const now = flags.now === undefined ? formatTime(Math.floor(deps.clock() / 1000) * 1000) : time(flags.now, '--now');
+    const result = run(path, rest.slice(1), flags, { now, read: deps.read });
+    const out = argv[0] === 'show' ? result : { format: FORMAT, command: argv[0], ...result };
+    return { code: 0, out: `${JSON.stringify(out, null, 2)}\n`, err: '' };
+  } catch (e) {
+    if (e instanceof Refusal) return { code: 3, out: '', err: `state: refused: ${e.message}\n` };
+    return failure('state', e);
+  }
+}
+
+runIfEntry(import.meta.url, main);
