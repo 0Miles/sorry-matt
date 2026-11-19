@@ -3,16 +3,25 @@
 // skills/have-it-all-done/ASKING.md section 7:
 //   - location: <git common dir>/sorry-matt/runs/<run>.md
 //   - in progress: the first line (a BOM aside) is `<!-- sorry-matt:run active -->`
-//   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet and backticks allowed);
+//   - field 10, rule files: one line per file, `rule: <absolute path>` (a list bullet allowed, backticks allowed
+//     around the value, and the whole line may be wrapped in backticks; the shape is ledgerLine below);
 //     every such line in the ledger counts, which ASKING says by keeping `rule:` lines to field 10
 // Anything it cannot find or read means "no run in progress": it prints nothing.
-// budget.mjs finds the runs in progress through ledgersForEvent here.
+// budget.mjs finds the runs in progress through ledgersForEvent here and builds its line pattern with ledgerLine.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
 
 export const ACTIVE = /^<!--\s*sorry-matt:run\s+active\s*-->$/;
-const RULE = /^\s*(?:[-*+]\s+)?rule:\s*`?([^`]+?)`?\s*$/;
+
+/**
+ * The one shape of a ledger's `<key>: <value>` line: leading space, an optional `-`, `*` or `+` bullet,
+ * optional backticks around the value or the whole line (each side on its own), trailing space.
+ * The captures come from `value`, a RegExp.
+ */
+export const ledgerLine = (key, value) => new RegExp(`^\\s*(?:[-*+]\\s+)?\`?${key}:\\s*\`?${value.source}\`?\\s*$`);
+
+const RULE = ledgerLine('rule', /([^`]+?)/);
 
 /** The git common directory for cwd, or null outside a repo or without git. */
 export function commonDir(cwd, run = spawnSync) {
