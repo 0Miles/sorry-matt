@@ -95,26 +95,32 @@ red-light fix agents included (time limits). Every wake-up does, in order:
 Dispatch points and finishing the run go by **the CI result for the integration branch's latest SHA**; while a line
 is in red-light handling, every wake-up reads that line as well. The latest SHA is
 `git rev-parse origin/<integration branch>`; when it differs from the local integration branch, push first per
-close-out step 6, then read (a line never pushed, or settled as not covered by CI, is not read):
+close-out step 6, then read (a line never pushed, or settled as not covered by CI, is not read). This skill's
+`scripts/ci.mjs` classifies the result; do not work it out from the run list yourself:
 
 ```bash
-gh run list --branch <integration branch> --commit <SHA> --limit 100 --json databaseId,workflowName,status,conclusion
+node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" verdict <integration branch> <SHA>
 ```
 
-Only GitHub Actions is read; any other CI is invisible here and counts as no run. All of one SHA's runs together give
-one result, classified in this order, the first match winning; record the result and its SHA in ledger field 4:
+Run it inside the repository; elsewhere, add `--repo <owner>/<repo>`. Only GitHub Actions is read; any other CI is
+invisible here and counts as no run. The script turns all of one SHA's runs into one result, the `verdict` of its
+output; the order of the rules and the output format are in the script's header. The script only reads: what follows
+a result is yours to do. Record the result and its SHA in ledger field 4, then go by the result:
 
-- **Query failed:** `gh` exits non-zero. Do not guess: record why, and read again next time.
-- **No run:** the list is empty. A just-pushed SHA may not be registered yet, so treat it as still running first. Only
+- **Query failed** (`query-failed`): do not guess: record the reason given in `error`, and read again next time.
+- **No run** (`no-run`): `reason` is `empty` (the list is empty) or `no-success` (every run completed and not one
+  is a `success` — a SHA whose runs are all `skipped` or `neutral` has no run; it is not green). A just-pushed SHA
+  may not be registered yet, so treat it as still running first. <!-- pending #100 -->Only
   when two dispatch points in a row read an empty list, and `gh run list --branch <integration branch> --limit 1
   --json databaseId` is empty too (the branch has never had a run), is the line settled as **CI does not cover the
   integration branch**; that holds through finishing the run, and the line's CI is not read again.
-- **Red:** some run's `conclusion` is `failure`, `timed_out`, `startup_failure`, `action_required` or `stale`. Go
-  through the red-light handling in [`RED-LIGHT.md`](RED-LIGHT.md).
-- **Still running:** some run's `status` is not `completed`. Do not wait and do not poll; next time, read the
+- **Red** (`red`): go through the red-light handling in [`RED-LIGHT.md`](RED-LIGHT.md).
+- **Still running** (`running`): do not wait and do not poll; next time, read the
   then-latest SHA — every run covers the full suite, so a newer SHA covers the older ones.
-- **Cancelled:** some run is `cancelled`. `gh run rerun <databaseId>`, and treat it as still running.
-- **Green:** anything else — every run is `completed`, with `conclusion` `success`, `skipped` or `neutral`.
+- **Cancelled** (`cancelled`): run `gh run rerun <id>` for every id listed in the output's `rerun`, and treat it as
+  still running.
+- **Green** (`green`): at least one run is a `success`, with nothing red, still running or cancelled. Carry on as
+  usual.
 
 **Lines on local verification.** In the pipeline, a line with no `origin`, or one settled as not covered by CI, has
 no CI to read: at the moments it would have been read — a dispatch point; every wake-up while the line is in
