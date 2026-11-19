@@ -104,7 +104,7 @@ levels:
 | Level | What | Covers |
 | --- | --- | --- |
 | **double** | two-step confirmation, with the consequences spelled out | catastrophic actions: a recursive delete of `~`, `/`, a drive root, `.`, `..` or a path outside the project; `format`, `mkfs*`, `dd of=/dev/…`, `diskpart`; `dropdb`, SQL `DROP DATABASE/SCHEMA/TABLE`, `TRUNCATE`, `FLUSHALL`/`FLUSHDB`, `dropDatabase()`; `gh repo delete`, the API/GraphQL repo deletes and MCP `delete_repository`; `terraform`/`tofu`/`pulumi destroy`; `gcloud projects delete`, `az group delete`; `kubectl delete namespace`, `aws s3 rb` and `aws cloudformation delete-stack` aimed at prod; a force-push to, or delete of, `main`, `master` or the remote's default branch. Outgoing messages: mailers, `git send-email`, chat and mail APIs through `curl` and friends (a plain GET only reads, except APIs that send on GET such as Telegram's `sendMessage`), MCP send/post actions. Payments: `stripe` writes, non-GET calls to payment APIs, MCP payment actions |
-| **ask** | asked once | releases and production deploys: `npm`/`pnpm`/`yarn`/`bun` publish (recursive and workspace forms too), `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply, `fly deploy`, `wrangler deploy`, `firebase deploy`, other deploy tools and SQL writes aimed at prod, also through `npx`/`bunx`/`pnpm dlx`, `gh workflow run` with prod. Not asked: `--dry-run`, and targets explicitly named as non-production (`-var-file=staging.tfvars`, `TF_WORKSPACE=dev`, `fly deploy -a shop-staging`, `wrangler deploy --env staging`, `firebase deploy -P app-dev`), and `ssh prod-host <read-only command>` such as `uptime`, `tail` or `systemctl status`. Writes to files that change how Claude Code behaves: `.claude/settings*.json`, `managed-settings.json`, `.claude/hooks/`, `~/.claude.json`, `.mcp.json`, `managed-mcp.json`, `.claude/sorry-matt.json`. A merge that deploys to production right away (below) |
+| **ask** | asked once | releases and production deploys: `npm`/`pnpm`/`yarn`/`bun` publish (recursive and workspace forms too), `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply, `fly deploy`, `wrangler deploy`, `firebase deploy`, other deploy tools and SQL writes aimed at prod, also through `npx`/`bunx`/`pnpm dlx`, `gh workflow run` with prod. Not asked: `--dry-run`, and targets explicitly named as non-production (`-var-file=staging.tfvars`, `TF_WORKSPACE=dev`, `fly deploy -a shop-staging`, `wrangler deploy --env staging`, `firebase deploy -P app-dev`), and `ssh prod-host <read-only command>` such as `uptime`, `tail` or `systemctl status`. Writes to files that change how Claude Code behaves: `.claude/settings*.json`, `managed-settings.json`, `.claude/hooks/`, `~/.claude.json`, `.mcp.json`, `managed-mcp.json`, `.claude/sorry-matt.json` (reading, printing, testing, opening or committing them is not a write, and a copy writes only its destination). A merge that deploys to production right away (below) |
 | none | let through to your permission settings | everything else: force-pushing a feature branch, `git reset --hard`, `git clean`, deletes inside the project, cloning, installing packages or extensions, `curl … \| sh`, reading or writing credential files, `sudo`, `chmod`, `icacls` |
 
 **What it is not.** The guard matches command text; it is not a security boundary. It does not see through an
@@ -137,10 +137,12 @@ the flow above applies, since a PreToolUse `ask` goes to the permission prompt.
 only when the merge would deploy right away. The hook takes, in order:
 
 1. `SORRY_MATT_MERGE_DEPLOYS` (`yes`/`no`) in the environment, or `{"mergeDeploysProduction": true|false}` in the
-   repo's `.claude/sorry-matt.json`;
+   repo's `.claude/sorry-matt.json` (that file only speaks for its own clone's origin);
 2. otherwise detection, on the workflows the merge leaves on the base branch: for a PR, `gh pr view` gives the base
    and the head, and the head's `.github/workflows/*.y*ml` are read (the base's when the head is not available
-   locally, which the prompt says); for a push, the tree of the ref being pushed. A workflow that a push to the base
+   locally, which the prompt says); for a PR in another repo than this clone's origin (`--repo`), the same files
+   are read from GitHub with `gh api graphql`; for a push, the tree of the ref being pushed. A variable set earlier
+   on the same command line (`R=owner/repo; gh pr merge 1 --repo $R`) is read as its value. A workflow that a push to the base
    triggers deploys when a job has `environment: prod`/`production`, uses a known deploy action
    (`actions/deploy-pages`, `peaceiris/actions-gh-pages`, `cloudflare/wrangler-action`,
    `FirebaseExtended/action-hosting-deploy`, …), calls a reusable workflow named like a deploy or release, or runs
@@ -153,6 +155,20 @@ only when the merge would deploy right away. The hook takes, in order:
 Detected: asked, naming the workflow and the signal. Clearly not: let through to your permission settings. A lookup
 that fails, or a job or step named like a deploy, release or publish whose action the hook does not recognize:
 asked, saying why.
+
+**Unattended.** A prompt waits for an answer for as long as it takes, so an agent left running overnight stops at
+the first one. Before you walk away, create the switch file; every call the guard would ask about is then denied
+instead, with a message telling the agent to put it on the human-work list (or in its final report) and carry on.
+Two-step actions are denied before any confirmation is recorded. Remove the file to be asked again. The guard
+reads it on every call, so it takes effect in sessions that are already running. Setting `SORRY_MATT_UNATTENDED=on`
+in the `env` of your settings does the same for new sessions. This only makes the guard stricter; prompts that
+come from your own permission settings are not the guard's and still appear (in `auto` mode the classifier decides
+those instead).
+
+```bash
+touch ~/.claude/sorry-matt-unattended   # going to bed
+rm ~/.claude/sorry-matt-unattended      # back
+```
 
 To turn the guard off, set it in the `env` of your Claude Code settings:
 
