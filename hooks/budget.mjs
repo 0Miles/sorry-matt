@@ -1,9 +1,10 @@
 // The run's spawn budget, enforced by hooks. Ledgers and their fields are defined in
 // skills/have-it-all-done/ASKING.md section 7; this module reads two things from them:
 //   - in progress: the first line is `<!-- sorry-matt:run active -->` (runs.mjs)
-//   - field 9, limits: one line per limit, `budget: <name> <integer>` (a list bullet and backticks allowed);
-//     the hook enforces only `budget: spawns <N>`; the others (`rounds`, `hours`, `no-progress`, and the stage time
-//     limits `timeout-<stage>` in minutes) are for the host
+//   - field 9, limits: one line per limit, `budget: <name> <integer>` (a list bullet allowed, backticks allowed
+//     around the value, and the whole line may be wrapped in backticks; the shape is ledgerLine in runs.mjs);
+//     the hook enforces only `budget: spawns <N>`; the others (`rounds`, `hours`, `no-progress`, and the stage
+//     time limits `timeout-<stage>` in minutes) are for the host
 // The spawn count lives next to the ledger in `<run>.counters.json`, written only by the hook:
 //   { "spawns": <int>, "agents": [<agent_id>, ...], "updated": "<ISO time>" }
 // SubagentStart adds one per new agent_id (it also fires when a subagent is resumed, so a seen id is not
@@ -20,9 +21,9 @@
 // count itself is still kept by SubagentStart and the next call reads it again.
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { ledgersForEvent } from './runs.mjs';
+import { ledgerLine, ledgersForEvent } from './runs.mjs';
 
-const BUDGET = /^\s*(?:[-*+]\s+)?`?budget:\s*`?([a-z][a-z-]*)\s+(\d+)`?\s*$/;
+const BUDGET = ledgerLine('budget', /([a-z][a-z-]*)\s+(\d+)/);
 
 /** Every `budget: <name> <integer>` line in a ledger; the first line for a name wins. */
 export function parseBudget(text) {

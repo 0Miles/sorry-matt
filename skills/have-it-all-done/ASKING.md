@@ -186,8 +186,10 @@ and the denial carries the confirm command to run first. Only the exact line the
 Subagents do not run these actions; they report them to the host. The host sends them as **prompting calls**,
 back to back after every other step (`have-it-all-done` section 0); a two-step resend follows right after its
 first confirmation. When the user refuses at the prompt, or the hook denies the call — in `bypassPermissions`
-mode nothing guarantees a prompt, so every two-step action is denied — put it on the human-work list with the
-command to run and the consequences the hook described; do not retry with another spelling.
+mode nothing guarantees a prompt, so every two-step action is denied; while the user has unattended mode on, every
+action needing confirmation is denied outright, with no prompt — put it on the human-work list with the command to
+run and the consequences the hook described; do not retry with another spelling, and do not stop to wait: carry on
+with everything else you can do. Only the user switches unattended mode; never touch its switch file.
 
 The hook matches command text; it is not a security boundary. It does not recognize an interpreter wrapper
 (`node -e`, `python -c`), variable expansion, or commands like `find / -delete`; without managed settings, another

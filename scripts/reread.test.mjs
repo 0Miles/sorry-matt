@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { parseLedger, activeLedgers, reminder, respond } from '../hooks/runs.mjs';
+import { parseLedger, activeLedgers, reminder, respond, ledgerLine } from '../hooks/runs.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -46,6 +46,23 @@ test('parseLedger: rule lines with absolute paths, bullets and backticks allowed
     'C:\\plugins\\sorry-matt\\skills\\have-it-all-done\\ASKING.md',
     '/plugins/sorry-matt/skills/get-to-work/SKILL.md',
   ]);
+});
+
+test('parseLedger: a rule line wrapped whole in backticks counts, with or without a bullet', () => {
+  const ledger = (line) => `<!-- sorry-matt:run active -->\n## 10. Rule files\n${line}\n`;
+  assert.deepEqual(parseLedger(ledger('`rule: /abs/x.md`')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('- `rule: /abs/x.md`')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('* `rule: C:\\abs\\x.md`')).rules, ['C:\\abs\\x.md']);
+});
+
+test('parseLedger: trailing spaces or tabs after a rule path are not part of the path', () => {
+  assert.deepEqual(parseLedger('<!-- sorry-matt:run active -->\nrule: /a/b.md  \nrule: /a/b.md\t\n').rules, ['/a/b.md']);
+});
+
+test('ledgerLine: one line shape for any key, bullets and backticks around the value or the whole line', () => {
+  const line = ledgerLine('size', /(\d+)/);
+  for (const ok of ['size: 7', '  - size: 7  ', '* size: `7`', '+ `size: 7`', '`size: 7`']) assert.equal(line.exec(ok)?.[1], '7', ok);
+  for (const no of ['the size: 7', 'size: seven', '-size: 7', 'sizes: 7']) assert.equal(line.exec(no), null, no);
 });
 
 test('activeLedgers: skips ended ledgers, non-markdown files and run directories', () => {
@@ -96,6 +113,20 @@ test('respond: silent without git, outside a repo, without runs, with only ended
     assert.equal(respond('not json', { git: gitAt(f.dir) }), null);
     writeFileSync(join(f.runs, 'now.md'), '<!-- sorry-matt:run active -->\nrule: /x/SKILL.md\n');
     assert.match(respond(event(), { git: gitAt(f.dir) }), /- ledger: .*now\.md\n {2}- rule: \/x\/SKILL\.md/);
+  } finally {
+    f.done();
+  }
+});
+
+test('respond: a field-10 rule line wrapped in backticks still reaches the reminder', () => {
+  const f = fixture();
+  try {
+    const rule = join(f.dir, 'SKILL.md');
+    writeFileSync(rule, 'x');
+    writeFileSync(join(f.runs, 'now.md'), `<!-- sorry-matt:run active -->\n## 10. Rule files\n- \`rule: ${rule}\`\n`);
+    const out = respond(event(), { git: gitAt(f.dir) });
+    assert.ok(out.includes(`  - rule: ${rule}\n`), out);
+    assert.ok(!out.includes('rule files: none listed'), out);
   } finally {
     f.done();
   }

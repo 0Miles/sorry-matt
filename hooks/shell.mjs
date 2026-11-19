@@ -26,13 +26,14 @@ export const commandName = (word = '') =>
 /**
  * Every simple command in `line`, nested ones (`bash -c`, `$( )`, heredocs fed to a shell) included.
  * @param {string} line
- * @param {'bash'|'powershell'} dialect
+ * @param {'bash'|'powershell'|'cmd'} dialect cmd: `^` escapes, a backslash is a path separator, `'` and `#` are plain
  * @returns {{argv: string[], redirects: string[], op: string, heredoc: string}[]}
  */
 export function parse(line, dialect = 'bash') {
   const segments = [];
   const nested = [];
-  const escape = dialect === 'powershell' ? '`' : '\\';
+  const escape = { powershell: '`', cmd: '^' }[dialect] ?? '\\';
+  const cmd = dialect === 'cmd';
   const heredocs = [];
   let seg = { argv: [], redirects: [], op: '', heredoc: '' };
   let word = null;
@@ -106,7 +107,7 @@ export function parse(line, dialect = 'bash') {
       i += 2;
       continue;
     }
-    if (c === "'") {
+    if (c === "'" && !cmd) {
       const end = line.indexOf("'", i + 1);
       word = (word ?? '') + line.slice(i + 1, end === -1 ? line.length : end);
       i = end === -1 ? line.length : end + 1;
@@ -116,7 +117,7 @@ export function parse(line, dialect = 'bash') {
       let j = i + 1;
       let text = '';
       while (j < line.length && line[j] !== '"') {
-        if (line[j] === escape && j + 1 < line.length) {
+        if (line[j] === escape && !cmd && j + 1 < line.length) {
           text += line[j + 1];
           j += 2;
         } else if (line[j] === '$' && line[j + 1] === '(') {
@@ -145,7 +146,7 @@ export function parse(line, dialect = 'bash') {
       i = end;
       continue;
     }
-    if (c === '#' && word === null) {
+    if (c === '#' && word === null && !cmd) {
       const nl = line.indexOf('\n', i);
       i = nl === -1 ? line.length : nl;
       continue;
@@ -195,6 +196,7 @@ export function parse(line, dialect = 'bash') {
     i++;
   }
   endSegment('');
+  expandVariables(segments, dialect);
 
   const out = [];
   for (const s of segments) {
@@ -206,6 +208,51 @@ export function parse(line, dialect = 'bash') {
   }
   for (const text of nested) out.push(...parse(text, dialect));
   return out;
+}
+
+// `R=owner/repo; gh pr merge 1 --repo $R`: a variable given a plain value earlier on the same line is read as that
+// value from then on. A name given two different values, or a value that is itself an expansion, stays as written,
+// and so does anything inside `$( )`, backticks or a nested script.
+const NAME = '[A-Za-z_][A-Za-z0-9_]*';
+function assignments(argv, dialect) {
+  if (dialect === 'cmd') return null;
+  if (dialect === 'powershell') {
+    let m;
+    if (argv.length === 3 && argv[1] === '=' && (m = new RegExp(`^\\$(${NAME})$`).exec(argv[0]))) return [[m[1], argv[2]]];
+    if (argv.length === 1 && (m = new RegExp(`^\\$(${NAME})=(.*)$`, 's').exec(argv[0]))) return [[m[1], m[2]]];
+    return null;
+  }
+  const words = ['export', 'local', 'readonly', 'declare', 'typeset'].includes(argv[0]) ? argv.slice(1) : argv;
+  if (!words.length || !words.every((w) => new RegExp(`^${NAME}=`).test(w))) return null;
+  return words.map((w) => [w.slice(0, w.indexOf('=')), w.slice(w.indexOf('=') + 1)]);
+}
+
+function expandVariables(segments, dialect) {
+  const key = (name) => (dialect === 'powershell' ? name.toLowerCase() : name);
+  const seen = new Map();
+  for (const seg of segments) {
+    for (const [name, value] of assignments(seg.argv, dialect) ?? []) {
+      const k = key(name);
+      seen.set(k, seen.has(k) && seen.get(k) !== value ? null : value);
+    }
+  }
+  const values = new Map();
+  const expand = (word) =>
+    word.replace(new RegExp(`\\$\\{(${NAME})\\}|\\$(${NAME})(?![A-Za-z0-9_])`, 'g'), (whole, braced, bare) => {
+      const k = key(braced ?? bare);
+      return values.has(k) ? values.get(k) : whole;
+    });
+  for (const seg of segments) {
+    const set = assignments(seg.argv, dialect);
+    if (values.size) {
+      seg.argv = seg.argv.map(expand);
+      seg.redirects = seg.redirects.map(expand);
+    }
+    for (const [name, value] of set ?? []) {
+      const k = key(name);
+      if (seen.get(k) !== null && !/[$`]/.test(value)) values.set(k, value);
+    }
+  }
 }
 
 /**
@@ -260,7 +307,7 @@ function innerScript(rawArgv) {
   }
   if (name === 'cmd') {
     const c = rest.findIndex((w) => /^\/[ck]$/i.test(w));
-    return c !== -1 ? { text: rest.slice(c + 1).join(' '), dialect: 'bash' } : null;
+    return c !== -1 ? { text: rest.slice(c + 1).join(' '), dialect: 'cmd' } : null;
   }
   if (name === 'eval') return rest.length ? { text: rest.join(' '), dialect: 'bash' } : null;
   if (name === 'invoke-expression' || name === 'iex') {

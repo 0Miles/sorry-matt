@@ -496,3 +496,23 @@ spawns 改依票數後這個前提不成立，超過 13 張票的 run 會先停�
 派票點，不另加。`rounds` 由主持人判，hook 不讀，解析不受影響。
 
 時限判定不做腳本：比大小是字串比較，進展是兩段 git 指令，寫成指令比多一支腳本與測試簡單。
+
+## guard 的無人值守模式
+
+使用者 2026-11-19 回報：agent 半夜停在 guard 的確認框上，一路等到早上。PreToolUse 的 ask 沒有逾時，人不在就一直卡。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 需要確認的動作一律跳確認提示 | 新增無人值守模式：`~/.claude/sorry-matt-unattended` 存在，或 `SORRY_MATT_UNATTENDED=on` 時，每個 ask 改成 deny，訊息要 agent 記進人工作業清單後繼續做其他事；兩段確認在記錄任何確認之前就擋下 | 只會讓 guard 更嚴，誰建立開關檔都不放寬任何東西；開關檔每次呼叫都讀，已經在跑的 session 也立即生效。 |
+| 同一行先設的變數（`R=o/r; gh pr merge 1 --repo $R`）照字面比對 | 解析時展開：只展開前面設過、只設過一個值、值本身不是展開式的變數 | 字面 `$R` 對不上 origin，判成「無法判斷」而跳框；展開只會讓判斷更準。 |
+| PR 不屬於這個 clone 的 origin 就判「無法判斷」 | 改用 `gh api graphql` 從 GitHub 讀 PR head（取不到就 base）的 workflow；這個 clone 的 `.claude/sorry-matt.json` 不再套用到別的 repo | 跨 repo 合併是常態，不該每次都問；本機設定只描述本機 repo。 |
+
+## guard 不為普通指令跳框
+
+使用者 2026-11-19 指示：普通指令不要跳框，否則按 allow 會變成反射動作，真正該看的那次也一起按掉。依近三天的 transcript，
+實際跳過的框除了上一節的兩種合併誤判，還有 agent 清自己的 scratchpad worktree（`cmd /c "rd /s /q \?\$p"`）被當成災難級刪除。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `cmd /c` 的內容用 bash 規則解析 | 改用 cmd 規則：`^` 跳脫、反斜線照字面、`'` 與 `#` 不是特殊字元；刪除目標去掉 `\?\` 長路徑前綴 | 反斜線被吃掉後，暫存目錄變成 `/?…` 而誤判，`D:\other` 反而變成相對路徑 `D:other` 而漏判。 |
+| 引數裡出現 Claude 設定檔路徑、指令不在讀取清單就問 | 讀取清單補上只印、只測、只開啟或只 commit 的指令（`echo`、`Test-Path`、`Get-ChildItem`、雜湊、`code`、`git commit` 等）；`cp`／`Copy-Item` 只看目的地 | 這些都不寫入設定檔；寫入（重導、`sed -i`、`git checkout --`、複製到設定檔）照問。 |
