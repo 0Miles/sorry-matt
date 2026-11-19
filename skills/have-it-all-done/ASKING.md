@@ -283,7 +283,7 @@ is exactly the active marker, with no blank line before it. Ten fields:
    The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
    states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming relies on it and the agent id to
    pick back up every ticket short of an end state, and on the deadlines to keep scanning time limits.
-9. **Run metrics and budget**, in four parts:
+9. **Run metrics and budget**, in five parts:
    - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is created,
      and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch points,
      `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget: hours 12`
@@ -312,6 +312,14 @@ is exactly the active marker, with no blank line before it. Ten fields:
      `get-to-work` section 1, budget and breaker.
    - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
      and where the run is stuck; "none" when it has not stopped.
+   - **Host session:** one line `session: <id>`, the value of the environment variable `CLAUDE_CODE_SESSION_ID` in
+     the host's own shell commands (read it with `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"`,
+     which runs in any shell). Write it when the ledger is created; read it again when taking over a ledger and on
+     every resume (except a `/loop` wake-up: same session, the value cannot change), and rewrite the line when the
+     value differs. The plugin's hook counts against this run only the spawns whose `session_id` matches this line,
+     and blocks only the matching session; when the value cannot be read (an empty string), leave the line out and
+     the hook falls back to counting and blocking every session in the repo. The hook reads only the first
+     `session:` line, so no other field starts a line with `session:`.
 10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
     `rule: <absolute path>`, filled in when the ledger is created and completed when an existing ledger is taken
     over (for example, `have-it-all-done` taking over a ledger that a standalone `get-to-work` created). List the
@@ -336,7 +344,8 @@ finders, verifiers and Fix Verifiers are in its own rules. A task the host hands
 subagent's brief: a check the brief does not name becomes a raw ticket for a later run.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
-"none", field 9 has the four `budget:` limits, the four stage time limits and current usage, and field 10 has listed the rule files' absolute
+"none", field 9 has the four `budget:` limits, the four stage time limits, current usage and, when a session id
+can be read, a `session:` line matching the current session, and field 10 has listed the rule files' absolute
 paths since creation; resuming always starts by re-reading the ledger and the rule files it lists; where there is
 no common directory, the report says the source of truth moved to it; the host's context holds no raw diffs, test
 logs, or agent reports.

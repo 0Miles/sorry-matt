@@ -1,5 +1,5 @@
 {
-  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; while a run is in progress, count its subagents and deny a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
+  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
   "hooks": {
     "PreToolUse": [
       {

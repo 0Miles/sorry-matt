@@ -217,13 +217,23 @@ While a run is in progress, two more hooks share one entry (`hooks/hooks.json` �
 With no run in progress, or no `budget: spawns` line, neither hook counts against anything or blocks anything. While
 a run is in progress, know how far it reaches:
 
-- **Every session in the repo counts.** The hooks cannot tell which session a subagent belongs to, so any session
-  working in the same repository (any worktree) adds to an active run's count, not just the run's own host.
-- **A run at its limit blocks every session in the repo.** With several runs in progress, each one counts every
-  spawn, and any one at its limit denies spawns everywhere in that repo.
-- **A run that ended abnormally keeps blocking.** If a run stops without reaching its handoff (a crash, a closed
-  terminal), its ledger still starts with `<!-- sorry-matt:run active -->`. Change that first line to
-  `<!-- sorry-matt:run ended -->` by hand; the deny message names the ledger.
+- **Only the run's host session counts.** The host writes its Claude Code session id (`CLAUDE_CODE_SESSION_ID`) into
+  field 9 as `session: <id>` when it creates the ledger and again whenever it takes it over or resumes. Both hooks
+  then count and block only events whose `session_id` matches — the host's own spawns and those of its subagents.
+  Another session working in the same repository (any worktree) is neither counted against the run nor blocked by
+  it, and with several runs in progress each one counts and blocks only its own host. This was checked live with
+  `scripts/host-session.live.mjs` (Claude Code 2.1.328): the hook events carry the host's id, also for a subagent's
+  own Agent call, and `--resume` and compaction keep it.
+- **A ledger without a `session:` line counts every session.** Ledgers from older versions, or written by a host
+  that could not read its id, fall back to the repo-wide rule: every session in the repo adds to the run's count,
+  and the run at its limit denies spawns everywhere in that repo. So does a hook event without a `session_id`.
+- **A run that ended abnormally.** If a run stops without reaching its handoff (a crash, a closed terminal), its
+  ledger still starts with `<!-- sorry-matt:run active -->`: the compaction reminder keeps pointing at it, a resumed
+  host session is still held to its limit, and a ledger without a `session:` line keeps blocking every session. End
+  it with `node hooks/end-run.mjs <ledger>` (from the plugin's directory; the deny message gives the full command),
+  run from inside the repository. It changes only the first line to `<!-- sorry-matt:run ended -->`, and changes
+  nothing — saying why — when the file is not a ledger directly in the repo's `<git common dir>/sorry-matt/runs/` or
+  its first line is not the active marker.
 - **Parallel spawns can overshoot.** Agent calls sent in one message are each checked before any of them starts, so
   a batch can take the count past the limit; the next spawn after it is denied.
 - **Failures.** A counters file that is not JSON, or not in the counters format, denies spawns until it is fixed (the
@@ -285,9 +295,9 @@ Restart Claude Code after updating so the new skill definitions are loaded.
 - `scripts/` holds the repository checks, run on every pull request by `.github/workflows/check.yml`:
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
-- `hooks/` holds the guard hook, the compaction reminder, and the run budget hooks; `scripts/guard.test.mjs`,
-  `scripts/deploy-on-merge.test.mjs`, `scripts/reread.test.mjs`, and `scripts/budget.test.mjs` test them in the
-  same CI run.
+- `hooks/` holds the guard hook, the compaction reminder, the run budget hooks, and `end-run.mjs`, the command
+  that ends an abnormally stopped run; `scripts/guard.test.mjs`, `scripts/deploy-on-merge.test.mjs`,
+  `scripts/reread.test.mjs`, `scripts/budget.test.mjs`, and `scripts/end-run.test.mjs` test them in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
   `scripts/acceptance.test.mjs`, `scripts/overlap.test.mjs`, `scripts/review-guide.test.mjs`, `scripts/ci.test.mjs`,
