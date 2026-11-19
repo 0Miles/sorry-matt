@@ -11,7 +11,7 @@
 - 套件與版本：`<套件>@<lockfile 解析的版本>`
 - 載入方式：<唯一一條 import 路線，以及樣式與 provider 的載入點>
 - 自帶 skill：<可用 skill 清單裡屬於它的 skill；沒有就寫「沒有」>
-- 既有、不再新用：<另一套的套件與版本；只有一套時刪掉這行>
+- 既有、不再新用：<同一個 package 裡另一套的套件與版本；只有一套時刪掉這行>
 
 ## Tokens
 
@@ -34,10 +34,29 @@
 
 - lint：`<指令>`
 - typecheck：`<指令>`
+- test：`<指令>`
 - storybook：`<指令>`
 ```
 
 未使用現成元件庫時，「元件庫」段只寫一行「無」。
+
+不同 package 各用一套元件庫時（monorepo），「元件庫」段每套一條，各附一行「適用範圍」寫它涵蓋的
+package 路徑；每套都是現役。某個 package 裡同時有兩套時，「既有、不再新用」寫在那個 package 那一條底下：
+
+```markdown
+## 元件庫
+
+- `<套件 A>@<lockfile 解析的版本>`
+  - 適用範圍：`<package A 的路徑>`
+  - 載入方式：<package A 的 import 路線，以及樣式與 provider 的載入點>
+  - 自帶 skill：<屬於套件 A 的 skill；沒有就寫「沒有」>
+- `<套件 B>@<lockfile 解析的版本>`
+  - 適用範圍：`<package B 的路徑>`
+  - 載入方式：<package B 的 import 路線，以及樣式與 provider 的載入點>
+  - 自帶 skill：<屬於套件 B 的 skill；沒有就寫「沒有」>
+```
+
+單一 package 的專案不寫「適用範圍」，照第一份模板產出，格式不變。
 
 ## 規則
 
