@@ -364,7 +364,9 @@ guard（`hooks/permanent-exceptions.mjs`）：受保護分支只有 `main`、`ma
   讀取遇 Windows 暫時鎖檔重試，仍鎖住就放行並警告，內容損壞才 fail closed。
 - 使用者 opt-out `SORRY_MATT_BUDGET=off`，與 guard 的 `SORRY_MATT_GUARD` 分開；誤傷範圍寫在 README「Run budget」。
 - README 的 headless 硬上限：`claude -p --max-turns --max-budget-usd`。
-- 測試 `scripts/budget.test.mjs`，CI 一起跑。PreToolUse deny 對 `Agent` 的實跑驗證尚未做（依 hooks 文件佐證）。
+- 測試 `scripts/budget.test.mjs`，CI 一起跑。PreToolUse deny 對 `Agent` 已在 Claude Code 2.1.325 以
+  `scripts/spawn-deny.live.mjs` 實跑驗證：用量達上限後，前景與背景的 Agent 呼叫都被 deny，沒有觸發 SubagentStart。
+  這支腳本花 API 額度、不進 CI；Claude Code 升級後手動重跑。
 
 ## #17：同一條線上可開工的票平行做（逐票流水線）
 
