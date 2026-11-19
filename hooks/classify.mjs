@@ -183,11 +183,9 @@ function classifySegment(seg, prev, cwd) {
   const byTool = commandRule(name, args, line, seg, cwd);
   if (byTool) return byTool;
 
-  // Writing Claude Code settings with anything but a reader.
-  if (!READERS.has(name) && !(name === 'git' && /^(diff|log|show|status|blame|add|ls-files)$/.test(gitSub(args).sub))) {
-    const path = args.map((a) => a.replace(/^-[-\w]*=/, '')).find((a) => isClaudeSettings(a));
-    if (path) return hit('claude-settings', line, { path });
-  }
+  // Writing Claude Code settings with anything that can write: not a reader, and for a copy only the destination.
+  const settingsPath = settingsWritten(name, args);
+  if (settingsPath) return hit('claude-settings', line, { path: settingsPath });
   if (SQL_CLIENTS.has(name)) {
     const sql = `${words}\n${seg.heredoc}\n${seg.op === '|' ? prev.argv.join(' ') : ''}`;
     const statements = [...sql.matchAll(SQL_DESTROY)].map((m) => m[0].replace(/\s+/g, ' ').trim());
@@ -207,6 +205,24 @@ function classifySegment(seg, prev, cwd) {
     }
   }
   return null;
+}
+
+// Commands that only read, print or test the paths they are given (a redirect is checked on its own).
+const SETTINGS_READERS = new Set([...READERS, 'echo', 'printf', 'write-output', 'write-host', 'test-path', 'resolve-path', 'rvpa',
+  'get-item', 'gi', 'get-childitem', 'gci', 'get-filehash', 'find', 'fd', 'sha256sum', 'sha1sum', 'md5sum', 'shasum', 'file', 'realpath',
+  'readlink', 'basename', 'dirname', 'code', 'cursor', 'start', 'explorer', 'open', 'xdg-open', 'invoke-item', 'ii']);
+const GIT_READS = /^(diff|log|show|status|blame|add|ls-files|grep|check-ignore|check-attr|cat-file|commit|whatchanged|shortlog)$/;
+const COPIERS = new Set(['cp', 'copy', 'copy-item', 'cpi', 'xcopy']);
+const COPY_VALUED = new Set(['-t', '--target-directory', '-S', '--suffix', '-Path', '-LiteralPath', '-Destination', '-Filter', '-Include', '-Exclude']);
+
+function settingsWritten(name, args) {
+  if (SETTINGS_READERS.has(name) || (name === 'git' && GIT_READS.test(gitSub(args).sub))) return '';
+  if (COPIERS.has(name)) {
+    // Only the destination is written: `-Destination`, `-t dir`, or the last path.
+    const dest = optionValue(args, '-Destination', '-t', '--target-directory') || positionals(args, COPY_VALUED).at(-1) || '';
+    return isClaudeSettings(dest) ? dest : '';
+  }
+  return args.map((a) => a.replace(/^-[-\w]*=/, '')).find((a) => isClaudeSettings(a)) ?? '';
 }
 
 const DISK = (line, target) => catastrophic(line, `覆寫或清除 ${target}：上面的所有資料都會消失，無法復原。`);
@@ -367,7 +383,8 @@ function deleteRule(name, args, line, cwd) {
     targets = path !== -1 ? [args[path + 1] ?? ''] : positionals(args, new Set(['-Include', '-Exclude', '-Filter']));
   }
   if (!recursive) return null;
-  const hits = targets.map((t) => t.replace(/,$/, '')).filter((t) => dangerousDeleteTarget(t, cwd));
+  // `\\?\C:\x` is Windows' long-path spelling of `C:\x`.
+  const hits = targets.map((t) => t.replace(/,$/, '').replace(/^[\\/]{2}[?.][\\/]/, '')).filter((t) => dangerousDeleteTarget(t, cwd));
   if (!hits.length) return null;
   const paths = hits.map((t) => absoluteTarget(t, cwd)).join('、');
   return catastrophic(line, `遞迴刪除 ${paths}：不經資源回收筒，沒有備份就無法復原。`);
