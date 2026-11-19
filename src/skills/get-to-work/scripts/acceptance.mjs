@@ -10,7 +10,9 @@
 //   original   The ticket body (GitHub issue body; Local Markdown ticket file), leaving out fenced code and every
 //              section titled `Comments` or `sorry-matt …` (any level, down to the next heading of that level or
 //              higher). When what is left has an acceptance heading (`Acceptance criteria`, `Acceptance` or `驗收…`,
-//              any level), the list items of that section; else every checkbox item (`- [ ]`, `- [x]`).
+//              any level), the list items of that section; else every checkbox item (`- [ ]`, `- [x]`, `1. [ ]`).
+//              A list item is ticket.mjs's: a `-`, `*` or `+` bullet, or a number followed by `.` or `)`, then
+//              whitespace and at least one non-blank character.
 //   expansion  An expansion block, written by someone other than the implementer before the ticket starts:
 //
 //                <!-- sorry-matt:expansion -->
@@ -63,28 +65,28 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
 import { UsageError, parseJson, run, canonical, failure, runIfEntry } from './cli.mjs';
-import { scan, section, ownRows, lines, startsHeading } from './ticket.mjs';
+import { scan, section, ownRows, lines, startsHeading, listItem } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
 export const MARKER = '<!-- sorry-matt:expansion -->';
 
 const ACCEPTANCE_HEADING = /^(acceptance criteria|acceptance|驗收\S*)$/i;
-const LIST_ITEM = /^\s*[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$/;
-const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s+(.*)$/;
+// A checkbox at the start of a list item's text; its state is not part of the criterion.
+const CHECKBOX = /^\[[ xX]\](?:\s+|$)/;
 const KEY_LINE = /^(by|run|round|acceptance|rulings):\s*(.*)$/;
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 
-// List items of `input` (text lines), each with its continuation lines; `pick` decides which lines start an item. A
-// blank line, a heading, or a list item that `pick` rejects ends the item.
-function listItems(input, pick = LIST_ITEM) {
+// List items of `input` (text lines), each with its continuation lines and without its checkbox. With `checkboxOnly`,
+// only checkbox items start an item. A blank line, a heading, or a list item that is not picked ends the item.
+function listItems(input, { checkboxOnly = false } = {}) {
   const items = [];
   let open = false;
   for (const line of input) {
-    const m = pick.exec(line);
-    if (m) {
-      items.push(m[1]);
+    const text = listItem(line);
+    if (text !== null && (!checkboxOnly || CHECKBOX.test(text))) {
+      items.push(text.replace(CHECKBOX, ''));
       open = true;
-    } else if (open && line.trim() && !LIST_ITEM.test(line) && !startsHeading(line)) {
+    } else if (open && line.trim() && text === null && !startsHeading(line)) {
       items[items.length - 1] += ` ${line}`;
     } else {
       open = false;
@@ -98,7 +100,7 @@ export function originalCriteria(body) {
   // nested under the acceptance heading is never counted twice.
   const rows = ownRows(scan(body));
   const own = section(rows, (t) => ACCEPTANCE_HEADING.test(t));
-  return own ? listItems(lines(own)) : listItems(lines(rows), CHECKBOX);
+  return own ? listItems(lines(own)) : listItems(lines(rows), { checkboxOnly: true });
 }
 
 // Every expansion block in `text`: each starts at a marker line and runs to the next marker or the end.
