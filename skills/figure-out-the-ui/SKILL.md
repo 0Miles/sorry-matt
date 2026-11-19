@@ -18,6 +18,13 @@ when it does not exist, stop, produce
 no UI brief, and ask the user to run `/set-up-ui-skills`. This skill only reads `ui.md`: when it finds `ui.md`
 and the source disagreeing, it proceeds on the source and writes the mismatch into the brief's assumptions part.
 
+This skill changes no files, so it has no "files this change touches". When the `Component library` section of
+`ui.md` has several entries, each with a `Scope` line, choose by the path of the page, route, or component the
+UI brief will land in, under the per-file rule in the prerequisite of **component reuse**; the `Tokens` section,
+the `New shared components` line, and the `Scope` column of the `Shared components` table are handled the same
+way. When that path cannot be told yet, write it as an **assumption**, and say which entry the brief proceeds
+on.
+
 Write any fact that cannot be found as an **assumption** and proceed on it; collect the assumptions at the end
 of the brief so a reader can overturn them at a glance.
 

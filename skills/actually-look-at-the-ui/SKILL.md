@@ -42,10 +42,13 @@ the four kinds of candidate — components in the `Shared components` table, com
 HTML elements, and page-local components. The expected component does not come from the diff's imports: a
 hand-rolled lookalike imports no component, and it still has the component it should have used.
 
-Take the list of component library components from the first of these sources that is available, and name in
-the report which one was used:
+Take the list of component library components entry by entry: for each `Component library` entry the
+prerequisite of **component reuse** chooses for a file in the diff, use the first of these sources that is
+available, and name in the report which one was used; when several entries are chosen, take each one's list
+separately. When the entry chosen is "None", that file's list of component library components is empty, and
+none of the four sources is used.
 
-1. The skill recorded in the `Bundled skill` field of the `Component library` section of `ui.md`.
+1. The skill recorded in the `Bundled skill` field of the `Component library` entry chosen for that file.
 2. The `exports` of the package's `package.json`.
 3. The exports of the type definitions that `types` / `typings` points to.
 4. The exports of the `main` / `module` entry file.
@@ -56,7 +59,7 @@ component's root-node attributes applies only when (a) passes for that library c
 
 Done when: every screen the diff touches, every affected state cell, and every row of the component choice
 table maps to at least one claim; every row of the component choice table has exactly one (a) and one (b) (only
-(a) when the `Tokens` entry chosen for it is "None"); with no table, every UI element the diff touches has an expected
+(a) when every style source file of that UI element chooses a `Tokens` entry of "None"); with no table, every UI element the diff touches has an expected
 component, and the source of the component library list is recorded.
 
 ## 2. Get it running
@@ -107,9 +110,11 @@ For each claim, bring the screen into that state by actually operating it, then 
   with a search command or `file:line` as the evidence.
 
   With a browser, (b) checks one more thing: for every `var(--x)` with no fallback on a line the diff adds or
-  changes in the UI element's own style source, read the resolved value of the custom property `--x` on that
-  element; an empty value fails (b), and the evidence gives the property name, the `file:line`, and the value
-  read. A `var(--x, …)` with a fallback is not checked.
+  changes in the UI element's own style source, read the resolved value of the custom property `--x` on the
+  node that declaration actually applies to (when the rule selects an inner node, read the inner node); an empty
+  value fails (b), and the evidence gives the property name, the `file:line`, and the value read. A
+  `var(--x, …)` with a fallback is not checked. When `--x` is not a token (it is not defined in the files of the
+  `Location` line of the `Tokens` entry chosen for that file), it is not checked either, and does not fail (b).
 
   When the `Tokens` section reads "None" (with several entries: every style source file of the element chooses
   "None"), no (b) claim is produced and no `var()` resolution check is done, and the report says so once.
@@ -124,10 +129,10 @@ Fix each failure to a pass under the rules of `build-the-ui-right`, then look ag
 neighboring claims the fix touched. Failures outside this change's scope go into the report as they stand. A
 (b) failure is fixed the way **hard-coded value** prescribes, by switching to the matching token; never fix it
 with a prohibition of **component reuse** — an outside override, raised specificity or `!important`, a private
-class or private CSS variable, for example. For a failure where `var(--x)` resolves to empty: when the token
-file has a token whose name matches (a misspelling, for example), change to that name; otherwise (there is no
-such token, or the token file is not loaded on this screen) list it in the report as it stands with the reason,
-and add no new token.
+class or private CSS variable, for example. A failure where `var(--x)` resolves to empty (the token
+file has this token, but it does not resolve on that node: the token file is not loaded on this screen, or the
+token is defined in a scope that does not cover the node) is listed in the report as it stands with the reason;
+add no new token.
 
 `ui.md` follows the two layers of "Maintain `ui.md`" in **component reuse**: where the fix touches a spot on
 which `ui.md` and the source disagree, the source wins, and `ui.md` is corrected in the same commit as that fix;
@@ -143,7 +148,7 @@ Done when: every failure was looked at again and passed, or is listed in the rep
 - The **eyes-on list**.
 - The viewing conditions; with no browser, "`var()` resolution not checked", written once.
 - With no component choice table handed over: the source of the component library list (which of the four
-  sources in step 1).
+  sources in step 1; with several entries chosen, one per entry, and "None" for an entry that is "None").
 - **`ui.md` mismatches**: every mismatch found along the way and not corrected in step 4, naming the `ui.md`
   section and row and the source location; "none" when there are none.
 
