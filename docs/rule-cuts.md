@@ -516,3 +516,16 @@ spawns 改依票數後這個前提不成立，超過 13 張票的 run 會先停�
 | --- | --- | --- |
 | `cmd /c` 的內容用 bash 規則解析 | 改用 cmd 規則：`^` 跳脫、反斜線照字面、`'` 與 `#` 不是特殊字元；刪除目標去掉 `\?\` 長路徑前綴 | 反斜線被吃掉後，暫存目錄變成 `/?…` 而誤判，`D:\other` 反而變成相對路徑 `D:other` 而漏判。 |
 | 引數裡出現 Claude 設定檔路徑、指令不在讀取清單就問 | 讀取清單補上只印、只測、只開啟或只 commit 的指令（`echo`、`Test-Path`、`Get-ChildItem`、雜湊、`code`、`git commit` 等）；`cp`／`Copy-Item` 只看目的地 | 這些都不寫入設定檔；寫入（重導、`sed -i`、`git checkout --`、複製到設定檔）照問。 |
+
+## #59：純文字票的審查成本
+
+run `2026-11-19-backlog-sweep` 的三張純文字票（#16、#49、#50），每張審查約 20 個 agent、10–15 分鐘，擋住整併的 finding
+合計只有一則；突變三張都是空的；多數候選到 verifier 才被判成 spec 指定的措辭或 fixed point 就有，而 finder 報告裡常已寫出
+這個懷疑。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `prove-it` 第 2 節「單一檔案、數十行以內 → 一個 finder」 | 加一種：只動 Markdown 或其他文件、沒有可執行程式碼的 diff 也只派一個 finder | 純文字 diff 沒有呼叫端、被刪除的程式行為可追，五個 lens 分開派只是五次重讀同一份文字。 |
+| `prove-it` 第 2 節 finder 回報格式 | 加 `suspected`：`spec`（附被指定的原文）、`pre-existing`（附 fixed point 位置）或 `none` | finder 已經寫在報告裡的懷疑，原本因「省略 finder 的推理」傳不到 verifier。 |
+| `prove-it` 第 4 節「每個候選各一個 verifier」 | 依「檔案＋失效機制」分組，同組交給同一個 verifier，仍逐條裁決、各附 `file:line` 證據；標了 `suspected` 的走簡化流程：先查 fixed point 與 spec，成立就直接裁決 pre-existing 或新增的 spec 層級（記成觀察，標 `(spec-level)`），不成立再走一般流程 | 同機制的候選要查的是同幾行，分開派是重複讀；簡化流程不成立就退回一般流程，不會讓真的缺陷少走反駁與三關。 |
+| `prove-it` 第 3 節突變 | 沒有可執行的行時跳過，不跑 `mutate.mjs lines`，紀錄寫 `skipped: no executable lines`；第 6 節補 `skipped` 的寫法，實跑紅燈也用它（`skipped: red baseline`） | 三張票都跑完才得到「無可突變行」，各自用自由文字記。 |
