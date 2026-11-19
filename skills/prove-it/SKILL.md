@@ -26,7 +26,11 @@ The caller supplies:
   original ticket, `from: expansion` was added at expansion, with `by`, `run` and `round`.
 - **Fixed point:** the line integration branch.
 - **Ref under review:** the ticket branch.
-- **Targeted-check results:** the commands and results the implementation agent reported.
+- **Targeted-check results:** the commands and results the implementation agent reported. They only confirm green;
+  the reviewer picks the live run's commands itself (section 3).
+- **CI coverage:** whether CI runs the full suite on the line's integration branch after integration — `covered`,
+  `uncovered` (the caller ruled "CI does not cover the integration branch") or `no-origin` (there is no `origin`).
+  When it is not given, section 3's scope command decides from whether `origin` exists.
 - **Mode:** `initial`, or `recheck` (the recheck after a batched fix, with the previous review block attached;
   it follows section 7).
 - **Reviewers:** by default only `primary`, this skill's own set of Finders.
@@ -47,18 +51,21 @@ directly, without Finders or Verifiers: the evidence is the acceptance diff outp
 agent reporting any criterion it needs changed as awaiting ruling. The review carries on as usual, and the acceptance
 check always works from the snapshot, never from the changed version.
 
-Create a **review worktree** in the scratchpad. The live run and mutation happen only there; the implementation
-agent's worktree stays untouched:
+Open a **review worktree** in the scratchpad. The live run and mutation happen only there; the implementation
+agent's worktree stays untouched. Inside the repo, run:
 
 ```bash
-git -C <repo> worktree add --detach <scratchpad>/review-<ticket> <ticket branch>
+node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" open --path <scratchpad>/review-<ticket> --ref <ticket branch> > <scratchpad>/review-<ticket>-r<round>-worktree.json
 git -C <repo> diff <fixed point>...<ticket branch> > <scratchpad>/review-<ticket>.diff
 ```
 
-Reuse existing dependency installs; where the new worktree has none, restore from the lockfile (frozen forms such as
-`npm ci` or `pnpm install --frozen-lockfile`). Never add a dependency or download a new tool — the review
-changes neither this ticket's diff nor the repo's dependencies. New-file line numbers always come from
-`git show <ticket branch>:<path>`.
+**A ticket's review worktree is built once:** the initial review creates it, each recheck (section 7) reuses it
+through the same command, moved to the fixed tip, and it is removed only once the verdict is final (section 6).
+What `open` decides and outputs is in the script header: `created` is new, `reused` is kept, `rebuilt` means the
+previous round left changes behind and it was thrown away and built again. When the output's `install` is true,
+restore dependencies from the lockfile (frozen forms such as `npm ci` or `pnpm install --frozen-lockfile`); when it is
+false, keep the existing install. Never add a dependency or download a new tool — the review changes neither this
+ticket's diff nor the repo's dependencies. New-file line numbers always come from `git show <ticket branch>:<path>`.
 
 The **review tier** is judged here, once, from the diff, written into the review block as `tier`, and kept for the
 whole ticket, rechecks included. It sets the number of finders and the lenses each applies, how verifiers and Fix
@@ -82,8 +89,8 @@ use `--tier full` in sections 4 and 7; add the path of `<scratchpad>/review-<tic
 "evidence paths" field.
 
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed
-acceptance criteria have been recorded as an `acceptance` finding; the review worktree sits at the ticket branch tip
-and the diff is saved; `tier` comes from the tier command's output, or is `full` when it failed.
+acceptance criteria have been recorded as an `acceptance` finding; `worktree.mjs open` put the review worktree at the
+ticket branch tip, dependencies were handled per `install`, and the diff is saved; `tier` comes from the tier command's output, or is `full` when it failed.
 
 ## 2. Finder: candidates in parallel
 
@@ -153,10 +160,28 @@ The reviewer does this step; it is never handed to the implementer.
 
 ### Live run
 
-In the review worktree, run the project's test, typecheck, and lint scripts once each. When the review worktree
-has `docs/agents/commands.md`, take the commands from its "Full checks"; without the file, or when its "Full checks"
-reads `none`, find them yourself from the manifest and the CI configuration, as before, and give the source as
-`self-found`. This is the baseline for mutation:
+**The full suite belongs to CI; the review runs only the affected scope.** At the root of the review worktree, first
+judge the scope:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/scope.mjs" --base <fixed point> --ci <section 1's CI coverage> > <scratchpad>/review-<ticket>-scope.json
+```
+
+Leave out `--ci` when the caller gave no CI coverage. The rules for the scope and for where the commands come from
+are in the script header; read the output as it is:
+
+- `scope: full`: CI does not cover the integration branch, or there is no `origin`, so no one else runs the full
+  suite before the line finishes; run the project's test, typecheck and lint once each, as before. Take the commands
+  from the output's `commands`; when it is `null`, find them yourself from the manifest and the CI configuration.
+- `scope: affected`: CI runs the full suite after integration, so run only typecheck, the tests that cover the changed
+  files, and the lint of the changed files. Derive the commands by applying the output's `targeted` (the text of the
+  command contract's "Targeted checks") to `changed`; when it is `null`, derive them yourself from the manifest and
+  the test configuration. `tests` lists candidate test files; one counts only once an import chain or the contract's
+  mapping confirms it covers a changed file. Skip typecheck or lint when the project has none.
+
+The reviewer picks the commands; never copy the one the implementation agent reported. Copy the output's `scope`,
+`ci` and `source` into the `live run` line (section 6), so it shows whether this was the full suite or the affected
+scope, and whether the commands came from the contract or were derived. This is the baseline for mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
@@ -189,9 +214,12 @@ Choosing lines:
    files. Uncovered lines are not mutated; their count goes into the record. When the ticket changes executable code
    lines and none of them is covered, that fact is itself a candidate (lens `mutation`).
 2. **At most one mutant per line, and a per-ticket cap of the tier output's `mutationCap`** (pass it to the script as
-   `--cap`). Over the cap, take in order: lines a Finder
-   candidate points at → lines an acceptance criterion directly depends on → conditions, boundaries, and return
-   values → other statements; within a priority, spread across hunks.
+   `--cap`; `light` has the lowest cap). Over the cap, take in order: **lines this ticket's new or changed tests claim
+   to guard** (the code lines such a test calls directly and asserts on; the lines holding the behaviour its name,
+   assertion message or commit message says it guards) → lines a Finder candidate points at → lines an acceptance
+   criterion directly depends on → conditions, boundaries, and return values → other statements; within a priority,
+   spread across hunks. The first priority leads because a new test that claims to guard a line yet cannot kill its
+   mutant is the most direct evidence that the tests do not pin the change.
 3. For each line pick the operator most likely to slip past the tests: invert a condition, shift a boundary
    (`<` ↔ `<=`), replace a return value with a constant or empty value, delete a statement (a call, an assignment,
    an `await`). A mutant must change some observable behaviour.
@@ -211,23 +239,40 @@ header:
 node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --base <fixed point> [--lcov <lcov file>] --plan <scratchpad>/mutants.json --ledger <scratchpad>/review-<ticket>-r<round>-ledger.json --cmd "<test command>" > <scratchpad>/mutants-result.json
 ```
 
-Run it at the root of the review worktree. Give `--cmd` the narrowest test command that covers the chosen lines.
-The script runs the baseline first. It refuses a mutant that is not on a changed line of this ticket's diff or that
+Run it at the root of the review worktree. Give `--cmd` the narrowest test command that covers the chosen lines,
+taken from the live run's commands or a narrowed form of one. The script runs the baseline first. It refuses a mutant that is not on a changed line of this ticket's diff or that
 lcov marks uncovered, and a plan with two mutants on one line, with an `original` that does not match the current
 line, or whose count plus what the ledger already spent exceeds the cap; `--cap` can only lower it. After each
 mutant it writes the original bytes back, compares their SHA-256, and records the mutant in the ledger. **One
 ledger per review round:** a round may be split into several `run`s, but never switch ledgers or open another
-round to get around the cap. Exit code 3 means a restore failed: stop at once, discard the whole review worktree,
-and the verdict is `stuck`. When it finishes, confirm `git -C <review worktree> status --porcelain` prints nothing.
+round to get around the cap.
+
+On a non-zero exit, act on the output; section 6 says how to record each case:
+
+- **1 with `baseline: "red"`** (the live run was green, the script's own baseline is red): when `--cmd` is narrower
+  than the live run's commands, the chosen command is wrong — switch to one that covers the same lines and was green
+  in the live run, and run again with the same ledger (a red baseline runs no mutant and spends none of the cap). When
+  `--cmd` is the very command that was green in the live run, red and green on the same commit is a flaky red: it
+  becomes a candidate (lens `live-run`, evidence the paths of the live-run log and this output), and this round
+  mutates no further.
+- **1 with `error`** (a runtime error; the files it touched are restored): record the mutants that ran from
+  `results`, and do not make up the ones that did not; the verdict is `stuck`, the reason being unfinished
+  mutation, and once cleared, section 5 resumes only mutation, with the same ledger.
+- **3** (a restore failed): stop at once; the verdict is `stuck`. The review worktree is not used again: after the
+  block is written, section 6 removes it, and the next round's `open` builds it again.
+
+Never infer a clean worktree from the exit code: `restored` always comes from section 6's `worktree.mjs status`.
 
 Outcomes: `killed` and `timeout` mean the tests caught it; `survived` is a candidate (lens `mutation`) whose
 `failure_scenario` names a concrete input on which the original and the mutant produce different observable results
 and no existing test stops it.
 
 Done when: the live-run result is recorded; with no executable lines, mutation was skipped and the record says
-`skipped: no executable lines`; mutation touched only covered lines in this ticket's diff, at most one per line and
-no more than the cap; every mutant has an outcome; `git status --porcelain` in the review worktree is
-empty; every surviving mutant has become a candidate.
+`skipped: no executable lines`; the live run's scope and command source come from `scope.mjs`'s output, and its
+commands were not copied from the implementation agent; mutation touched only covered lines in this ticket's diff, at
+most one per line and no more than the cap, with lines the ticket's new tests claim to guard first over the cap; every
+mutant has an outcome; a non-zero `mutate.mjs` exit was handled per the three cases above; every surviving mutant has
+become a candidate.
 
 ## 4. Verifier: an independent ruling per candidate
 
@@ -326,7 +371,8 @@ it meets, that rule's quote and a falsifiable fix direction; every mutant has a 
   tests. State the reason, what would clear it, and which section the review reached. A `stuck` before the review
   opens (section 1) does not count as a review; once cleared, run `initial` again. A `stuck` mid-review, once
   cleared, resumes only the unfinished sections, keeping the candidates, rulings, and mutation record already in
-  the block, and dispatches no Finders again.
+  the block, and dispatches no Finders again. On `stuck`, section 6 removes the review worktree, and a resumed review
+  builds it again with `open`.
 
 **The verifiers' rulings decide the verdict.** The caller copies each ruling into the block as it stands: the
 findings are the ones a verifier ruled blocking, the observations are the other confirmed ones. When the caller
@@ -360,24 +406,46 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: <command> -> green | red (<log path>) source=<commands.md | self-found>
+live run: scope=<affected | full | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
+- <command> -> green | red
 mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
-- <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
-restored: yes | no
+- <file>:<line> <operator> -> killed | timeout | survived | restore-failed: <disposition: F2 | equivalent, invalid | ...>
+- error: <message> (<mutation output path>)
+restored: yes | no | n/a
 ```
 
-`source` on the `live run` line is where the commands came from: `commands.md` when taken from
-`docs/agents/commands.md`, `self-found` when the reviewer found them. An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
-`file:line`. A spec-level observation is marked `(spec-level)` at the end of its sentence, before
-`(evidence: …)`.
+The `live run` line gives the scope, the CI coverage and the command source, with one line per command under it:
+`scope` is `full` or `affected` from section 3's `scope.mjs` output, and `findings` in a recheck (section 7); `ci` is
+the output's `ci`; `source` is `commands.md` when the commands came from the contract, `self-found` when the reviewer
+found or derived them. `- error:` appears only when `mutate.mjs` ended in a runtime error; `restore-failed` is used
+only for the mutant behind an exit code 3 (the output's `restoreFailed`). An empty list is written `none`. An
+`acceptance` finding's location is the acceptance diff output's path, not a `file:line`. A spec-level observation is
+marked `(spec-level)` at the end of its sentence, before `(evidence: …)`.
 
 When a round runs no mutation, its `mutation` section is a single line with no mutant list:
 
 - No executable lines: `mutation (round <n>): skipped: no executable lines`
 - Red live run: `mutation (round <n>): skipped: red baseline`
+- Green live run, red `mutate.mjs` baseline, and a flaky red (section 3):
+  `mutation (round <n>): skipped: red baseline (mutate.mjs, <mutation output path>)`. When a switched command ran
+  green, write the rerun's result in the full format instead.
+- `stuck` before the review opened, or mid-review before mutation:
+  `mutation (round <n>): skipped: stuck before mutation`
 
-In both cases `restored` is still written, and its value is `restored: yes`: no file was changed, which is the same
-as restored.
+When `mutate.mjs` ends in a runtime error or a failed restore, use the full format: `mutated` is the number of
+`results` in the output, plus the one whose restore failed.
+
+**`restored` always comes from the script, never from an inference.** Whether mutation ran, was skipped, or the review
+went `stuck` in any section, run this inside the repo before writing the block:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" status --path <scratchpad>/review-<ticket> > <scratchpad>/review-<ticket>-r<round>-restored.json
+```
+
+Copy the output's `restored`: `yes` is an empty `git status --porcelain`; `no` means tests, lint or mutation left
+changes behind — add the output's path to the "evidence paths" field, and the next round's `open` throws the
+worktree away and builds it again; `n/a` means this round had no review worktree (`stuck` before the review opened).
+In a round where `mutate.mjs` exited 3, `restored` is always `no`.
 
 With a second reviewer, each gets its own `reviewer:` section, and findings stay separate, never merged
 or reranked; `verdict` follows from every reviewer's findings.
@@ -391,18 +459,28 @@ GitHub, update in place the comment whose first line is `<!-- sorry-matt:status 
 into the ticket file's `## sorry-matt status` section. This is a machine record for the next agent, with no polish
 pass. Return the same block to the caller.
 
-Finally remove the review worktree: `git -C <repo> worktree remove <scratchpad>/review-<ticket>`.
+**Remove the review worktree once the verdict is final.** When `verdict` is `pass` or `stuck`, or this is the second
+recheck (the previous block is a `mode: recheck` `fix`) and the verdict is still `fix` — no recheck follows — run this
+inside the repo after the block is written:
 
-Done when: the block follows the format above; the status record holds exactly one, current review block that keeps
-every round's mutation record; no PR comment, review, or `suggestion` block was produced; the review worktree is
-removed.
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" close --path <scratchpad>/review-<ticket>
+```
+
+Any other `fix` keeps it for the next recheck to reuse.
+
+Done when: the block follows the format above; the `live run` line shows whether the scope was `full`, `affected` or
+`findings`; `restored` comes from `worktree.mjs status`; the status record holds exactly one, current review block
+that keeps every round's mutation record; no PR comment, review, or `suggestion` block was produced; once the verdict
+is final the review worktree is removed, and any other `fix` keeps it.
 
 ## 7. Recheck
 
 After the batched fix, the caller invokes this skill again in `recheck` mode with the previous review block. A
 recheck answers one question: is each of the previous findings closed? Its scope is those findings and the diff of
 the fix commits (`git diff <previous head>..<ticket branch>`), so each round has less to verify than the one before.
-Rebuild the review worktree per section 1 at the fixed ticket branch tip; `tier` stays what the initial review set.
+Reuse the initial review's worktree through section 1's `worktree.mjs open`, which moves it to the fixed ticket branch
+tip; never build another. `tier` stays what the initial review set.
 
 1. **Fix Verifier:** write the `id` and `file` of each finding (except an `acceptance` finding, which takes step 4)
    as a JSON array and batch them with
@@ -422,7 +500,8 @@ Rebuild the review worktree per section 1 at the fixed ticket branch tip; `tier`
    Other spellings of the same finding, lines outside the fix diff, and problems that meet no `rule` go, one line
    each, into the report's `noticed`, which the caller treats as observations. The report has four lines at most
    per finding, and `noticed` as its last line.
-2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added.
+2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added. The `live run` line
+   says `scope=findings`, `ci` as section 1's CI coverage, and `source` for where these commands came from.
 3. **Mutation:** rerun only the mutants that survived last time; this time each must be killed. Where the line's
    content changed, apply the same operator to the line that replaced it. Use a new ledger for this round. Lines the
    fix added are covered by question 2 of step 1.

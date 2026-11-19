@@ -471,7 +471,10 @@ integration branch, CI runs in the background, the host does not wait, and the n
    and hand it to the review all the same, with `check.changed` true. Then call the Skill tool with `prove-it` in
    mode `initial`, passing the ticket (identifier, the original ticket text and the expansion block), the paths of
    the acceptance snapshot and of the acceptance diff output, the fixed point (the line integration branch), the
-   ticket branch, and the targeted-check results from step 1. The reviewer does the live run, and mutation limited
+   ticket branch, the targeted-check results from step 1, and the line's CI coverage — `no-origin` when there is no
+   `origin`, `uncovered` when the line was ruled "CI does not cover the integration branch", `covered` otherwise; on
+   a line with CI the review runs only the affected scope and leaves the full suite to the CI run after integration.
+   The reviewer does the live run, and mutation limited
    to this ticket's diff, and it writes a fixed-format `pass` / `fix` / `stuck` verdict and finding list into the
    ticket's status record. `pass` goes on to integration, `fix` to the batched fix, and `stuck` is cleared using the
    condition it states, then `prove-it` is called again per its section 5. If it cannot be cleared, mark the ticket
@@ -485,7 +488,8 @@ integration branch, CI runs in the background, the host does not wait, and the n
 3. **Batched fix:** hand the review block's `findings` back to the original context-holding agent all at once, as
    the `summary`, `evidence` and `fix` text of those findings; the fix's scope is closing them, in one round.
    Afterwards re-run the targeted checks for the affected surface and the acceptance diff, then call the Skill tool
-   with `prove-it` in mode `recheck`, attaching the previous review block and the new acceptance diff output: it
+   with `prove-it` in mode `recheck`, attaching the previous review block, the new acceptance diff output and the
+   same CI coverage: it
    verifies only whether those findings are closed. **A ticket gets at most two correction rounds**, counted in the
    ticket's verification result in the reconciliation table; a new finding raised by a recheck counts within the
    same rounds. When the second round's `recheck` is still `fix`, mark the ticket stuck (`SEND-BACK.md`), attaching
