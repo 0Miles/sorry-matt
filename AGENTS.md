@@ -196,6 +196,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 撤回 | revert |
 | 驗證未過 | failed verification |
 | 本機驗證 | local verification |
+| 本機驗證的線 | line on local verification |
+| 本機驗證逐 SHA 紀錄 | per-SHA local verification record |
+| 下界(紅燈範圍) | lower bound |
 | 恢復 | resuming |
 | 規則檔 | rule files |
 | 狀態標記 | state marker |
