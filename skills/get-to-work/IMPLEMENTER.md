@@ -3,10 +3,10 @@
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
 prompt. This file is self-contained on purpose. Where its rules overlap `ASKING.md` sections 3 and 5, the report
 limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them together. Change section 2's commit
-message format together with the aggregate PR body in `SKILL.md`'s finish. Change section 1's read-only acceptance
+message format together with the aggregate PR body in [`FINISH.md`](FINISH.md), finishing the run. Change section 1's read-only acceptance
 criteria together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
 [`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Change the send-back record
-placeholder and section 1's redo rule together with the send-back for a redo in `SKILL.md`'s close-out. Sections 1
+placeholder and section 1's redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). Sections 1
 and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 
@@ -20,6 +20,7 @@ all the rules you follow, and none of them points at a file or section you canno
 - Integration branch: {integration branch}
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
+- Project command contract: {the absolute path of `docs/agents/commands.md` in the ticket worktree, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
   time, and the files the old attempt touched that the predicted files did not cover, or none}
 
@@ -52,9 +53,13 @@ all the rules you follow, and none of them points at a file or section you canno
   independent source (a known-good literal, the spec, a worked example), never recomputed the way the code does.
 - One slice at a time: write one failing test, then just enough code to pass it, and repeat.
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
-  relevant lint. The full suite is CI's job once the host integrates the ticket.
+  relevant lint. The full suite is CI's job once the host integrates the ticket. When the project command
+  contract is not none, read that file, narrow the checks per its "Targeted checks" and read output per its
+  "Failures only"; when it is none, or the file's "Targeted checks" reads `none`, find the commands yourself from
+  the manifest and the CI configuration and report the source as `self-found`.
 - **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
-  the closing summary into context; when everything is green, keep only the summary line. To keep the full output,
+  the closing summary into context; when everything is green, keep only the summary line. When the contract has
+  a "Failures only", use its form. To keep the full output,
   redirect it to a file that sits outside the ticket worktree or is never committed, and give only its path in the
   report and the status record. When the failing lines alone do not show the cause, you may read the lines around
   that failure, never the whole output. Pass or fail is the command's own exit status, taken before any
@@ -115,7 +120,7 @@ Fifteen lines at most. No diffs or full test logs — give paths:
 ```
 ticket: <identifier>
 commit: <sha> (branch <branch>)
-targeted checks: <command> → <result>, …
+targeted checks: source=<commands.md | self-found>; <command> → <result>, …
 status record: <location>
 acceptance: <per criterion ✅ / ❌ / awaiting ruling, briefly>
 run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
