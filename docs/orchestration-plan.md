@@ -134,3 +134,114 @@
 
 - run `2026-11-19-all-issues` 最小化收尾，不再做審查與修改：線 72、73、84、87 併入最新 main 後開總 PR #114–#117（line-84 的 `AGENTS.md` 詞彙表衝突兩邊都保留）；已在 main 的 #75、#76、#83、#98 直接關閉；ledger 標成 ended。#99 沒有整併，分支保留。
 - 新開 #118–#124；#79 改成這份規劃的總票；#100、#101、#102、#97 補上調整；#107 併入 #101 後關閉；#4 關閉（#19 照舊擱置）。
+
+## 6. `Done when` 的斷言對照（#118）
+
+`state.mjs check <state> <gate>`（斷言在 `get-to-work/scripts/gates.mjs`，檔頭是 gate 與斷言的正本）把下列項目改成
+斷言；「保留文字」的項目需要判斷，或狀態不在 state.json 與 git 裡。#118 只交付 gate 與測試：把 `Done when` 換成
+「跑 `check <gate>`，失敗時怎麼辦」是 #124 的工作，這張表是它的依據。gate 失敗以 4 結束，stdout 列出每個失敗的
+斷言與缺什麼，state 不變。
+
+表中 `gate/斷言` 指 `check <gate>` 的斷言 id。
+
+### `get-to-work/SKILL.md`
+
+| 段落 | 項目 | 分類 |
+| --- | --- | --- |
+| §0 凍結 | 已選定且驗證 tracker 模式 | 保留文字（環境判斷） |
+| | 每張初始票有發布出處、tracker 原生識別、blocker map | 保留文字（不在 state） |
+| | 每張初始票有所屬線 | 斷言：state 結構（`load` 驗證票的 `line` 是已知整合分支）；`freeze/tickets` |
+| | 被他線佔用而排除的票有佔用來源與解除條件 | 保留文字（`freeze.mjs` 的輸出，#119） |
+| | 每張票有預計檔案、任兩條線不重疊 | 保留文字（`freeze.mjs`／`overlap.mjs` 已算，#119） |
+| | 每條線有從同一基底尖端建立的整合分支 | 斷言：`freeze/line-branch`、`freeze/line-base` |
+| | 每條線有 worktree | 斷言：`freeze/line-worktree` |
+| | 獨立執行時 `budget: spawns`／`rounds` 已依票數寫定 | 保留文字（數值是判斷；行的存在見 `ledger/budget-limits`） |
+| | 整合分支上有 `docs/agents/commands.md`，在派出任何票之前 | 斷言：`freeze/commands-contract`、`freeze/not-dispatched` |
+| 讀 CI | 該讀 CI 的線讀了最新 SHA 的結果並記下 | 斷言：`ci/ci-latest` |
+| | 本機驗證的線每個驗過的 SHA 都有紀錄 | 斷言：`ci/local-record`（tip 的紀錄；`state.mjs local` 拒絕同一 SHA 第二筆） |
+| | 有 CI 的線上 `no-verdict` 的本機驗證也有紀錄 | 保留文字（是否走了 `no-verdict` 是主持人的判斷） |
+| 預算與斷路 | 每個派票點先更新用量、判進展與上限 | 保留文字（順序；交給 #101 的 tick） |
+| | 收票結束都更新了用量 | 保留文字（時機） |
+| | 停下之後沒有再派票 | 斷言：`stopped/no-dispatch-after-stop` |
+| | 未交付的票標待裁決並寫出停在哪個上限 | 斷言：`stopped/undispatched-set-aside`、`stopped/stop-reason` |
+| | 第 9 欄有停止原因 | 斷言：`stopped/stop-recorded`（停止原因已移進 state 的 `stop`） |
+| | 被預算擋下的 spawn 沒有重試或換路 | 保留文字（hook 擋，`hooks/budget.mjs`） |
+| 時限 | 每次派送有派送紀錄（agent id、類型、派送時間、時限、到期時間、指紋） | 斷言：`dispatch/assignment`、`wake-end/assignment`（欄位齊全由 `state.mjs assign` 的格式檢查保證） |
+| | spawn `description` 以角色字開頭、後接票的識別碼 | 保留文字（`spawns.mjs`、`brief.mjs` 已腳本化） |
+| | 每次喚醒處理回報後掃描每個在途 agent | 保留文字（順序；`deadline.mjs scan`） |
+| | 舊 agent 的回報沒有被收 | 保留文字（判斷） |
+| | 喚醒結束時有在途 agent 就排了 fallback 喚醒，背景 `sleep` 至多一個 | 斷言：`wake-end/fallback-wake`（`sleepTask` 只有一格，所以至多一個是結構保證） |
+| 派票 | 先判上限、再讀 CI，才往下派 | 保留文字（順序；交給 #101） |
+| | 派出的票在 spawn 前有驗收項、驗收快照與預計檔案 | 斷言：`dispatch/snapshot`（也是 `stage implementing` 的守門）；驗收項與預計檔案保留文字（`acceptance.mjs`、`overlap.mjs`） |
+| | 展開補上的驗收項出自展開 agent 並標明 `by`、`run`、`round` | 保留文字（`acceptance.mjs` 已腳本化） |
+| | 展開中的票沒有被重複送去展開 | 保留文字（`stage` 的邊已擋 expanding → expanding） |
+| | 每個派票點有 `overlap.mjs` 的計畫檔與輸出，`start` 全部派出，不與在途的票重疊 | 保留文字（`overlap.mjs` 已腳本化） |
+| | frontier 每張票都已展開中、在途、在 `wait` 或待裁決 | 保留文字（需要 frontier 輸出；交給 #101） |
+| | 實作 agent 的 prompt 是填好的 `IMPLEMENTER.md` | 保留文字（`brief.mjs`，#120） |
+| 收票 | 回報的票沒等其他票就進了收票 | 保留文字（時機） |
+| | 每張票恰好一次獨立審查，每輪修正後各一次 `recheck` | 斷言：`review/one-initial`、`review/recheck-per-fix` |
+| | 每次呼叫附驗收比對、結論寫進接續紀錄 | 保留文字（內容） |
+| | 交修的內容是 `findings` 原文 | 保留文字（內容） |
+| | 修正輪數不超過二並記下 | 斷言：`review/fix-rounds`（也是 `stage fixing` 的守門） |
+| | 進待整併前最近一次審查是 `pass` | 斷言：`review/queued-review`（與 `stage queued` 共用同一個守門函式） |
+| | 有觀察或 pre-existing 的票都有 raw ticket | 保留文字（判斷） |
+| | 針對性檢查回到綠，有交付或卡住紀錄 | 保留文字（`verify.mjs`，#122） |
+| | 專項 reviewer 指名了風險 | 保留文字（判斷） |
+| | 每條線同一時間至多一張票在整併 | 斷言：`dispatch/one-integrating`、`merged/one-integrating` |
+| | 紅燈處置中的線沒有票被整併 | 保留文字（紅燈處置的狀態不在 state；`merge-gate.mjs`，#123） |
+| | 每次整併是帶 git 預設 message 的 `--no-ff` merge commit | 斷言：`merged/no-ff`、`integrated/no-ff` |
+| | SHA 記進了對帳表，每次整併恰好一個 | 斷言：`merged/one-merge`、`merged/branch-recorded`、`merged/on-line`、`merged/tip-recorded` |
+| | 衝突解法只在 merge commit 裡，ticket 分支沒有被改寫 | 斷言：`merged/not-rewritten`（清理前跑；清理後分支已不在） |
+| | 每次整併之後都做了派票點 | 保留文字（順序；交給 #101） |
+| | 接續紀錄寫到最新 | 保留文字（內容） |
+| | 成功票已整併並清理 ticket worktree 與本地分支 | 斷言：`integrated/stage`、`integrated/cleaned` |
+| | 有 `origin` 的線每次整併各 push 一次；喚醒結束時 `origin/<整合分支>` 與本地同 SHA | 斷言：`integrated/pushed`、`wake-end/pushed`（`git ls-remote`，不信任 remote-tracking ref） |
+| 期間開票 | 每張初始票恰好對帳為已交付、卡住或待裁決 | 斷言：`finish/end-state`、`finish/end-reason`、`finish/delivered-merge` |
+| | 期間新開的 raw tickets 有來源連結，沒有混入凍結票集 | 保留文字（tracker 內容） |
+
+`FINISH.md` 的完成判準不在七段之內，其中可檢查的也進了 `finish`：一次併入基底（`finish/base-sync`）、完整驗證是
+整合分支最新 SHA 的結果（`finish/full-verification`：記下的 CI 結論 green／red 或本機驗證紀錄的 SHA 等於本地 tip）、
+tip 已記下且已 push（`finish/tip-recorded`、`finish/pushed`）、所有 ticket worktree 與本地分支已移除（`finish/cleaned`）。
+ledger 的 ended 標記是 `ledger --ended`。
+
+### `have-it-all-done/ASKING.md`
+
+| 段落 | 項目 | 分類 |
+| --- | --- | --- |
+| §1 提問前置檢查 | 每個提問通過三關；新建的環境產物已落檔 | 保留文字（判斷） |
+| §2 什麼該問 | 每個提問歸到四類之一；其餘已代答 | 保留文字（判斷） |
+| §3 什麼該代答 | 非四類決定記在其中一層，每列五欄俱全 | 保留文字（自答清單是敘事欄位；五欄可在 #124 決定是否腳本化） |
+| §4 裁決點與節流 | 恰好一個裁決點，之後沒有提問 | 保留文字（對話層） |
+| | 中途事項都有落點 | 保留文字（判斷） |
+| | `budget: spawns`／`rounds` 已在裁決點前依票數改寫 | 保留文字（數值是判斷；行的存在見 `ledger/budget-limits`） |
+| §5 授權 | 需要授權的動作以正規指令送出，結果記進第 5 欄 | 保留文字（guard hook 擋，紀錄是敘事） |
+| | 需要確認的動作在確認後才執行或列進人工作業清單 | 保留文字（guard hook） |
+| | 被擋下的動作在人工作業清單並附片段或指令 | 保留文字（內容） |
+| | 沒有寫入任何設定檔 | 保留文字（guard hook 擋） |
+| §6 語言與對外文字 | 每個提問與對外文字符合四條 | 保留文字（判斷） |
+| §7 run ledger | 第一行是與 run 狀態相符的標記 | 斷言：`ledger/marker`（`--ended` 檢查 ended） |
+| | 十個欄位都有內容或明記「無」 | 斷言：`ledger/fields` |
+| | 第 9 欄四行上限、四行階段時限 | 斷言：`ledger/budget-limits`、`ledger/stage-limits` |
+| | 第 9 欄最新用量 | 保留文字 → 用量已移進 state（#100），由 `state.mjs usage` 寫 |
+| | 讀得到 session id 時一行相符的 `session:` | 斷言：`ledger/session` |
+| | 第 10 欄列出規則檔的絕對路徑 | 斷言：`ledger/rule-files`（「從建立時就」是時機，保留文字） |
+| | 恢復的第一個動作是重讀 ledger 與規則檔 | 保留文字（順序；`hooks/reread.mjs` 提示） |
+| | 沒有共用目錄時已明記正本改為最終報告 | 保留文字 |
+| | 主持人上下文沒有 diff、日誌或報告原文 | 保留文字（判斷） |
+
+### `prove-it/SKILL.md`
+
+`prove-it` 在審查 agent 裡執行，它的中間產物（候選、裁決、突變紀錄、審查用 worktree）不在 state.json，主持人也
+不該讀它們，所以七段都保留文字，只有結論層的兩項由 state 守住：
+
+| 段落 | 項目 | 分類 |
+| --- | --- | --- |
+| §1 輸入與開審 | 輸入齊全；前提不成立輸出 `stuck`；驗收被改過記 finding；worktree 在分支尖端、diff 存檔 | 保留文字（審查 agent 內部） |
+| | `tier` 取自判級指令的輸出，或失敗時是 `full` | 保留文字（`tier.mjs` 已腳本化） |
+| §2 Finder | finder 都回報；去重；每則有 `suspected`；每個 hunk 經過逐行 lens | 保留文字 |
+| §3 實跑與突變 | 實跑記錄；突變範圍與上限；mutant 都有結果；worktree 乾淨；存活成候選 | 保留文字（`mutate.mjs` 已腳本化範圍與上限） |
+| §4 Verifier | 每個候選恰有一項裁決與證據；finding 有 `rule` 與修法方向 | 保留文字 |
+| §5 結論 | 結論恰為三者之一 | 斷言：`state.mjs review --verdict` 只收 pass／fix／stuck（既有守門） |
+| | 由驗收比對與分流推得；`rule` 出自 verifier | 保留文字 |
+| §6 輸出 | 區塊格式；只有一個最新 review 區塊；沒有 PR 評語；worktree 已移除 | 保留文字（tracker 內容） |
+| §7 複驗 | 每則舊 finding 有 Fix Verifier 裁決；實跑與突變範圍；新 finding 在修正行上；寫進接續紀錄 | 保留文字；「每輪修正後一次複驗」由 `review/recheck-per-fix` 在主持人側檢查 |

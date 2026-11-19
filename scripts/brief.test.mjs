@@ -257,6 +257,8 @@ test('description builds every role word, and spawns.mjs reads back the role and
     [['ci-fix', 'r1/line-a'], 'ci-fix r1/line-a', null],
     [['merge', '#72'], 'merge #72', '#72'],
     [['merge', 'r1/line-a'], 'merge r1/line-a', null],
+    [['review', '#72'], 'review #72', '#72'],
+    [['review', '03-add-login.md'], 'review 03-add-login.md', '03-add-login.md'],
   ];
   for (const [args, expected, ticket] of cases) {
     const r = parse(main(['description', ...args]));
@@ -265,7 +267,7 @@ test('description builds every role word, and spawns.mjs reads back the role and
     assert.equal(category({ type: 'general-purpose', description: expected }), args[0]);
     assert.equal(ticketOf(expected), ticket);
   }
-  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', '#73'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words']])
+  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', '#73'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words'], ['review', 'r1/line-a'], ['review', '#72', '#73']])
     assert.equal(main(['description', ...args]).code, 2, JSON.stringify(args));
 });
 

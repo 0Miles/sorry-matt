@@ -719,3 +719,40 @@ test('end to end: two sessions through the entry; the other session spawns past 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- #108: the review host agent spawns prove-it's finders, verifiers and Fix Verifiers itself (second level) ---
+// Their hook events have the shape scripts/host-session.live.mjs saw live on Claude Code 2.1.328 (2026-11-20): a
+// subagent's own Agent call reaches PreToolUse with the host's session_id and the subagent's agent_id, and the
+// SubagentStart it causes carries the host's session_id too. So they count against the run and the limit holds.
+
+const nested = (event, agent_id) => ({ ...event, agent_id });
+
+test('second-level spawns: counted against the host run, logged under their role, and denied at the limit', () => {
+  const f = fixture();
+  try {
+    const ledger = join(f.runs, 'r.md');
+    writeFileSync(ledger, hostLedger(4));
+    const deps = { git: f.git, env: {} };
+    assert.deepEqual(send(from(typedCall('general-purpose', 'review #108'), 'host-1'), deps), { decision: null, warnings: [] });
+    countSpawn(from(typedStart('rv1', 'general-purpose'), 'host-1'), deps);
+    for (const [id, description] of [['f1', 'finder #108'], ['f2', 'finder #108'], ['v1', 'verifier #108']]) {
+      const call = nested(from(typedCall('general-purpose', description), 'host-1'), 'rv1');
+      assert.deepEqual(send(call, deps), { decision: null, warnings: [] }, description);
+      countSpawn(from(typedStart(id, 'general-purpose'), 'host-1'), deps);
+    }
+    const counters = readCounters(countersPath(ledger));
+    assert.equal(counters.spawns, 4);
+    assert.deepEqual(counters.log.map((e) => [e.id, e.description]), [
+      ['rv1', 'review #108'],
+      ['f1', 'finder #108'],
+      ['f2', 'finder #108'],
+      ['v1', 'verifier #108'],
+    ]);
+    const denied = send(nested(from(typedCall('general-purpose', 'verifier #108'), 'host-1'), 'rv1'), deps).decision;
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny', 'the review host is stopped at the run limit');
+    assert.match(reasonOf(denied), /has spawned 4 subagents and its limit is 4/);
+    assert.equal(decision(from(agentCall(), 'host-1'), deps).hookSpecificOutput.permissionDecision, 'deny', 'and so is the host');
+  } finally {
+    f.done();
+  }
+});

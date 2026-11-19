@@ -8,7 +8,7 @@
 與 CI 相同的四條，依序跑，每條結束代碼 0 才算綠：
 
 ```bash
-node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs
+node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs
 node scripts/check-structure.mjs
 node scripts/check-vendored.mjs
 claude plugin validate .
@@ -39,16 +39,18 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs`、`scripts/brief.test.mjs` |
   | `src/skills/get-to-work/scripts/brief.mjs` | `scripts/brief.test.mjs` |
   | `src/skills/get-to-work/IMPLEMENTER.md`、`src/skills/get-to-work/EXPANDER.md` 與 dist 的同名檔（`brief.mjs` 填它們的佔位） | `scripts/brief.test.mjs` |
-  | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs` |
-  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs` |
+  | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/integrate.test.mjs` |
+  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs` |
   | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`） |
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs` |
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs` |
-  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`（`verify.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`（`verify.mjs` import 它） |
   | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs` |
   | `src/skills/prove-it/scripts/scope.mjs` | `scripts/scope.test.mjs` |
   | `src/skills/prove-it/scripts/worktree.mjs` | `scripts/worktree.test.mjs` |
+  | `src/skills/get-to-work/scripts/integrate.mjs` | `scripts/integrate.test.mjs` |
+  | `src/skills/get-to-work/scripts/gates.mjs` | `scripts/gates.test.mjs` |
   | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |
   | `agents/*.md`、`src/agents/*.md`（沒有測試檔；`check-structure.mjs` 對帳兩版。改了 `tools:` 另以 `node scripts/agent-tools.live.mjs` 手動實測，會花少量額度、不進 CI） | `node scripts/check-structure.mjs` |
 
@@ -73,7 +75,7 @@ claude plugin validate .
 Node 內建的覆蓋率，產出 lcov 到指定的檔；測試檔清單可以縮到涵蓋改動行的那幾個：
 
 ```bash
-node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs
+node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs
 ```
 
 `<lcov 檔>` 放在 repo 之外。repo 沒有另裝覆蓋工具。

@@ -17,7 +17,7 @@
 //   - `type` is neither "general-purpose" nor null: the category is `type` (a named agent type, such as
 //     "sorry-matt:expander").
 //   - otherwise the first word of `description`, lowercased, when it is one of the role words the skills start
-//     an Agent call's description with: expand, implement, fix, ci-fix, merge, finder, verifier, fix-verifier.
+//     an Agent call's description with: expand, implement, fix, ci-fix, merge, review, finder, verifier, fix-verifier.
 //   - otherwise "general-purpose".
 //   Spawns counted but not logged (`spawns` minus the number of log entries) are "unknown".
 //
@@ -46,7 +46,7 @@ import { readFileSync } from 'node:fs';
 import { UsageError, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/spawns@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'finder', 'verifier', 'fix-verifier'];
+export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'finder', 'verifier', 'fix-verifier'];
 
 // The file-name marker is described in the header: its start, its slug and its end.
 const WORD = '\\p{L}\\p{N}_';

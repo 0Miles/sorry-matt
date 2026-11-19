@@ -400,6 +400,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 派工內容 | spawn prompt |
 | 筆記目錄 | notes directory |
 | 工具限制 | tool restriction |
+| 審查主持 agent | review host agent |
+| 審查回報 | review report |
+| 第二層(spawn) | second level |
 | 判級指令 | tier command |
 | 裁剪(lens) | prune |
 | 併入(lens) | fold into |
