@@ -6,11 +6,32 @@
 
 ## 0. 開場
 
-讀完本檔後依序讀兩份：
+讀完本檔後依序讀三份：
 
 1. `docs/agents/issue-tracker.md`：provider 與慣例。不存在時，請使用者執行
    `/setup-matt-pocock-skills`，取得設定後再繼續。
 2. `docs/agents/environment.md`，取得已落檔的環境事實。不存在時略過。
+3. `docs/agents/commands.md`：**專案指令契約**，定義在下面。不存在時照下面的「缺檔時」。
+
+**專案指令契約**是 repo 自己的檢查指令，寫一次，實作、審查與本機驗證都讀同一份，不各自從 manifest 與 CI
+設定找。它是 Markdown，五個固定的英文 `##` 標題，順序固定；標題是給 skill 對照的鍵，不翻譯、不改名。標題底下
+的說明用專案自己的語言，指令放在 fenced code 或反引號裡，在 repo 根目錄原樣可執行。沒有內容的欄寫 `none`。
+
+| 標題 | 寫什麼 |
+| --- | --- |
+| `Full checks` | repo 完整的自動檢查：test、typecheck、lint 與 CI 跑的其他檢查，一行一條指令。每條結束代碼 0 才算綠。 |
+| `Targeted checks` | 怎麼把檢查縮到單一檔案或單一 package：指令的寫法，以及改到的檔對應哪些檢查。 |
+| `Coverage` | 產出 lcov 的指令，與 lcov 檔的位置。 |
+| `Failures only` | 這個專案只印失敗的行與結尾摘要的寫法。通過與否仍取檢查指令本身的結束代碼，在任何過濾之前取得。 |
+| `Sensitive paths` | 審查判級用的敏感路徑，一行一個 repo 相對路徑，目錄以 `/` 結尾：改動會影響權限、guard、CI、發布或部署的地方。 |
+
+**缺檔時。** `get-to-work` 的主持人在凍結票集前產生它（`get-to-work` 第 0 節）；其他 skill 不產生。讀取點
+—— 實作 agent 的針對性檢查、`prove-it` 的實跑、`get-to-work` 的本機驗證 —— 在沒有這份檔時照現況自己從
+manifest 與 CI 設定找指令。每個讀取點都在回報寫明用的是哪一種：`commands.md` 或 `self-found`。
+
+**產生規則。** 內容只從 repo 讀出來：manifest 的 scripts、CI 設定的執行步驟、既有的覆蓋率設定；敏感路徑取
+repo 裡實際存在的 CI 設定、hook 與 guard、發布與部署設定、權限設定與資料庫 migration 的路徑。每一欄附來源檔案
+路徑。讀不到的欄寫 `none`，不問使用者，也不寫沒在 repo 裡看到的指令。這次產生記進 run 層自答清單（第 3 節）。
 
 ## 1. 提問前置檢查
 

@@ -46,6 +46,11 @@ Then **freeze** the initial ticket set:
 5. When running standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket
    count per `ASKING.md` section 4. When composed by `have-it-all-done`, they were set before the ruling point;
    leave them.
+6. When `docs/agents/commands.md` does not exist, generate it per the generation rules in `ASKING.md` section 0
+   and commit it to each line's integration branch, after that branch is created and before any ticket is
+   dispatched: the subject carries no ticket ID, and the content is the same on every line. Do not commit it to
+   the user's current branch. Ticket branches are cut from the integration branch, so the implementation agent's
+   worktree has the file.
 
 **Hard rail:** tickets discovered or filed during the run remain context; the initial set never expands after
 the freeze.
@@ -53,7 +58,9 @@ the freeze.
 Done when: the tracker mode is selected and verified; every initial ticket has a publication source,
 provider-native identifier, line, and blocker map; every ticket excluded as held by another line has the source of
 the hold and a clearing condition; every line has an integration branch and worktree created from the same base
-tip; when running standalone, `budget: spawns` and `budget: rounds` have been set from the frozen ticket count.
+tip; when running standalone, `budget: spawns` and `budget: rounds` have been set from the frozen ticket count;
+every line's integration branch has `docs/agents/commands.md`, and where it was missing it was generated and
+committed before any ticket was dispatched.
 
 ## 1. Advance the pipeline with `/loop`
 
@@ -124,8 +131,11 @@ line whose CI is red, and goes through the red-light handling in `RED-LIGHT.md`.
 
 **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`, a
 line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second read),
-run the repository's full checks locally once on this SHA instead, and the report says which case it was. Run
-them in the integration worktree while its tree is exactly this SHA: when finishing the run, wait for a merge
+run the repository's full checks locally once on this SHA instead, and the report says which case it was. The
+repository's full checks are the "Full checks" of `docs/agents/commands.md` when this SHA's tree has that file,
+each command run as written; without it, find them yourself from the manifest and the CI configuration, as before.
+The full verification report states, next to the source, whether the commands came from `commands.md` or were
+found by the host (`self-found`). Run them in the integration worktree while its tree is exactly this SHA: when finishing the run, wait for a merge
 agent still resolving a conflict; at a dispatch point or wake-up in the pipeline, when the integration worktree's
 tree is not this SHA (an integration is under way), do not wait and do not verify this time — the line keeps its
 previous result, dispatching as usual unless it is in red-light handling — and the dispatch point that
@@ -352,7 +362,9 @@ candidate, in order:
 6. Read the sibling [`IMPLEMENTER.md`](IMPLEMENTER.md), fill in its placeholders, and spawn one implementation
    agent in the background with the filled-in text as its prompt, adding no rules of your own. Fill the
    expansion-block placeholder from `expansions[].text` in that ticket's acceptance snapshot: on GitHub the
-   expansion block is a comment, so the ticket text does not contain it. The **status record** it defines is that
+   expansion block is a comment, so the ticket text does not contain it. Fill the project command contract
+   placeholder with the absolute path of `docs/agents/commands.md` in the ticket worktree, or none when the file
+   is not there. The **status record** it defines is that
    ticket's own source of truth; everywhere else cites it. For a ticket dispatched again after being sent back:
    when the original agent is still there, give it the send-back record and the rebuilt worktree with SendMessage
    instead of spawning; only when it is gone, spawn a new one per `IMPLEMENTER.md` with the send-back record in its

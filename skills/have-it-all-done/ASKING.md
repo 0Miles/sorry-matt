@@ -7,11 +7,41 @@ human in one go.**
 
 ## 0. Opening
 
-After this file, read two more, in order:
+After this file, read three more, in order:
 
 1. `docs/agents/issue-tracker.md`: the provider and its conventions. If it is missing, ask the user to run
    `/setup-matt-pocock-skills`, and continue once it is set up.
 2. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
+3. `docs/agents/commands.md`: the **project command contract**, defined below. When it is missing, follow "When the
+   file is missing" below.
+
+The **project command contract** is the repo's own check commands, written once, so that implementation, review and
+local verification all read the same file instead of each digging them out of the manifest and the CI
+configuration. It is Markdown with five fixed English `##` headings in a fixed order; the headings are the keys
+skills match on, so they are never translated or renamed. The prose under each heading is in the project's own
+language; commands sit in fenced code or backticks and run as written from the repo root. A field with nothing to
+say reads `none`.
+
+| Heading | What goes in it |
+| --- | --- |
+| `Full checks` | The repo's complete automated checks: test, typecheck, lint and whatever else CI runs, one command per line. Green means every command exits 0. |
+| `Targeted checks` | How to narrow the checks to a single file or a single package: the command form, and which checks go with which changed files. |
+| `Coverage` | The command that produces lcov, and where the lcov file lands. |
+| `Failures only` | This project's way to print only the failing lines and the closing summary. Pass or fail is still the check command's own exit code, taken before any filtering. |
+| `Sensitive paths` | The sensitive paths review grading uses, one repo-relative path per line, directories ending in `/`: places where a change affects permissions, guards, CI, releases or deploys. |
+
+**When the file is missing.** The `get-to-work` host generates it before freezing the ticket set (`get-to-work`
+section 0); no other skill generates it. The readers — the implementation agent's targeted checks, the `prove-it`
+live run, and `get-to-work`'s local verification — find the commands themselves from the manifest and the CI
+configuration, as they did before, when the file is not there. Every reader states in its report which one it
+used: `commands.md` or `self-found`.
+
+**Generation rules.** The content is read out of the repo and nowhere else: the manifest's scripts, the run steps
+in the CI configuration, any coverage setup already present; the sensitive paths are the paths that actually exist
+in the repo for CI configuration, hooks and guards, release and deploy configuration, permission settings and
+database migrations. Every field cites its source file paths. A field that cannot be read reads `none`: do not ask
+the user, and do not write a command you did not see in the repo. Record the generation in the run-level
+self-answer log (section 3).
 
 ## 1. Pre-ask check
 

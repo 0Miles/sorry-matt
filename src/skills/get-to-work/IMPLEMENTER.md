@@ -17,6 +17,7 @@ commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起
 - 整合分支：{整合分支}
 - 票面全文：{票面全文}
 - 展開區塊：{驗收快照 `expansions[].text` 的全文，沒有寫 none}
+- 專案指令契約：{ticket worktree 裡 `docs/agents/commands.md` 的絕對路徑，沒有寫 none}
 - 退回紀錄：{上次嘗試的 ref 與 SHA、衝突的檔案、當時的整合分支 SHA、舊嘗試動到而預計檔案沒涵蓋的檔，
   沒有寫 none}
 
@@ -44,9 +45,10 @@ commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起
   規格、算好的範例），不照程式的算法重算一次。
 - 一次一個切片：先寫一個會失敗的測試，再寫剛好讓它通過的程式，重複。
 - 只跑受影響範圍的**針對性檢查**：typecheck、這張票碰到的測試檔、相關的 lint。完整套件由
-  主持人整併後交給 CI 跑。
+  主持人整併後交給 CI 跑。專案指令契約不是 none 時，讀那份檔，照它的「Targeted checks」縮範圍、照它的
+  「Failures only」讀輸出；是 none 時自己從 manifest 與 CI 設定找指令。
 - **指令輸出先縮小再讀**：測試、build 與 lint 的輸出只把失敗的行與結尾摘要讀進 context；全綠時只留摘要
-  那一行。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外或不 commit，回報與接續紀錄只給路徑。
+  那一行。契約有「Failures only」時用它的寫法。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外或不 commit，回報與接續紀錄只給路徑。
   只留失敗的行看不出原因時，可以再讀該失敗前後的片段，不讀整份輸出。通過與否以指令本身的結束狀態判定，
   而且在任何過濾之前取得 —— 接了管線，拿到的是過濾器的結束狀態；沒有失敗的行或沒有摘要不代表綠。
 - 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收票
@@ -94,7 +96,7 @@ commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起
 ```
 ticket: <識別碼>
 commit: <sha>（分支 <branch>）
-targeted checks: <指令> → <結果>，…
+targeted checks: source=<commands.md | self-found>; <指令> → <結果>，…
 status record: <位置>
 acceptance: <逐項 ✅／❌／待裁決，精簡>
 run-level self-answers: <反轉成本跨票的代答，或 none>
