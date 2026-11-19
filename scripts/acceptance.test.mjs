@@ -362,3 +362,31 @@ test('cli: a snapshot that starts with a UTF-8 BOM is read', () => {
   assert.equal(r.code, 0, r.err);
   assert.equal(JSON.parse(r.out).check.changed, false);
 });
+
+// #111: list items are ticket.mjs's: a `-`, `*` or `+` bullet, or a number followed by `.` or `)`.
+test('numbered list items in the acceptance section are criteria (#111)', () => {
+  const out = localAcceptance({ path: 't.md', text: '# 01: x\n\n## Acceptance criteria\n\n1. first\n2. second\n', source: 'worktree' });
+  assert.deepEqual(out.items, [{ from: 'original', text: 'first' }, { from: 'original', text: 'second' }]);
+  assert.equal(out.needsExpansion, false);
+  // `)` numbering, a checkbox after the number, continuation lines, and a numbered item after a bullet starts its own.
+  assert.deepEqual(
+    textsOf('## Acceptance\n\n1) [ ] Export writes a CSV\n   with a header\n2) [x] Empty tables export a header only\n- a bullet\n3. a third after the bullet\n'),
+    ['Export writes a CSV with a header', 'Empty tables export a header only', 'a bullet', 'a third after the bullet'],
+  );
+});
+
+test('checkbox fallback: a numbered checkbox counts, a numbered item without a box ends the open one (#111)', () => {
+  assert.deepEqual(
+    textsOf('# 01: x\n\nScope.\n\n1. [ ] alpha\n   continued\n2. not a box\n- [x] beta\n'),
+    ['alpha continued', 'beta'],
+  );
+});
+
+test('expansion: numbered items under acceptance: are criteria (#111)', () => {
+  const out = localAcceptance({
+    path: 't.md',
+    text: '## sorry-matt expansion\n\n<!-- sorry-matt:expansion -->\nby: e\nrun: r\nround: 1\n\nacceptance:\n1. [ ] one\n2. two\n\nrulings:\n1. not a criterion\n',
+    source: 'worktree',
+  });
+  assert.deepEqual(out.items.map((i) => [i.from, i.text]), [['expansion', 'one'], ['expansion', 'two']]);
+});
