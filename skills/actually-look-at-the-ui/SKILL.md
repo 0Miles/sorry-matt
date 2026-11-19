@@ -32,7 +32,7 @@ Every row of the component choice table yields two claims:
 - (b) Its own style source contains no **hard-coded value**; for how, see step 3.
 
 Rows and claims map one to one and are never merged: when two rows name the same component, each still has its
-own (a) and (b). The number of (a) claims equals the number of table rows.
+own (a) and (b), and each takes its own row in the step 5 evidence table.
 
 When no component choice table was handed over (called on its own, or called by `make-the-ui-fast`), (a) and (b)
 instead cover every UI element the diff adds or changes. For each element, derive the **expected component** by
@@ -116,7 +116,9 @@ Done when: every failure was looked at again and passed, or is listed in the rep
 
 ## 5. Report
 
-- The **evidence table** `claim | grade | evidence | result`.
+- The **evidence table** `claim | grade | evidence | result`: one row per claim. An (a) or (b) claim names the
+  component choice table row number and the UI element it belongs to — "(a) row 3: Create order", for example;
+  never stand in for the individual rows with a range row ("(a) for rows 1–16", for example) or a count summary.
 - The **eyes-on list**.
 - The viewing conditions.
 - With no component choice table handed over: the source of the component library list (which of the four
@@ -124,6 +126,6 @@ Done when: every failure was looked at again and passed, or is listed in the rep
 - **`ui.md` mismatches**: every mismatch found along the way and not corrected in step 4, naming the `ui.md`
   section and row and the source location; "none" when there are none.
 
-Done when: the evidence table covers every claim from step 1 exactly once; every "pass" is graded measured or
-derived; with no table, the source of the component list is stated; the `ui.md` mismatches are listed one by
+Done when: the evidence table covers every claim from step 1 exactly once, one row each, with no range row or
+count summary; every "pass" is graded measured or derived; with no table, the source of the component list is stated; the `ui.md` mismatches are listed one by
 one, or stated as "none".

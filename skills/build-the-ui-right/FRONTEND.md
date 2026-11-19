@@ -145,7 +145,10 @@ When `ui.md` and the source conflict, the source wins. A skill that changes code
 
 1. **Mismatch this change touches**: a mismatch this change causes or touches is corrected in `ui.md`, in the
    same commit as that change. These always belong to this layer:
-   - Adding, extracting, renaming, or deleting a shared component, or changing what it is for.
+   - Adding, extracting, renaming, or deleting a shared component, or changing what it is for. When adding or
+     extracting one, the component file, the page code that starts using it, and its `ui.md` row go in the
+     same commit; the component is not committed on its own first: the `Shared components` table only holds
+     components two or more pages use, so the row is not true until the pages use it.
    - Introducing, upgrading, or removing a component library, or changing how it is loaded.
    - Reusing an existing component that so far only another page used: in the component choice table it is
      "reused", with its file path as the location; when this change makes two or more pages or features use it,
