@@ -19,7 +19,8 @@
    **未併入**：ledger 第 4 欄記嘗試併入的基底 SHA 與「未併入」，交付物與人工作業清單寫明衝突的
    檔案，交付一律留給人合併（見下方合併段）。
 3. **完整驗證**：以整合分支最新 SHA 的 CI 為準。照收票步驟 6 push 步驟 1–2 之後的整合分支，依第 1 節
-   「讀 CI」讀它。還在跑時，每個未完成的 run 各執行一次 `gh run watch <databaseId> --exit-status` 等它
+   「讀 CI」讀它。還在跑時，`verdict` 輸出的 `runs` 裡每個 `status` 不是 `completed` 的 run，以它的 `id`
+   各執行一次 `gh run watch <id> --exit-status` 等它
    結束 —— 每個 run 一次阻塞呼叫，不逐次輪詢，執行環境能背景執行就背景執行。沒有 run 時稍後再讀一次。
    紅就走 [`RED-LIGHT.md`](RED-LIGHT.md) 的紅燈處置。
 

@@ -41,7 +41,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/overlap@1';
 
@@ -119,7 +119,7 @@ export function overlapPlan({ base = null, running = [], candidates = [] }, git)
 function readPlan(path, read) {
   let plan;
   try {
-    plan = JSON.parse(read(path));
+    plan = parseJson(read(path));
   } catch (e) {
     if (e instanceof SyntaxError) throw new UsageError(`${path}: not JSON (${e.message})`);
     throw e;

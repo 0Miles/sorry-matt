@@ -188,20 +188,35 @@ function buildRepo(t) {
   };
 }
 
-// `runs` maps a SHA to the conclusions of its completed runs, or to "running".
+// `runs` maps a SHA to the conclusions of its completed runs, or to "running". `rows` is what `gh` prints, built
+// once so the run ids stay put.
 function fakeCi(runs) {
   const calls = [];
+  const rows = [];
+  for (const [headSha, conclusions] of Object.entries(runs)) {
+    for (const c of conclusions === 'running' ? [null] : conclusions) {
+      rows.push({ headSha, ...(c === null ? inProgress() : done(c)) });
+    }
+  }
   const gh = (args) => {
     calls.push(args);
-    const rows = [];
-    for (const [headSha, conclusions] of Object.entries(runs)) {
-      for (const c of conclusions === 'running' ? [null] : conclusions) {
-        rows.push({ headSha, ...(c === null ? inProgress() : done(c)) });
-      }
-    }
     return JSON.stringify(rows);
   };
-  return { gh, calls };
+  return { gh, calls, rows };
+}
+
+// What a `verdicts[]` entry carries for `sha`, from the fixture rows `gh` printed.
+const RED_CONCLUSIONS = ['failure', 'timed_out', 'startup_failure', 'action_required', 'stale'];
+function entry(sha, verdict, source, rows = [], partial = false) {
+  const mine = rows.filter((r) => r.headSha === sha);
+  return {
+    sha,
+    verdict,
+    source,
+    partial,
+    runs: mine.map((r) => ({ id: r.databaseId, workflow: r.workflowName, status: r.status, conclusion: r.conclusion || null })),
+    failed: mine.filter((r) => RED_CONCLUSIONS.includes(r.conclusion)).map((r) => r.databaseId),
+  };
 }
 
 function earliestRed(r, plan, gh) {
@@ -229,15 +244,18 @@ test('earliest-red: a red SHA right after a green one maps to the one ticket mer
   assert.deepEqual(j.line, { ref: 'origin/line', sha: m13 });
   assert.equal(j.ci, 'read');
   assert.equal(j.error, null);
+  assert.equal(j.truncated, false);
+  assert.equal(j.boundary, null);
   assert.equal(j.earliestRed, m13);
   assert.deepEqual(j.lowerBound, { sha: m11, kind: 'green' });
   assert.deepEqual(j.tickets, ['#13']);
   assert.equal(j.unmatched, false);
   assert.deepEqual(j.merges, [{ sha: m13, subject: "Merge branch 'run/13-c' into line", tickets: ['#13'], matchedBy: 'branch' }]);
-  assert.deepEqual(j.verdicts, [
-    { sha: m13, verdict: 'red', source: 'ci' },
-    { sha: m11, verdict: 'green', source: 'ci' },
-  ]);
+  // Each entry carries its runs; `failed` is the red one's id, ready for `gh run view <id> --log-failed`.
+  const red = ci.rows.find((x) => x.headSha === m13 && x.conclusion === 'failure');
+  assert.deepEqual(j.verdicts, [entry(m13, 'red', 'ci', ci.rows), entry(m11, 'green', 'ci', ci.rows)]);
+  assert.deepEqual(j.verdicts[0].failed, [red.databaseId]);
+  assert.deepEqual(j.verdicts[1].failed, []);
   assert.deepEqual(ci.calls, [
     ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
   ]);
@@ -369,10 +387,7 @@ test('earliest-red: a line on local verification uses only the ledger records, w
   assert.equal(j.earliestRed, m14);
   assert.deepEqual(j.lowerBound, { sha: m11, kind: 'green' });
   assert.deepEqual(j.tickets, ['#13', '#14']);
-  assert.deepEqual(j.verdicts, [
-    { sha: m14, verdict: 'red', source: 'local' },
-    { sha: m11, verdict: 'green', source: 'local' },
-  ]);
+  assert.deepEqual(j.verdicts, [entry(m14, 'red', 'local'), entry(m11, 'green', 'local')]);
 
   // No earlier green record: the lower bound is the merge base.
   const bare = earliestRed(r, { ci: false, tickets, local: [`local: line ${m13} red ci-not-covering`] }, noGh).json;
@@ -389,7 +404,7 @@ test('earliest-red: the first local record of a SHA wins; a later one does not o
   const j = earliestRed(r, { ci: false, tickets: [T11], local }, () => '[]').json;
   assert.equal(j.earliestRed, m11);
   assert.equal(j.verdicts[0].verdict, 'red');
-  assert.deepEqual(j.verdicts, [{ sha: m11, verdict: 'red', source: 'local' }]);
+  assert.deepEqual(j.verdicts, [entry(m11, 'red', 'local')]);
 });
 
 test('earliest-red: a CI verdict stands over a local record of the same SHA', (t) => {
@@ -400,7 +415,7 @@ test('earliest-red: a CI verdict stands over a local record of the same SHA', (t
   const ci = fakeCi({ [m11]: ['success'], [m13]: ['failure'] });
   const j = earliestRed(r, { tickets: [T11, T13], local: [`local: line ${m13} green no-verdict`] }, ci.gh).json;
   assert.equal(j.earliestRed, m13);
-  assert.deepEqual(j.verdicts[0], { sha: m13, verdict: 'red', source: 'ci' });
+  assert.deepEqual(j.verdicts[0], entry(m13, 'red', 'ci', ci.rows));
   assert.deepEqual(j.lowerBound, { sha: m11, kind: 'green' });
 });
 
@@ -431,11 +446,7 @@ test('earliest-red: on a line with CI, a local record stands in for a SHA that h
   assert.equal(j.earliestRed, m13);
   assert.deepEqual(j.lowerBound, { sha: m11, kind: 'green' });
   assert.deepEqual(j.tickets, ['#13']);
-  assert.deepEqual(j.verdicts, [
-    { sha: m14, verdict: 'red', source: 'ci' },
-    { sha: m13, verdict: 'red', source: 'local' },
-    { sha: m11, verdict: 'green', source: 'ci' },
-  ]);
+  assert.deepEqual(j.verdicts, [entry(m14, 'red', 'ci', ci.rows), entry(m13, 'red', 'local', ci.rows), entry(m11, 'green', 'ci', ci.rows)]);
 
   // A local green record is a lower bound just like a CI green.
   const green = earliestRed(r, { tickets: [T11, T13, T14], local: [`local: line ${m13} green no-verdict`] }, fakeCi({ [m14]: ['failure'] }).gh).json;
@@ -519,4 +530,97 @@ test('earliest-red: bad plans exit 2; an unknown ref exits 1', (t) => {
   assert.equal(res.code, 1);
   assert.match(res.err, /^ci: /);
   assert.equal(earliestRed(r, { ci: false, line: 'no-such-branch' }, gh).code, 1);
+});
+
+// --- earliest-red: a run list cut at the limit -------------------------------------------------------------------
+
+// `gh` printing exactly these rows, newest first, as `gh run list` does.
+function listed(rows) {
+  return { rows, gh: () => JSON.stringify(rows) };
+}
+const row = (headSha, conclusion, workflow = 'check') => ({ headSha, ...done(conclusion, workflow) });
+const filler = (headSha, n) => Array.from({ length: n }, (_, i) => row(headSha, 'success', `w${i}`));
+
+test('earliest-red: when gh returns exactly 200 runs, the oldest SHA listed is not judged green on the runs it got', (t) => {
+  const r = buildRepo(t);
+  r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  const m14 = r.ticket('run/14-d');
+  r.push();
+  // SHA 3 (m13) has run A success and run B failure; the limit cuts B, and m11's green run with it.
+  const cut = listed([row(m14, 'failure'), ...filler(m14, 198), row(m13, 'success', 'A')]);
+  assert.equal(cut.rows.length, 200);
+  const j = earliestRed(r, { tickets: [T11, T13, T14] }, cut.gh).json;
+  assert.equal(j.truncated, true);
+  assert.equal(j.boundary, m13);
+  assert.equal(j.earliestRed, m14);
+  // m13 is passed over, so the stretch reaches back to the merge base and m13's ticket stays on the list.
+  assert.deepEqual(j.lowerBound, { sha: r.base, kind: 'merge-base' });
+  assert.deepEqual(j.tickets, ['#11', '#13', '#14']);
+  assert.deepEqual(j.verdicts, [entry(m14, 'red', 'ci', cut.rows), entry(m13, 'green', 'ci', cut.rows, true)]);
+
+  // One run fewer and the list is whole: the same green on m13 is a conclusion and the lower bound.
+  const whole = listed([row(m14, 'failure'), ...filler(m14, 197), row(m13, 'success', 'A')]);
+  const w = earliestRed(r, { tickets: [T11, T13, T14] }, whole.gh).json;
+  assert.equal(w.truncated, false);
+  assert.equal(w.boundary, null);
+  assert.deepEqual(w.lowerBound, { sha: m13, kind: 'green' });
+  assert.deepEqual(w.tickets, ['#14']);
+  assert.deepEqual(w.verdicts.map((v) => v.partial), [false, false]);
+});
+
+test('earliest-red: on a cut list a red at the boundary still counts, and a local record stands in for a cut green', (t) => {
+  const r = buildRepo(t);
+  r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  const m14 = r.ticket('run/14-d');
+  r.push();
+  // A missing run cannot undo a red: the boundary's failure is the earliest red.
+  const red = listed([row(m14, 'failure'), ...filler(m14, 198), row(m13, 'failure')]);
+  const j = earliestRed(r, { tickets: [T11, T13, T14] }, red.gh).json;
+  assert.equal(j.truncated, true);
+  assert.equal(j.earliestRed, m13);
+  assert.deepEqual(j.lowerBound, { sha: r.base, kind: 'merge-base' });
+  assert.deepEqual(j.tickets, ['#11', '#13']);
+  assert.deepEqual(j.verdicts[1].failed, [red.rows[199].databaseId]);
+
+  // A local green record on the cut SHA is a conclusion, as on any SHA without a CI conclusion.
+  const green = listed([row(m14, 'failure'), ...filler(m14, 198), row(m13, 'success')]);
+  const g = earliestRed(r, { tickets: [T11, T13, T14], local: [`local: line ${m13} green no-verdict`] }, green.gh).json;
+  assert.deepEqual(g.lowerBound, { sha: m13, kind: 'green' });
+  assert.deepEqual(g.tickets, ['#14']);
+  assert.deepEqual(g.verdicts[1], entry(m13, 'green', 'local', green.rows, true));
+});
+
+test('earliest-red: on a cut list, SHAs listed after the boundary first appears and walked SHAs older than it are partial too', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  const m14 = r.ticket('run/14-d');
+  r.push();
+  // m11 has a newer run (say, dispatched again later), listed before the boundary; its older runs may be cut.
+  // m14 has a run listed between the boundary's two runs.
+  const rows = [row(m14, 'failure'), row(m11, 'success'), ...filler(m14, 195), row(m13, 'success', 'A'), row(m14, 'success', 'late'), row(m13, 'success', 'B')];
+  assert.equal(rows.length, 200);
+  const j = earliestRed(r, { tickets: [T11, T13, T14] }, listed(rows).gh).json;
+  assert.equal(j.boundary, m13);
+  assert.deepEqual(j.verdicts.map((v) => [v.sha, v.verdict, v.partial]), [
+    [m14, 'red', true],
+    [m13, 'green', true],
+    [m11, 'green', true],
+  ]);
+  assert.equal(j.earliestRed, m14);
+  assert.deepEqual(j.lowerBound, { sha: r.base, kind: 'merge-base' });
+  assert.deepEqual(j.tickets, ['#11', '#13', '#14']);
+});
+
+test('earliest-red: a plan file that starts with a UTF-8 BOM is read', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  r.push();
+  const file = join(r.dir, 'bom.plan.json');
+  writeFileSync(file, `\uFEFF${JSON.stringify({ worktree: r.repo, line: 'line', base: 'main', ci: true, tickets: [T11] })}`);
+  const res = main(['earliest-red', file], { ...defaultDeps(), gh: fakeCi({ [m11]: ['failure'] }).gh });
+  assert.equal(res.code, 0, res.err);
+  assert.equal(JSON.parse(res.out).earliestRed, m11);
 });

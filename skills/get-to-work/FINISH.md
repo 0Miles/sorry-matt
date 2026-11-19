@@ -27,7 +27,8 @@ Every line passes **three line-level gates** first, in this order:
    delivery is always left for a human to merge (see the merge paragraph below).
 3. **Full verification:** the CI result for the integration branch's latest SHA is what counts. Push the
    integration branch as steps 1–2 left it, per close-out step 6, and read it per section 1, reading CI.
-   While it is still running, run `gh run watch <databaseId> --exit-status` once for each unfinished run to wait it
+   While it is still running, run `gh run watch <id> --exit-status` once for each run in the `verdict` output's
+   `runs` whose `status` is not `completed`, `<id>` being that run's `id`, to wait it
    out — one blocking call per run, no repeated polling, in the background where the environment allows. With no
    run, read once more a little later. On red, go through the red-light handling in [`RED-LIGHT.md`](RED-LIGHT.md).
 

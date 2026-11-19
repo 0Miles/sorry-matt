@@ -62,6 +62,13 @@
 //   cancelled and no-run, all-skipped SHAs included, are not). A SHA with no CI conclusion takes its local
 //   verification record, when it has one. When `gh` fails, only the local records are used and `ci` in the
 //   output says so.
+//   Truncation: `gh` returns runs newest first and stops at 200. When it returns 200, older runs may be missing:
+//   `truncated` is true and `boundary` is the SHA of the last (oldest) run returned. That SHA, every SHA with a
+//   run listed after that SHA's first run, and every walked SHA older than one of those are `partial`: on them
+//   only red is a CI conclusion (a missing run can turn any other verdict red, but cannot undo a red), so a
+//   partial green, running or cancelled SHA is passed over, or takes its local record. A walked SHA with no run
+//   listed has no CI verdict, as before. With `truncated`, the earliest red may lie past the boundary; the
+//   stretch then still reaches back to the lower bound, so `tickets` covers it.
 //   `earliestRed`: starting at the newest SHA that has a conclusion, when that one is red, the oldest red SHA
 //   reached before a green one; SHAs without a conclusion in between are passed over. null when the newest
 //   conclusion is green or no SHA has one.
@@ -80,6 +87,9 @@
 //     "line":        { "ref": "origin/<integration branch>", "sha": "<tip>" },
 //     "ci":          "read" | "query-failed" | "not-read",    // not-read: the plan's `ci` is false
 //     "error":       "<gh's error message>" | null,           // set only for query-failed
+//     "truncated":   false,                                    // true: gh returned 200 runs, older ones may be
+//                                                              // missing (see Truncation above)
+//     "boundary":    "<sha>" | null,                           // set only with truncated: the oldest run's SHA
 //     "earliestRed": "<sha>" | null,
 //     "lowerBound":  { "sha": "<sha>", "kind": "green" | "merge-base" } | null,   // null with earliestRed
 //     "tickets":     ["#12", "#14"],                           // ids, oldest merge first
@@ -87,22 +97,30 @@
 //                                                              // stretch belongs to a ticket
 //     "merges":      [{ "sha": "<merge>", "subject": "...", "tickets": ["#12"],
 //                       "matchedBy": "sha" | "branch" | "id" | null }],   // the stretch's merges, oldest first
-//     "verdicts":    [{ "sha": "<sha>", "verdict": "red", "source": "ci" | "local" }]
+//     "verdicts":    [{ "sha": "<sha>", "verdict": "red", "source": "ci" | "local", "partial": false,
+//                       "runs": [{ "id": 123, "workflow": "check", "status": "completed", "conclusion": "failure" }],
+//                       "failed": [123] }]
 //                                                              // newest first: walked SHAs with CI runs or a
-//                                                              // local record; verdict as in `verdict`
+//                                                              // local record; verdict as in `verdict`, from the
+//                                                              // runs listed; `runs` as in `verdict` (empty
+//                                                              // without CI runs, kept under a local record);
+//                                                              // `failed`: the ids of its red runs, for
+//                                                              // `gh run view <id> --log-failed`
 //   }
 //
 // Exit codes: 0 output written, a failed `gh` query included (it is a result: `query-failed`); 1 git failed;
 // 2 bad arguments or plan.
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { UsageError, failure, run, runIfEntry } from './cli.mjs';
+import { UsageError, parseJson, failure, run, runIfEntry } from './cli.mjs';
 import { ticketOwners } from './merges.mjs';
 
 export const FORMAT = 'sorry-matt/ci@1';
 
 const RED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required', 'stale']);
 const RUN_FIELDS = 'databaseId,workflowName,status,conclusion';
+// earliest-red reads at most this many runs of the line; a list this long may have been cut.
+export const RUN_LIMIT = 200;
 
 const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, status: r.status ?? null, conclusion: r.conclusion || null });
 
@@ -144,7 +162,7 @@ const LOCAL_RECORD = /^local:\s+(\S+)\s+([0-9a-f]{40,64})\s+(green|red)(?:\s|$)/
 export function readPlan(path, read) {
   let plan;
   try {
-    plan = JSON.parse(read(path));
+    plan = parseJson(read(path));
   } catch (e) {
     throw new UsageError(`${path}: ${e.message}`);
   }
@@ -197,9 +215,12 @@ export function earliestRed(plan, { git, gh }) {
 
   let ci = 'not-read';
   let error = null;
+  let truncated = false;
+  let boundary = null;
   const runsBySha = new Map();
+  const partial = new Set();
   if (plan.ci) {
-    const args = ['--branch', plan.line, '--limit', '200', '--json', `headSha,${RUN_FIELDS}`, ...(plan.repo ? ['--repo', plan.repo] : [])];
+    const args = ['--branch', plan.line, '--limit', String(RUN_LIMIT), '--json', `headSha,${RUN_FIELDS}`, ...(plan.repo ? ['--repo', plan.repo] : [])];
     const q = queryRuns(gh, args, plan.worktree);
     if (q.error !== undefined) {
       ci = 'query-failed';
@@ -207,24 +228,41 @@ export function earliestRed(plan, { git, gh }) {
     } else {
       ci = 'read';
       for (const r of q.rows) runsBySha.set(r.headSha, [...(runsBySha.get(r.headSha) ?? []), toRun(r)]);
+      // A full list may have lost its oldest runs. The SHA of the last (oldest) row, every SHA with a row from
+      // that SHA's first row on, and every walked SHA older than one of those may be missing runs.
+      truncated = q.rows.length >= RUN_LIMIT;
+      if (truncated) {
+        boundary = q.rows[q.rows.length - 1].headSha;
+        const cut = q.rows.findIndex((r) => r.headSha === boundary);
+        for (const r of q.rows.slice(cut)) partial.add(r.headSha);
+        const first = walk.findIndex((c) => partial.has(c.sha));
+        if (first >= 0) for (const c of walk.slice(first)) partial.add(c.sha);
+      }
     }
   }
 
   // One entry per walked SHA that anything is known about. A CI conclusion (red or green) stands; without one,
-  // the local record is the conclusion.
+  // the local record is the conclusion. On a SHA that may be missing runs only red is a conclusion: a missing run
+  // can turn green, running or cancelled red, but cannot undo a red.
   const concluded = (v) => v === 'red' || v === 'green';
   const verdictOf = new Map();
   for (const c of walk) {
-    const fromCi = runsBySha.has(c.sha) ? classify(runsBySha.get(c.sha)).verdict : null;
-    if (plan.local.has(c.sha) && !concluded(fromCi)) verdictOf.set(c.sha, { verdict: plan.local.get(c.sha), source: 'local' });
-    else if (fromCi) verdictOf.set(c.sha, { verdict: fromCi, source: 'ci' });
+    const runs = runsBySha.get(c.sha) ?? [];
+    const fromCi = runs.length ? classify(runs).verdict : null;
+    const cut = partial.has(c.sha);
+    const ciConcluded = cut ? fromCi === 'red' : concluded(fromCi);
+    const failed = runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id);
+    const known = { partial: cut, runs, failed };
+    if (plan.local.has(c.sha) && !ciConcluded) verdictOf.set(c.sha, { verdict: plan.local.get(c.sha), source: 'local', ...known, concluded: true });
+    else if (fromCi) verdictOf.set(c.sha, { verdict: fromCi, source: 'ci', ...known, concluded: ciConcluded });
   }
 
   let red = -1;
   let green = -1;
   for (let i = 0; i < walk.length; i += 1) {
-    const v = verdictOf.get(walk[i].sha)?.verdict;
-    if (!concluded(v)) continue;
+    const e = verdictOf.get(walk[i].sha);
+    if (!e?.concluded) continue;
+    const v = e.verdict;
     if (v === 'green') {
       green = i;
       break;
@@ -238,12 +276,17 @@ export function earliestRed(plan, { git, gh }) {
     line: { ref, sha: tip },
     ci,
     error,
+    truncated,
+    boundary,
     earliestRed: null,
     lowerBound: null,
     tickets: [],
     unmatched: false,
     merges: [],
-    verdicts: walk.filter((c) => verdictOf.has(c.sha)).map((c) => ({ sha: c.sha, ...verdictOf.get(c.sha) })),
+    verdicts: walk.filter((c) => verdictOf.has(c.sha)).map((c) => {
+      const { concluded: _, ...e } = verdictOf.get(c.sha);
+      return { sha: c.sha, ...e };
+    }),
   };
   if (red < 0) return out;
 

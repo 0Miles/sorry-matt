@@ -62,7 +62,7 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
-import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
+import { UsageError, parseJson, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { scan, section, ownRows, lines, startsHeading } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
@@ -256,7 +256,7 @@ export function main(argv, deps = defaultDeps()) {
     if (args.against) {
       let snapshot;
       try {
-        snapshot = JSON.parse(deps.readFile(args.against));
+        snapshot = parseJson(deps.readFile(args.against));
       } catch (e) {
         throw new Error(`cannot read snapshot ${args.against}: ${e.message}`);
       }

@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url';
 /** A bad invocation: exit code 2 and a pointer to the script's header. */
 export class UsageError extends Error {}
 
+/**
+ * JSON.parse for a file the host wrote. Windows PowerShell 5.1 starts the files it writes with `>` or
+ * `Out-File -Encoding utf8` with a UTF-8 BOM, which JSON.parse rejects; one leading BOM is dropped first.
+ */
+export const parseJson = (text) => JSON.parse(String(text).replace(/^\uFEFF/, ''));
+
 /** Run a command and return its stdout; throws with `stderr` on a non-zero exit. */
 export const run = (cmd, args, cwd) =>
   execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });

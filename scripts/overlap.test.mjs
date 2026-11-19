@@ -171,3 +171,12 @@ test('a running worktree holds what it changed since branching, not what the bas
   const missing = run(dir, { base: 'line', running: [{ id: '#8', files: 'p8.txt', worktree: join(dir, 'nope') }] });
   assert.equal(missing.code, 1);
 });
+
+test('a plan file that starts with a UTF-8 BOM is read', (t) => {
+  const dir = scratch(t);
+  writeFileSync(join(dir, 'a.txt'), 'a.md\n');
+  writeFileSync(join(dir, 'plan.json'), `\uFEFF${JSON.stringify({ base: 'run/line', candidates: [{ id: '#11', files: 'a.txt' }] })}`);
+  const r = main([join(dir, 'plan.json')]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(r.out).start, ['#11']);
+});

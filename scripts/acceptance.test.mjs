@@ -351,3 +351,14 @@ test('cli local: from a Windows 8.3 short-path cwd the ticket path is still repo
     assert.equal(JSON.parse(r.out).id, file);
   }
 });
+
+test('cli: a snapshot that starts with a UTF-8 BOM is read', () => {
+  const { gh } = fakeGh({ 7: { title: 'Export', body: BODY, comments: [] } });
+  const snap = main(['github', '--repo', REPO, '7'], { gh, readFile: () => assert.fail('no snapshot yet') });
+  assert.equal(snap.code, 0, snap.err);
+  const { sha256 } = JSON.parse(snap.out);
+  const deps = { gh, readFile: () => `\uFEFF${snap.out}` };
+  const r = main(['github', '--repo', REPO, '7', '--against', 's.json', '--sha', sha256], deps);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(JSON.parse(r.out).check.changed, false);
+});

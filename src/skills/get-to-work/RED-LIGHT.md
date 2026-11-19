@@ -20,7 +20,10 @@
    輸出格式寫在腳本檔頭。`earliestRed` 是最早的紅 SHA，`lowerBound` 是範圍的下界：它之前最近一個有結論而且
    是綠的 SHA（`kind` 是 `green`）；沒有更早的綠時取整合分支與基底分支的 merge-base（`kind` 是 `merge-base`），
    有 CI 的線也一樣。本機驗證紀錄算該 SHA 的結論，與其他 SHA 的 CI 結論合起來判。輸出的 `ci` 是
-   `query-failed` 時，這次只用本機驗證紀錄判，照「讀 CI」的查詢失敗記下 `error`。`earliestRed` 是 `null`
+   `query-failed` 時，這次只用本機驗證紀錄判，照「讀 CI」的查詢失敗記下 `error`。`truncated` 是 `true` 時
+   run 清單在上限被截斷：`boundary` 那個 SHA 與 `verdicts[]` 裡 `partial` 是 `true` 的 SHA 可能少了 run，
+   腳本只把它們的紅當結論，不自己補判、不手動重查。這時真正最早的紅可能比 `earliestRed` 更舊，範圍照樣往下
+   延伸到 `lowerBound`，`tickets` 已涵蓋。`earliestRed` 是 `null`
    （沒有 SHA 有結論，或最新一個有結論的 SHA 是綠）時這次不對票：流水線中，下一次喚醒照「讀 CI」再讀這條線；
    收官（[`FINISH.md`](FINISH.md) 步驟 3）沒有下一次喚醒，當場再跑一次 `earliest-red`，仍是 `null` 就當作
    **對不到票**，照第 3–6 點走。
@@ -29,7 +32,8 @@
    才看 subject）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
    票（中間的 push 沒有結論）從最早的開始，就是第一張。`unmatched` 是 `true` —— 紅燈來自主持人 commit、精簡或併入基底 —— 就
    **對不到票**。
-3. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。本機驗證沒有
+3. 失敗的 job 與步驟以 `gh run view <id> --log-failed` 存檔，主持人只取失敗那幾行；`<id>` 是同一份
+   `earliest-red` 輸出裡 `verdicts[]` 中 `earliestRed` 那筆的 `failed` 列出的每個 id，不另跑 `gh run list`。本機驗證沒有
    run（本機驗證的線，以及有 CI 的線上 `no-verdict` 的那一次）：跑檢查時就把輸出存成 `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log`（跟 ledger 同在共用目錄），
    紅的那份就是失敗輸出，主持人只取失敗的行。
 4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，Agent tool 的 `description` 是 `ci-fix` 後接票的識別碼，票面附上失敗
