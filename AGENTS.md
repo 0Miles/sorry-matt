@@ -386,6 +386,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 分段計量 | spawn breakdown |
 | 類別(分段計量的) | kind |
 | 專案指令契約 | project command contract |
+| 流程設定 | run profile |
 | 讀取點(專案指令契約的) | reader |
 | 缺檔時 | when the file is missing |
 | 產生規則 | generation rules |
