@@ -352,7 +352,12 @@ test('earliest-red: a line on local verification uses only the ledger records, w
   const m13 = r.ticket('run/13-c');
   const m14 = r.ticket('run/14-d');
   // No r.push(): there is no origin/line at all.
-  const noGh = () => assert.fail('gh must not be called on a line on local verification');
+  // The script treats a throwing `gh` as a failed query, so a sentinel that throws proves nothing: count the calls.
+  const ghCalls = [];
+  const noGh = (args) => {
+    ghCalls.push(args);
+    return '[]';
+  };
   const tickets = [T11, T13, T14];
 
   const local = [`local: line ${m11} green no-origin`, `local: line ${m14} red no-origin`, `local: other-line ${m13} red no-origin`];
@@ -374,6 +379,45 @@ test('earliest-red: a line on local verification uses only the ledger records, w
   assert.equal(bare.earliestRed, m13);
   assert.deepEqual(bare.lowerBound, { sha: r.git('merge-base', 'line', 'main'), kind: 'merge-base' });
   assert.deepEqual(bare.tickets, ['#11', '#13']);
+  assert.deepEqual(ghCalls, [], 'gh is never called on a line on local verification');
+});
+
+test('earliest-red: the first local record of a SHA wins; a later one does not overwrite it', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const local = [`local: line ${m11} red no-origin`, `local: line ${m11} green no-origin`];
+  const j = earliestRed(r, { ci: false, tickets: [T11], local }, () => '[]').json;
+  assert.equal(j.earliestRed, m11);
+  assert.equal(j.verdicts[0].verdict, 'red');
+  assert.deepEqual(j.verdicts, [{ sha: m11, verdict: 'red', source: 'local' }]);
+});
+
+test('earliest-red: a CI verdict stands over a local record of the same SHA', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  r.push();
+  const ci = fakeCi({ [m11]: ['success'], [m13]: ['failure'] });
+  const j = earliestRed(r, { tickets: [T11, T13], local: [`local: line ${m13} green no-verdict`] }, ci.gh).json;
+  assert.equal(j.earliestRed, m13);
+  assert.deepEqual(j.verdicts[0], { sha: m13, verdict: 'red', source: 'ci' });
+  assert.deepEqual(j.lowerBound, { sha: m11, kind: 'green' });
+});
+
+test('earliest-red: after a base sync, the merge-base lower bound is the synced base tip, not where the line was cut', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  r.git('switch', '-q', 'main');
+  const moved = r.host('main moves');
+  r.git('switch', '-q', 'line');
+  r.git('merge', '-q', '--no-edit', 'main');
+  const m13 = r.ticket('run/13-c');
+  r.push();
+  const j = earliestRed(r, { tickets: [T11, T13] }, fakeCi({ [m11]: ['failure'], [m13]: ['failure'] }).gh).json;
+  assert.equal(j.earliestRed, m11);
+  assert.deepEqual(j.lowerBound, { sha: moved, kind: 'merge-base' });
+  assert.notEqual(j.lowerBound.sha, r.base);
+  assert.deepEqual(j.tickets, ['#11']);
 });
 
 test('earliest-red: on a line with CI, a local record stands in for a SHA that has no CI verdict', (t) => {

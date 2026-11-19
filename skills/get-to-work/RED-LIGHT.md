@@ -29,8 +29,10 @@ the fix leave it red, map the red back to the original ticket by mistake.
    with CI as well. A local verification record counts as that SHA's verdict and is judged together with the other
    SHAs' CI verdicts. When the output's `ci` is `query-failed`, only the local verification records were judged
    this time; record `error` as reading CI does for a failed query. When `earliestRed` is `null` (no SHA has a
-   verdict, or the newest SHA with one is green), map nothing this time, and read the line again per reading CI at
-   the next wake-up.
+   verdict, or the newest SHA with one is green), map nothing this time: in the pipeline, read the line again per
+   reading CI at the next wake-up; finishing the run ([`FINISH.md`](FINISH.md) step 3) has no next wake-up, so run
+   `earliest-red` again on the spot, and if it is still `null`, treat the red as **mapping to no ticket** and go
+   through points 3–6.
 2. **Map it to a ticket:** the same output's `tickets` is the tickets owning the merge commits between `lowerBound`
    and `earliestRed`, oldest first; the mapping rules are in the header of `scripts/review-guide.mjs` (the
    merge SHAs recorded in the ledger's reconciliation table come first; only tickets with no recorded SHA fall back

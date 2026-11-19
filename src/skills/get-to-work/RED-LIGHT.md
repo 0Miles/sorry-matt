@@ -21,7 +21,9 @@
    是綠的 SHA（`kind` 是 `green`）；沒有更早的綠時取整合分支與基底分支的 merge-base（`kind` 是 `merge-base`），
    有 CI 的線也一樣。本機驗證紀錄算該 SHA 的結論，與其他 SHA 的 CI 結論合起來判。輸出的 `ci` 是
    `query-failed` 時，這次只用本機驗證紀錄判，照「讀 CI」的查詢失敗記下 `error`。`earliestRed` 是 `null`
-   （沒有 SHA 有結論，或最新一個有結論的 SHA 是綠）時這次不對票，下一次喚醒照「讀 CI」再讀這條線。
+   （沒有 SHA 有結論，或最新一個有結論的 SHA 是綠）時這次不對票：流水線中，下一次喚醒照「讀 CI」再讀這條線；
+   收官（[`FINISH.md`](FINISH.md) 步驟 3）沒有下一次喚醒，當場再跑一次 `earliest-red`，仍是 `null` 就當作
+   **對不到票**，照第 3–6 點走。
 2. **對到票**：同一份輸出的 `tickets` 是 `lowerBound` 到 `earliestRed` 這段的 merge commit 對到的票，由舊到新；
    對票規則在 `scripts/review-guide.mjs` 檔頭（ledger 對帳表記的 merge SHA 優先，沒記 SHA 的票
    才看 subject）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
