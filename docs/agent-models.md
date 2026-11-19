@@ -68,7 +68,8 @@ node <plugin>/skills/get-to-work/scripts/acceptance.mjs local --ref cmp/line-slu
 | `01-clean-separators.md` | 寫出展開區塊，驗收 10 項，`needsExpansion` false | 寫出展開區塊，驗收 9 項，`needsExpansion` false |
 | `02-max-length.md` | 寫出展開區塊，驗收 9 項，`needsExpansion` false | 寫出展開區塊，驗收 9 項，`needsExpansion` false |
 
-兩次都沒有票回報待裁決，都是一個只動兩個票檔的 commit 落在 `cmp/line-slug`。每張票的結果類別相同。
+兩次都沒有票回報待裁決，成果都 commit 在 `cmp/line-slug`：改前是兩個 commit，各動一個票檔；改後是一個 commit，
+動兩個票檔。每張票的結果類別相同。
 
 ### 判讀與限制
 
