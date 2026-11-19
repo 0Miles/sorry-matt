@@ -84,25 +84,27 @@ agent，含展開 agent 與紅燈修正的 agent（「時限」）。每次喚�
 
 派票點與收官都以**整合分支最新 SHA 的 CI 結果**為準；有線在紅燈處置中時，每次喚醒也讀那條線。最新 SHA 是
 `git rev-parse origin/<整合分支>`；它和本地整合分支不同時，先照收票步驟 6 push 再讀（從未 push 過、
-或已定案為 CI 不涵蓋整合分支的線不讀）：
+或已定案為 CI 不涵蓋整合分支的線不讀）。結果由本 skill 的 `scripts/ci.mjs` 判，不自己讀 run 清單推：
 
 ```bash
-gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId,workflowName,status,conclusion
+node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" verdict <整合分支> <SHA>
 ```
 
-只讀 GitHub Actions；其他 CI 在這裡讀不到，當作沒有 run。一個 SHA 的所有 run 合起來判一個結果，依下列
-順序，先符合的為準；結果與 SHA 記進 ledger 第 4 欄：
+在 repo 目錄內執行；不在時加 `--repo <owner>/<repo>`。只讀 GitHub Actions；其他 CI 在這裡讀不到，當作沒有 run。
+腳本把一個 SHA 的所有 run 合成一個結果，就是輸出的 `verdict`；判定順序與輸出格式寫在腳本檔頭。腳本只讀
+不寫，結果之後的事由你做。結果與 SHA 記進 ledger 第 4 欄，再照結果往下：
 
-- **查詢失敗**：`gh` 非零結束。不猜，記下原因，下一次再讀。
-- **沒有 run**：清單是空的。剛 push 的 SHA 可能還沒登記，先當成還在跑。連續兩個派票點都讀到空清單，
+- **查詢失敗**（`query-failed`）：不猜，記下 `error` 寫的原因，下一次再讀。
+- **沒有 run**（`no-run`）：`reason` 是 `empty`（清單是空的），或 `no-success`（每個 run 都跑完了，卻沒有
+  任何一個 `success` —— 全是 `skipped`／`neutral` 的 SHA 是沒有 run，不是綠）。剛 push 的 SHA 可能還沒
+  登記，先當成還在跑。<!-- pending #100 -->連續兩個派票點都讀到空清單，
   而且 `gh run list --branch <整合分支> --limit 1 --json databaseId` 也是空的（這條分支從來沒有 run），
   才定案為 **CI 不涵蓋整合分支**；定案沿用到收官，之後這條線不再讀 CI。
-- **紅**：有 run 的 `conclusion` 是 `failure`、`timed_out`、`startup_failure`、`action_required` 或
-  `stale`。走 [`RED-LIGHT.md`](RED-LIGHT.md) 的紅燈處置。
-- **還在跑**：有 run 的 `status` 不是 `completed`。不等、不輪詢，下一次讀那時的最新 SHA —— 每個 run
+- **紅**（`red`）：走 [`RED-LIGHT.md`](RED-LIGHT.md) 的紅燈處置。
+- **還在跑**（`running`）：不等、不輪詢，下一次讀那時的最新 SHA —— 每個 run
   都跑全套，較新的 SHA 涵蓋較舊的。
-- **被取消**：有 run 是 `cancelled`。`gh run rerun <databaseId>`，當成還在跑。
-- **綠**：其餘 —— 每個 run 都 `completed`，`conclusion` 都是 `success`、`skipped` 或 `neutral`。
+- **被取消**（`cancelled`）：對輸出的 `rerun` 列出的每個 id 執行 `gh run rerun <id>`，當成還在跑。
+- **綠**（`green`）：至少有一個 run 是 `success`，沒有紅、沒有還在跑、沒有被取消。照常往下。
 
 **本機驗證的線。** 流水線中，沒有 `origin` 或已定案為 CI 不涵蓋整合分支的線不讀 CI：在原本要讀 CI 的
 時刻 —— 派票點；該線在紅燈處置中時的每次喚醒 —— 改對整合分支最新 SHA（`git rev-parse <整合分支>`）照下方的

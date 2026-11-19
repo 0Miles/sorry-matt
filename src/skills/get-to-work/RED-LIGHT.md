@@ -6,18 +6,29 @@
 審查通過的在佇列裡等；下面的紅燈修正與撤回不排隊。紅線上再整併別的票，最早紅 SHA 之後的 SHA 都帶著
 同一個紅，新票自己的紅燈被蓋住，修完仍紅時也會錯對到原票。
 
-1. **最早的紅 SHA**：`gh run list --branch <整合分支> --limit 200 --json headSha,status,conclusion`
-   按 `headSha` 彙整，每個 SHA 照 `SKILL.md`「讀 CI」的結果判定判；沿 `git log --first-parent --format=%H origin/<整合分支>` 由新往舊，
-   找出最早的紅 SHA —— 它之前最近一個有結論的 SHA 是綠。有 CI 的線上原因是 `no-verdict` 的本機驗證紀錄
-   （`SKILL.md`「讀 CI」的本機驗證）算該 SHA 的結論，與其他 SHA 的 CI 結論合起來判，下界仍是最近一個有結論而且是綠的 SHA。
-   本機驗證的線不跑 `gh run list`，改讀 ledger 第 4 欄的
-   本機驗證逐 SHA 紀錄：沿 `git log --first-parent --format=%H <整合分支>` 由新往舊，找出最早的紅 SHA —— 它之前
-   最近一筆有紀錄的 SHA 是綠；沒有更早的綠紀錄時，下界取 `git merge-base <整合分支> <基底分支>`。
-2. **對到票**：`git log --merges --first-parent --format='%H %s' <前一個綠 SHA>..<最早的紅 SHA>` 列出這段的
-   merge commit，照 `scripts/review-guide.mjs` 檔頭的規則對票（ledger 對帳表記的 merge SHA 優先，沒記 SHA 的票
+1. **最早的紅 SHA**：由本 skill 的 `scripts/ci.mjs` 算，不自己沿 log 推。為這條線寫一份計畫檔
+   `sorry-matt/runs/<run>/ci/<line-slug>.plan.json`：`worktree` 是整合 worktree，`line` 是整合分支，`base` 是
+   基底分支；`ci` 在有 CI 的線填 `true`，本機驗證的線填 `false`（腳本就不呼叫 `gh`，沿本地整合分支走）；
+   `local` 是 ledger 第 4 欄這條線的本機驗證逐 SHA 紀錄，整行照抄（有 CI 的線上原因是 `no-verdict` 的那幾筆
+   也抄）；`tickets` 是已整併進這條線的票，每張的 `id`、分支 `branch`，以及 ledger 對帳表記的 merge SHA
+   `merges`。輸出存成同名的 `.json`：
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" earliest-red <計畫檔>
+   ```
+
+   輸出格式寫在腳本檔頭。`earliestRed` 是最早的紅 SHA，`lowerBound` 是範圍的下界：它之前最近一個有結論而且
+   是綠的 SHA（`kind` 是 `green`）；沒有更早的綠時取整合分支與基底分支的 merge-base（`kind` 是 `merge-base`），
+   有 CI 的線也一樣。本機驗證紀錄算該 SHA 的結論，與其他 SHA 的 CI 結論合起來判。輸出的 `ci` 是
+   `query-failed` 時，這次只用本機驗證紀錄判，照「讀 CI」的查詢失敗記下 `error`。`earliestRed` 是 `null`
+   （沒有 SHA 有結論，或最新一個有結論的 SHA 是綠）時這次不對票：流水線中，下一次喚醒照「讀 CI」再讀這條線；
+   收官（[`FINISH.md`](FINISH.md) 步驟 3）沒有下一次喚醒，當場再跑一次 `earliest-red`，仍是 `null` 就當作
+   **對不到票**，照第 3–6 點走。
+2. **對到票**：同一份輸出的 `tickets` 是 `lowerBound` 到 `earliestRed` 這段的 merge commit 對到的票，由舊到新；
+   對票規則在 `scripts/review-guide.mjs` 檔頭（ledger 對帳表記的 merge SHA 優先，沒記 SHA 的票
    才看 subject）。完成紀錄、卡住紀錄、期間開票這些主持人 commit 不是 merge，夾在中間也不影響。有好幾張
-   票（中間的 push 沒有結論）從最早的開始。沒有 merge 對到票 —— 紅燈來自主持人 commit、精簡或併入基底 —— 就
-   **對不到票**。本機驗證的線照同一條指令與規則，沒有前一個綠 SHA 時代入第 1 點的下界。
+   票（中間的 push 沒有結論）從最早的開始，就是第一張。`unmatched` 是 `true` —— 紅燈來自主持人 commit、精簡或併入基底 —— 就
+   **對不到票**。
 3. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。本機驗證沒有
    run（本機驗證的線，以及有 CI 的線上 `no-verdict` 的那一次）：跑檢查時就把輸出存成 `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log`（跟 ledger 同在共用目錄），
    紅的那份就是失敗輸出，主持人只取失敗的行。
