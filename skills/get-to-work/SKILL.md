@@ -133,7 +133,10 @@ the fix leave it red, map the red back to the original ticket by mistake.
 1. **Earliest red SHA:** aggregate `gh run list --branch <integration branch> --limit 200 --json
    headSha,status,conclusion` by `headSha`, classifying each SHA as above; walking
    `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red
-   SHA — the nearest SHA before it with a verdict is green. A line on local verification runs no `gh run list`;
+   SHA — the nearest SHA before it with a verdict is green. On a line with CI, a local verification record whose
+   reason is `no-verdict` (section 2 step 3) counts as that SHA's verdict and is judged together with the other
+   SHAs' CI verdicts; the lower bound is still the nearest SHA with a verdict that is green. A line on local
+   verification runs no `gh run list`;
    read the per-SHA local verification records in ledger field 4 instead: walking
    `git log --first-parent --format=%H <integration branch>` from newest to oldest, find the earliest red SHA — the
    nearest recorded SHA before it is green; with no earlier green record, the lower bound is
@@ -148,7 +151,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
    with the two SHAs from point 1 (the previous green SHA or the lower bound, and the earliest red SHA), under the
    same mapping rules.
 3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
-   lines. A line on local verification has no run: while running the checks, save their output to
+   lines. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
+   CI): while running the checks, save their output to
    `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log` (in the shared directory, next to the ledger); the red one
    is the failure output, and the host takes only the failing lines.
 4. **Fix, two rounds at most:** when it maps to a ticket, hand it back to that ticket's original agent (if it is gone,
@@ -188,7 +192,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
    point, so the budget and the stop conditions are judged as usual.
 
 Done when: every line due a CI read had its latest SHA's result read and recorded in the ledger; on a line on local
-verification, every SHA verified has a record in ledger field 4; a red line
+verification, every SHA verified has a record in ledger field 4, and so does a `no-verdict` local verification on a
+line with CI; a red line
 dispatched nothing new and advanced no integration queue until it was green or reverted; a reverted ticket and the
 integrated tickets depending on it are out of `--done`, their reconciliation rows marked stuck or gap, with the
 tickets in flight depending on it awaiting ruling and naming the upstream revert; a line that failed verification
@@ -620,8 +625,11 @@ Every line passes **three line-level gates** first, in this order:
    **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`, a
    line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second read),
    run the repository's full checks locally once on this SHA instead, and the report says which case it was. Run
-   them in the integration worktree while its tree is exactly this SHA (when a merge agent is still resolving a
-   conflict, wait for it to finish). Lines in the first two cases are verified per SHA throughout the pipeline, per
+   them in the integration worktree while its tree is exactly this SHA: when finishing the run, wait for a merge
+   agent still resolving a conflict; at a dispatch point or wake-up in the pipeline, when the integration worktree's
+   tree is not this SHA (an integration is under way), do not wait and do not verify this time — the line keeps its
+   previous result, dispatching as usual unless it is in red-light handling — and the dispatch point that
+   integration triggers verifies the then-latest SHA. Lines in the first two cases are verified per SHA throughout the pipeline, per
    section 1, reading CI, not only when finishing the run.
 
    **Every local verification appends one per-SHA local verification record for the line to ledger field 4**, a
@@ -767,7 +775,8 @@ own commit, mixed into no ticket's commits; the aggregate PR body has a per-tick
 its status-record link, with the threshold notice at the top when `size.over` is true; the full verification is
 the CI result for the latest SHA of the integration branch synced to the latest base, or, under step 3's
 local-verification conditions, a local run on that same SHA with the reason reported; on a line on local
-verification, every SHA verified has a record in ledger field 4; its report names the verified SHA and the base
+verification, every SHA verified has a record in ledger field 4, and so does the `no-verdict` one on a line with CI;
+its report names the verified SHA and the base
 SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified
 on its unsynced tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or
 was merged after the permission settings let it through (through the merge queue when the base has one) and
