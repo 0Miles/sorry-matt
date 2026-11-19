@@ -55,7 +55,7 @@ diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>
 
 ## 2. Finder：平行找候選
 
-每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出。以下兩種 diff 只派一個 finder，
+每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出，Agent tool 的 `description` 是 `finder` 後接票的識別碼。以下兩種 diff 只派一個 finder，
 由它套用全部 lens：
 
 - 只有一個檔案，而且不超過數十行。
@@ -63,6 +63,10 @@ diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>
 
 本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送，不在背景跑：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
+
+三者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
+`finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
+這個前綴把 spawn 依角色與票分段計量；寫錯的會算成不明用途的通用 agent。
 
 - **逐行**：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
   反轉、off-by-one、falsy zero、遺漏 `await`、copy-paste 錯變數與 catch 吞錯。
@@ -171,7 +175,7 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 ## 4. Verifier：逐項獨立裁決
 
 候選（含第 3 節的實跑與突變候選）依「檔案＋失效機制」分組：同一個檔案、同一種失效機制的候選
-交給同一個 verifier subagent，其餘各自一個，全部並行派出。失效機制由主持人依 `summary` 與
+交給同一個 verifier subagent，其餘各自一個，全部並行派出，`description` 是 `verifier` 後接票的識別碼。失效機制由主持人依 `summary` 與
 `failure_scenario` 判斷，拿不準就分開。分組只減少 verifier 的數量，不合併候選：verifier 對組內
 每個候選逐條裁決，各附 `file:line` 證據。Verifier 只處理候選，不重讀整份 diff。
 
@@ -288,7 +292,7 @@ review 或 `suggestion` 區塊；審查用 worktree 已移除。
 不派 Finder，只對上一次的 finding 涉及的行重做驗證。審查用 worktree 依第 1 節以修正後的
 ticket 分支尖端重建。
 
-1. **Fix Verifier**：每則 finding（`acceptance` 除外，見第 4 步）各交給一個獨立的 subagent，並行派出。Prompt 自足，含審查用
+1. **Fix Verifier**：每則 finding（`acceptance` 除外，見第 4 步）各交給一個獨立的 subagent，並行派出，`description` 是 `fix-verifier` 後接票的識別碼。Prompt 自足，含審查用
    worktree 路徑、finding 的 `summary`、`evidence` 與 `fix`，以及修正 commit 的 diff
    （`git diff <上次 head>..<ticket 分支>`）；省略實作者的說明。先嘗試反駁修法，四題逐一作答並附
    `file:line`：

@@ -205,7 +205,9 @@ While a run is in progress, two more hooks share one entry (`hooks/hooks.json` �
 - **SubagentStart** counts each new subagent in `<run>.counters.json` next to the run ledger (a resumed subagent keeps
   its `agent_id` and is not counted again). Only the hook writes that file, under an exclusive lock file and through
   a temporary file and a rename, so it never races with the host writing the ledger. SubagentStart cannot block a
-  spawn; it only counts.
+  spawn; it only counts. Each counted spawn is also logged there with its agent type, the `description` of the Agent
+  call that caused it (paired by agent type, oldest first, since the two events share no id) and the time;
+  `get-to-work`'s `scripts/spawns.mjs` sums that log by kind of agent and by ticket when a run finishes.
 - **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9:
   200 when the ledger is created, rewritten to `30 × tickets + 50` once the ticket count is known, or to the spawns
   already used plus `30 × tickets` when that is higher). It is a last

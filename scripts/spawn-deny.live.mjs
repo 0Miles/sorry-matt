@@ -6,7 +6,9 @@
 // It builds a throwaway git repo (in the work dir, default the OS temp dir) whose only active run ledger has
 // `budget: spawns 1`, loads this checkout as the plugin with --plugin-dir, and asks the model for two Agent calls
 // in a row, then one with run_in_background. Pass: the first spawn runs and is counted, the next two come back
-// as the budget deny, no second subagent starts, and the counters file still says 1.
+// as the budget deny, no second subagent starts, and the counters file still says 1. It also checks the fields the
+// spawn log is built from on real events: the one counted spawn is logged with SubagentStart's agent type and the
+// description the Agent call gave, and the denied calls leave nothing pending.
 // Never point it at a real repo: an active ledger with a low limit blocks every run's spawns in that repo.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -44,7 +46,12 @@ function session(name, prompt) {
   const starts = events.filter(
     (e) => e.type === 'system' && e.subtype === 'hook_started' && /^SubagentStart/.test(e.hook_name || ''),
   ).length;
-  return { results, starts };
+  const calls = events
+    .filter((e) => e.type === 'assistant')
+    .flatMap((e) => e.message.content || [])
+    .filter((c) => c.type === 'tool_use' && c.name === 'Agent')
+    .map((c) => c.input || {});
+  return { results, starts, calls };
 }
 
 const failures = [];
@@ -56,7 +63,7 @@ const denied = (r) => Boolean(r && r.error && r.text.includes('sorry-matt budget
 
 const one = session(
   'sequential',
-  `Use the Agent tool exactly twice, one call after the other (not in parallel). Each time use subagent_type general-purpose, model haiku, description 'live test N', and ${OK} Then report what each call returned. Use no other tool and do not retry a failed call.`,
+  `Use the Agent tool exactly twice, one call after the other (not in parallel). Each time use subagent_type general-purpose, model haiku, description 'live test 1' for the first call and 'live test 2' for the second, and ${OK} Then report what each call returned. Use no other tool and do not retry a failed call.`,
 );
 expect(one.results.length === 2, `sequential session made two Agent calls (saw ${one.results.length})`);
 expect(Boolean(one.results[0] && !one.results[0].error), 'first spawn, under the limit, ran');
@@ -72,6 +79,13 @@ expect(bg.starts === 0, `no background subagent started (saw ${bg.starts} Subage
 
 const counters = JSON.parse(readFileSync(join(runs, 'live.counters.json'), 'utf8'));
 expect(counters.spawns === 1, `counters file says 1 spawn (says ${counters.spawns})`);
+const log = counters.log || [];
+const given = one.calls[0] || {};
+expect(log.length === 1, `the log has one entry (has ${log.length})`);
+expect(Boolean(log[0] && log[0].type) && log[0].type === given.subagent_type, `logged type is the Agent call's subagent_type (${JSON.stringify(log[0] && log[0].type)} vs ${JSON.stringify(given.subagent_type)})`);
+expect(Boolean(log[0] && log[0].description) && log[0].description === given.description, `logged description is the Agent call's (${JSON.stringify(log[0] && log[0].description)} vs ${JSON.stringify(given.description)})`);
+expect((counters.pending || []).length === 0, `no call is left pending (${JSON.stringify(counters.pending)})`);
+console.log(`counters: ${JSON.stringify(counters)}`);
 
 const version = spawnSync('claude', ['--version'], { encoding: 'utf8' }).stdout;
 console.log(`claude ${String(version || '').trim()}; streams in ${work}`);

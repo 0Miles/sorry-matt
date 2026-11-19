@@ -213,6 +213,17 @@ maps to no ticket counts too. `prove-it`'s finders, verifiers and Fix Verifiers 
 (`prove-it` section 2): they run to completion inside the host's own turn, and the host is not woken while it waits
 on them, so review has no time limit.
 
+**A spawn's `description`:** every time you spawn an agent, the Agent tool's `description` starts with that agent's
+role word, followed by the ticket's identifier (`#N` on GitHub, the ticket file name in Local Markdown), as in
+`implement #72`. The role words: `expand` (an expansion agent, followed by every ticket it covers, as in
+`expand #75 #83`), `implement` (an implementation agent, including one spawned anew after a send-back and one
+reassigned while implementing), `fix` (an agent reassigned while fixing), `ci-fix` (an agent newly spawned for a
+red-light fix; when the red maps to no ticket, followed by that line's integration branch) and `merge` (a merge
+agent); `prove-it`'s `finder`, `verifier` and `fix-verifier` are in its own rules. The plugin's hook records each
+spawn's agent type and this `description` in `<run>.counters.json` beside the ledger, and the spawn breakdown when
+finishing (`FINISH.md`) relies on this prefix to tell which kind of work a general-purpose agent did and for which
+ticket: a spawn with a wrong prefix is counted under `general-purpose`.
+
 The **stage time limits** are four `budget:` lines in ledger field 9, in minutes (`ASKING.md` section 7):
 `timeout-implement` (implementing), `timeout-fix` (fixing, red-light fixes included), `timeout-expand` (expanding)
 and `timeout-merge` (the merge agent while integrating).
@@ -220,7 +231,10 @@ and `timeout-merge` (the merge agent while integrating).
 **Assignment record:** at every assignment, record in that ticket's row of the reconciliation table (for an
 expansion agent, in the row of every ticket it covers):
 
-- The agent id, the assigned time, the stage time limit and the deadline. Times are always UTC, in the format of
+- The agent id, the agent type, the assigned time, the stage time limit and the deadline. The agent type is the
+  `subagent_type` the Agent tool actually used at the spawn (`sorry-matt:expander` for an expansion agent,
+  `general-purpose` when it fell back to a general-purpose agent); an assignment handed back to the original agent
+  with SendMessage keeps that agent's type. Times are always UTC, in the format of
   `date -u +%Y-%m-%dT%H:%M:%SZ`, and the deadline is the assigned time plus the stage time limit; times in this
   format compare correctly as strings. Record extended as `no`.
 - The **progress fingerprint**: the HEAD and the working-tree tree of the worktree the agent works in. For
@@ -269,8 +283,9 @@ earliest deadline minus now, in seconds:
 
 With no agent in flight, `/loop` paces itself as before.
 
-Done when: every assignment left an assignment record (agent id, assigned time, stage time limit, deadline and
-progress fingerprint) in the reconciliation table; every wake-up scanned every agent in flight after handling
+Done when: every assignment left an assignment record (agent id, agent type, assigned time, stage time limit,
+deadline and progress fingerprint) in the reconciliation table; every spawn's `description` starts with its role word,
+followed by the ticket's identifier; every wake-up scanned every agent in flight after handling
 reports, expansion and red-light fix agents included; no report from a superseded agent was taken; every wake-up that ended with agents in flight scheduled a fallback wake-up,
 with at most one background `sleep` at a time.
 
@@ -318,9 +333,12 @@ candidate, in order:
    the sibling [`EXPANDER.md`](EXPANDER.md), fill its placeholders with every such ticket at this dispatch point, and
    spawn one expansion agent in the background with the filled-in text as its prompt, adding no rules of your own.
    The Agent tool's `subagent_type` is `sorry-matt:expander` — the plugin's agent definition file
-   `agents/expander.md`, which sets the expansion agent's model and tools, so the host specifies neither. When that
+   `agents/expander.md`, which sets the expansion agent's model and tools, so the host specifies neither; the
+   `description` is `expand` followed by the identifier of every ticket in this batch (time limits). When that
    agent type is not in the available list, use a general-purpose agent instead, with no model specified and the
-   same prompt. It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
+   same prompt and `description`, and record the agent type as `general-purpose` in the assignment record of every
+   ticket in this batch: it then runs on the host's model with every tool, not on what the definition file sets, and
+   the reconciliation table and the run metrics have to show that. It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
    point's number (field 9). These tickets move to the expanding stage and go no further at this dispatch point, so
    the next dispatch point does not spawn an expansion for them again. The expansion agent's report triggers a
    dispatch point, where they return to candidate and re-run the script from this step; a ticket still true, or
@@ -368,15 +386,16 @@ candidate, in order:
    worktree. With Local Markdown the expansion block is already committed on the integration branch, and the ticket
    branch is cut after it.
 6. Read the sibling [`IMPLEMENTER.md`](IMPLEMENTER.md), fill in its placeholders, and spawn one implementation
-   agent in the background with the filled-in text as its prompt, adding no rules of your own. Fill the
+   agent in the background with the filled-in text as its prompt, adding no rules of your own; the `description` is
+   `implement` followed by the ticket's identifier (time limits). Fill the
    expansion-block placeholder from `expansions[].text` in that ticket's acceptance snapshot: on GitHub the
    expansion block is a comment, so the ticket text does not contain it. Fill the project command contract
    placeholder with the absolute path of `docs/agents/commands.md` in the ticket worktree, or none when the file
    is not there. The **status record** it defines is that
    ticket's own source of truth; everywhere else cites it. For a ticket dispatched again after being sent back:
    when the original agent is still there, give it the send-back record and the rebuilt worktree with SendMessage
-   instead of spawning; only when it is gone, spawn a new one per `IMPLEMENTER.md` with the send-back record in its
-   placeholder. The reconciliation table records each ticket's stage and its responsible agent's id, along with the
+   instead of spawning; only when it is gone, spawn a new one per `IMPLEMENTER.md` (its `description` likewise
+   `implement` followed by the ticket's identifier) with the send-back record in its placeholder. The reconciliation table records each ticket's stage and its responsible agent's id, along with the
    assignment record from time limits.
 
 Done when: every dispatch point first judged the limits per budget and breaker, then read the lines due a read per
@@ -429,7 +448,8 @@ integration branch, CI runs in the background, the host does not wait, and the n
    SHAs in the ledger's reconciliation table, red-light `-ci` merges included: red-light mapping and the
    **per-ticket guide** at finishing (`FINISH.md`) both go by it, and the subject is only the fallback when no SHA was recorded.
    That merge's second-parent range, `<merge>^1..<merge>^2`, is exactly this ticket's commits.
-   Where there are conflicts, give them to a **merge agent** to resolve hunk by hunk: it gets the integration
+   Where there are conflicts, give them to a **merge agent** to resolve hunk by hunk (the Agent tool's `description` is
+   `merge` followed by the ticket's identifier, time limits): it gets the integration
    worktree, both sides' ticket text and commit messages, and this test — the choice is between two intents rather
    than two blocks of text, so trace each side to its primary source (the ticket text and the commit message), keep
    both where they are compatible, and where they are not, take the side that matches this merge's goal, with what
