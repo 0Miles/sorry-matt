@@ -35,6 +35,8 @@
 //   node state.mjs usage    <state> [--started <UTC>] [--wait <seconds>] [--spawns <n>] [--add <counter>=<n>]...
 //                           [--sleep-task <task id>|none] [--tokens <n>|unknown]
 //   node state.mjs progress <state> --from <progress.json> [--note <text>]
+//   node state.mjs check    <state> <gate> [<ticket or branch>...] [--repo <path>] [--base <ref>] [--ledger <path>]
+//                           [--ended]
 //
 // Times are UTC, written `YYYY-MM-DDTHH:MM:SSZ`, as in deadline.mjs. A ticket id is the tracker's id (`#12`) or the
 // ticket file name; an integration branch is the `<run>/<line-slug>` name. SHAs are lowercase hex, 7–64 digits
@@ -195,6 +197,11 @@
 //                                                         // hours: now − started − waiting, null before a start
 //   progress  Records a `deadline.mjs progress` output: `noProgress`, `snapshot`, and `rounds` when not stopped;
 //             when stopped, `stop` with the limits, the usage at the time and `--note`. Refused once stopped.
+//   check     Runs one stage-exit gate: assertions over the state, the git repository at `--repo` (default: the
+//             current directory) and, for `ledger`, the run ledger. The gates, their assertions and their flags are
+//             in the header of gates.mjs. Reads only: it takes no lock and never writes the state.
+//             Output: { "format", "command": "check", "gate", "ok": true | false, "checked": [<assertion>],
+//                       "failures": [{ "assertion", "subject", "message" }] }   // also on exit 4
 //
 // Output (stdout, JSON): `show` and `resume` as above; a write prints { "format", "command", "revision", ... }
 // with the tickets, line or usage it changed. Every write takes `<state>.lock` (created exclusively; a lock older
@@ -204,11 +211,13 @@
 //
 // Exit codes: 0 done; 1 the state (or the ledger, or a file named by a flag) could not be read or written, is
 // missing, is not JSON or not a state file, or the lock could not be taken; 2 bad arguments or a bad input file;
-// 3 refused: the command is well-formed but the state does not allow it (the message says what is missing).
-// On 1, 2 or 3 nothing is written to stdout and the state file is unchanged.
+// 3 refused: the command is well-formed but the state does not allow it (the message says what is missing);
+// 4 a gate failed (`check`): stdout lists every failed assertion, stderr one line per failure.
+// On 1, 2 or 3 nothing is written to stdout. On every code but 0 the state file is unchanged.
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, failure, run as exec, runIfEntry } from './cli.mjs';
+import { GATES, TARGETS, runGate } from './gates.mjs';
 
 export const FORMAT = 'sorry-matt/state@1';
 export const STAGES = ['candidate', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered', 'stuck', 'awaiting-ruling'];
@@ -1146,6 +1155,31 @@ function progress(path, rest, flags, ctx) {
   });
 }
 
+function checkGate(path, rest, flags, ctx) {
+  const [name, ...targets] = rest;
+  oneOf(name, GATES, 'gate');
+  const kind = TARGETS[name];
+  if (!kind && targets.length) throw new UsageError(`check ${name} takes no tickets or branches, got ${targets[0]}`);
+  if (kind === 'ticket!' && !targets.length) throw new UsageError(`check ${name} needs at least one ticket`);
+  if (new Set(targets).size !== targets.length) throw new UsageError('a ticket or branch is named twice');
+  if (name === 'freeze' && !isText(flags.base)) throw new UsageError('check freeze needs --base <ref>');
+  if (name !== 'freeze' && flags.base !== undefined) throw new UsageError('--base goes with check freeze');
+  if (name === 'ledger' && !isText(flags.ledger)) throw new UsageError('check ledger needs --ledger <path>');
+  if (name !== 'ledger' && (flags.ledger !== undefined || flags.ended)) throw new UsageError('--ledger and --ended go with check ledger');
+  const state = load(path);
+  if (kind === 'branch') for (const b of targets) lineOf(state, b);
+  else if (kind && targets.length) ticketsOf(state, targets);
+  const profile = profileOf(state);
+  const repo = resolve(flags.repo ?? '.');
+  return runGate(name, state, { targets, base: flags.base, ledger: flags.ledger, ended: flags.ended === true }, {
+    profile,
+    queueGuard: (id, t) => stageGuard(id, t, 'queued', null, profile),
+    git: ctx.git ?? ((args) => exec('git', ['-C', repo, ...args])),
+    read: ctx.read,
+    env: ctx.env,
+  });
+}
+
 // ---- entry ---------------------------------------------------------------------------------------------------------
 
 const NOW = { now: 'one' };
@@ -1170,10 +1204,11 @@ const COMMANDS = {
   local: [local, NOW],
   usage: [usage, { started: 'one', wait: 'one', spawns: 'one', add: 'many', 'sleep-task': 'one', tokens: 'one', ...NOW }],
   progress: [progress, { from: 'one', note: 'one', ...NOW }],
+  check: [checkGate, { repo: 'one', base: 'one', ledger: 'one', ended: 'bool' }],
 };
 
 export function defaultDeps() {
-  return { read: (p) => readFileSync(p, 'utf8'), clock: () => Date.now() };
+  return { read: (p) => readFileSync(p, 'utf8'), clock: () => Date.now(), env: process.env };
 }
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.
@@ -1186,9 +1221,11 @@ export function main(argv, deps = defaultDeps()) {
     if (!rest.length) throw new UsageError(`${argv[0]} needs the state file first`);
     const path = resolve(rest[0]);
     const now = flags.now === undefined ? formatTime(Math.floor(deps.clock() / 1000) * 1000) : time(flags.now, '--now');
-    const result = run(path, rest.slice(1), flags, { now, read: deps.read });
+    const result = run(path, rest.slice(1), flags, { now, read: deps.read, env: deps.env ?? {}, git: deps.git });
     const out = argv[0] === 'show' ? result : { format: FORMAT, command: argv[0], ...result };
-    return { code: 0, out: `${JSON.stringify(out, null, 2)}\n`, err: '' };
+    const failed = argv[0] === 'check' && !result.ok;
+    const err = failed ? result.failures.map((f) => `state: check ${result.gate}: ${f.assertion}: ${f.subject}: ${f.message}\n`).join('') : '';
+    return { code: failed ? 4 : 0, out: `${JSON.stringify(out, null, 2)}\n`, err };
   } catch (e) {
     if (e instanceof Refusal) return { code: 3, out: '', err: `state: refused: ${e.message}\n` };
     return failure('state', e);
