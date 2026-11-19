@@ -60,22 +60,46 @@ Reuse existing dependency installs; where the new worktree has none, restore fro
 changes neither this ticket's diff nor the repo's dependencies. New-file line numbers always come from
 `git show <ticket branch>:<path>`.
 
+The **review tier** is judged here, once, from the diff, written into the review block as `tier`, and kept for the
+whole ticket, rechecks included. It sets the number of finders and verifiers and the mutation cap. Changed lines are
+the added plus deleted lines of `git diff --numstat <fixed point>...<ticket branch>`; sensitive paths come from
+`Sensitive paths` in the review worktree's `docs/agents/commands.md`, and when that file is missing or the section is
+`none`, they are the paths of CI configuration, hooks and guards, release and deploy configuration, permission
+settings and database migrations. Top to bottom, the first row that matches is the tier:
+
+| `tier` | Condition | Finders | Verifiers | Mutation cap |
+| --- | --- | --- | --- | --- |
+| `light` | Prose only: every changed file is documentation such as `.md` or `.txt`, with no code, tests, scripts, configuration, or generated files | 1 | 1 | — |
+| `full` | The diff touches a sensitive path, or has more than 400 changed lines | 3 | one per file | 10 |
+| `light` | No more than 50 changed lines | 1 | 1 | 3 |
+| `standard` | Everything else | 2 | one per file, at most 3 | 5 |
+
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed
 acceptance criteria have been recorded as an `acceptance` finding; the review worktree sits at the ticket branch tip
-and the diff is saved.
+and the diff is saved; `tier` has been judged from the table above.
 
 ## 2. Finder: candidates in parallel
 
-Give each lens to its own finder subagent, all dispatched in one message. Two kinds of diff get a single finder
-that applies every lens:
+The number of finders follows `tier`; dispatch them all in one message, the Agent tool's `description` being
+`finder` followed by the ticket's identifier. The lenses are split like this:
 
-- A single file of no more than a few dozen lines.
-- Prose only: every changed file is documentation such as `.md` or `.txt`, with no code, tests, scripts,
-  configuration, or generated files.
+- `light`: one finder applies every lens.
+- `standard`: two — correctness (line by line, deleted behaviour, cross-file contracts) and conformance (acceptance
+  check, repo conventions).
+- `full`: three — line by line with deleted behaviour, cross-file contracts, and conformance.
 
-This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground,
-never in the background: the caller waits within its own turn until every one of them is back. `get-to-work` puts
-no time limit on review because of this rule.
+This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground:
+the caller waits within its own turn until every one of them is back. `get-to-work` puts no time limit on review
+because of this rule.
+
+All three report only the fields their section names. Reasoning, probe programs and probe output go into files under
+`<scratchpad>/review-<ticket>-notes/`, and the report gives the paths: the caller's context holds only the fields a
+ruling needs.
+
+For all three, the Agent tool's `description` always starts with the role word, followed by the ticket's identifier
+(`#N` on GitHub, the ticket file name in Local Markdown): `finder #72`, `verifier #72`, `fix-verifier #72`. The
+plugin's hook records it in the run's counters file, and `get-to-work` relies on this prefix when finishing to break
+the run's spawns down by role and by ticket; one written wrong is counted as a general-purpose agent of unknown use.
 
 - **Line by line:** for every line of every hunk, ask which inputs, states, timings, or platforms break it. Check
   especially for inverted conditions, off-by-one, falsy zero, a missing `await`, a copy-pasted wrong variable, and
@@ -106,7 +130,8 @@ describing an observable consequence (wrong output, a crash, data loss — not a
 - `pre-existing`: the fixed point already does this. Give its location on the fixed point.
 - `none`: neither seems likely.
 
-At most six per finder; an empty list when there are none.
+At most six per finder, ordered from the heaviest `failure_scenario` consequence to the lightest; an empty list when
+there are none.
 
 Each reviewer is one set of Finders, and every candidate carries a `by` field naming its reviewer. Today there is
 only `primary`; another reviewer is just another source of candidates, and everything from section 3 on stays the
@@ -122,8 +147,10 @@ The reviewer does this step; it is never handed to the implementer.
 
 ### Live run
 
-In the review worktree, run the project's test, typecheck, and lint scripts once each. This is the baseline for
-mutation:
+In the review worktree, run the project's test, typecheck, and lint scripts once each. When the review worktree
+has `docs/agents/commands.md`, take the commands from its "Full checks"; without the file, or when its "Full checks"
+reads `none`, find them yourself from the manifest and the CI configuration, as before, and give the source as
+`self-found`. This is the baseline for mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
@@ -145,7 +172,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" lines --base <fixed point> [--lcov
 
 The output format is in the script header. Coverage comes from a coverage tool the repo already has installed (c8,
 nyc, jest / vitest coverage, coverage.py) or one built into the runtime (Node 22's
-`node --test --experimental-test-coverage --test-reporter=lcov`); pass the lcov it produces as `--lcov`. With
+`node --test --experimental-test-coverage --test-reporter=lcov`); pass the lcov it produces as `--lcov`. When
+`docs/agents/commands.md` exists and its "Coverage" is not `none`, produce the lcov with its command. With
 neither, `covered` is `null`: a line counts as covered only when the reviewer traces a call chain from a test to it,
 and the record says `coverage=inferred`.
 
@@ -154,7 +182,8 @@ Choosing lines:
 1. Take only covered, executable code lines; never mutate test files, comments, docs, configuration, or generated
    files. Uncovered lines are not mutated; their count goes into the record. When the ticket changes executable code
    lines and none of them is covered, that fact is itself a candidate (lens `mutation`).
-2. **At most one mutant per line, and at most 10 per ticket.** Over the cap, take in order: lines a Finder
+2. **At most one mutant per line, and a per-ticket cap set by `tier`** (the table in section 1; pass it to the script
+   as `--cap`). Over the cap, take in order: lines a Finder
    candidate points at → lines an acceptance criterion directly depends on → conditions, boundaries, and return
    values → other statements; within a priority, spread across hunks.
 3. For each line pick the operator most likely to slip past the tests: invert a condition, shift a boundary
@@ -196,12 +225,13 @@ empty; every surviving mutant has become a candidate.
 
 ## 4. Verifier: an independent ruling per candidate
 
-Group the candidates (including the live-run and mutation candidates from section 3) by file plus failure
-mechanism: candidates in the same file with the same failure mechanism go to one verifier subagent, every other
-candidate to its own, all dispatched in parallel. The host judges the failure mechanism from `summary` and
-`failure_scenario`; when unsure, keep them apart. Grouping only cuts the number of verifiers and never merges
-candidates: a verifier rules on each candidate in its group separately, each with its own `file:line` evidence.
-Verifiers only handle candidates; none rereads the whole diff.
+Group the candidates (including the live-run and mutation candidates from section 3) by file and give each group to
+one verifier subagent, all dispatched in parallel, with `verifier` followed by the ticket's identifier as the
+`description`. The number of groups follows `tier`: `light` puts every candidate in one group; `standard` makes one
+group per file and, past three groups, folds the groups with the fewest candidates into one; `full` makes one group
+per file. Grouping only sets the number of verifiers: a verifier rules on each candidate in its group separately,
+each with its own `file:line` evidence. A verifier handles only the candidates it was given; anything else it sees
+while ruling goes, one line each, into the report's `noticed`, which the caller treats as observations.
 
 The prompt is self-contained and holds only the absolute paths of the repo and the review worktree, the ticket
 branch, the fixed point, the fields of that group's candidates, and the ruling rules below. Leave out the finder's
@@ -234,23 +264,44 @@ path only), and **invalid**. Every citation names its source: the ticket branch 
 the ticket text / acceptance snapshot. Only when a citation does not match the source it names, have another
 verifier re-check that candidate.
 
+**The verifier judges blocking, and there are only five rules.** A confirmed candidate is blocking only when it
+meets one of them; the verifier writes the `rule` it meets into the ruling and quotes the text or output it rests on:
+
+| `rule` | Met when | Quote |
+| --- | --- | --- |
+| `acceptance` | A criterion in the acceptance snapshot does not hold on the ticket branch | The criterion's text |
+| `regression` | Behaviour that holds on the fixed point, and that neither the ticket nor a criterion asked to change, is broken on the ticket branch | The output on the fixed point and on the ticket branch |
+| `red` | The live run is red | The live-run output's path |
+| `safety` | Data loss, leaked credentials or permissions, or a check on a sensitive path that no longer works | The input that triggers it and the result |
+| `unpinned` | A surviving mutant is confirmed: the tests do not pin the behaviour this ticket changed | The mutation output's path |
+
+A confirmed candidate that meets none of the five is an observation: hardening for edge inputs, message wording, a
+scenario no criterion covers, and other spellings that ought to be checked too all belong here.
+
 Routing:
 
-- **Confirmed and blocking** (it changes whether this ticket should be integrated) → a finding. A confirmed
-  surviving mutant always counts as blocking: the tests do not pin the behaviour this ticket changed.
-- **Confirmed but not blocking** → an observation; it triggers no fix.
-- **Spec-level** → an observation marked `(spec-level)` at the end of its sentence; it triggers no fix.
-- **Pre-existing** → handed to the host for get-to-work's filing along the way.
+- **Confirmed and blocking** → a finding, carrying its `rule`.
+- **Confirmed but not blocking** → an observation.
+- **Spec-level** → an observation marked `(spec-level)` at the end of its sentence.
+- **Pre-existing** → listed under `pre-existing`.
 - **Invalid** → dropped; for a mutation candidate, its disposition goes into the mutation record (for example
   "equivalent, invalid").
 
+Only findings trigger a fix. Observations and pre-existing items go to the caller for get-to-work's filing along the
+way, and the ticket moves on by the verdict.
+
 Each finding carries a one-sentence **fix direction** that states the observable before/after difference (an
-output, an error, a test going from red to green). One that cannot state it is a style preference; withdraw it.
-For a surviving mutant, the fix direction is a test that kills it, with its input.
+output, an error, a test going from red to green); its scope is closing the scenario the finding quotes. One that
+cannot state it is a style preference; withdraw it. For a surviving mutant, the fix direction is a test that kills
+it, with its input.
+
+The verifier's report has one block per candidate, five lines at most: the ruling, the `rule` (for a confirmed
+candidate; `none` when it meets none), the `file:line` evidence, the result of each gate or the two checks of the
+short path, and the fix direction (findings only). The last line is `noticed`, or `none`.
 
 Done when: every candidate has exactly one ruling with `file:line` evidence, and either the result of each gate or
-the two checks of the short path; candidates in a group were each ruled on separately; every finding has a
-falsifiable fix direction; every mutant has a disposition in the mutation record.
+the two checks of the short path; candidates in a group were each ruled on separately; every finding has the `rule`
+it meets, that rule's quote and a falsifiable fix direction; every mutant has a disposition in the mutation record.
 
 ## 5. Verdict
 
@@ -262,8 +313,13 @@ falsifiable fix direction; every mutant has a disposition in the mutation record
   cleared, resumes only the unfinished sections, keeping the candidates, rulings, and mutation record already in
   the block, and dispatches no Finders again.
 
+**The verifiers' rulings decide the verdict.** The caller copies each ruling into the block as it stands: the
+findings are the ones a verifier ruled blocking, the observations are the other confirmed ones. When the caller
+thinks an observation should block integration, it dispatches one more verifier to rule again on that one
+candidate's `rule`, and that ruling stands.
+
 Done when: the verdict is exactly one of the three and follows from section 1's acceptance diff and the routing in
-section 4, not from self-assessment.
+section 4; every finding's `rule` in the block comes from a verifier's report.
 
 ## 6. Output and the status record
 
@@ -272,7 +328,7 @@ mechanically:
 
 ```text
 <!-- sorry-matt:review -->
-review: <round>  mode: initial | recheck
+review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
 base: <fixed point>@<sha>  head: <ticket branch>@<sha>
 stuck: <reason and how to clear it, or none>
@@ -280,7 +336,7 @@ acceptance: unchanged | changed (<acceptance diff path>)  original=<n> expansion
 
 reviewer: primary
 findings:
-- F1 blocking <file>:<line> [<lens>]
+- F1 blocking <file>:<line> [<lens>] rule=<acceptance | regression | red | safety | unpinned>
   summary: <one sentence>
   evidence: <file:line the verifier opened; path of the live-run or mutation output>
   fix: <fix direction, with the observable before/after difference>
@@ -289,13 +345,14 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: <command> -> green | red (<log path>)
-mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
+live run: <command> -> green | red (<log path>) source=<commands.md | self-found>
+mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
-An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
+`source` on the `live run` line is where the commands came from: `commands.md` when taken from
+`docs/agents/commands.md`, `self-found` when the reviewer found them. An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
 `file:line`. A spec-level observation is marked `(spec-level)` at the end of its sentence, before
 `(evidence: …)`.
 
@@ -327,33 +384,43 @@ removed.
 
 ## 7. Recheck
 
-After the batched fix, the caller invokes this skill again in `recheck` mode with the previous review block. This
-is not a second review: no Finders run, and only the lines the previous findings concern are verified again.
-Rebuild the review worktree per section 1 at the fixed ticket branch tip.
+After the batched fix, the caller invokes this skill again in `recheck` mode with the previous review block. A
+recheck answers one question: is each of the previous findings closed? Its scope is those findings and the diff of
+the fix commits (`git diff <previous head>..<ticket branch>`), so each round has less to verify than the one before.
+Rebuild the review worktree per section 1 at the fixed ticket branch tip; `tier` stays what the initial review set.
 
-1. **Fix Verifier:** give each finding (except `acceptance`, see step 4) to its own subagent, dispatched in
-   parallel. The prompt is self-contained: the review worktree path, the finding's `summary`, `evidence`, and `fix`,
-   and the diff of the fix commits (`git diff <previous head>..<ticket branch>`); leave out the implementer's
-   explanation. Try to disprove the fix first, answering each of the four with `file:line`:
-   1. Is every failure window in the finding closed?
-   2. Did the fix open a new one?
-   3. What is the observable difference before and after? If there is none, it was not fixed.
-   4. Will any other caller break?
+1. **Fix Verifier:** for `light` and `standard`, one subagent per ticket takes every finding; for `full`, one per
+   finding, dispatched in parallel. An `acceptance` finding does not go to it (step 4). The `description` is
+   `fix-verifier` followed by the ticket's identifier. The prompt is self-contained: the review worktree path, each
+   finding's `summary`, `evidence`, `rule` and `fix`, and the diff of the fix commits; leave out the implementer's
+   explanation. For each finding it re-runs the scenario recorded in `evidence` and answers two questions with
+   `file:line`:
+   1. What is that scenario's observable result now? Matching the after-state written in `fix` means **closed**;
+      anything else means **open**.
+   2. Among the changed lines of the fix diff, is there a defect that meets one of section 4's five `rule`s? If so,
+      take it through the three gates of section 4, with the previous head standing in for the fixed point at the
+      second gate; a confirmed one becomes a new finding in this round.
 
-   Two rulings: **closed** or **open**. A new window from question 2 goes through the three gates of section 4,
-   and if confirmed and blocking becomes a new finding in this round.
+   Other spellings of the same finding, lines outside the fix diff, and problems that meet no `rule` go, one line
+   each, into the report's `noticed`, which the caller treats as observations. The report has four lines at most
+   per finding, and `noticed` as its last line.
 2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added.
-3. **Mutation:** mutate only the lines the findings concern, under the rules of section 3 (one per line, cap 10),
-   with a new ledger for this round. If a previously surviving mutant's line is unchanged, rerun the same mutant;
-   this time it must be killed.
+3. **Mutation:** rerun only the mutants that survived last time; this time each must be killed. Where the line's
+   content changed, apply the same operator to the line that replaced it. Use a new ledger for this round. Lines the
+   fix added are covered by question 2 of step 1.
 4. **Acceptance diff:** read the new acceptance diff output the caller attached. The `acceptance` finding is closed
    only when `check.changed` is false; when it is true the finding stays open, and if there was none before, record
    one as a new finding in this round per section 1.
 
-Verdict: every finding closed, the live run green, every mutant on finding lines killed, the acceptance diff showing
-no change, and no new blocking finding → `pass`; otherwise `fix`. The caller controls how many fix rounds there are.
-Output follows section 6 with `mode: recheck`, and each earlier finding's `summary` is prefixed `closed` or `open`.
+Verdict: every finding closed, the live run green, every mutant that survived last time killed, the acceptance diff
+showing no change, and no new finding → `pass`; otherwise `fix`. Output follows section 6 with `mode: recheck`; each
+earlier finding's `summary` is prefixed `closed` or `open`, and every `noticed` line goes into `observations`.
+
+**A ticket gets at most two `recheck`s.** When the second one's verdict is still `fix`, write the block as usual and
+the caller marks the ticket stuck under get-to-work's rules; this round's new findings count within the same rounds
+as the earlier ones.
 
 Done when: every earlier finding has one Fix Verifier ruling with evidence (an `acceptance` finding is ruled on by
-the new acceptance diff output); the live run and mutation touched only the lines the findings concern; the verdict
-and block are written into the status record per section 6.
+the new acceptance diff output); the live run touched only the lines the findings concern, and mutation reran only
+the mutants that survived last time; every new finding of this round sits on a changed line of the fix diff and
+carries a `rule`; the verdict and block are written into the status record per section 6.
