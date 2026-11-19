@@ -57,13 +57,18 @@ Put the findings and the questions in one message for the user to rule on at onc
 questions. Every question carries a **recommended answer** with a one-line basis, so the user can reply "as
 recommended". Questions come only from the rules below; where a rule says not to ask, do not ask.
 
-**A. Component library.**
+**A. Component library.** Judged per package: in a monorepo, each frontend package is judged by its own
+dependencies and imports.
 
 - None detected → record "none"; do not ask.
 - One detected → record it as the evidence shows; do not ask.
-- Two or more detected → ask which one new code uses. Recommended answer: the one a lint rule restricting imports
-  or a migration note points to; otherwise the one with more imports. Record the others as "existing, not for new
-  use".
+- Different packages each use one → do not ask; every one is active, recorded as its own entry with a "Scope" line
+  (the package path).
+- Two or more detected in the same package → ask which one that package's new code uses. Recommended answer: the
+  one a lint rule restricting imports or a migration note points to; otherwise the one with more imports. Record
+  the others as "existing, not for new use" — that label is for this case only.
+- When an existing `ui.md` already records the ruling on this question and the evidence still matches it, do not
+  ask.
 
 **B. Shared components.** List the candidates by import count; this is a finding, not a question; the threshold for a
 candidate is the **Only the truly shared** rule in `UI-TEMPLATE.md`. The only question is about duplicate implementations: one question per group, "which copy is the source
@@ -75,6 +80,12 @@ a shared directory, with a story, or with a barrel export.
 types, story), and the mechanical check commands: where there is evidence, write what it shows and do not ask. Ask
 only when the evidence disagrees with itself (for example two shared directories both gaining new components, or
 half the components with stories and half without); the recommended answer is the practice recent commits follow.
+When an existing `ui.md` already records the ruling on this question and the evidence still matches it, do not
+ask.
+
+"The evidence still matches it" means the side the ruling chose is still in the repo (the package is still a
+dependency, the file or directory still exists, the practice still has instances) and no evidence contradicts it;
+when evidence does contradict it, raise one question for it per **Existing `ui.md`** below.
 
 **Existing `ui.md`.** On a re-run, use it as the base for comparison: content that matches the evidence, or that
 the evidence does not speak to (usually a manual edit), stays as written and raises no question. Content the
@@ -88,8 +99,10 @@ When there are no questions at all, say "no questions need a ruling" and show th
 message.
 
 Done when: the findings and every question go out in one message; every question has a recommended answer and its
-basis; the question list holds none that a rule says not to ask (no library or only one, no duplicated
-component or one an existing `ui.md` already ruled on, no conflicting convention, an instructions file that already exists).
+basis; the question list holds none that a rule says not to ask (no library or only one, different packages
+each using one library, a library question an existing `ui.md` already ruled on, no duplicated component or one an
+existing `ui.md` already ruled on, no conflicting convention or one an existing `ui.md` already ruled on, an
+instructions file that already exists).
 
 ## 3. Confirm the draft
 
@@ -102,7 +115,7 @@ Using [`UI-TEMPLATE.md`](UI-TEMPLATE.md) and the user's rulings, show two drafts
 ```markdown
 ### UI
 
-<one-line summary: the component library (or "none") and where shared components live>. See `docs/agents/ui.md`.
+<one-line summary: the component library (or "none"; with several, each with its scope) and where shared components live>. See `docs/agents/ui.md`.
 ```
 
 The user may edit the drafts directly; an edited version replaces the draft and is shown again, until the user
@@ -138,7 +151,12 @@ drafts is unchanged, word for word.
 - Which files were written or updated, and which instructions file was edited.
 - The frontend skills that read `ui.md`: `figure-out-the-ui`, `build-the-ui-right`, `actually-look-at-the-ui`,
   `make-the-ui-fast`, `make-this-shit-pretty`.
-- `ui.md` can be edited directly from now on; re-running this skill is only needed to start over.
+- `ui.md` can be edited directly from now on; re-running this skill is only needed to start over or to restore
+  `### UI`.
+- Both setups write the same `## Agent skills` block: if `### UI` is gone after a re-run of
+  `/setup-matt-pocock-skills`, ask the user to re-run `/set-up-ui-skills` to restore it. The frontend skills read
+  `docs/agents/ui.md` directly and keep working without `### UI`.
 
-Done when: the report lists the paths written and those five frontend skills, and says that `ui.md` can be edited
-directly and that a re-run is only needed to start over.
+Done when: the report lists the paths written and those five frontend skills; says that `ui.md` can be edited
+directly and that a re-run is only needed to start over or to restore `### UI`; and tells the user that if `### UI`
+is gone after re-running `/setup-matt-pocock-skills`, they should re-run `/set-up-ui-skills` to restore it.

@@ -322,6 +322,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 單頁的新元件 | new component used on a single page |
 | 鍵盤操作(行為基準第六項) | keyboard operation |
 | 業務邏輯 | business logic |
+| 適用範圍 | scope |
+| 「適用範圍」行(`ui.md`) | `Scope` line |
+| 逐 package 判定 | judged per package |
+| 現役(元件庫) | active |
 
 ## 外部語義來源
 
