@@ -23,7 +23,8 @@ status record; the host that spawned you takes only your final fixed-format repo
 - CI coverage: {covered, uncovered or no-origin}
 - Status record: {GitHub: the URL of the comment whose first line is `<!-- sorry-matt:status -->`; Local Markdown: the
   ticket file's absolute path}
-- Previous review block: {"in the status record" for a recheck or a resume after `stuck`; none for an initial review}
+- Previous review block: {"in the status record" for every recheck, and for an initial review resuming after a
+  mid-review `stuck`; none for any other initial review}
 - Reviewers: {primary, or the specialist reviewer the host added and the risk it looks at}
 - Scratchpad: {absolute path}
 

@@ -35,8 +35,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
 - **接續紀錄**：該票接續紀錄的位置 —— GitHub 是第一行為 `<!-- sorry-matt:status -->` 的那則留言，Local Markdown
   是票檔。審查區塊寫在這裡（第 6 節）。
-- **上一次的審查區塊**：複驗，或審中 `stuck` 排除後續跑（第 5 節）時，就是接續紀錄裡現在那個 `sorry-matt:review`
-  區塊，由你自己讀；初審沒有。
+- **上一次的審查區塊**：複驗一律有，初審在審中 `stuck` 排除後續跑（第 5 節）時也有：就是接續紀錄裡現在那個
+  `sorry-matt:review` 區塊，由你自己讀。其餘的初審沒有。
 - **reviewer**：預設只有 `primary`，也就是本 skill 自己的 Finder 組。
 
 逐項確認，任一項不成立就不開審，以第 6 節格式輸出 `verdict: stuck` 並寫明是哪一項：
@@ -390,7 +390,14 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" status --path <scratchpad>/revie
 
 把這個區塊寫進該票接續紀錄的「驗證結果」欄，取代上一個 `sorry-matt:review` 區塊，`round`
 遞增。被取代的區塊裡每一段 `mutation (round <n>)` 原樣帶進新區塊、放在本輪那段之前，所以初審
-的完整突變紀錄不會被複驗蓋掉；「證據路徑」欄補上 diff、實跑與突變輸出的路徑。GitHub 原地更新那則第一行是
+的完整突變紀錄不會被複驗蓋掉；「證據路徑」欄補上 diff、實跑與突變輸出的路徑。
+
+**複驗的 `stuck` 不丟掉待驗的 finding。** `mode: recheck` 的區塊結論是 `stuck`（含開審前的）時，被取代區塊的
+`findings` 每則原樣帶進新區塊（本輪已有 Fix Verifier 裁決的照第 7 節在 `summary` 前標 `closed` 或 `open`），`head`
+也沿用被取代區塊的 —— 那是下一次複驗要驗的 finding，與它算修正 diff 用的上次 head。排除後的複驗因此從同一批
+finding 與同一個上次 head 驗起，不會因為區塊裡沒有 finding 而判 `pass`。
+
+GitHub 原地更新那則第一行是
 `<!-- sorry-matt:status -->` 的留言
 （`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`）；Local
 Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agent 讀的機器紀錄，不用潤稿。

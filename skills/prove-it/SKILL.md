@@ -40,8 +40,9 @@ The caller supplies:
 - **Mode:** `initial`, or `recheck` (the recheck after a batched fix; it follows section 7).
 - **Status record:** where the ticket's status record is — on GitHub the comment whose first line is
   `<!-- sorry-matt:status -->`, on Local Markdown the ticket file. The review block goes there (section 6).
-- **Previous review block:** for a recheck, or for resuming after a mid-review `stuck` is cleared (section 5), the
-  `sorry-matt:review` block now in the status record, which you read yourself; an initial review has none.
+- **Previous review block:** a recheck always has one, and so does an initial review resuming after a mid-review
+  `stuck` is cleared (section 5): the `sorry-matt:review` block now in the status record, which you read yourself. Any
+  other initial review has none.
 - **Reviewers:** by default only `primary`, this skill's own set of Finders.
 
 Check each item; if any fails, do not open the review — output `verdict: stuck` in the section 6 format, naming
@@ -468,8 +469,16 @@ or reranked; `verdict` follows from every reviewer's findings.
 Write this block into the "verification results" field of the ticket's status record, replacing the previous
 `sorry-matt:review` block and incrementing `round`. Every `mutation (round <n>)` section of the replaced block is
 carried into the new one verbatim, ahead of this round's, so a recheck never overwrites the initial review's full
-mutation record. Add the paths of the diff, live-run, and mutation output to the "evidence paths" field. On
-GitHub, update in place the comment whose first line is `<!-- sorry-matt:status -->`
+mutation record. Add the paths of the diff, live-run, and mutation output to the "evidence paths" field.
+
+**A recheck's `stuck` keeps the findings still to verify.** When a `mode: recheck` block's verdict is `stuck` (one
+before the review opens included), each of the replaced block's `findings` is carried into the new block verbatim
+(those a Fix Verifier has already ruled on this round get the `closed` or `open` mark before their `summary`, per
+section 7), and `head` keeps the replaced block's value — those are the findings the next recheck verifies, and the
+previous head it computes the fix diff from. The recheck after clearing therefore starts from the same findings and
+the same previous head, and never passes because the block has no findings.
+
+On GitHub, update in place the comment whose first line is `<!-- sorry-matt:status -->`
 (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`); on Local Markdown, write it
 into the ticket file's `## sorry-matt status` section. This is a machine record for the next agent, with no polish
 pass.

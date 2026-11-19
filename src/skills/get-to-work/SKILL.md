@@ -365,8 +365,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    把 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單寫進該票的接續紀錄。主持人不載入 `prove-it`，只收它最後
    那段**審查回報**：至多六行，第一行 `<!-- sorry-matt:review-report -->`，含結論、finding／觀察／pre-existing 的
    數量與審查區塊的位置，不含 finding 全文。`pass` 進整併，`fix` 進集中修正，`stuck` 依回報寫的解除條件排除後
-   以同一個模式再 spawn 一次（回報的 `completed` 是 `none` 時上一次的審查區塊填 none，否則填「在接續紀錄裡」，它照
-   `prove-it` 第 5 節續跑）；原因是 `budget` 時照「預算與斷路」把該票標待裁決；其餘排除不了的 —— 含
+   以同一個模式再 spawn 一次（模式 `recheck` 時上一次的審查區塊一律填「在接續紀錄裡」；`initial` 時回報的 `completed`
+   是 `none` 填 none，否則填「在接續紀錄裡」，它照 `prove-it` 第 5 節續跑）；原因是 `budget` 時照「預算與斷路」把該票標待裁決；其餘排除不了的 —— 含
    `no Agent tool`（spawn 深度已到上限）—— 標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
    只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單，寫進交付說明的 reviewer 佔位；
    「再看一遍比較保險」不是風險。

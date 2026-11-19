@@ -19,7 +19,7 @@
 - 針對性檢查結果：{實作 agent 回報的指令與結果}
 - CI 覆蓋：{covered、uncovered 或 no-origin}
 - 接續紀錄：{GitHub：第一行為 `<!-- sorry-matt:status -->` 的留言的 URL；Local Markdown：票檔的絕對路徑}
-- 上一次的審查區塊：{複驗或 `stuck` 後續跑時寫「在接續紀錄裡」；初審寫 none}
+- 上一次的審查區塊：{複驗一律寫「在接續紀錄裡」；初審在審中 `stuck` 後續跑時也寫「在接續紀錄裡」，其餘初審寫 none}
 - reviewer：{primary，或主持人加的專項 reviewer 與它要看的風險}
 - scratchpad：{絕對路徑}
 

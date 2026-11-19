@@ -486,8 +486,9 @@ integration branch, CI runs in the background, the host does not wait, and the n
    lines at most, the first `<!-- sorry-matt:review-report -->`, holding the verdict, the counts of findings,
    observations and pre-existing items, and where the review block is — never the findings' text. `pass` goes on to
    integration, `fix` to the batched fix, and `stuck` is cleared using the condition the report states, then the
-   agent is spawned again in the same mode (with the previous review block set to none when the report's `completed`
-   is `none`, and to "in the status record" otherwise, so it resumes per `prove-it` section 5); when the reason is
+   agent is spawned again in the same mode (in mode `recheck` the previous review block is always "in the status
+   record"; in mode `initial` it is none when the report's `completed` is `none`, and "in the status record" otherwise,
+   so it resumes per `prove-it` section 5); when the reason is
    `budget`, mark the ticket awaiting ruling per "Budget and breaker"; anything else that cannot be cleared —
    `no Agent tool` (the spawn depth limit reached) included — marks the ticket stuck (`SEND-BACK.md`). **One ticket
    gets this one reviewer by default**, its lenses covering standards and spec conformance together. Add a specialist
