@@ -3,10 +3,10 @@
 The host fills in the `{…}` placeholders and hands everything below the rule to the implementation agent as its
 prompt. This file is self-contained on purpose. Where its rules overlap `ASKING.md` sections 3 and 5, the report
 limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them together. Change section 2's commit
-message format together with the aggregate PR body in `SKILL.md`'s finish. Change section 1's read-only acceptance
+message format together with the aggregate PR body in [`FINISH.md`](FINISH.md), finishing the run. Change section 1's read-only acceptance
 criteria together with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in
 [`EXPANDER.md`](EXPANDER.md), and the acceptance diff in `prove-it` section 1. Change the send-back record
-placeholder and section 1's redo rule together with the send-back for a redo in `SKILL.md`'s close-out. Sections 1
+placeholder and section 1's redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). Sections 1
 and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).
 

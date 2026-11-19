@@ -2,8 +2,8 @@
 
 主持人填好 `{…}` 佔位後，把分隔線以下的全文作為 prompt 交給實作 agent。本檔刻意自足，規則與
 `ASKING.md` 第 3、5 節、第 7 節的回報上限、`have-it-all-done` 第 0 節重疊處要一起改；第 2 節的
-commit message 格式與 `SKILL.md` 收官的總 PR body 要一起改；第 1 節的驗收只讀與 `SKILL.md` 派票的
-驗收快照、[`EXPANDER.md`](EXPANDER.md) 的展開區塊格式、`prove-it` 第 1 節的驗收比對要一起改；退回紀錄的佔位與第 1 節的重做規則和 `SKILL.md` 收票的退回重做要一起改。第 1、2 節
+commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起改；第 1 節的驗收只讀與 `SKILL.md` 派票的
+驗收快照、[`EXPANDER.md`](EXPANDER.md) 的展開區塊格式、`prove-it` 第 1 節的驗收比對要一起改；退回紀錄的佔位與第 1 節的重做規則和 [`SEND-BACK.md`](SEND-BACK.md) 的退回重做要一起改。第 1、2 節
 改寫自 `mattpocock/skills` 的 `implement` 與 `tdd`（MIT，出處與授權見
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)）。
 
