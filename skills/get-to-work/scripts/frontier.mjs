@@ -22,7 +22,8 @@
 //         not done. `Status:` alone (ready-for-human included) never makes it done.
 //         How the file is read (ticket.mjs, shared with acceptance.mjs): fenced code is skipped, so nothing
 //         inside it counts; the `Comments`, `sorry-matt ...`, `Blocked by`, completion and blocker headings
-//         count at any level, and each section runs down to the next heading of the same or a higher level.
+//         count at any level, and each section runs down to the next heading of the same or a higher level;
+//         `Comments` must be the whole title, and the ticket's own title never starts a skipped section.
 //         The GitHub issue body is read the same way. Without --ref the files are read from the working tree;
 //         with --ref they are read from that commit.
 // --line  Report only the tickets of that line (an id from `line`). With Local Markdown, done and stuck live on
