@@ -147,7 +147,11 @@ const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const SKILL = dirname(SCRIPTS);
 const SELF = join(SCRIPTS, 'tick.mjs');
 const js = (name) => join(SCRIPTS, name);
-const doc = (file, part) => ({ path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : join(SKILL, file), part });
+// `agents/<name>.md` is a plugin agent definition, two levels up from this skill (src: src/agents; dist: agents).
+const doc = (file, part) => ({
+  path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
+  part,
+});
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -474,12 +478,12 @@ const COLLECT = {
   implementing: {
     outcomes: ['green', 'red', 'blocked'],
     what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
-    reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('IMPLEMENTER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
   },
   expanding: {
     outcomes: ['reported'],
     what: (ids) => `Take the expansion agent's report for ${ids.join(', ')}. Record reported; --value lists, comma-separated, the tickets it reported as awaiting ruling (they leave the run), the others go back to candidate.`,
-    reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('EXPANDER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('agents/expander.md', 'section 4, the report it returns')],
   },
   fixing: {
     outcomes: ['fixed', 'blocked'],

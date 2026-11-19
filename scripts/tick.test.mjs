@@ -7,9 +7,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
@@ -18,6 +19,8 @@ import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.m
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const REPO = 'o/r';
 const LINE = 'r1/line-1';
@@ -651,6 +654,12 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
   };
   const strict = play(null);
   const relaxed = play(RELAXED);
+  // every file a reference names exists; the agents' reports are read from their definitions (#126)
+  for (const a of [...strict.h.log, ...relaxed.h.log])
+    for (const r of a.reference) if (r.path) assert.ok(existsSync(r.path), `${a.id}: ${r.path} exists`);
+  const collected = (stage) => strict.h.log.find((a) => a.step === 'collect' && a.meta.stage === stage).reference.map((r) => r.path);
+  assert.ok(collected('implementing').includes(join(root, 'src', 'agents', 'implementer.md')));
+  assert.ok(collected('expanding').includes(join(root, 'src', 'agents', 'expander.md')));
   const only = (a, b) => [...a.sigs].filter((x) => !b.sigs.has(x)).sort();
   assert.deepEqual(only(strict, relaxed), [
     'assignment:expand', // expand: skip
