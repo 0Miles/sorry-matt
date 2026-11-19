@@ -37,7 +37,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
   是票檔。審查區塊寫在這裡（第 6 節）。
 - **上一次的審查區塊**：複驗一律有，初審在審中 `stuck` 排除後續跑（第 5 節）時也有：就是接續紀錄裡現在那個
   `sorry-matt:review` 區塊，由你自己讀。其餘的初審沒有。
-- **reviewer**：預設只有 `primary`，也就是本 skill 自己的 Finder 組。
+- **reviewer**：預設只有 `primary`，也就是本 skill 自己的 Finder 組。`full` 級的 `architecture` 專項 reviewer 由你
+  依判級輸出的 `reviewers` 加上（第 2 節），不由呼叫方給。
 
 逐項確認，任一項不成立就不開審，以第 6 節格式輸出 `verdict: stuck` 並寫明是哪一項：
 
@@ -78,9 +79,10 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 - `finders`：第 2 節照它派 Finder。
 - `verifiers.max`、`fixVerifiers`：第 4、7 節照它合批。
 - `mutationCap`：第 3 節的突變上限；`null` 表示只動說明文字，沒有可執行的行。
+- `reviewers`：第 2 節照它決定要不要派 architecture 專項 reviewer；只有 `full` 列了 `architecture`。
 
 判級指令以非 0 結束時，`tier` 當成 `full`，`finders` 當成 `[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`，
-突變上限 10，第 4、7 節用 `--tier full`；`<scratchpad>/review-<票>-tier.err` 的路徑補進接續紀錄的「證據路徑」欄。
+突變上限 10，`reviewers` 當成 `["primary","architecture"]`，第 4、7 節用 `--tier full`；`<scratchpad>/review-<票>-tier.err` 的路徑補進接續紀錄的「證據路徑」欄。
 
 完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
 審查用 worktree 由 `worktree.mjs open` 開在 ticket 分支尖端，相依依 `install` 處理，diff 已存檔；`tier` 取自判級指令的輸出，或在它失敗時是 `full`。
@@ -91,25 +93,25 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 `description` 是 `finder` 後接票的識別碼。`pruned` 列的 lens 已依 diff 機械裁剪，不派、不寫進任何 prompt：沒有
 刪除行不派被刪除的行為，沒有規則檔涵蓋改動檔不派 repo 慣例，簽章沒變時跨檔案契約併入逐行。
 
-本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律由你以前景派送：你在自己的
+本 skill 的 finder、architect（下方）、verifier（第 4 節）與 Fix Verifier（第 7 節）一律由你以前景派送：你在自己的
 回合裡等它們全部回來才往下，而你本身也是呼叫方以前景派出的。`get-to-work` 不給審查設時限，前提就是這一條。
 spawn 被拒 —— 拿不到 Agent tool，或被 plugin 的 hook 以預算為由擋下 —— 時不重試、不換路，也不自己兼任：結論
 `stuck`，原因寫被拒的訊息，已完成的節照第 5 節留給續跑。
 
-**三者是 plugin 的 agent 定義檔。** Agent tool 的 `subagent_type` 依序是 `sorry-matt:finder`、`sorry-matt:verifier`、
-`sorry-matt:fix-verifier`；定義檔在 plugin 根目錄的 `agents/`，即本 skill base directory 往上兩層的
-`../../agents/finder.md`、`../../agents/verifier.md`、`../../agents/fix-verifier.md`。工具與固定規則（工作規則、裁決規則、
+**四者是 plugin 的 agent 定義檔。** Agent tool 的 `subagent_type` 依序是 `sorry-matt:finder`、`sorry-matt:architect`、
+`sorry-matt:verifier`、`sorry-matt:fix-verifier`；定義檔在 plugin 根目錄的 `agents/`，即本 skill base directory 往上兩層的
+`../../agents/finder.md`、`../../agents/architect.md`、`../../agents/verifier.md`、`../../agents/fix-verifier.md`。工具與固定規則（工作規則、裁決規則、
 回報格式）都在定義檔：派工只傳各節列的值（路徑、lens、候選或 finding），不重述規則，也不指定模型。定義檔的
 `tools:` 不給 Edit 與 Write，但留著 shell —— 審查要跑測試與 `git` —— 而 shell 寫得了檔，所以這不是唯讀保證：
 「審查不改這張票的 diff」仍靠定義檔的文字規則，加上第 6 節 `worktree.mjs status` 的 `git status --porcelain`
 檢查來發現。這些 agent 類型不在可用清單時改派通用 agent、不指定模型：prompt 是定義檔 frontmatter 以下的本文
 （其中的 `${CLAUDE_PLUGIN_ROOT}` 換成 plugin 根目錄的絕對路徑）接上同樣的派工內容，`description` 相同。
 
-三者的回報只有定義檔指定的欄位。推理過程、probe 的程式與輸出寫進筆記目錄 `<scratchpad>/review-<票>-notes/`
+四者的回報只有定義檔指定的欄位。推理過程、probe 的程式與輸出寫進筆記目錄 `<scratchpad>/review-<票>-notes/`
 底下的檔案（派工時給這個路徑），回報給路徑：你的 context 只收裁決要用的欄位。
 
-三者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
-`finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
+四者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
+`finder #72`、`architect #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
 這個前綴把 spawn 依角色與票分段計量；寫錯的會算成不明用途的通用 agent。
 
 - **逐行**（`line-by-line`）：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
@@ -131,10 +133,23 @@ Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktre
 `suspected`（疑似 spec 層級或既有）；`suspected` 是 `spec`（附被指定的原文）、`pre-existing`（附 fixed point 上的
 位置）或 `none`。
 
-每位 reviewer 是一組 Finder，候選帶 `by` 欄標明來自哪位。目前只有 `primary`；多一位 reviewer
-只是多一個候選來源，第 3 節以後的步驟不變。
+每位 reviewer 是一個候選來源，候選帶 `by` 欄標明來自哪位：Finder 的是 `primary`，第 1 節的 `acceptance` finding
+與第 3 節的實跑、突變候選也算 `primary`。
 
-完成判準：所有 finder 都已回報；同一行、同一失效機制的候選已去重，保留 `failure_scenario`
+**architecture 專項 reviewer。** 判級輸出的 `reviewers` 列了 `architecture`（只有 `full` 級，也就是高風險的票）時，
+在派 Finder 的同一則訊息多派一個 architect（`sorry-matt:architect`），`description` 是 `architect` 後接票的識別碼；
+其他級不派。派工內容與 Finder 相同，只是不給 lens：它的 lens —— 不變式歸屬、接縫位置、單一事實來源、失敗模式、
+能不能更簡單 —— 與回報欄位都在定義檔。它的產出以觀察為主，回報兩份清單：
+
+- `observations`：還沒有可達失效情境的架構問題，每則有 `file`、`line`、`lens`、`summary`、`evidence` 與 `cost`
+  （哪個可預見的後續改動要因此多碰哪些地方）。不經 verifier、不影響結論，照第 6 節寫進審查區塊的
+  `reviewer: architecture` 段。
+- `candidates`：已經造成使用者看得到失效的，欄位與 Finder 的候選相同，`by` 是 `architecture`。和其餘候選一起
+  去重，走第 4 節的合批與裁決。
+
+多一位 reviewer 只是多一個候選來源，第 3 節以後的步驟不變。
+
+完成判準：所有 finder 都已回報，`reviewers` 列了 `architecture` 時 architect 也已回報；同一行、同一失效機制的候選已去重，保留 `failure_scenario`
 最具體的一則；每則候選都有 `suspected`；每個 hunk 都至少經過一次逐行 lens。
 
 ## 3. 實跑與突變
@@ -261,7 +276,7 @@ Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**
 就是 blocking，附修法方向；最後一行 `noticed` 是它裁決途中看到的其他問題，由你當成觀察。引用與它標明的
 來源對不上時，才換一個 verifier 重驗。
 
-分流：
+分流（結果寫進候選 `by` 的那位 reviewer 的段落，見第 6 節；`noticed` 一律進 `primary` 段）：
 
 - **成立且 blocking** → finding，帶 `rule`。
 - **成立但不 blocking** → 觀察。
@@ -280,11 +295,11 @@ Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**
 - `fix`：至少一則成立且 blocking 的 finding；第 1 節的 `acceptance` finding 算一則。
 - `stuck`：審查做不完 —— 開審前提不成立、還原失敗、審查用 worktree 跑不起測試。寫明原因、
   解除條件，以及已完成到哪一節。開審前的 `stuck`（第 1 節）不算一次審查，排除後重跑 `initial`；
-  審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder。`stuck` 時
+  審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder 與 architect。`stuck` 時
   審查用 worktree 照第 6 節移除，續跑時由 `open` 重建。
 
 **結論以 verifier 的裁決為準。** 你把每則裁決原樣抄進區塊：finding 就是 verifier 判為 blocking 的那幾則，
-觀察就是其餘成立的。你認為某則觀察該擋下整併時，另派一個 verifier 只重判那一則的 `rule`，以它的裁決為準。
+觀察就是其餘成立的，加上 architect 回報的 `observations`（不經裁決，原樣抄進它的段落）。你認為某則觀察該擋下整併時，另派一個 verifier 只重判那一則的 `rule`，以它的裁決為準。
 
 完成判準：結論恰為三者之一，而且由第 1 節的驗收比對與第 4 節的分流推得；區塊裡每則 finding 的 `rule` 都出自
 verifier 的回報。
@@ -348,7 +363,11 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" status --path <scratchpad>/revie
 以結束代碼 3 結束的輪次，`restored` 一律 `no`。
 
 有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
-重排；`verdict` 以全部 reviewer 的 finding 推得。
+重排；`verdict` 以全部 reviewer 的 finding 推得。判級輸出的 `reviewers` 列了 `architecture` 時，`reviewer: primary` 那段
+之後接一段 `reviewer: architecture`，欄位相同：`findings`、`pre-existing` 與成立但不 blocking 的觀察來自 `by` 是
+`architecture` 的候選的裁決；它回報的 `observations` 也進這段的 `observations`，每則寫成
+`- <file>:<line> [<lens>] <summary>; cost: <cost> (evidence: <evidence>)`。finding 的編號（`F1`、`F2`…）整個區塊連續，
+不因分段重來；審查回報的 `counts` 加總全部段落。
 
 把這個區塊寫進該票接續紀錄的「驗證結果」欄，取代上一個 `sorry-matt:review` 區塊，`round`
 遞增。被取代的區塊裡每一段 `mutation (round <n>)` 原樣帶進新區塊、放在本輪那段之前，所以初審
@@ -399,7 +418,8 @@ review 或 `suggestion` 區塊；結論定案時審查用 worktree 已移除，�
 集中修正之後，呼叫方再以前景 spawn 一個審查主持 agent，模式 `recheck`；你從接續紀錄讀上一次的審查區塊。複驗只回答一個問題：上一次的每則
 finding 關上了沒有。它的範圍是那幾則 finding 與修正 commit 的 diff（`git diff <上次 head>..<ticket 分支>`），
 所以每一輪要驗的東西只會變少。審查用 worktree 照第 1 節的 `worktree.mjs open` 沿用初審那一個、移到修正後的
-ticket 分支尖端，不另建；`tier` 沿用初審的。
+ticket 分支尖端，不另建；`tier` 沿用初審的。複驗不派 Finder 與 architect：上一個區塊有 `reviewer: architecture`
+段時，本輪照樣保留這一段，它的 finding 照下面第 1 步驗。
 
 1. **Fix Verifier**：把 finding（`acceptance` finding 除外，它走第 4 步）的 `id`、`file` 寫成 JSON 陣列，以
    `node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier <沿用的 tier> --stage fix --items <scratchpad>/review-<票>-r<round>-findings.json`

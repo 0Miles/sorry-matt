@@ -19,7 +19,7 @@
 - `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
   含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
 - `agents/*.md` — plugin 自帶的 agent 定義檔(frontmatter 帶模型與工具限制),英文,plugin 實際載入的是這份。
-  本文有規則的(`prove-it` 的 `finder.md`、`verifier.md`、`fix-verifier.md`)是 dist:原稿在
+  本文有規則的(`prove-it` 的 `finder.md`、`architect.md`、`verifier.md`、`fix-verifier.md`)是 dist:原稿在
   `src/agents/<name>.md`(繁中),照 skill 的規則從 src 重寫;本文沒有規則、只叫 agent 照派工內容做的
   (`expander.md`)只有這一份。frontmatter 除 `description` 外兩版相同。`tools:` 一律列 `Bash, PowerShell`
   兩種 shell:session 缺的那個會被略過,只列 Bash 的定義檔在只有 PowerShell tool 的 session 裡一個 shell 都沒有
@@ -397,6 +397,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 合線 | join lines |
 | 索引檔 | index file |
 | 觀察(審查區塊的) | observation |
+| 專項 reviewer | specialist reviewer |
+| 不變式歸屬 | invariant ownership |
+| 接縫位置 | seam placement |
+| 單一事實來源 | single source of truth |
+| 失敗模式 | failure mode |
+| 能不能更簡單 | could it be simpler |
+| 代價(architect 觀察的 `cost`) | cost |
 | 派工內容 | spawn prompt |
 | 筆記目錄 | notes directory |
 | 工具限制 | tool restriction |

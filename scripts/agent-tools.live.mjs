@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Live test: what does the `tools:` line of a plugin agent definition give the agent in Claude Code? (#104, #82)
-// prove-it's review agents (agents/finder.md, verifier.md, fix-verifier.md) and the expansion agent rest on facts no
-// unit test can show, so this asks real headless sessions:
+// prove-it's review agents (agents/finder.md, architect.md, verifier.md, fix-verifier.md) and the expansion agent rest
+// on facts no unit test can show, so this asks real headless sessions:
 //   1. A definition's `tools:` line is the agent's whole tool set: the review definitions give no Edit and no Write
 //      tool, and a spawned agent whose `tools:` line has neither cannot call them (a control agent that has them can).
 //      They keep a shell, which can still write files: what this proves is "no Edit and Write tool", never read-only.
@@ -25,6 +25,9 @@
 // missing, while the control agent edited and created its files. A body's `${CLAUDE_PLUGIN_ROOT}` became the probe
 // plugin's directory. With PowerShell and no Bash, a `tools: Read, Bash` agent resolved to Read alone and replied
 // NO-SHELL; the review line ran PowerShell. That is why every definition lists both shells (#82, from #74).
+// agents/architect.md (#105) came after that run. Its `tools:` line is the other three's, word for word, so the spawn
+// checks above (which use a copy of the line, not the body) already cover it; its own `--agent` resolution checks run
+// from the next run on.
 // Re-run it by hand after a Claude Code upgrade that touches agents, tools or plugins, and after changing a
 // definition's `tools:` line.
 import { spawnSync } from 'node:child_process';
@@ -46,7 +49,7 @@ const git = (...args) => spawnSync('git', ['-C', repo, ...args], { encoding: 'ut
 git('init', '-q');
 git('-c', 'user.name=live', '-c', 'user.email=live@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init');
 
-const REVIEW = ['finder', 'verifier', 'fix-verifier'];
+const REVIEW = ['finder', 'architect', 'verifier', 'fix-verifier'];
 const toolsLine = (name) => {
   const m = /^tools:\s*(.*)$/m.exec(readFileSync(join(plugin, 'agents', `${name}.md`), 'utf8').replace(/\r\n/g, '\n'));
   return m ? m[1].trim() : null;

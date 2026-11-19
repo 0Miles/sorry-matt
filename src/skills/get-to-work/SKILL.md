@@ -179,7 +179,7 @@ Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時�
 識別碼（GitHub 是 `#N`，Local Markdown 是票檔名），如 `implement #72`。角色字：`expand`（展開 agent，後接它負責的
 每張票，如 `expand #75 #83`）、`implement`（實作 agent，含退回後新 spawn 的與實作中改派的）、`fix`（修正中改派的
 agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該線的整合分支）、`merge`（整併 agent）、`review`（審查主持
-agent）；它 spawn 的 `finder`、`verifier`、`fix-verifier` 寫在 `prove-it` 自己的規則裡。這些第二層的 spawn 帶的仍是
+agent）；它 spawn 的 `finder`、`architect`、`verifier`、`fix-verifier` 寫在 `prove-it` 自己的規則裡。這些第二層的 spawn 帶的仍是
 主持人的 session id，hook 照樣計進 run 的 spawn 數、到上限照樣擋下。plugin 的 hook 把每個 spawn 的 agent 類型與這個 `description`
 記進 ledger 旁的 `<run>.counters.json`，收官的分段計量（`FINISH.md`）靠這個前綴認出通用 agent 做的是哪一種工作、
 屬於哪張票：前綴寫錯的 spawn 會算進 `general-purpose`。
@@ -369,7 +369,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    是 `none` 填 none，否則填「在接續紀錄裡」，它照 `prove-it` 第 5 節續跑）；原因是 `budget` 時照「預算與斷路」把該票標待裁決；其餘排除不了的 —— 含
    `no Agent tool`（spawn 深度已到上限）—— 標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
    只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單，寫進交付說明的 reviewer 佔位；
-   「再看一遍比較保險」不是風險。
+   「再看一遍比較保險」不是風險。`full` 級的票由 `prove-it` 依判級輸出自己加 `architecture` 專項 reviewer，不寫進佔位、
+   也不記自答清單。
 
    **主持人照審查回報執行。** 審查的深度由 `prove-it` 的 `tier` 定，blocking 由它的 verifier 判；主持人的
    工作是把結論落地：`findings` 交修（步驟 3）；`observations` 或 `pre-existing` 的數量不是 0 時，只讀審查區塊的

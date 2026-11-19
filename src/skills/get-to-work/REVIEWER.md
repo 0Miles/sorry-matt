@@ -26,9 +26,9 @@
 ## 1. 主持審查
 
 呼叫 Skill tool 帶入 `prove-it`，照它全文做；上面的值就是它第 1 節的輸入，「呼叫方」指派你的主持人。finder、
-verifier 與 Fix Verifier 由你以前景 spawn，`description` 照 `prove-it` 寫；它們的回報留在你這裡。
+architect（`full` 級才有）、verifier 與 Fix Verifier 由你以前景 spawn，`description` 照 `prove-it` 寫；它們的回報留在你這裡。
 
-- 拿不到 Agent tool（spawn 深度已到上限）：不自己兼任 finder、verifier 或 Fix Verifier，照 `prove-it` 第 1 節
+- 拿不到 Agent tool（spawn 深度已到上限）：不自己兼任 finder、architect、verifier 或 Fix Verifier，照 `prove-it` 第 1 節
   輸出 `verdict: stuck`，原因 `no Agent tool`。
 - 拿不到 `prove-it`（Skill tool 沒有它）：不憑記憶審，不寫區塊，直接回報 `verdict: stuck`、`block: none`，原因
   `no prove-it`。
@@ -49,5 +49,5 @@ block: <where the review block is: the status comment's URL, or the ticket file'
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
 
-完成判準：審查照 `prove-it` 跑完或停在 `stuck`；finder、verifier 與 Fix Verifier 都是你 spawn 的各自獨立的 agent，
+完成判準：審查照 `prove-it` 跑完或停在 `stuck`；finder、architect、verifier 與 Fix Verifier 都是你 spawn 的各自獨立的 agent，
 沒有一個由你兼任；審查區塊在接續紀錄裡；最後一則訊息恰是上面的六行回報。

@@ -43,7 +43,8 @@ The caller supplies:
 - **Previous review block:** a recheck always has one, and so does an initial review resuming after a mid-review
   `stuck` is cleared (section 5): the `sorry-matt:review` block now in the status record, which you read yourself. Any
   other initial review has none.
-- **Reviewers:** by default only `primary`, this skill's own set of Finders.
+- **Reviewers:** by default only `primary`, this skill's own set of Finders. The `architecture` specialist reviewer
+  of the `full` tier is added by you from the tier output's `reviewers` (section 2), not supplied by the caller.
 
 Check each item; if any fails, do not open the review — output `verdict: stuck` in the section 6 format, naming
 which one:
@@ -95,10 +96,12 @@ header. Read the output as it is; never recompute it:
 - `finders`: section 2 dispatches Finders from it.
 - `verifiers.max`, `fixVerifiers`: sections 4 and 7 batch by them.
 - `mutationCap`: section 3's mutation cap; `null` means prose only, with no executable lines.
+- `reviewers`: section 2 decides from it whether to dispatch the architecture specialist reviewer; only `full` lists
+  `architecture`.
 
 When the tier command exits non-zero, take `tier` as `full`, `finders` as
-`[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`, the mutation cap as 10, and
-use `--tier full` in sections 4 and 7; add the path of `<scratchpad>/review-<ticket>-tier.err` to the status record's
+`[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`, the mutation cap as 10,
+`reviewers` as `["primary","architecture"]`, and use `--tier full` in sections 4 and 7; add the path of `<scratchpad>/review-<ticket>-tier.err` to the status record's
 "evidence paths" field.
 
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed
@@ -113,17 +116,17 @@ in `pruned` were pruned mechanically from the diff; dispatch them nowhere and pu
 means no deleted-behaviour lens, no rule file covering the changed files means no repo-conventions lens, and with no
 signature changed the cross-file lens is folded into line by line.
 
-This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched by you in the
+This skill's finders, the architect (below), verifiers (section 4) and Fix Verifiers (section 7) are always dispatched by you in the
 foreground: you wait within your own turn until every one of them is back, and you were yourself dispatched in the
 foreground by the caller. `get-to-work` puts no time limit on review because of this rule. When a spawn is refused —
 no Agent tool, or the plugin's hook blocks it over the budget — do not retry, take another route, or stand in
 yourself: the verdict is `stuck`, the reason is the refusal's message, and the sections already done stay for the
 resume per section 5.
 
-**All three are plugin agent definitions.** The Agent tool's `subagent_type` is `sorry-matt:finder`,
-`sorry-matt:verifier` and `sorry-matt:fix-verifier` respectively; the definitions sit in the plugin root's `agents/`,
-two levels above this skill's base directory: `../../agents/finder.md`, `../../agents/verifier.md`,
-`../../agents/fix-verifier.md`. The tools and the fixed rules (working rules, ruling rules, report format) live in the
+**All four are plugin agent definitions.** The Agent tool's `subagent_type` is `sorry-matt:finder`,
+`sorry-matt:architect`, `sorry-matt:verifier` and `sorry-matt:fix-verifier` respectively; the definitions sit in the
+plugin root's `agents/`, two levels above this skill's base directory: `../../agents/finder.md`,
+`../../agents/architect.md`, `../../agents/verifier.md`, `../../agents/fix-verifier.md`. The tools and the fixed rules (working rules, ruling rules, report format) live in the
 definitions: a spawn prompt passes only the values each section lists (paths, lenses, candidates or findings), restates no
 rule and names no model. A definition's `tools:` line gives no Edit and no Write tool, but it keeps a shell — review
 has to run tests and `git` — and a shell can write files, so this is no read-only guarantee: "review does not change
@@ -133,12 +136,13 @@ general-purpose agent instead and name no model: the prompt is the definition's 
 `${CLAUDE_PLUGIN_ROOT}` replaced by the plugin root's absolute path) followed by the same spawn prompt, under the same
 `description`.
 
-All three report only the fields their definition names. Reasoning, probe programs and probe output go into files
+All four report only the fields their definition names. Reasoning, probe programs and probe output go into files
 under the notes directory `<scratchpad>/review-<ticket>-notes/` (the spawn prompt gives this path), and the report gives
 the paths: your context holds only the fields a ruling needs.
 
-For all three, the Agent tool's `description` always starts with the role word, followed by the ticket's identifier
-(`#N` on GitHub, the ticket file name in Local Markdown): `finder #72`, `verifier #72`, `fix-verifier #72`. The
+For all four, the Agent tool's `description` always starts with the role word, followed by the ticket's identifier
+(`#N` on GitHub, the ticket file name in Local Markdown): `finder #72`, `architect #72`, `verifier #72`,
+`fix-verifier #72`. The
 plugin's hook records it in the run's counters file, and `get-to-work` relies on this prefix when finishing to break
 the run's spawns down by role and by ticket; one written wrong is counted as a general-purpose agent of unknown use.
 
@@ -166,11 +170,25 @@ report fields and the cap of six per finder are written in the definition. Each 
 pre-existing); `suspected` is `spec` (with the text that specifies it), `pre-existing` (with its location on the
 fixed point) or `none`.
 
-Each reviewer is one set of Finders, and every candidate carries a `by` field naming its reviewer. Today there is
-only `primary`; another reviewer is just another source of candidates, and everything from section 3 on stays the
-same.
+Each reviewer is one source of candidates, and every candidate carries a `by` field naming its reviewer: the
+Finders' is `primary`, and so are section 1's `acceptance` finding and section 3's live-run and mutation candidates.
 
-Done when: every finder has reported; candidates on the same line with the same failure mechanism are deduplicated,
+**The architecture specialist reviewer.** When the tier output's `reviewers` lists `architecture` (only the `full`
+tier, the high-risk tickets), dispatch one architect (`sorry-matt:architect`) in the same message as the Finders, its
+`description` being `architect` followed by the ticket's identifier; no other tier dispatches one. Its spawn prompt is
+the Finders' without a lens: its lenses — invariant ownership, seam placement, single source of truth, failure mode,
+could it be simpler — and its report fields live in the definition. Its output is mainly observations, in two lists:
+
+- `observations`: architecture problems with no reachable failure yet, each with `file`, `line`, `lens`, `summary`,
+  `evidence` and `cost` (which foreseeable later change has to touch which extra places because of it). They go
+  through no verifier and do not affect the verdict; section 6 writes them into the review block's
+  `reviewer: architecture` section.
+- `candidates`: ones that already cause a user-visible failure, with a Finder candidate's fields and `by` set to
+  `architecture`. They are deduplicated with the other candidates and go through section 4's batching and rulings.
+
+Another reviewer is just another source of candidates, and everything from section 3 on stays the same.
+
+Done when: every finder has reported, and so has the architect when `reviewers` lists `architecture`; candidates on the same line with the same failure mechanism are deduplicated,
 keeping the one with the most concrete `failure_scenario`; every candidate has a `suspected`; every hunk has been
 through the line-by-line lens at least once.
 
@@ -323,7 +341,8 @@ For every candidate in its batch a verifier reports one ruling — **confirmed**
 line, `noticed`, holds other problems it saw while ruling, which you treat as observations. Only when a
 citation does not match the source it names, have another verifier re-check that candidate.
 
-Routing:
+Routing (results go into the section of the reviewer the candidate's `by` names, see section 6; `noticed` always goes
+into the `primary` section):
 
 - **Confirmed and blocking** → a finding, carrying its `rule`.
 - **Confirmed but not blocking** → an observation.
@@ -347,11 +366,12 @@ it meets, that rule's quote and a falsifiable fix direction; every mutant has a 
   tests. State the reason, what would clear it, and which section the review reached. A `stuck` before the review
   opens (section 1) does not count as a review; once cleared, run `initial` again. A `stuck` mid-review, once
   cleared, resumes only the unfinished sections, keeping the candidates, rulings, and mutation record already in
-  the block, and dispatches no Finders again. On `stuck`, section 6 removes the review worktree, and a resumed review
+  the block, and dispatches no Finders or architect again. On `stuck`, section 6 removes the review worktree, and a resumed review
   builds it again with `open`.
 
 **The verifiers' rulings decide the verdict.** You copy each ruling into the block as it stands: the
-findings are the ones a verifier ruled blocking, the observations are the other confirmed ones. When you
+findings are the ones a verifier ruled blocking, the observations are the other confirmed ones, plus the architect's
+`observations` (not ruled on, copied into its section as they stand). When you
 think an observation should block integration, it dispatches one more verifier to rule again on that one
 candidate's `rule`, and that ruling stands.
 
@@ -424,7 +444,12 @@ worktree away and builds it again; `n/a` means this round had no review worktree
 In a round where `mutate.mjs` exited 3, `restored` is always `no`.
 
 With a second reviewer, each gets its own `reviewer:` section, and findings stay separate, never merged
-or reranked; `verdict` follows from every reviewer's findings.
+or reranked; `verdict` follows from every reviewer's findings. When the tier output's `reviewers` lists
+`architecture`, a `reviewer: architecture` section follows the `reviewer: primary` one, with the same fields: its
+`findings`, `pre-existing` and confirmed-but-not-blocking observations come from the rulings on candidates whose `by`
+is `architecture`; the `observations` it reported also go into this section's `observations`, each written as
+`- <file>:<line> [<lens>] <summary>; cost: <cost> (evidence: <evidence>)`. Finding numbers (`F1`, `F2`, ...) run on
+across the whole block, never restarting per section; the review report's `counts` add up every section.
 
 Write this block into the "verification results" field of the ticket's status record, replacing the previous
 `sorry-matt:review` block and incrementing `round`. Every `mutation (round <n>)` section of the replaced block is
@@ -484,7 +509,9 @@ previous review block from the status record. A
 recheck answers one question: is each of the previous findings closed? Its scope is those findings and the diff of
 the fix commits (`git diff <previous head>..<ticket branch>`), so each round has less to verify than the one before.
 Reuse the initial review's worktree through section 1's `worktree.mjs open`, which moves it to the fixed ticket branch
-tip; never build another. `tier` stays what the initial review set.
+tip; never build another. `tier` stays what the initial review set. A recheck dispatches no Finders and no architect:
+when the previous block has a `reviewer: architecture` section, this round keeps it, and its findings are checked by
+step 1 below.
 
 1. **Fix Verifier:** write the `id` and `file` of each finding (except an `acceptance` finding, which takes step 4)
    as a JSON array and batch them with

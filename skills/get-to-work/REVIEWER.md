@@ -31,10 +31,10 @@ status record; the host that spawned you takes only your final fixed-format repo
 ## 1. Host the review
 
 Call the Skill tool with `prove-it` and follow it in full; the values above are its section 1 inputs, and "the caller"
-is the host that spawned you. You spawn the finders, verifiers and Fix Verifiers in the foreground, with the
+is the host that spawned you. You spawn the finders, the architect (`full` tier only), verifiers and Fix Verifiers in the foreground, with the
 `description` `prove-it` gives; their reports stay with you.
 
-- No Agent tool (the spawn depth limit is reached): do not stand in as finder, verifier or Fix Verifier; output
+- No Agent tool (the spawn depth limit is reached): do not stand in as finder, architect, verifier or Fix Verifier; output
   `verdict: stuck` per `prove-it` section 1, reason `no Agent tool`.
 - No `prove-it` (the Skill tool does not offer it): do not review from memory and write no block; report
   `verdict: stuck` with `block: none`, reason `no prove-it`.
@@ -57,6 +57,6 @@ block: <where the review block is: the status comment's URL, or the ticket file'
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
 
-Done when: the review ran through `prove-it` or stopped at `stuck`; the finders, verifiers and Fix Verifiers are each
-a separate agent you spawned, none of them stood in for by you; the review block is in the status record; the last
+Done when: the review ran through `prove-it` or stopped at `stuck`; the finders, architect, verifiers and Fix Verifiers are
+each a separate agent you spawned, none of them stood in for by you; the review block is in the status record; the last
 message is exactly the six-line report above.
