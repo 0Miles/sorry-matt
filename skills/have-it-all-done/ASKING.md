@@ -235,7 +235,8 @@ is exactly the active marker, with no blank line before it. Ten fields:
 3. The risk gate's three lights and the clearance record.
 4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
    `get-to-work` section 1, reading CI); the base SHA `get-to-work` synced in when finishing the run (when
-   unsynced, the base SHA it tried and "unsynced").
+   unsynced, the base SHA it tried and "unsynced"); the **per-SHA local verification records** (format and rules:
+   `get-to-work` section 2 step 3, "local verification"). A record line starts with `local:`, never with `rule:` or `budget:`.
 5. Authorization outcomes: every action needing authority or confirmation (section 5) that was sent, and the
    permission verdict or confirmation result, with a permission rule snippet or the command to run for each
    blocked one.

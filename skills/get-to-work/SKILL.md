@@ -116,6 +116,12 @@ one result, classified in this order, the first match winning; record the result
 - **Cancelled:** some run is `cancelled`. `gh run rerun <databaseId>`, and treat it as still running.
 - **Green:** anything else — every run is `completed`, with `conclusion` `success`, `skipped` or `neutral`.
 
+**Lines on local verification.** In the pipeline, a line with no `origin`, or one settled as not covered by CI, has
+no CI to read: at the moments it would have been read — a dispatch point; every wake-up while the line is in
+red-light handling — run the "local verification" of section 2 step 3 on the integration branch's latest SHA
+(`git rev-parse <integration branch>`) instead, and record it. A line whose local verification is red is treated exactly like a
+line whose CI is red, and goes through the red-light handling below.
+
 **Red-light handling.** A red line **dispatches nothing new** and its **integration queue pauses** until it is green
 or the culprit is reverted. Tickets in flight keep implementing, being reviewed and being fixed, and those that pass
 review wait in the queue; the red-light fixes and reverts below do not queue. Integrating another ticket onto a red
@@ -125,16 +131,27 @@ the fix leave it red, map the red back to the original ticket by mistake.
 1. **Earliest red SHA:** aggregate `gh run list --branch <integration branch> --limit 200 --json
    headSha,status,conclusion` by `headSha`, classifying each SHA as above; walking
    `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red
-   SHA — the nearest SHA before it with a verdict is green.
+   SHA — the nearest SHA before it with a verdict is green. On a line with CI, a local verification record whose
+   reason is `no-verdict` (section 2 step 3) counts as that SHA's verdict and is judged together with the other
+   SHAs' CI verdicts; the lower bound is still the nearest SHA with a verdict that is green. A line on local
+   verification runs no `gh run list`;
+   read the per-SHA local verification records in ledger field 4 instead: walking
+   `git log --first-parent --format=%H <integration branch>` from newest to oldest, find the earliest red SHA — the
+   nearest recorded SHA before it is green; with no earlier green record, the lower bound is
+   `git merge-base <integration branch> <base branch>`.
 2. **Map it to a ticket:** `git log --merges --first-parent --format='%H %s' <previous green SHA>..<earliest red SHA>`
    lists that stretch's merge commits; map them by the rules in the header of `scripts/review-guide.mjs` (the
    merge SHAs recorded in the ledger's reconciliation table come first; only tickets with no recorded SHA fall back
    to the subject). The host's commits — completion records, stuck records, tickets filed along the
    way — are not merges, so landing in between changes nothing. With several tickets (the pushes between them have
    no verdict), start from the earliest. With no merge mapped to a ticket — the red came from a host commit, the
-   simplify pass or the base sync — it **maps to no ticket**.
+   simplify pass or the base sync — it **maps to no ticket**. A line on local verification uses the same command
+   and rules, putting point 1's lower bound in when there is no previous green SHA.
 3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
-   lines.
+   lines. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
+   CI): while running the checks, save their output to
+   `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log` (in the shared directory, next to the ledger); the red one
+   is the failure output, and the host takes only the failing lines.
 4. **Fix, two rounds at most:** when it maps to a ticket, hand it back to that ticket's original agent (if it is gone,
    spawn a new one per `IMPLEMENTER.md` with the failure summary attached to the ticket text), to fix on a
    `<run>/<NN>-<slug>-ci` branch freshly cut from the integration branch: the CI failure is the finding, and it goes
@@ -143,7 +160,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
    integration worktree, commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies. A
    fix agent stopped for running over its time limit counts as a round too (time limits).
    Every fix round ends with a push (skipped with no `origin`), and the next verification gives its result: in the
-   pipeline that is the next CI read; when finishing the run, it is section 2 step 3 verifying again on the spot.
+   pipeline that is the next CI read (for a line on local verification, the local verification run then, on the new
+   SHA); when finishing the run, it is section 2 step 3 verifying again on the spot.
 5. **Still red after two rounds, mapped to a ticket: revert.** `git revert -m 1 <that ticket's merge commit>`, and
    take back its completion record:
    - **GitHub:** file the raw issue per close-out's "mark it stuck"; later dispatch points move the ticket from
@@ -170,7 +188,9 @@ the fix leave it red, map the red back to the original ticket by mistake.
    are closed out as usual, and the queue no longer pauses for the red. In the pipeline, this triggers a dispatch
    point, so the budget and the stop conditions are judged as usual.
 
-Done when: every line due a CI read had its latest SHA's result read and recorded in the ledger; a red line
+Done when: every line due a CI read had its latest SHA's result read and recorded in the ledger; on a line on local
+verification, every SHA verified has a record in ledger field 4, and so does a `no-verdict` local verification on a
+line with CI; a red line
 dispatched nothing new and advanced no integration queue until it was green or reverted; a reverted ticket and the
 integrated tickets depending on it are out of `--done`, their reconciliation rows marked stuck or gap, with the
 tickets in flight depending on it awaiting ruling and naming the upstream revert; a line that failed verification
@@ -289,8 +309,8 @@ is before it is **overdue**. For each overdue agent:
      stopped for running over its time limit, its commits and uncommitted changes are left for the new agent to
      judge whether to build on, and an existing status record is taken over and updated in place; for fixing, also
      attach that round's findings. For expanding, give the tickets it covered that still have no expansion block to a
-     new expansion agent. A reassignment is a new assignment: record it as above, replace the agent id in the
-     reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
+     new expansion agent, spawned the way step 1 of dispatch says. A reassignment is a new assignment: record it as
+     above, replace the agent id in the reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
      blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
    - **This stage was already reassigned for a timeout** → for implementing and fixing, **mark it stuck**, giving the
      two timeouts as the reason; expanding tickets are marked **awaiting ruling**.
@@ -374,7 +394,10 @@ candidate, in order:
    a ticket whose full expansion was deferred until it reached the frontier) go to an **expansion agent**: read
    the sibling [`EXPANDER.md`](EXPANDER.md), fill its placeholders with every such ticket at this dispatch point, and
    spawn one expansion agent in the background with the filled-in text as its prompt, adding no rules of your own.
-   It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
+   The Agent tool's `subagent_type` is `sorry-matt:expander` — the plugin's agent definition file
+   `agents/expander.md`, which sets the expansion agent's model and tools, so the host specifies neither. When that
+   agent type is not in the available list, use a general-purpose agent instead, with no model specified and the
+   same prompt. It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
    point's number (field 9). These tickets move to the expanding stage and go no further at this dispatch point, so
    the next dispatch point does not spawn an expansion for them again. The expansion agent's report triggers a
    dispatch point, where they return to candidate and re-run the script from this step; a ticket still true, or
@@ -601,8 +624,20 @@ Every line passes **three line-level gates** first, in this order:
 
    **Local verification** (this skill's one source of truth for it; everywhere else points here): with no `origin`, a
    line settled as not covered by CI, or no verdict for this SHA (a failed query, or still no run on the second read),
-   run the repository's full checks locally once on this SHA instead, and the report says which case it was. A local
-   red is fixed per points 4–6 of the red-light handling, where the next verification is a local re-run on the new
+   run the repository's full checks locally once on this SHA instead, and the report says which case it was. Run
+   them in the integration worktree while its tree is exactly this SHA: when finishing the run, wait for a merge
+   agent still resolving a conflict; at a dispatch point or wake-up in the pipeline, when the integration worktree's
+   tree is not this SHA (an integration is under way), do not wait and do not verify this time — the line keeps its
+   previous result, dispatching as usual unless it is in red-light handling — and the dispatch point that
+   integration triggers verifies the then-latest SHA. Lines in the first two cases are verified per SHA throughout the pipeline, per
+   section 1, reading CI, not only when finishing the run.
+
+   **Every local verification appends one per-SHA local verification record for the line to ledger field 4**, a
+   single line: `local: <integration branch> <full SHA> <green or red> <reason>` — the leading `local:` says the
+   source is local, and the reason is `no-origin`, `ci-not-covering` or `no-verdict` (the three cases above). One
+   record per SHA, and a new record never overwrites an old one; a SHA that already has a record is not re-run,
+   and that record's result stands. Save the output as the checks run (red-light handling point 3). A local red goes
+   through the whole of section 1's red-light handling (points 1–6); after each fix round, re-run locally on the new
    SHA.
 
    The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
@@ -739,8 +774,10 @@ own commit, mixed into no ticket's commits; the aggregate PR body has a per-tick
 `review-guide.mjs` output, giving every completed ticket, in blocker order, a clickable commit range, a summary and
 its status-record link, with the threshold notice at the top when `size.over` is true; the full verification is
 the CI result for the latest SHA of the integration branch synced to the latest base, or, under step 3's
-local-verification conditions, a local run on that same SHA with the reason reported, and its report names the
-verified SHA and the base SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified
+local-verification conditions, a local run on that same SHA with the reason reported; on a line on local
+verification, every SHA verified has a record in ledger field 4, and so does the `no-verdict` one on a line with CI;
+its report names the verified SHA and the base
+SHA; an unsynced line names its conflicting files and the base SHA it tried, was verified
 on its unsynced tree, and is left for a human to merge; every line has exactly one human-mergeable delivery, or
 was merged after the permission settings let it through (through the merge queue when the base has one) and
 reported; every completed ticket of a merged aggregate PR is closed, and where an aggregate PR is left to a human
