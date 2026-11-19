@@ -356,7 +356,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    重讀該票（Local Markdown 改用 `--ref <ticket 分支>`），輸出存檔。結束代碼 3 表示快照本身被改過，
    輸出照樣存檔交給審查，`check.changed` 為 true。再呼叫 Skill tool 帶入 `prove-it`，模式
    `initial`，傳入票（識別碼、原票票面與展開區塊）、驗收快照與比對輸出的路徑、fixed point（該線
-   整合分支）、ticket 分支與步驟 1 的針對性檢查結果。它由審查方做實跑與只限
+   整合分支）、ticket 分支、步驟 1 的針對性檢查結果，以及這條線的 CI 覆蓋 —— 沒有 `origin` 傳 `no-origin`，已定案為
+   CI 不涵蓋整合分支傳 `uncovered`，其餘傳 `covered`；有 CI 的線審查只跑受影響範圍，全套留給整併後的 CI。它由審查方做實跑與只限
    本票 diff 的突變，輸出 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單，並寫進該票的
    接續紀錄。`pass` 進整併，`fix` 進集中修正，`stuck` 依它寫的解除條件排除後，照 `prove-it` 第 5 節
    重新呼叫；排除不了就標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
@@ -368,7 +369,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    這張票照 `verdict` 往下走。
 3. **集中修正**：把審查區塊的 `findings` 一次全部交回保有 context 的原 agent，交的就是那幾則的 `summary`、
    `evidence` 與 `fix` 原文；修正的範圍是關上這幾則，一輪修完。修完重跑受影響範圍的針對性檢查與驗收比對，
-   再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，附上一次的審查區塊與新的比對輸出：它只驗這幾則關上了沒有。
+   再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，附上一次的審查區塊、新的比對輸出與同一個 CI 覆蓋：它只驗這幾則關上了沒有。
    **一張票至多兩輪修正**，輪數記在對帳表該票的驗證結果；複驗帶出的新 finding 算進同一個輪數。第二輪的
    `recheck` 仍是 `fix` 就標卡住（`SEND-BACK.md`），卡住紀錄附還開著的 finding。
 

@@ -20,7 +20,8 @@
 - **Local Markdown**：在整合分支的原 ticket 追加 `## sorry-matt blocker`，列出原因、已做嘗試
   與相關分支；將 `Status` 改為 `ready-for-human` 後 commit。
 
-完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支。主持人在整合分支上的其他 commit（卡住紀錄、
+完成卡住紀錄後也移除 ticket worktree 與本地 ticket 分支；`prove-it` 的審查用 worktree（`<scratchpad>/review-<票>`）
+還在時，以 `git -C <repo> worktree remove --force <scratchpad>/review-<票>` 一併移除。主持人在整合分支上的其他 commit（卡住紀錄、
 期間開票）在那次喚醒結束前一併 push。
 
 完成判準：每張退回的票都有 `sent-back` ref、接續紀錄裡的退回紀錄、對帳表的退回次數與加寬的預計檔案，且至多退回一次。

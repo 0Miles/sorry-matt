@@ -28,7 +28,9 @@ A ticket is sent back once at most: if, after the redo, its conflict again canno
 - **Local Markdown:** append `## sorry-matt blocker` to the original ticket on the integration branch with the
   reason, attempted remedies, and relevant branches; set `Status` to `ready-for-human` and commit it.
 
-After recording the stuck state, also remove the ticket worktree and local ticket branch. Push the host's other
+After recording the stuck state, also remove the ticket worktree and local ticket branch; if `prove-it`'s review
+worktree (`<scratchpad>/review-<ticket>`) is still there, remove it too with
+`git -C <repo> worktree remove --force <scratchpad>/review-<ticket>`. Push the host's other
 commits on the integration branch (stuck records, tickets filed along the way) before that wake-up ends.
 
 Done when: every ticket sent back has its `sent-back` ref, a
