@@ -246,25 +246,26 @@ test('cli local: a snapshot taken on the integration branch is checked against t
   }
 });
 
+// The criterion texts of a Local Markdown ticket read from the working tree.
+const textsOf = (text) => localAcceptance({ path: 't.md', text, source: 'worktree' }).items.map((i) => i.text);
+
 test('fenced code is not a criterion, in the acceptance section or in the checkbox fallback', () => {
-  const at = (text) => localAcceptance({ path: 't.md', text, source: 'worktree' }).items.map((i) => i.text);
-  assert.deepEqual(at('## Acceptance criteria\n\n- [ ] Real one\n\n```markdown\n- [ ] Example inside a fence\n```\n'), ['Real one']);
-  assert.deepEqual(at('# 01: X\n\n~~~\n- [ ] Fenced\n~~~\n\n- [ ] Real\n'), ['Real']);
+  assert.deepEqual(textsOf('## Acceptance criteria\n\n- [ ] Real one\n\n```markdown\n- [ ] Example inside a fence\n```\n'), ['Real one']);
+  assert.deepEqual(textsOf('# 01: X\n\n~~~\n- [ ] Fenced\n~~~\n\n- [ ] Real\n'), ['Real']);
 });
 
 test('headings: a Comments section ends at the same level, a closing # run is not the title, a heading ends an item', () => {
-  const at = (text) => localAcceptance({ path: 't.md', text, source: 'worktree' }).items.map((i) => i.text);
-  assert.deepEqual(at('# 01: x\n\n## Comments\n\nlooks good\n\n## Acceptance criteria\n\n- [ ] Still open\n'), ['Still open']);
-  assert.deepEqual(at('# 01: x\n\n## Acceptance criteria ##\n\n- it works\n'), ['it works']);
+  assert.deepEqual(textsOf('# 01: x\n\n## Comments\n\nlooks good\n\n## Acceptance criteria\n\n- [ ] Still open\n'), ['Still open']);
+  assert.deepEqual(textsOf('# 01: x\n\n## Acceptance criteria ##\n\n- it works\n'), ['it works']);
   assert.deepEqual(
     localAcceptance({ path: 't.md', text: '# 03: x\n\n## Acceptance criteria\n\n- [ ] it works\n### Notes\n\nmore\n', source: 'worktree' }).items,
     [{ from: 'original', text: 'it works' }],
   );
   // The ticket title never opens a skipped section, and only `Comments` exactly is skipped.
-  assert.deepEqual(at('# Comments vanish on reload\n\n- [ ] Comments persist\n'), ['Comments persist']);
-  assert.deepEqual(at('# 01: x\n\n## Comments API\n\n- [ ] endpoint returns 200\n'), ['endpoint returns 200']);
+  assert.deepEqual(textsOf('# Comments vanish on reload\n\n- [ ] Comments persist\n'), ['Comments persist']);
+  assert.deepEqual(textsOf('# 01: x\n\n## Comments API\n\n- [ ] endpoint returns 200\n'), ['endpoint returns 200']);
   // Inline code opening with three backticks is not a fence.
-  assert.deepEqual(at('# 01: x\n\n```npm test``` runs first.\n\n- [ ] Tests pass\n'), ['Tests pass']);
+  assert.deepEqual(textsOf('# 01: x\n\n```npm test``` runs first.\n\n- [ ] Tests pass\n'), ['Tests pass']);
 });
 
 test('compare: an expansion criterion re-attributed to another round or author is a change', () => {

@@ -181,7 +181,7 @@ function blockerRefs(own) {
   const listed = section(own, (t) => /^blocked by$/i.test(t));
   const inline = field(lines(own).join('\n'), 'Blocked by');
   const items = listed
-    ? lines(listed).filter((l) => /^\s*[-*]\s+/.test(l)).map((l) => l.replace(/^\s*[-*]\s+/, ''))
+    ? lines(listed).flatMap((l) => /^\s*[-*]\s+(.*)$/.exec(l)?.[1] ?? [])
     : inline
       ? [inline]
       : [];
