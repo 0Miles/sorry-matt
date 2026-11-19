@@ -10,25 +10,36 @@ review wait in the queue; the red-light fixes and reverts below do not queue. In
 line would carry the same red into every SHA after the earliest red one, hide the new ticket's own red, and, should
 the fix leave it red, map the red back to the original ticket by mistake.
 
-1. **Earliest red SHA:** aggregate `gh run list --branch <integration branch> --limit 200 --json
-   headSha,status,conclusion` by `headSha`, classifying each SHA by the result classification in `SKILL.md`, reading CI; walking
-   `git log --first-parent --format=%H origin/<integration branch>` from newest to oldest, find the earliest red
-   SHA — the nearest SHA before it with a verdict is green. On a line with CI, a local verification record whose
-   reason is `no-verdict` (`SKILL.md`, reading CI, local verification) counts as that SHA's verdict and is judged together with the other
-   SHAs' CI verdicts; the lower bound is still the nearest SHA with a verdict that is green. A line on local
-   verification runs no `gh run list`;
-   read the per-SHA local verification records in ledger field 4 instead: walking
-   `git log --first-parent --format=%H <integration branch>` from newest to oldest, find the earliest red SHA — the
-   nearest recorded SHA before it is green; with no earlier green record, the lower bound is
-   `git merge-base <integration branch> <base branch>`.
-2. **Map it to a ticket:** `git log --merges --first-parent --format='%H %s' <previous green SHA>..<earliest red SHA>`
-   lists that stretch's merge commits; map them by the rules in the header of `scripts/review-guide.mjs` (the
+1. **Earliest red SHA:** this skill's `scripts/ci.mjs` works it out; do not walk the log yourself. Write a plan file
+   for the line, `sorry-matt/runs/<run>/ci/<line-slug>.plan.json`: `worktree` is the integration worktree, `line`
+   the integration branch, `base` the base branch; `ci` is `true` on a line with CI and `false` on a line on local
+   verification (the script then never calls `gh` and walks the local integration branch); `local` is this line's
+   per-SHA local verification records from ledger field 4, each line copied whole (on a line with CI, the ones
+   whose reason is `no-verdict` are copied too); `tickets` is the tickets integrated into this line, each with its
+   `id`, its branch as `branch`, and the merge SHAs recorded in the ledger's reconciliation table as `merges`. Save
+   the output under the same name with `.json`:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" earliest-red <plan file>
+   ```
+
+   The output format is in the script's header. `earliestRed` is the earliest red SHA, and `lowerBound` is the
+   stretch's lower bound: the nearest SHA before it with a verdict that is green (`kind` is `green`); with no
+   earlier green, the merge base of the integration branch and the base branch (`kind` is `merge-base`), on a line
+   with CI as well. A local verification record counts as that SHA's verdict and is judged together with the other
+   SHAs' CI verdicts. When the output's `ci` is `query-failed`, only the local verification records were judged
+   this time; record `error` as reading CI does for a failed query. When `earliestRed` is `null` (no SHA has a
+   verdict, or the newest SHA with one is green), map nothing this time: in the pipeline, read the line again per
+   reading CI at the next wake-up; finishing the run ([`FINISH.md`](FINISH.md) step 3) has no next wake-up, so run
+   `earliest-red` again on the spot, and if it is still `null`, treat the red as **mapping to no ticket** and go
+   through points 3–6.
+2. **Map it to a ticket:** the same output's `tickets` is the tickets owning the merge commits between `lowerBound`
+   and `earliestRed`, oldest first; the mapping rules are in the header of `scripts/review-guide.mjs` (the
    merge SHAs recorded in the ledger's reconciliation table come first; only tickets with no recorded SHA fall back
    to the subject). The host's commits — completion records, stuck records, tickets filed along the
    way — are not merges, so landing in between changes nothing. With several tickets (the pushes between them have
-   no verdict), start from the earliest. With no merge mapped to a ticket — the red came from a host commit, the
-   simplify pass or the base sync — it **maps to no ticket**. A line on local verification uses the same command
-   and rules, putting point 1's lower bound in when there is no previous green SHA.
+   no verdict), start from the earliest, which is the first one. When `unmatched` is `true` — the red came from a
+   host commit, the simplify pass or the base sync — it **maps to no ticket**.
 3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
    lines. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
    CI): while running the checks, save their output to

@@ -19,6 +19,8 @@
 //   `tickets` are the tickets merged into the line, delivered or not. `blockedBy` edges to ids not listed are
 //   ignored.
 //
+// The matching rules below are implemented in merges.mjs, which ci.mjs shares.
+//
 // The walk is `git log --first-parent <base>..<line>`, oldest first. A two-parent merge belongs to tickets by the
 // first rule that matches:
 //   1. sha:    its SHA is in a ticket's `merges` (the merge SHAs the host recorded in the reconciliation table).
@@ -70,19 +72,12 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { subjectIds, ticketOwners } from './merges.mjs';
+
+export { subjectIds };
 
 export const FORMAT = 'sorry-matt/review-guide@1';
 export const DEFAULT_THRESHOLD = 400;
-
-const BRANCH_SUBJECT = /^Merge branch '([^']+)'/;
-const ID_SUBJECT = /^Merge (\S+?)(?=[\s:(]|$)(?:\s*\(([^)]*)\))?/;
-
-/** The ticket ids a merge subject names under rule 3: the leading id and its `(+<id>)` aliases. */
-export function subjectIds(subject) {
-  const m = ID_SUBJECT.exec(subject);
-  if (!m || m[1] === 'branch') return [];
-  return [m[1], ...[...(m[2] ?? '').matchAll(/\+\s*([^\s,)]+)/g)].map((a) => a[1])];
-}
 
 const strings = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x);
 
@@ -191,26 +186,8 @@ export function buildGuide(plan, git) {
     ([h, tree, p, ...s]) => ({ sha: h, tree, parents: p.split(' ').filter(Boolean), subject: s.join('\t') }),
   );
 
-  // Rule 1: recorded merge SHAs.
-  const bySha = new Map();
-  for (const t of plan.tickets) {
-    for (const ref of t.merges) {
-      const full = sha(ref);
-      bySha.set(full, [...(bySha.get(full) ?? []), t]);
-    }
-  }
-  // Rules 2 and 3: only tickets without recorded SHAs.
-  const unrecorded = plan.tickets.filter((t) => !t.merges.length);
-  const byBranch = new Map(unrecorded.filter((t) => t.branch).map((t) => [t.branch, t]));
-  const byId = new Map(unrecorded.map((t) => [t.id, t]));
-  const owners = (c) => {
-    if (bySha.has(c.sha)) return { owners: bySha.get(c.sha), matchedBy: 'sha' };
-    const branch = (BRANCH_SUBJECT.exec(c.subject) || [])[1];
-    const byB = branch && (byBranch.get(branch) || byBranch.get(branch.replace(/-ci$/, '')));
-    if (byB) return { owners: [byB], matchedBy: 'branch' };
-    const byI = subjectIds(c.subject).map((id) => byId.get(id)).filter(Boolean);
-    return { owners: [...new Set(byI)], matchedBy: 'id' };
-  };
+  // The three matching rules live in merges.mjs, shared with ci.mjs.
+  const { owners, recorded: bySha } = ticketOwners(plan.tickets, sha);
 
   const merges = new Map(plan.tickets.map((t) => [t.id, []]));
   const firstMerge = new Map();
@@ -223,7 +200,7 @@ export function buildGuide(plan, git) {
       lineCommits.push({ kind: 'commit', ...entry, resolved: null, remergeDiff: null });
       return;
     }
-    const match = c.parents.length === 2 ? owners(c) : { owners: [] };
+    const match = owners(c);
     if (match.owners.length) {
       walked.add(c.sha);
       const [p1, p2] = c.parents;
