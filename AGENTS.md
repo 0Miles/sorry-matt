@@ -6,7 +6,7 @@
 - `src/skills/<name>/agents/openai.yaml` — OpenAI UI 與 invocation metadata 原稿
 - `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
 - `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,或多個 skill
-  共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
+  共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`,以及 `get-to-work` 的 `RED-LIGHT.md`、`TIMEOUTS.md`、`SEND-BACK.md`、`FINISH.md`;
   `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀;
   `build-the-ui-right/FRONTEND.md` 由五支前端 skill 共讀)
 - `src/skills/<name>/scripts/` — skill 執行(不載入)的零依賴腳本,由 `SKILL.md` 以

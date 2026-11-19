@@ -236,7 +236,7 @@ is exactly the active marker, with no blank line before it. Ten fields:
 4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
    `get-to-work` section 1, reading CI); the base SHA `get-to-work` synced in when finishing the run (when
    unsynced, the base SHA it tried and "unsynced"); the **per-SHA local verification records** (format and rules:
-   `get-to-work` section 2 step 3, "local verification"). A record line starts with `local:`, never with `rule:` or `budget:`.
+   `get-to-work`'s `SKILL.md`, section 1, reading CI, "local verification"). A record line starts with `local:`, never with `rule:` or `budget:`.
 5. Authorization outcomes: every action needing authority or confirmation (section 5) that was sent, and the
    permission verdict or confirmation result, with a permission rule snippet or the command to run for each
    blocked one.
@@ -282,7 +282,7 @@ is exactly the active marker, with no blank line before it. Ten fields:
     over (for example, `have-it-all-done` taking over a ledger that a standalone `get-to-work` created). List the
     `SKILL.md` loaded through the Skill tool too: compaction re-attaches only its first 5,000 tokens. Files read only
     at one step to fill in a hand-off (`EXPANDER.md`, `IMPLEMENTER.md`, `TEMPLATES.md`, and the like) are not
-    listed: the step that uses one reads it again anyway. The hook collects every `rule: <absolute path>` line in
+    listed: the step that uses one reads it again anyway. `get-to-work`'s `RED-LIGHT.md`, `TIMEOUTS.md`, `SEND-BACK.md` and `FINISH.md` are not listed in field 10 either: the step that reaches that branch reads the file again. The hook collects every `rule: <absolute path>` line in
     the whole ledger, so no other field starts a line with `rule:`.
 
 When the common directory is not writable, or the current directory is not inside a git repo, there is no ledger —
