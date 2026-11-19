@@ -49,7 +49,7 @@ commit message 格式與 [`FINISH.md`](FINISH.md) 收官的總 PR body 要一起
   「Failures only」讀輸出；是 none，或那份檔的「Targeted checks」寫 `none` 時，自己從 manifest 與 CI 設定找指令，
   回報的來源寫 `self-found`。
 - **指令輸出先縮小再讀**：測試、build 與 lint 的輸出只把失敗的行與結尾摘要讀進 context；全綠時只留摘要
-  那一行。契約有「Failures only」時用它的寫法。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外或不 commit，回報與接續紀錄只給路徑。
+  那一行。契約有「Failures only」時用它的寫法。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外，或放在被 ignore 的路徑，回報與接續紀錄只給路徑。
   只留失敗的行看不出原因時，可以再讀該失敗前後的片段，不讀整份輸出。通過與否以指令本身的結束狀態判定，
   而且在任何過濾之前取得 —— 接了管線，拿到的是過濾器的結束狀態；沒有失敗的行或沒有摘要不代表綠。
 - 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收票

@@ -141,13 +141,19 @@ node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" verdict <整合分支> <SHA>
 與每張票收票結束把 ledger 寫到最新時（只做步驟 1；進展與上限只在派票點判）。
 
 1. **更新用量**：照 `ASKING.md` 第 7 節第 9 欄更新 spawn 數與經過時間（開始時間的記法也在那裡）。
-2. **判進展**：「一次」是一個派票點。等 agents 的喚醒、只推進收票的喚醒都不算。比對上個派票點記下的進度
-   快照 —— 每條線整合分支的 tip SHA，與對帳表中已到終局（已交付、卡住、待裁決）的票：兩者都沒變，連續
-   無進展次數加一；任何一項變了就歸零。票在終局之前的階段之間移動，或被退回重做，都不算
-   進展；ticket 分支上的 commit 也不算：沒整併的嘗試沒有改變任何交付。然後把這次的快照記進第 9 欄；第一個
-   派票點只記快照。
-3. **判上限**：派票點次數達到 `rounds`、spawn 數達到 `spawns`、經過時間達到 `hours`，或連續無進展
-   次數達到 `no-progress`，就**停下**。沒停下才把派票點次數加一，往下派票。
+2. **判進展與上限**：由本 skill 的 `scripts/deadline.mjs` 判，不自己比：
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" progress <plan.json>
+   ```
+
+   計畫檔由你寫，格式與判法在腳本檔頭：第 9 欄記的上個派票點的進度快照（第一個派票點是 `null`）、現在每條線
+   整合分支的 tip SHA、對帳表中已到終局（已交付、卡住、待裁決）的票、第 9 欄原本的連續無進展次數、用量
+   （派票點次數、spawn 數、步驟 1 算好的經過時間）與四個上限。只在派票點跑：等 agents 的喚醒、只推進收票的
+   喚醒都不跑。輸入只有 tip 與終局票 —— 票在終局之前的階段之間移動、被退回重做、ticket 分支上的 commit 都
+   不在裡面：沒整併的嘗試沒有改變任何交付。
+3. **照輸出做**：把 `noProgress`（連續無進展次數）與 `snapshot`（這次的進度快照）記進第 9 欄。`stop` 是
+   `true` 就**停下**，`stoppedBy` 列出停在哪幾個上限；是 `false` 才把派票點次數記成輸出的 `rounds`，往下派票。
 
 **停下**：這個派票點不派票、不展開，之後也不再有派票點。在途的票照「收票」收到整併、卡住或退回為止，讀 CI
 與紅燈處置（`RED-LIGHT.md`）照常；退回的票不再派。凍結票集中沒派過的（含展開中的）、退回後等重派的、spawn 被擋下的票標**待裁決**，原因寫
@@ -179,42 +185,66 @@ agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該
 **階段時限**是 ledger 第 9 欄的四行 `budget:`，單位分鐘（`ASKING.md` 第 7 節）：`timeout-implement`（實作中）、
 `timeout-fix`（修正中，含紅燈修正）、`timeout-expand`（展開中）、`timeout-merge`（整併中的整併 agent）。
 
-**派送紀錄**：每次派送時在對帳表該票那一列記下（一個展開 agent 負責的每張票都記）：
+**派送紀錄**：每次派送時以本 skill 的 `scripts/deadline.mjs` 算出，連同 agent id 與 agent 類型抄進對帳表該票那一列（一個
+展開 agent 負責的每張票都記）：
 
-- agent id、agent 類型、派送時間、階段時限與到期時間。agent 類型是 spawn 時 Agent tool 實際用的 `subagent_type`
-  （展開 agent 是 `sorry-matt:expander`，退回通用 agent 時是 `general-purpose`）；以 SendMessage 交回原 agent 的派送
-  沿用那個 agent 的類型。時間一律 UTC，寫成 `date -u +%Y-%m-%dT%H:%M:%SZ` 的格式，到期時間 =
-  派送時間 + 階段時限；同格式的時間可以直接按字串比大小。延長記 `no`。
-- **進度指紋**：agent 工作的 worktree 的 HEAD 與工作樹的 tree。實作與修正是 ticket worktree（紅燈修正是 `-ci`
-  分支的 worktree；對不到票的是整合 worktree），整併是整合 worktree。一律以 Bash 執行 —— PowerShell 的管線與
-  編碼會讓同一棵樹算出不同的結果：
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --worktree <worktree> --limit <階段時限>
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<票>=<數>' [--expansions '<票>=<數>' …] --limit <階段時限>
+```
 
-  ```bash
-  git -C <worktree> rev-parse HEAD
-  idx="$(git -C <worktree> rev-parse --path-format=absolute --git-path sorry-matt-fingerprint.index)"
-  cp "$(git -C <worktree> rev-parse --path-format=absolute --git-path index)" "$idx" \
-    && GIT_INDEX_FILE="$idx" git -C <worktree> add -A 2>/dev/null \
-    && GIT_INDEX_FILE="$idx" git -C <worktree> write-tree
-  rm -f "$idx"
-  ```
+- 輸出派送時間、階段時限、到期時間、延長（`no`）與**進度指紋**。時間一律 UTC，寫成 `YYYY-MM-DDTHH:MM:SSZ`。
+- agent 類型是 spawn 時 Agent tool 實際用的 `subagent_type`（展開 agent 是 `sorry-matt:expander`，退回通用 agent 時是
+  `general-purpose`）；以 SendMessage 交回原 agent 的派送沿用那個 agent 的類型。
+- 第一式的 `<worktree>` 是 agent 工作的 worktree：實作與修正是 ticket worktree（紅燈修正是 `-ci` 分支的
+  worktree；對不到票的是整合 worktree），整併是整合 worktree。進度指紋是它的 HEAD 與整個工作樹（含未追蹤檔，
+  不含 ignored）的 tree，算法在腳本檔頭；真正的 index 與工作樹不動。
+- 展開 agent 不在 worktree 裡工作，用第二式：`--expansions` 給它負責的每張票以 `acceptance.mjs` 讀出的
+  `expansions` 數，進度指紋就是這組數字。`<票>=<數>` 一律加引號：`#12=0` 不加引號會被 shell 當成註解。
 
-  第二段在一份暫存 index 裡把整個工作樹（含未追蹤檔，不含 ignored）寫成一棵 tree，輸出它的 hash；真正的 index
-  不動。未追蹤檔改內容、新檔放進未追蹤的目錄、已暫存的檔再改，都會讓它不同。展開 agent 不在 worktree 裡工作，
-  改記它負責的每張票以 `acceptance.mjs` 讀出的 `expansions` 數。
+**沒有派送紀錄的派送不成立。** 先跑 `record`，成功了才 spawn 或 SendMessage，再把 agent id 補進那一列 —— 所以
+不會有 agent 在跑而對帳表沒有它的紀錄。`record` 結束代碼不是 0 時 stdout 是空的，不派送：結束代碼 2 是參數寫錯，
+改好再跑；結束代碼 1 是這個 worktree 的進度指紋算不出來，它的狀態要人處理，不換一種方式照樣派送。依原本要
+派送的工作了結，原因寫 stderr（展開 agent 的 `record` 不讀 worktree，不會是 1）：
+
+- **實作、集中修正**（紅燈修正除外）→ 該票標**待裁決**。
+- **整併 agent** → 先 `git -C <整合 worktree> merge --abort` 把整合 worktree 還原到合併之前，再把該票標**待裁決**，
+  佇列換下一張。
+- **紅燈修正** → 算一輪修正失敗，不再開下一輪：對到票就直接照 `RED-LIGHT.md` 紅燈處置第 5 點撤回，對不到票就
+  照第 6 點判這條線驗證未過。
+
+三種都照「派票」觸發派票點。
 
 agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 agent** 就是到期時間不是 `—` 的 agent。
 
 **時限掃描**：每次喚醒 —— `/loop` 的喚醒、agent 通知、fallback 喚醒都算 —— 在處理完已回報的 agents 之後做。
-取現在時間（同上格式），到期時間早於它的在途 agent 就是**超時**。對每個超時的 agent：
-照同層的 [`TIMEOUTS.md`](TIMEOUTS.md) 處置 —— 判進展、延長、停下後的各分支、留紀錄；時限掃描發現超時的 agent 時，走到這裡時全文讀取並照做。
+把每個在途 agent 的派送紀錄寫成計畫檔（格式在腳本檔頭；展開 agent 另給它每張票現在的 `expansions` 數），執行：
 
-**fallback 喚醒**：每次喚醒結束時還有在途 agent，就以最早的到期時間排下一次喚醒；所有 agent 都不回報時，主持人
-也會在第一個時限到期時醒來。派送過的喚醒結束時一定有在途 agent，所以每次派送之後都排了一次。延遲是最早的到期
-時間減現在，換成秒：
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
+```
 
-- **`ScheduleWakeup`**（第 1 節進入的 `/loop` 動態模式可用）：延遲只能在 60–3600 秒之間。不到 60 秒排 60；超過
-  3600 秒排 3600，醒來沒有超時就照這一段再排一次。
-- 沒有 `ScheduleWakeup`：以 Bash 在背景執行 `sleep <秒>`（不設上限），把它的 task id 記進 ledger 第 9 欄。同一時間
+輸出裡 `overdue` 是 `true` 的 agent 就是**超時**，它的 `action` 是腳本判好的處置：`extend`（延長一次）或
+`stop`（停下）。腳本只算：不停 agent、不寫 ledger。
+
+- **結束代碼不是 0**：stdout 是空的，沒有任何 agent 被判過。不憑它停或延長任何 agent：照 stderr 修好計畫檔再跑，
+  這次喚醒結束前要跑成功。
+- **某個 agent 的 `error` 不是 `null`**：它超時了，但進度指紋算不出來（worktree 不見、git 拒絕、檔案被鎖），
+  `action` 是 `null`；其他 agent 照常判好。原因是計畫檔寫錯 worktree 就改掉；然後再跑一次 `scan`。仍有 `error`
+  就把它當成 `stop` 處置 —— 進展無從證明就不延長 —— 並把 `error` 寫進它的時限處置。有 `error` 的 agent 不算進
+  `fallback`。
+
+對每個超時的 agent：
+照同層的 [`TIMEOUTS.md`](TIMEOUTS.md) 處置 —— 延長、停下後的各分支、留紀錄；時限掃描發現超時的 agent 時，走到這裡時全文讀取並照做。
+
+**fallback 喚醒**：每次喚醒結束時還有在途 agent，就排下一次喚醒；所有 agent 都不回報時，主持人
+也會在第一個時限到期時醒來。派送過的喚醒結束時一定有在途 agent，所以每次派送之後都排了一次。延遲取 `scan`
+輸出的 `fallback`（`null` 是掃描後沒有在途 agent）；時限掃描之後這次喚醒又有派送（改派、派票點）時，以最新的
+對帳表再跑一次 `scan`，取那一次的 `fallback`。
+
+- **`ScheduleWakeup`**（第 1 節進入的 `/loop` 動態模式可用）：排 `fallback.scheduleWakeup` 秒 —— 它只收 60–3600
+  秒，腳本已夾好。醒來沒有超時就照這一段再排一次。
+- 沒有 `ScheduleWakeup`：以 Bash 在背景執行 `sleep <fallback.seconds>`（不設上限），把它的 task id 記進 ledger 第 9 欄。同一時間
   只留一個：排新的之前，先以 `TaskStop` 停掉第 9 欄記的上一個（已結束就略過）。它結束時的通知就是喚醒，第一件事
   照 `ASKING.md` 第 7 節的恢復重讀 ledger 與規則檔，再照第 1 節的喚醒步驟做。
 - 背景 `sleep` 也不能用：以 interval 模式重新進入第 1 節的 `/loop`，prompt 不變，間隔取最短的階段時限。沒有在途

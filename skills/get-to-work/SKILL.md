@@ -180,16 +180,23 @@ written current (step 1 only; progress and the limits are judged only at dispatc
 
 1. **Update usage:** update the spawn count and elapsed time per `ASKING.md` section 7, field 9 (which also says how
    the start time is recorded).
-2. **Judge progress:** "once" means one dispatch point. A wake-up spent waiting on agents, or one that only moves
-   close-outs along, does not count. Compare against the progress snapshot recorded at the last dispatch point —
-   each line's integration-branch tip SHA, and the tickets in the reconciliation table that have reached an end state
-   (delivered, stuck, awaiting ruling): when neither changed, add one to the consecutive no-progress count; when
-   anything changed, reset it to zero. A ticket moving between stages short of an end state, or being sent back for a
-   redo, is not progress; nor are commits on a ticket branch: an attempt that was never merged changed no delivery.
-   Then record this snapshot in field 9; the first dispatch point only records it.
-3. **Check the limits:** when the dispatch points already run reach `rounds`, spawns reach `spawns`, elapsed time
-   reaches `hours`, or the consecutive no-progress count reaches `no-progress`, **stop**. Only when nothing stops
-   the run, add one to the dispatch-point count and go on dispatching.
+2. **Judge progress and the limits:** this skill's `scripts/deadline.mjs` judges them; do not compare by hand:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" progress <plan.json>
+   ```
+
+   You write the plan file; its format and the rules are in the script's header: the progress snapshot field 9
+   records from the last dispatch point (`null` at the first one), each line's integration-branch tip SHA now, the
+   tickets in the reconciliation table that have reached an end state (delivered, stuck, awaiting ruling), field 9's
+   consecutive no-progress count so far, the usage (dispatch points, spawns, and the elapsed time step 1 worked out)
+   and the four limits. Run it at dispatch points only: not on a wake-up spent waiting on agents, nor on one that
+   only moves close-outs along. The input holds tips and end-state tickets and nothing else — a ticket moving
+   between stages short of an end state, a send-back for a redo and commits on a ticket branch are not in it: an
+   attempt that was never merged changed no delivery.
+3. **Act on the output:** record `noProgress` (the consecutive no-progress count) and `snapshot` (this progress
+   snapshot) in field 9. When `stop` is `true`, **stop**; `stoppedBy` lists the limits that stopped the run. Only
+   when it is `false`, set the dispatch-point count to the output's `rounds` and go on dispatching.
 
 **Stopping:** this dispatch point dispatches and expands nothing, and no dispatch point follows it. Tickets in flight
 go on through close-out until they are integrated, stuck or sent back, with CI reads and red-light handling (`RED-LIGHT.md`) as usual;
@@ -235,53 +242,82 @@ The **stage time limits** are four `budget:` lines in ledger field 9, in minutes
 `timeout-implement` (implementing), `timeout-fix` (fixing, red-light fixes included), `timeout-expand` (expanding)
 and `timeout-merge` (the merge agent while integrating).
 
-**Assignment record:** at every assignment, record in that ticket's row of the reconciliation table (for an
-expansion agent, in the row of every ticket it covers):
+**Assignment record:** at every assignment, compute it with this skill's `scripts/deadline.mjs` and copy it, with
+the agent id and the agent type, into that ticket's row of the reconciliation table (for an expansion agent, into the row of every
+ticket it covers):
 
-- The agent id, the agent type, the assigned time, the stage time limit and the deadline. The agent type is the
-  `subagent_type` the Agent tool actually used at the spawn (`sorry-matt:expander` for an expansion agent,
-  `general-purpose` when it fell back to a general-purpose agent); an assignment handed back to the original agent
-  with SendMessage keeps that agent's type. Times are always UTC, in the format of
-  `date -u +%Y-%m-%dT%H:%M:%SZ`, and the deadline is the assigned time plus the stage time limit; times in this
-  format compare correctly as strings. Record extended as `no`.
-- The **progress fingerprint**: the HEAD and the working-tree tree of the worktree the agent works in. For
-  implementation and fixes that is the ticket worktree (for a red-light fix, the `-ci` branch's worktree; for one
-  that maps to no ticket, the integration worktree); for merging, the integration worktree. Always run it with Bash
-  — PowerShell's pipeline and encoding give the same tree a different result:
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --worktree <worktree> --limit <stage time limit>
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<ticket>=<n>' [--expansions '<ticket>=<n>' …] --limit <stage time limit>
+```
 
-  ```bash
-  git -C <worktree> rev-parse HEAD
-  idx="$(git -C <worktree> rev-parse --path-format=absolute --git-path sorry-matt-fingerprint.index)"
-  cp "$(git -C <worktree> rev-parse --path-format=absolute --git-path index)" "$idx" \
-    && GIT_INDEX_FILE="$idx" git -C <worktree> add -A 2>/dev/null \
-    && GIT_INDEX_FILE="$idx" git -C <worktree> write-tree
-  rm -f "$idx"
-  ```
+- The output gives the assigned time, the stage time limit, the deadline, extended (`no`) and the **progress
+  fingerprint**. Times are always UTC, written `YYYY-MM-DDTHH:MM:SSZ`.
+- The agent type is the `subagent_type` the Agent tool actually used at the spawn (`sorry-matt:expander` for an
+  expansion agent, `general-purpose` when it fell back to a general-purpose agent); an assignment handed back to the
+  original agent with SendMessage keeps that agent's type.
+- In the first form, `<worktree>` is the worktree the agent works in: for implementation and fixes the ticket
+  worktree (for a red-light fix, the `-ci` branch's worktree; for one that maps to no ticket, the integration
+  worktree); for merging, the integration worktree. The progress fingerprint is its HEAD and the tree of its whole
+  working tree (untracked files included, ignored ones not), computed as the script's header says; the real index
+  and the working tree are left alone.
+- An expansion agent works in no worktree; use the second form: `--expansions` takes the `expansions` count
+  `acceptance.mjs` reads for each ticket it covers, and those numbers are its progress fingerprint. Always quote
+  `<ticket>=<n>`: unquoted, a shell reads `#12=0` as a comment.
 
-  The second part writes the whole working tree (untracked files included, ignored ones not) as one tree in a
-  temporary index and prints its hash; the real index is left alone. An untracked file whose content changes, a new
-  file inside an already untracked directory, and a staged file changed again all change it. An expansion agent
-  works in no worktree; record instead the `expansions` count `acceptance.mjs` reads for each ticket it covers.
+**An assignment with no assignment record does not stand.** Run `record` first; only when it succeeds, spawn or
+SendMessage, then add the agent id to that row — so no agent ever runs without its record in the reconciliation
+table. When `record` exits non-zero, stdout is empty and you do not assign: exit code 2 is a bad argument, so correct
+it and run again; exit code 1 means this worktree's progress fingerprint cannot be computed, and its state needs a
+person: do not assign the work some other way instead. Settle it by the work you were about to assign, with stderr
+as the reason (an expansion agent's `record` reads no worktree, so it never exits 1):
+
+- **Implementation, a batched fix** (a red-light fix excepted) → mark the ticket **awaiting ruling**.
+- **A merge agent** → first `git -C <integration worktree> merge --abort` to put the integration worktree back to
+  where it was before the merge, then mark the ticket **awaiting ruling**; the queue moves on to the next ticket.
+- **A red-light fix** → it counts as one failed fix round and no further round is started: when it maps to a ticket,
+  go straight to the revert in `RED-LIGHT.md`, red-light handling point 5; when it maps to no ticket, find the line
+  to have failed verification per point 6.
+
+All three trigger a dispatch point per "Dispatch".
 
 Once the agent reports or is stopped, set that row's deadline to `—`. An **agent in flight** is any agent whose
 deadline is not `—`.
 
 **Deadline scan:** every wake-up — a `/loop` wake-up, an agent notification and a fallback wake-up all count — runs
-it after handling the agents that reported. Take the current time (same format); an agent in flight whose deadline
-is before it is **overdue**. For each overdue agent:
-handle it per the sibling [`TIMEOUTS.md`](TIMEOUTS.md) — judging progress, extending, the cases after a stop,
+it after handling the agents that reported. Write the assignment record of every agent in flight into a plan file
+(format in the script's header; for an expansion agent, add each of its tickets' `expansions` count now) and run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
+```
+
+An agent whose `overdue` is `true` in the output is **overdue**, and its `action` is the handling the script judged:
+`extend` (extend once) or `stop`. The script only computes: it stops no agent and writes no ledger.
+
+- **A non-zero exit:** stdout is empty and no agent has been judged. Stop or extend no agent on that basis: fix the
+  plan file as stderr says and run it again; it must succeed before this wake-up ends.
+- **An agent whose `error` is not `null`:** it is overdue, but its progress fingerprint could not be computed (the
+  worktree is gone, git refuses, a file is locked), and its `action` is `null`; the other agents are judged as usual.
+  When the cause is a wrong worktree in the plan file, correct it; then run `scan` once more. If the `error` is still
+  there, handle the agent as a `stop` — progress that cannot be shown earns no extension — and write the `error`
+  into its timeout handling. An agent with an `error` is not counted in `fallback`.
+
+For each overdue agent:
+handle it per the sibling [`TIMEOUTS.md`](TIMEOUTS.md) — extending, the cases after a stop,
 keeping a record; when the deadline scan finds an overdue agent, read it in full on reaching this point and follow it.
 
-**Fallback wake-up:** whenever a wake-up ends with agents still in flight, schedule the next wake-up for the earliest
-deadline, so that the host wakes when the first time limit runs out even if no agent ever reports. A wake-up that
-assigned any work always ends with an agent in flight, so every assignment is followed by one. The delay is the
-earliest deadline minus now, in seconds:
+**Fallback wake-up:** whenever a wake-up ends with agents still in flight, schedule the next wake-up, so that the
+host wakes when the first time limit runs out even if no agent ever reports. A wake-up that assigned any work always
+ends with an agent in flight, so every assignment is followed by one. The delay comes from the `fallback` in `scan`'s
+output (`null` means no agent is in flight after the scan); when this wake-up assigned work after the deadline scan (a
+reassignment, a dispatch point), run `scan` again on the latest reconciliation table and take that run's `fallback`.
 
-- **`ScheduleWakeup`** (available in the dynamic `/loop` mode that section 1 enters): the delay must be between 60
-  and 3600 seconds. Below 60, schedule 60; above 3600, schedule 3600, and when that wake-up finds nothing overdue,
-  schedule again per this paragraph.
-- Without `ScheduleWakeup`: run `sleep <seconds>` in the background with Bash (no upper bound), and record its task
-  id in ledger field 9. Keep only one: before scheduling a new one, `TaskStop` the previous one field 9 records
+- **`ScheduleWakeup`** (available in the dynamic `/loop` mode that section 1 enters): schedule
+  `fallback.scheduleWakeup` seconds — it accepts only 60 to 3600 seconds, and the script has already clamped the
+  value. When that wake-up finds nothing overdue, schedule again per this paragraph.
+- Without `ScheduleWakeup`: run `sleep <fallback.seconds>` in the background with Bash (no upper bound), and record
+  its task id in ledger field 9. Keep only one: before scheduling a new one, `TaskStop` the previous one field 9 records
   (skip it if it has finished). The notification when it ends is the wake-up; its first action is re-reading the
   ledger and the rule files per resuming in `ASKING.md` section 7, then the wake-up steps of section 1.
 - When a background `sleep` is not available either: re-enter section 1's `/loop` in interval mode, with the same
