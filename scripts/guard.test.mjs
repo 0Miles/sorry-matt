@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide as decideWith, confirmCommand, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, enterCommand, enterInvocation, plainScriptPath, unattended, unattendedFile } from '../hooks/decision.mjs';
 import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
 import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
@@ -843,8 +843,8 @@ test('only the entry line itself, unchanged and alone, is allowed', () => {
       assert.notEqual(decisionOf(decideWith(event(command), {}, deps)), 'allow', command);
     }
     assert.equal(existsSync(autoStateFile(home)), false, 'none of them entered');
-    // Another spelling of the same file is the same line; either quote holds the reason.
-    assert.equal(decisionOf(decideWith(event(`node "${PLUGIN.replace(/\\/g, '/')}/hooks//enter-unattended.mjs" 'away'`), {}, deps)), 'allow');
+    // Either quote holds the reason.
+    assert.equal(decisionOf(decideWith(event(`node "${script}" 'away'`), {}, deps)), 'allow');
     assert.equal(savedState(home).entered.reason, 'away');
   });
 });
@@ -1018,6 +1018,9 @@ test('the entry line names the script file itself: a case variant that is anothe
     const plugin = join(dir, 'Plugin');
     const hooks = join(plugin, 'hooks');
     mkdirSync(hooks, { recursive: true });
+    // Per-directory case sensitivity on Windows, where this machine has it (it only takes on an empty directory);
+    // without it the second file below is the same file.
+    if (process.platform === 'win32') spawnSync('fsutil.exe', ['file', 'setCaseSensitiveInfo', hooks, 'enable'], { encoding: 'utf8' });
     writeFileSync(join(hooks, 'enter-unattended.mjs'), '// the real one\n');
     const script = slashed(join(hooks, 'enter-unattended.mjs'));
     // The line as handed out, and the same file under another drive-letter case or Git Bash's spelling.
@@ -1028,8 +1031,6 @@ test('the entry line names the script file itself: a case variant that is anothe
       assert.equal(enterInvocation(call(script[0].toLowerCase() + script.slice(1)), plugin), 'away');
       assert.equal(enterInvocation(call(script[0].toUpperCase() + script.slice(1)), plugin), 'away');
       assert.equal(enterInvocation(call(`/${script[0].toLowerCase()}/${script.slice(3)}`), plugin), 'away');
-      // Per-directory case sensitivity, where this machine has it; without it the next file is the same file.
-      spawnSync('fsutil.exe', ['file', 'setCaseSensitiveInfo', hooks, 'enable'], { encoding: 'utf8' });
     }
     writeFileSync(join(hooks, 'Enter-Unattended.mjs'), '// another file\n');
     const other = slashed(join(hooks, 'Enter-Unattended.mjs'));
@@ -1097,4 +1098,78 @@ test('a command with a line break in it is not the entry line, in either shell',
     assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
     assert.equal(autoState(home).active(), false);
   });
+});
+
+test('the path word of the entry line is the script path as written: no option, no .. and no other route to it', () => {
+  withDir((dir) => withDir((home) => {
+    const slashed = (p) => p.replace(/\\/g, '/');
+    const plugin = join(dir, 'plugin');
+    const work = join(dir, 'work');
+    mkdirSync(join(plugin, 'hooks'), { recursive: true });
+    mkdirSync(work);
+    writeFileSync(join(plugin, 'hooks', 'enter-unattended.mjs'), '');
+    writeFileSync(join(work, 'evil.js'), '');
+    const script = slashed(join(plugin, 'hooks', 'enter-unattended.mjs'));
+    const tail = 'plugin/hooks/enter-unattended.mjs';
+    const refused = [
+      // A node option in the path's place: node would run the second word as the script.
+      `node "--title=x/../../${tail}" "evil.js"`,
+      `node --title=x/../../${tail} "evil.js"`,
+      `node '--title=x/../../${tail}' 'evil.js'`,
+      `node "-r/../../${tail}" "evil.js"`,
+      `node "--require=${script}" "evil.js"`,
+      `node "-" "away"`,
+      // The script reached through `..`, `.` or an empty segment, or relative to wherever the shell is.
+      `node "${slashed(work)}/../${tail}" "away"`,
+      `node "${script}/../enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/./hooks/enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/hooks//enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/.. /plugin/hooks/enter-unattended.mjs" "away"`,
+      `node "../${tail}" "away"`,
+      `node calc/../../${tail} "away"`,
+      `node "${script}/" "away"`,
+      // The path not written as the one double-quoted literal the guard hands out.
+      `node ${script} "away"`,
+      `node '${script}' "away"`,
+      `node "${script.replace(/\//g, '\\')}" "away"`,
+      // Names that are not the plain file, and control characters anywhere.
+      `node "${script}:evil" "away"`,
+      `node "${script}::\$DATA" "away"`,
+      `node "//?/${script}" "away"`,
+      `node "${script}" "a\x1bway"`,
+      `node "${script}" "a\x00way"`,
+      `node "${script}\x7f" "away"`,
+    ];
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of refused) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: work }, plugin), null, `${tool_name} ${JSON.stringify(command)}`);
+        assert.notEqual(decisionOf(decideWith(event(command, { tool_name, cwd: work }), {}, { home, pluginRoot: plugin, store: memoryStore(), now: 1 })), 'allow', `${tool_name} ${JSON.stringify(command)}`);
+      }
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+    // The line as handed out is still the line, in both shells.
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(plugin, 'away') }, cwd: work }, plugin), 'away', tool_name);
+    }
+  }));
+});
+
+test('which path words count as a plain script path, per platform and shell', () => {
+  const ok = (path, tool, platform) => assert.equal(plainScriptPath(path, tool, platform), true, `${platform} ${tool} ${path}`);
+  const no = (path, tool, platform) => assert.equal(plainScriptPath(path, tool, platform), false, `${platform} ${tool} ${path}`);
+  for (const tool of ['Bash', 'PowerShell']) {
+    ok('/home/me/.claude/plugins/sorry-matt/hooks/enter-unattended.mjs', tool, 'linux');
+    ok('/Users/me/my plugins/hooks/enter-unattended.mjs', tool, 'darwin');
+    ok('C:/Users/me/.claude/plugins/sorry-matt/hooks/enter-unattended.mjs', tool, 'win32');
+    for (const platform of ['linux', 'darwin', 'win32']) {
+      for (const path of ['--title=x/../p/hooks/enter-unattended.mjs', '-r', 'hooks/enter-unattended.mjs', './hooks/enter-unattended.mjs', '../p/hooks/enter-unattended.mjs', '~/p/hooks/enter-unattended.mjs', '']) {
+        no(path, tool, platform);
+      }
+    }
+    for (const path of ['/a/../p/x.mjs', '/a/./x.mjs', '/a//x.mjs', '/a/x.mjs/', '//a/x.mjs', '/..', 'C:/p/x.mjs']) no(path, tool, 'linux');
+    for (const path of ['C:/a/../p/x.mjs', 'C:/a/./x.mjs', 'C:/a//x.mjs', 'C:/a/.. /x.mjs', 'C:/a/. ./x.mjs', 'C:/a/x.mjs:stream', 'C:/a/x.mjs::$DATA', 'C:x.mjs', 'C:/a/x?.mjs', 'C:/a/*.mjs', '//?/C:/a/x.mjs', '//server/share/x.mjs', '/usr/x.mjs', '/tmp/x.mjs']) no(path, tool, 'win32');
+  }
+  // Git Bash turns /c/ into C:/ for node; PowerShell reads a leading slash as the current drive.
+  ok('/c/Users/me/p/hooks/enter-unattended.mjs', 'Bash', 'win32');
+  no('/c/Users/me/p/hooks/enter-unattended.mjs', 'PowerShell', 'win32');
 });
