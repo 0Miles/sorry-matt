@@ -1,0 +1,421 @@
+#!/usr/bin/env node
+// freeze: the deterministic part of freezing a ticket set in one repository: preflight checks, the files other
+// work holds, which tickets that excludes, the lines after joining those whose predicted files overlap, and the
+// candidate order. No dependencies: runs on a bare Node 20+.
+//
+// Usage
+//   node freeze.mjs <plan.json>
+//
+// plan.json, written by the host for one repository (a workspace with several repositories gets one plan each;
+// a line never spans repositories):
+//   {
+//     "repo":     "<working tree>",                 // optional; default the current directory
+//     "frontier": "<frontier output file>" | { ...frontier.mjs output... },   // format sorry-matt/frontier@1
+//     "files":    { "#11": "<predicted-files list>", ... },                   // one per open ticket
+//     "ignore":   ["<worktree path>" | "<branch>" | "#<pr>"],                // optional holders to leave out
+//     "held":     [{ "id": "<who>", "files": "<predicted-files list>", "release": "<condition>" }]  // optional
+//   }
+//   Relative paths are relative to the plan file. `frontier` is the output of frontier.mjs for the whole frozen
+//   set, run without --line; its `tracker` and `source` decide the GitHub checks and which repository's pull
+//   requests are read. A predicted-files list is the format overlap.mjs reads: one repo-relative path per line,
+//   `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
+//   under it. Every ticket whose state is "open" needs a list; lists of other tickets are ignored. `held` is
+//   what git cannot see (another session the host knows of), with its own release condition.
+//
+// What it computes
+//   preflight  `git-repo`: the repo is a git working tree with a commit on HEAD. `clean`: `git status
+//              --porcelain` prints nothing. With tracker "github" also `gh-auth`: `gh auth status` exits 0, and
+//              `repo-match`: one of the repo's remotes points at the frontier's `source` (owner/repo, any host,
+//              case-insensitive). When a check fails, `ok` is false and everything below is null.
+//   held       Files other work is changing, each holder with a release condition:
+//              - every other worktree of the repo (not bare, not prunable): `git diff --name-only --no-renames
+//                <merge-base of HEAD and its HEAD>` inside it (committed, staged, unstaged) plus its untracked
+//                files git does not ignore;
+//              - every local branch not merged into HEAD and not checked out in a worktree: the files of
+//                `git diff HEAD...<branch>`;
+//              - with tracker "github", every open pull request of `source` whose head is not the current branch:
+//                its files as `gh pr list --json files` returns them;
+//              - the plan's `held` entries.
+//              A holder named in `ignore` (a worktree by path or by its branch, a branch, a PR as `#n`) is left
+//              out; holders with no file are not listed.
+//   excluded   Open tickets whose predicted paths overlap a held path (one path covers the other). They leave
+//              the frozen set; the host records them as awaiting ruling with the holders and release conditions.
+//   stalled    Open tickets left in the set that can no longer become ready because of an exclusion, in
+//              frontier.mjs's terms: "blocked-external" (an in-set blocker was excluded) or "blocked-upstream"
+//              (an in-set blocker is stalled this way). Tickets the frontier already marked stalled are not
+//              repeated.
+//   lines      The frontier's lines recomputed without the excluded tickets (an exclusion can split a line),
+//              then joined: two lines whose open tickets' predicted paths overlap become one, transitively, until
+//              no two lines overlap. A line's id is its first ticket in the frontier's sort order; `members` are
+//              the recomputed line ids it is made of; `joins` are the pairs of tickets from different members
+//              whose paths overlap, with those paths.
+//   candidates The frontier's ready tickets that were not excluded, those that block the most open tickets of
+//              the remaining set first (direct in-set blockers only); equal counts keep the frontier's order.
+//
+// Output (stdout, JSON, format "sorry-matt/freeze@1"; fields are only ever added, never renamed)
+//   {
+//     "format":     "sorry-matt/freeze@1",
+//     "tracker":    "github" | "local",
+//     "source":     "<owner>/<repo>" | "<git-ref>" | "worktree",
+//     "repo":       "<top level of the working tree>" | null,
+//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match",
+//                                              "ok": true, "detail": "..." }] },
+//     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
+//                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
+//     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
+//                                                   "paths": ["src/a"], "release": "..." }] }],
+//     "stalled":    [{ "id": "#13", "stalled": "blocked-external", "by": ["#12"] }],
+//     "lines":      [{ "id": "#5", "members": ["#5", "#9"], "tickets": ["#5", "#6", "#9"],
+//                      "files": ["src/a"], "joins": [{ "tickets": ["#6", "#9"], "paths": ["src/a"] }] }],
+//     "candidates": [{ "id": "#5", "line": "#5", "unlocks": 2 }]
+//   }
+//   `held` through `candidates` are null when the preflight fails. Paths are sorted, `/` is the whole
+//   repository; lines, their tickets and members follow the frontier's ticket order.
+//
+// Exit codes: 0 output written (read `preflight.ok`); 1 a list, git or gh read failed after the preflight;
+// 2 bad arguments or plan.
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { UsageError, canonical, failure, runIfEntry } from './cli.mjs';
+import { overlaps, parseList } from './overlap.mjs';
+
+export const FORMAT = 'sorry-matt/freeze@1';
+const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
+
+const display = (p) => (p === '' ? '/' : p);
+const uniqueSorted = (xs) => [...new Set(xs)].sort();
+const z = (out) => out.split('\0').filter(Boolean);
+const detail = (e) => (e.stderr && String(e.stderr).trim()) || e.message;
+
+// ---------- plan ----------
+
+function readJSON(path, read, what) {
+  try {
+    return JSON.parse(read(path));
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new UsageError(`${path}: ${what} is not JSON (${e.message})`);
+    throw e;
+  }
+}
+
+function readFrontier(frontier, where) {
+  if (!frontier || typeof frontier !== 'object' || Array.isArray(frontier) || frontier.format !== FRONTIER_FORMAT) {
+    throw new UsageError(`${where}: frontier is not ${FRONTIER_FORMAT} output`);
+  }
+  const { tracker, source, tickets, frontier: ready } = frontier;
+  if (!['github', 'local'].includes(tracker) || typeof source !== 'string' || !Array.isArray(tickets) || !Array.isArray(ready)) {
+    throw new UsageError(`${where}: frontier needs tracker, source, tickets and frontier`);
+  }
+  for (const t of tickets) {
+    if (!t || typeof t.id !== 'string' || typeof t.state !== 'string' || !Array.isArray(t.blockedBy)) {
+      throw new UsageError(`${where}: a frontier ticket needs id, state and blockedBy`);
+    }
+  }
+  const ids = new Set(tickets.map((t) => t.id));
+  for (const id of ready) if (!ids.has(id)) throw new UsageError(`${where}: frontier lists ${id}, which is not a ticket`);
+  return frontier;
+}
+
+export function readPlan(path, read, cwd = process.cwd()) {
+  const plan = readJSON(path, read, 'the plan');
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new UsageError(`${path}: the plan is not an object`);
+  const dir = dirname(path);
+  if (plan.repo !== undefined && (typeof plan.repo !== 'string' || !plan.repo)) throw new UsageError(`${path}: repo is a non-empty string`);
+  const repo = plan.repo ? resolve(dir, plan.repo) : resolve(cwd);
+
+  let frontier = plan.frontier;
+  if (typeof frontier === 'string' && frontier) {
+    const file = resolve(dir, frontier);
+    frontier = readJSON(file, read, 'the frontier');
+  }
+  frontier = readFrontier(frontier, path);
+
+  const files = plan.files ?? {};
+  if (!files || typeof files !== 'object' || Array.isArray(files)) throw new UsageError(`${path}: files is an object`);
+  const byId = new Map(frontier.tickets.map((t) => [t.id, t]));
+  const predicted = new Map();
+  for (const [id, list] of Object.entries(files)) {
+    if (!byId.has(id)) throw new UsageError(`${path}: files names ${id}, which is not a ticket of the frontier`);
+    if (typeof list !== 'string' || !list) throw new UsageError(`${path}: ${id}: a files list is a path`);
+    if (byId.get(id).state !== 'open') continue;
+    const file = resolve(dir, list);
+    predicted.set(id, parseList(read(file), file));
+  }
+  for (const t of frontier.tickets) {
+    if (t.state === 'open' && !predicted.has(t.id)) throw new UsageError(`${path}: open ticket ${t.id} has no files list`);
+  }
+
+  const ignore = plan.ignore ?? [];
+  if (!Array.isArray(ignore) || ignore.some((i) => typeof i !== 'string' || !i)) {
+    throw new UsageError(`${path}: ignore is an array of non-empty strings`);
+  }
+  const hostHeld = plan.held ?? [];
+  if (!Array.isArray(hostHeld)) throw new UsageError(`${path}: held is an array`);
+  const held = hostHeld.map((h, i) => {
+    if (!h || typeof h.id !== 'string' || !h.id) throw new UsageError(`${path}: held[${i}] has no id`);
+    if (typeof h.files !== 'string' || !h.files) throw new UsageError(`${path}: held ${h.id} has no files list`);
+    if (typeof h.release !== 'string' || !h.release) throw new UsageError(`${path}: held ${h.id} has no release condition`);
+    const file = resolve(dir, h.files);
+    return { id: h.id, files: parseList(read(file), file), release: h.release };
+  });
+  return { repo, frontier, predicted, ignore, held };
+}
+
+// ---------- preflight ----------
+
+/** owner/repo from a remote URL (https, ssh or scp-like), lower-cased; null when it has no such tail. */
+export function remoteSlug(url) {
+  const m = /[/:]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+export function preflight({ repo, tracker, source }, { git, gh }) {
+  const checks = [];
+  let top = null;
+  try {
+    top = git(repo, ['rev-parse', '--show-toplevel']).trim();
+  } catch (e) {
+    checks.push({ name: 'git-repo', ok: false, detail: `${repo}: not a git working tree (${detail(e)})` });
+  }
+  if (top) {
+    try {
+      git(top, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+      checks.push({ name: 'git-repo', ok: true, detail: top });
+    } catch {
+      checks.push({ name: 'git-repo', ok: false, detail: `${top}: HEAD has no commit` });
+      top = null;
+    }
+  }
+  if (top) {
+    const dirty = git(top, ['status', '--porcelain']).split(/\r?\n/).filter(Boolean);
+    checks.push(
+      dirty.length
+        ? { name: 'clean', ok: false, detail: `${dirty.length} uncommitted or untracked: ${dirty.slice(0, 5).join('; ')}${dirty.length > 5 ? '; ...' : ''}` }
+        : { name: 'clean', ok: true, detail: 'working tree clean' },
+    );
+  }
+  if (tracker === 'github') {
+    try {
+      gh(['auth', 'status']);
+      checks.push({ name: 'gh-auth', ok: true, detail: 'gh auth status exited 0' });
+    } catch (e) {
+      checks.push({ name: 'gh-auth', ok: false, detail: `gh auth status failed: ${detail(e)}` });
+    }
+    if (top) {
+      const urls = uniqueSorted(git(top, ['remote', '-v']).split(/\r?\n/).map((l) => l.split(/\s+/)[1]).filter(Boolean));
+      const hit = urls.find((u) => remoteSlug(u) === source.toLowerCase());
+      checks.push(
+        hit
+          ? { name: 'repo-match', ok: true, detail: `${source} is ${hit}` }
+          : { name: 'repo-match', ok: false, detail: `no remote points at ${source}; remotes: ${urls.join(', ') || 'none'}` },
+      );
+    }
+  }
+  return { top, result: { ok: checks.every((c) => c.ok), checks } };
+}
+
+// ---------- held files ----------
+
+export function parseWorktrees(porcelain) {
+  const out = [];
+  let cur = null;
+  for (const line of porcelain.split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) {
+      cur = { path: line.slice('worktree '.length), branch: null, bare: false, prunable: false };
+      out.push(cur);
+    } else if (cur && line.startsWith('branch ')) cur.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '');
+    else if (cur && line === 'bare') cur.bare = true;
+    else if (cur && (line === 'prunable' || line.startsWith('prunable '))) cur.prunable = true;
+  }
+  return out;
+}
+
+function heldFiles({ top, tracker, source, ignore, hostHeld }, { git, gh }) {
+  const head = git(top, ['rev-parse', 'HEAD']).trim();
+  let current = null;
+  try {
+    current = git(top, ['symbolic-ref', '--quiet', '--short', 'HEAD']).trim() || null;
+  } catch {
+    current = null; // detached HEAD
+  }
+  const here = canonical(top);
+  const ignored = (...names) => names.some((n) => n && ignore.some((i) => i === n || canonical(top, i) === canonical(top, n)));
+  const held = [];
+  const checkedOut = new Set();
+  for (const wt of parseWorktrees(git(top, ['worktree', 'list', '--porcelain']))) {
+    if (wt.branch) checkedOut.add(wt.branch);
+    if (wt.bare || wt.prunable || canonical(wt.path) === here || ignored(wt.path, wt.branch)) continue;
+    const base = git(wt.path, ['merge-base', head, 'HEAD']).trim();
+    const files = uniqueSorted([
+      ...z(git(wt.path, ['diff', '--name-only', '--no-renames', '-z', base])),
+      ...z(git(wt.path, ['ls-files', '--others', '--exclude-standard', '-z'])),
+    ]);
+    if (files.length) {
+      held.push({
+        source: 'worktree',
+        id: wt.path,
+        branch: wt.branch,
+        files,
+        release: `the worktree is removed, or its work is merged into ${current ?? head} and nothing is left uncommitted`,
+      });
+    }
+  }
+  const branches = z(git(top, ['for-each-ref', '--no-merged=HEAD', '--format=%(refname)%00', 'refs/heads']))
+    .map((r) => r.trim().replace(/^refs\/heads\//, ''))
+    .filter(Boolean)
+    .sort();
+  for (const b of branches) {
+    if (b === current || checkedOut.has(b) || ignored(b)) continue;
+    const files = uniqueSorted(z(git(top, ['diff', '--name-only', '--no-renames', '-z', `${head}...refs/heads/${b}`])));
+    if (files.length) {
+      held.push({ source: 'branch', id: b, branch: b, files, release: `branch ${b} is merged into ${current ?? head} or deleted` });
+    }
+  }
+  if (tracker === 'github') {
+    const prs = JSON.parse(gh(['pr', 'list', '--repo', source, '--state', 'open', '--limit', '1000', '--json', 'number,headRefName,files']));
+    for (const pr of [...prs].sort((a, b) => a.number - b.number)) {
+      const id = `#${pr.number}`;
+      if (pr.headRefName === current || ignored(id)) continue;
+      const files = uniqueSorted((pr.files ?? []).map((f) => f.path));
+      if (files.length) {
+        held.push({ source: 'pr', id, branch: pr.headRefName ?? null, files, release: `PR ${id} is merged or closed` });
+      }
+    }
+  }
+  for (const h of hostHeld) {
+    held.push({ source: 'host', id: h.id, branch: null, files: h.files.map(display), release: h.release });
+  }
+  return held;
+}
+
+// ---------- tickets ----------
+
+const pathsOverlapping = (mine, theirs) => mine.filter((p) => theirs.some((q) => overlaps(p, q)));
+
+export function freezeTickets({ frontier, predicted, held }) {
+  const order = new Map(frontier.tickets.map((t, i) => [t.id, i]));
+  const byOrder = (a, b) => order.get(a) - order.get(b);
+  const asPaths = (files) => files.map((f) => (f === '/' ? '' : f));
+
+  // Exclusion: an open ticket whose predicted paths overlap a held path.
+  const excluded = [];
+  for (const t of frontier.tickets) {
+    if (t.state !== 'open') continue;
+    const hits = held
+      .map((h) => ({ with: h.id, source: h.source, paths: pathsOverlapping(predicted.get(t.id), asPaths(h.files)).map(display), release: h.release }))
+      .filter((h) => h.paths.length);
+    if (hits.length) excluded.push({ id: t.id, overlaps: hits });
+  }
+  const gone = new Set(excluded.map((e) => e.id));
+  const kept = frontier.tickets.filter((t) => !gone.has(t.id));
+  const keptIds = new Set(kept.map((t) => t.id));
+  const inSetBlockers = (t) => t.blockedBy.filter((b) => b.inSet).map((b) => b.id);
+
+  // Stalled by an exclusion, transitively, in frontier.mjs's terms.
+  const stalledBy = new Map();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const t of kept) {
+      if (t.state !== 'open' || t.stalled || stalledBy.has(t.id)) continue;
+      const external = inSetBlockers(t).filter((b) => gone.has(b));
+      const upstream = inSetBlockers(t).filter((b) => stalledBy.has(b));
+      if (external.length) stalledBy.set(t.id, { stalled: 'blocked-external', by: external });
+      else if (upstream.length) stalledBy.set(t.id, { stalled: 'blocked-upstream', by: upstream });
+      else continue;
+      changed = true;
+    }
+  }
+  const stalled = kept.filter((t) => stalledBy.has(t.id)).map((t) => ({ id: t.id, ...stalledBy.get(t.id) }));
+
+  // Lines without the excluded tickets: connected through in-set blocker edges, id = first ticket in order.
+  const parent = new Map(kept.map((t) => [t.id, t.id]));
+  const find = (x) => (parent.get(x) === x ? x : find(parent.get(x)));
+  const union = (a, b) => {
+    const [ra, rb] = [find(a), find(b)].sort(byOrder);
+    if (ra !== rb) parent.set(rb, ra);
+  };
+  for (const t of kept) for (const b of inSetBlockers(t)) if (keptIds.has(b)) union(t.id, b);
+  const baseLine = new Map(kept.map((t) => [t.id, find(t.id)]));
+
+  // Joining: union-find over the base lines, an edge wherever two open tickets of different lines overlap.
+  const open = kept.filter((t) => t.state === 'open').map((t) => t.id);
+  const joins = [];
+  for (let i = 0; i < open.length; i++) {
+    for (let j = i + 1; j < open.length; j++) {
+      const [a, b] = [open[i], open[j]];
+      if (baseLine.get(a) === baseLine.get(b)) continue;
+      const pa = predicted.get(a);
+      const pb = predicted.get(b);
+      const paths = uniqueSorted([...pathsOverlapping(pa, pb), ...pathsOverlapping(pb, pa)]);
+      if (!paths.length) continue;
+      union(a, b);
+      joins.push({ tickets: [a, b], paths: paths.map(display) });
+    }
+  }
+  const groups = new Map();
+  for (const t of kept) {
+    const root = find(t.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(t.id);
+  }
+  const lineOf = new Map();
+  const lines = [...groups.values()]
+    .map((ids) => ids.sort(byOrder))
+    .sort((a, b) => byOrder(a[0], b[0]))
+    .map((ids) => {
+      const id = ids[0];
+      for (const t of ids) lineOf.set(t, id);
+      const members = new Set(ids.map((t) => baseLine.get(t)));
+      return {
+        id,
+        members: [...members].sort(byOrder),
+        tickets: ids,
+        files: uniqueSorted(ids.flatMap((t) => predicted.get(t) ?? [])).map(display),
+        joins: joins.filter((j) => ids.includes(j.tickets[0])),
+      };
+    });
+
+  // Candidates: ready and kept; most open dependents in the remaining set first, ties in frontier order.
+  const unlocks = (id) => kept.filter((t) => t.state === 'open' && inSetBlockers(t).includes(id)).length;
+  const candidates = frontier.frontier
+    .filter((id) => keptIds.has(id))
+    .map((id) => ({ id, line: lineOf.get(id), unlocks: unlocks(id) }))
+    .sort((a, b) => b.unlocks - a.unlocks || byOrder(a.id, b.id));
+
+  return { excluded, stalled, lines, candidates };
+}
+
+// ---------- main ----------
+
+export function freeze(plan, deps) {
+  const { frontier } = plan;
+  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source }, deps);
+  const out = { format: FORMAT, tracker: frontier.tracker, source: frontier.source, repo: top, preflight: result };
+  if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null };
+  const held = heldFiles({ top, tracker: frontier.tracker, source: frontier.source, ignore: plan.ignore, hostHeld: plan.held }, deps);
+  return { ...out, held, ...freezeTickets({ frontier, predicted: plan.predicted, held }) };
+}
+
+export function defaultDeps() {
+  const exec = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+  return {
+    read: (p) => readFileSync(p, 'utf8'),
+    git: (cwd, args) => exec('git', ['-C', cwd, ...args]),
+    gh: (args) => exec('gh', args),
+  };
+}
+
+// Returns { code, out, err } instead of touching the process, so tests can drive it.
+export function main(argv, deps = {}) {
+  const d = { ...defaultDeps(), ...deps };
+  try {
+    if (argv.length !== 1 || argv[0].startsWith('-')) throw new UsageError('expected exactly one plan file');
+    const result = freeze(readPlan(resolve(argv[0]), d.read), d);
+    return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
+  } catch (e) {
+    return failure('freeze', e);
+  }
+}
+
+runIfEntry(import.meta.url, main);
