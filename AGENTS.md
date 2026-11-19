@@ -367,6 +367,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
 | 逐檔選(「元件庫」段多條時) | choose per file |
 | import 掃描 | import scan |
+| 使用檔 | using file |
+| 使用檔數 | using-file count |
+| 跨 package 的共用元件沒有落點 | cross-package shared component has no home |
+| 每 package 寫法 | per-package form |
+| 單行寫法(`ui.md`) | single-line form |
+| 用途(字面值的) | purpose |
+| 「新共用元件：無」(`ui.md`) | `New shared components: None` |
 | agent 定義檔 | agent definition file |
 | 通用 agent | general-purpose agent |
 | 指令輸出 | command output |

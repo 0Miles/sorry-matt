@@ -86,7 +86,8 @@ the first template and writes no "Scope"; one whose content differs between pack
   indented under it; the packages with no tokens get one "None" entry holding only a "Scope" line. Files of
   different packages never share one "Location" line.
 - **New shared components**: one "New shared components" line per distinct value, each with a "Scope" line
-  indented under it.
+  indented under it; the packages with no shared directory get one "New shared components: None" line holding
+  only a "Scope" line.
 - **Shared components table**: when some component cannot be used from every package, add a "Scope" column at
   the end of the table, each row giving the paths of the packages that can use that component; it is still one
   table, one row each, sorted by name.
@@ -115,6 +116,8 @@ the first template and writes no "Scope"; one whose content differs between pack
   - Scope: `<path of package A>`
 - New shared components: go in `<package B's shared directory>`; come with <what package B requires>
   - Scope: `<path of package B>`
+- New shared components: None
+  - Scope: `<path of the package with no shared directory>`
 - Duplicates: `<Name>` in `<losing path>` is not for new use; use `<source-of-truth path>` instead
 
 ## Mechanical checks

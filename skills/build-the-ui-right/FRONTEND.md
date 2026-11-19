@@ -47,7 +47,10 @@ or when it has been changed since it was read; otherwise go on with what was alr
 again. "Read" counts only the full text you yourself read in this conversation: someone else's retelling, a
 summary (the one a compacted conversation leaves behind included), or a read done by a parent conversation does
 not count. "Changed" does not depend on who changed it: after you edit it yourself in this conversation, read it
-once more the next time you need it. When it does not exist, stop here: write no code, produce no UI brief
+once more the next time you need it. How to detect a change: when you read `ui.md` in full, record the value of
+`git hash-object docs/agents/ui.md`; before every later reuse, compute it again, and when it differs from the
+recorded value, read the file in full again and record the new value. Outside a git repo, compare a hash of the
+file's content instead (`sha256sum docs/agents/ui.md`, for example). When it does not exist, stop here: write no code, produce no UI brief
 or other deliverable, and do not create `ui.md` yourself; ask the user to run `/set-up-ui-skills`, and continue
 once it exists. Running as a subagent that cannot reach the user, stop the same way and state in the report that
 a human needs to run `/set-up-ui-skills`. Answering a question without producing a deliverable is exempt, but the
@@ -61,11 +64,21 @@ file that falls inside no `Scope` is handled as if the `Component library` secti
 the report's **`ui.md` mismatches**. In the steps below, "the component library" means the entry chosen for
 that file.
 
+When the entry chosen for a file is "None" (a file inside no `Scope`, handled as "None", included), that file
+skips every library step: call no bundled skill, count no component library components among the candidates,
+and there is no `Loading` line to read or change; follow the rest.
+
 The same per-file rule applies to the `Tokens` section and to the `New shared components` line of the
 `Conventions` section: when they have several entries, each with a `Scope` line, take the entry whose `Scope`
 covers the file's path, and the one with the longest path when several cover it; a file inside no `Scope` is
 handled as "None" and goes into the report's **`ui.md` mismatches**. While a new component has no path yet, the
-`New shared components` line is chosen by the file that will use it. When the `Shared components` table has a
+`New shared components` line is chosen by the files that will use it (its **using files**). When the using files
+fall in two or more scopes, take the line whose `Scope` covers every using file, and the one with the longest
+path when several do. When no line covers every using file, do not put the component in any package's shared
+directory, and do not put one shared copy in each: each using file handles it inside its own scope as a new
+component used on a single page under the **new-component bar**, and the report's **`ui.md` mismatches** gets
+one entry, "cross-package shared component has no home", with the using files' paths. When the `Shared
+components` table has a
 `Scope` column, only the rows whose `Scope` covers the file's path are candidates for that file. In the steps
 below and in `actually-look-at-the-ui`, the `Tokens` section, its `Location` line, and the `New shared
 components` line all mean the entry chosen for that file.
@@ -132,7 +145,10 @@ uses one:
 - Hand-writing keyboard, focus, or state behavior the component library or a shared component already has.
 - Editing files in `node_modules`.
 - Patching the component library package.
-- Copying a library component's source into the project.
+- Copying a library component's source into the project. One exception: when the `Loading` line of the
+  `Component library` section in `ui.md` records that the library adds component source to the project through
+  its official command (the `components.json` kind), adding a component that official way does not count;
+  copying by hand from the package is still prohibited.
 - Importing an **internal path** of the component library.
 
 The last four are the **package-level** prohibitions. An **internal path** is a path that neither the `exports`
@@ -151,10 +167,16 @@ A **hard-coded value** is a literal value that meets all three of these:
   **matching token**: one with the same value, or a token that already exists for the same purpose.
 
 "The same purpose" means only a token whose role (where this token is used) the `Tokens` section states, and
-whose role is the same as the literal's use. A role counts only as written in the `Tokens` section: the naming
-rule says the names carry roles, or uses are stated token by token; never infer a role from a token's name. A
-token that is only a step on a scale (`--space-3`, `--gray-500`, for example), with no role stated in the
-`Tokens` section, is not "the same purpose", which leaves "same value" as the only way to match.
+whose role is the same as the literal's use. A role counts only as written in the `Tokens` section, which states it in one of two ways: uses stated token
+by token; or a `Naming rule` line saying the names carry roles — then read the role off the token's name by
+that rule, which is the `Tokens` section's text, not an inference of your own. When the `Naming rule` does not
+say the names carry roles, never infer a role from a token's name. A token that is only a step on a scale
+(`--space-3`, `--gray-500`, for example), with no role stated in the `Tokens` section, is not "the same
+purpose", which leaves "same value" as the only way to match.
+
+A literal's **purpose** is the CSS property it sits in plus what it applies to — the `color` of error message
+text, for example. When its purpose cannot be judged the same as any stated role, it is not "the same
+purpose", which leaves only "same value".
 
 None of these is a hard-coded value:
 
@@ -182,7 +204,9 @@ Before building a new component, always meet the first two:
 
 A new component that two or more pages or features will use also meets the other two:
 
-- Put it where the `New shared components` line of the `Conventions` section says.
+- Put it where the `New shared components` line of the `Conventions` section says; when its using files fall
+  in two or more scopes, which line to take, and what to do when no line covers every using file, follow the
+  prerequisite.
 - Add what that same line requires, such as a barrel export, types, or a story.
 
 A new component used on a single page sits beside that page, stays out of `ui.md`, and is not bound by the last
@@ -197,7 +221,9 @@ When `ui.md` and the source conflict, the source wins. A skill that changes code
    - Adding, extracting, renaming, or deleting a shared component, or changing what it is for. When adding or
      extracting one, the component file, the page code that starts using it, and its `ui.md` row go in the
      same commit; the component is not committed on its own first: the `Shared components` table only holds
-     components two or more pages use, so the row is not true until the pages use it.
+     components two or more pages use, so the row is not true until the pages use it. When the table
+     has no `Scope` column and the new component cannot be used from every package, the same commit adds the
+     column and fills in each existing row's own scope.
    - Introducing, upgrading, or removing a component library, or changing how it is loaded.
    - Reusing an existing component that so far only another page used: in the component choice table it is
      "reused", with its file path as the location; when this change makes two or more pages or features use it,
