@@ -34,6 +34,13 @@ const numOf = (id) => String(id).replace(/^#/, '');
 
 class Crash extends Error {}
 
+/** A bash that runs tick's commands as the host's does: any on POSIX, Git Bash / MSYS / Cygwin on win32 (not WSL). */
+const BASH = (() => {
+  const p = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  if (p.status !== 0) return false;
+  return process.platform !== 'win32' || /MINGW|MSYS|CYGWIN/i.test(p.stdout);
+})();
+
 /** A run with tickets #1 and #2 on one line, set up as the freeze leaves it. */
 function world(t, { profile = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-tick-'));
@@ -574,15 +581,20 @@ test('#128 D1: next makes the directory of every exec stdout before it returns; 
   const h = world(t);
   assert.equal(existsSync(join(h.W, 'tick')), false, 'no tick/ directory before the first next');
   // The programs are stubbed as shell functions; the command line itself, its cd and its redirect, run as written.
-  const STUBS = `node() { echo '{}'; }; gh() { echo '{}'; }; `;
+  // It runs from the test's temporary directory, and only in a bash that reads Windows paths (Git Bash, MSYS, Cygwin)
+  // on win32: WSL's bash would flatten them and write the files into the working directory.
+  const STUBS = `node() { echo 'stub'; }; gh() { echo 'stub'; }; `;
   const run = h.run;
   const seen = [];
   h.run = (actions) => {
     for (const a of actions.filter((x) => x.kind === 'exec' && x.stdout)) {
       assert.ok(existsSync(dirname(a.stdout)), `${a.id} (batch ${a.batch}): ${dirname(a.stdout)} exists when next returns`);
-      const p = spawnSync('bash', ['-c', `${STUBS}${a.command}`], { encoding: 'utf8' });
-      assert.equal(p.status, 0, `${a.id}: ${p.stderr}`);
-      assert.doesNotMatch(p.stderr, /No such file or directory/);
+      if (BASH) {
+        const p = spawnSync('bash', ['-c', `${STUBS}${a.command}`], { encoding: 'utf8', cwd: h.dir });
+        assert.equal(p.status, 0, `${a.id}: ${p.stderr}`);
+        assert.doesNotMatch(p.stderr, /No such file or directory/);
+        assert.equal(readFileSync(a.stdout, 'utf8'), 'stub\n', `${a.id}: the redirect wrote ${a.stdout}`);
+      }
       seen.push(a);
     }
     run(actions);
@@ -688,6 +700,24 @@ test('#128 D4: a fix round given to a new agent names the findings source: the r
       assert.ok(!send.do.includes('.report.md') && !brief.includes('.report.md'));
     }
   }
+});
+
+test('#128 D4: under review: minimal a fix agent reassigned after a timeout is pointed at the report file', (t) => {
+  const h = world(t, { profile: { review: 'minimal' } });
+  h.policy.review = (a) => (a.tickets[0] === '#1' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+  h.policy.send = () => 'sent'; // the fix agent takes the round and then does nothing: no commit, no report
+  h.wake();
+  h.wake();
+  assert.equal(stage(h, '#1'), 'fixing');
+  const w3 = h.wake({ minutes: 31, reported: [] });
+  const timeout = h.actions(w3).find((a) => a.step === 'timeout');
+  assert.ok(timeout && timeout.tickets[0] === '#1', 'the silent fix agent is stopped and reassigned');
+  const respawn = h.log.find((a) => a.kind === 'spawn' && a.step === 'spawn' && a.tickets[0] === '#1' && a.spawn.description === 'fix #1');
+  assert.ok(respawn, 'a new fix agent');
+  const brief = readFileSync(briefOf(respawn), 'utf8');
+  assert.match(brief, /timed out and was stopped/);
+  assert.ok(brief.includes(join(h.W, 'tick', 'review', '1-1.report.md')), 'the findings are in the reviewer report');
+  assert.doesNotMatch(brief, /status record|review block/);
 });
 
 test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
