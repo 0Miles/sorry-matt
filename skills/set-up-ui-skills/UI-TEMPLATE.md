@@ -38,11 +38,14 @@ with nothing to say reads "None" instead of being removed. Angle brackets mark w
 - storybook: `<command>`
 ```
 
-When the project uses no ready-made component library, the "Component library" section is the single line "None".
+When the whole project uses no ready-made component library (no frontend package has one), the "Component
+library" section is the single line "None".
 
-When different packages each use one component library (a monorepo), the "Component library" section has one entry
-per library, each with a "Scope" line giving the package path it covers; every one is active. When one package has
-two at once, "Existing, not for new use" goes under that package's entry:
+When the frontend packages' libraries are not all the same (a monorepo; a package with no library counts), the
+"Component library" section has one entry per active library, each with a "Scope" line giving the package paths
+it covers; the packages with no library get one "None" entry holding only a "Scope" line. When several packages
+share the same library (or equally have none), merge them into one entry whose "Scope" line lists those packages'
+paths. When one package has two at once, "Existing, not for new use" goes under that package's entry:
 
 ```markdown
 ## Component library
@@ -55,9 +58,15 @@ two at once, "Existing, not for new use" goes under that package's entry:
   - Scope: `<path of package B>`
   - Loading: <package B's import route, and where styles and providers are loaded>
   - Bundled skill: <the skill that belongs to package B; "none" if there is none>
+- None
+  - Scope: `<path of the package with no component library>`
 ```
 
-A single-package project writes no "Scope" line and follows the first template; its format is unchanged.
+When every package's library is different and none repeats, each entry's "Scope" line holds one path; when no
+package lacks a library, leave out the "None" entry.
+
+A single-package project, or a monorepo where every frontend package's library is the same, writes no "Scope"
+line and follows the first template; its format is unchanged.
 
 ## Rules
 
