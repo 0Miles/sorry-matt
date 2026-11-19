@@ -2,8 +2,10 @@
 //   - double verdicts go through the two-step confirmation (README "Guard hook"; state in confirm-state.mjs)
 //   - ask verdicts ask once
 //   - merge verdicts ask once when deploy-on-merge.mjs says the merge deploys, or cannot tell
+//   - unattended (switch file or SORRY_MATT_UNATTENDED): each of those asks is a deny the agent parks instead
 // It fails closed: an event it cannot read is denied, so a broken guard is loud, not silent.
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classify } from './classify.mjs';
@@ -46,16 +48,23 @@ export function decide(raw, env = process.env, deps = {}) {
       return deny('sorry-matt guard：不能寫入 guard 的確認紀錄（sorry-matt-guard 目錄）。兩段確認只能經由 guard 給的確認指令完成。');
     }
     const token = confirmInvocation(event, ctx.root);
+    if (token !== null && token && (deps.unattended ?? unattended(env))) {
+      return unattendedDeny('這是兩段確認的第一次確認指令。');
+    }
     if (token !== null) return confirmStep(ctx, token);
 
     const verdicts = classify(event);
     const doubles = verdicts.filter((v) => v.level === 'double');
+    const away = deps.unattended ?? unattended(env);
+    if (doubles.length && away) {
+      return unattendedDeny(`${[...new Set(doubles.map((v) => v.consequence))].join('\n')}\n要執行的是：${subjectOf(event)}`);
+    }
     if (doubles.length) return twoStep(ctx, doubles);
     const asks = verdicts.filter((v) => v.level === 'ask');
-    if (asks.length) return ask(asks.map(askReason).join('\n'));
+    if (asks.length) return (away ? unattendedDeny : ask)(asks.map(askReason).join('\n'));
     for (const verdict of verdicts.filter((v) => v.level === 'merge')) {
       const result = ctx.detect(verdict.target, { cwd: event.cwd || process.cwd(), env });
-      if (result.deploys !== false) return ask(mergeReason(verdict, result));
+      if (result.deploys !== false) return (away ? unattendedDeny : ask)(mergeReason(verdict, result));
     }
     return null;
   } catch (error) {
@@ -189,6 +198,26 @@ function askReason(verdict) {
 function mergeReason(verdict, result) {
   if (result.deploys) return `sorry-matt guard 確認：這次合併會立即觸發正式部署或發布。${result.reason}。（${verdict.detail}）`;
   return `sorry-matt guard 確認：無法判斷這次合併會不會立即觸發正式部署（${result.reason}），所以先問。（${verdict.detail}）可以設定 SORRY_MATT_MERGE_DEPLOYS=no，或在 repo 的 .claude/sorry-matt.json 寫 {"mergeDeploysProduction": false}，明確告訴 guard 合併不會部署。`;
+}
+
+// ---------- unattended ----------
+
+// While the user is away, a prompt would hold the session until morning. The switch file (or the env) turns every
+// ask into a deny the agent can work around: park the step for the user and keep going. It only ever makes the
+// guard stricter, so whoever creates the file cannot loosen anything with it.
+export const unattendedFile = (home = homedir()) => join(home, '.claude', 'sorry-matt-unattended');
+const ON = /^(1|on|yes|true)$/i;
+export function unattended(env = process.env, exists = existsSync, home = homedir()) {
+  if (ON.test(String(env.SORRY_MATT_UNATTENDED ?? '').trim())) return true;
+  try {
+    return exists(unattendedFile(home));
+  } catch {
+    return false;
+  }
+}
+
+function unattendedDeny(reason) {
+  return deny(`sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守模式只由使用者切換（刪除 ${unattendedFile().replace(/\\/g, '/')}，或拿掉 SORRY_MATT_UNATTENDED），不要動它。`);
 }
 
 // ---------- hook output ----------

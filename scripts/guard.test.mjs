@@ -7,12 +7,15 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide, confirmCommand } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, unattended, unattendedFile } from '../hooks/decision.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
+
+// Unless a test says otherwise the user is at the keyboard, whatever switch file this machine has.
+const decide = (raw, env = {}, deps = {}) => decideWith(raw, env, { unattended: false, ...deps });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CWD = process.platform === 'win32' ? 'D:\\code\\repo' : '/home/me/code/repo';
@@ -98,6 +101,8 @@ const CLASSIFIED = {
     'cp backup.json ~/.claude.json',
     'cp hook.sh .claude/hooks/pre-tool.sh',
     'echo {} > .mcp.json',
+    'git checkout -- .claude/settings.json',
+    'Copy-Item new.json -Destination .claude/settings.json',
   ],
   'release-deploy': [
     'npm publish',
@@ -240,7 +245,27 @@ const LET_THROUGH = [
   'aws s3 rb s3://scratch-bucket',
   'curl -s https://discord.com/api/webhooks/1/abc',
   'curl https://hooks.slack.com/services/T/B/X',
+  // reading, printing, testing or committing a settings file writes nothing; a copy writes only its destination
+  'Test-Path .claude/settings.local.json',
+  'Get-ChildItem .claude/settings.json',
+  'echo .claude/settings.json',
+  'sha256sum .claude/settings.json',
+  'cp .claude/settings.json /tmp/settings.backup.json',
+  'git commit -m "allow gh" .claude/settings.json',
+  'code .claude/settings.json',
 ];
+
+test('cmd /c is read with cmd quoting: backslashes are paths, \\\\?\\ is a long path', () => {
+  const pwshAt = (command) => first(verdicts('PowerShell', { command }, 'D:\\code\\repo'));
+  // An agent cleaning up its own scratch worktree under the temp dir (seen in a real run).
+  const temp = join(tmpdir(), 'claude', 'x', 'scratchpad', 'r453', 'review-453');
+  assert.equal(pwshAt(`$p = '${temp}'; cmd /c "rd /s /q \\\\?\\$p"; Test-Path $p`), null);
+  assert.equal(pwshAt(`cmd /c "rd /s /q ${temp}"`), null);
+  // Before, the backslashes were eaten and this turned into a relative path that passed.
+  assert.equal(pwshAt('cmd /c "rd /s /q D:\\other\\place"'), 'catastrophic');
+  assert.equal(pwshAt('cmd /c "rd /s /q \\\\?\\D:\\other\\place"'), 'catastrophic');
+  assert.equal(bash("cmd /c 'rd /s /q C:\\Users'"), 'catastrophic');
+});
 
 for (const [category, commands] of Object.entries(CLASSIFIED)) {
   test(`classified as ${category}`, () => {
@@ -560,8 +585,9 @@ test('two-step confirmation: a tool that cannot be rewritten is denied first, wi
 test('the hook speaks the PreToolUse contract end to end and fails closed', () => {
   withDir((dir) => {
     // os.tmpdir() of the child points into dir, so the state stays inside the test.
-    const env = { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir, CLAUDE_PLUGIN_ROOT: root };
+    const env = { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir, HOME: dir, USERPROFILE: dir, CLAUDE_PLUGIN_ROOT: root };
     delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
     const run = (script, input, args = []) => spawnSync(process.execPath, [join(root, script), ...args], { input, encoding: 'utf8', env });
     const guard = (command) => {
       const result = run('hooks/guard.mjs', JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id: 'e2e', permission_mode: 'default' }));
@@ -650,4 +676,63 @@ test('the user can turn the guard off through the environment', () => {
   assert.equal(decide(call, { SORRY_MATT_GUARD: 'OFF' }, { store }), null);
   assert.ok(decide(call, {}, { store }));
   assert.ok(decide(call, { SORRY_MATT_GUARD: 'on' }, { store }));
+});
+
+test('a variable set earlier on the same line is read as its value', () => {
+  const target = (command, tool = 'Bash') => verdicts(tool, { command }).find((v) => v.level === 'merge')?.target;
+  assert.equal(target('R=0Miles/sheet-thief-studio; gh pr merge 181 --repo $R --merge && sleep 5').repo, '0Miles/sheet-thief-studio');
+  assert.equal(target('export R=o/r && gh pr merge 1 -R "${R}"').repo, 'o/r');
+  assert.equal(target('$Repo = "o/r"; gh pr merge 1 --repo $repo', 'PowerShell').repo, 'o/r');
+  // Two different values, a dynamic value, or a use before the assignment: left as written.
+  assert.equal(target('R=a/b; R=c/d; gh pr merge 1 --repo $R').repo, '$R');
+  assert.equal(target('R=$(cat f); gh pr merge 1 --repo $R').repo, '$R');
+  assert.equal(target('gh pr merge 1 --repo $R; R=o/r').repo, '$R');
+  // It can only make a verdict sharper.
+  assert.equal(bash('D=~; rm -rf $D'), 'catastrophic');
+});
+
+test('unattended: every ask becomes a deny the agent can park, and nothing is recorded', () => {
+  const store = memoryStore();
+  const away = { unattended: true, store, now: 1 };
+  const check = (raw, deps = away) => {
+    const result = out(decideWith(raw, {}, deps));
+    assert.equal(result.permissionDecision, 'deny');
+    assert.match(result.permissionDecisionReason, /無人值守模式.*\n[^]*人工作業清單/);
+    assert.equal(result.updatedInput, undefined);
+    return result.permissionDecisionReason;
+  };
+  assert.match(check(event('npm publish')), /發布版本或部署正式環境/);
+  assert.match(check(event('gh pr merge 12'), { ...away, detect: () => ({ deploys: null, reason: '查不到' }) }), /無法判斷/);
+  assert.match(check(event('rm -rf ~')), /不經資源回收筒[^]*要執行的是：rm -rf ~/);
+  assert.deepEqual(store.sessions, {}, 'no two-step token was started');
+  const token = tokenFor('s1', 'Bash', { command: 'rm -rf ~' });
+  const pluginRoot = 'C:\\plugins\\sorry-matt';
+  check(event(confirmCommand(pluginRoot, token)), { ...away, pluginRoot });
+  // What was let through stays let through.
+  assert.equal(decideWith(event('git status'), {}, away), null);
+  assert.equal(decideWith(event('gh pr merge 12'), {}, { ...away, detect: () => ({ deploys: false, reason: '' }) }), null);
+});
+
+test('unattended is switched by a file in ~/.claude or by SORRY_MATT_UNATTENDED', () => {
+  withDir((home) => {
+    const file = unattendedFile(home);
+    assert.equal(file, join(home, '.claude', 'sorry-matt-unattended'));
+    const exists = (p) => p === file;
+    assert.equal(unattended({}, () => false, home), false);
+    assert.equal(unattended({}, exists, home), true);
+    assert.equal(unattended({ SORRY_MATT_UNATTENDED: 'on' }, () => false, home), true);
+    assert.equal(unattended({ SORRY_MATT_UNATTENDED: 'off' }, () => false, home), false);
+    assert.equal(unattended({}, () => { throw new Error('EPERM'); }, home), false);
+    // End to end: the hook process reads the file on every call.
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const guard = () => JSON.parse(spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: event('npm publish'), encoding: 'utf8', env }).stdout).hookSpecificOutput.permissionDecision;
+    assert.equal(guard(), 'ask');
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(file, '');
+    assert.equal(guard(), 'deny');
+    // Creating the switch is not a Claude settings write.
+    assert.equal(bash('touch ~/.claude/sorry-matt-unattended'), null);
+  });
 });
