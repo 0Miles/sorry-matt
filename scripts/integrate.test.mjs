@@ -129,7 +129,7 @@ test('line-init (direct) uses the base branch where it is checked out and create
 });
 
 test('ticket-init cuts the ticket branch from the line tip and records it', (t) => {
-  const { dir, git, g, ok, state, refused, work, lineWt } = withLine(t, ['#1']);
+  const { dir, git, g, ok, state, refused, work, lineWt } = withLine(t, ['#1', '#2']);
   const tip = work(lineWt, { 'x.md': 'x\n' }, 'line-level commit');
   const wt = join(dir, 'wt-1');
   const out = ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt);
@@ -144,7 +144,7 @@ test('ticket-init cuts the ticket branch from the line tip and records it', (t) 
   assert.deepEqual(again.created, { branch: false, worktree: false });
   assert.equal(again.from, null);
   refused(/is not a ticket of this run/, 'ticket-init', '#9', '--branch', 'run-1/09-x', '--worktree', join(dir, 'wt-9'));
-  refused(/is already the worktree of/, 'ticket-init', '#1', '--branch', 'run-1/01-b', '--worktree', lineWt);
+  refused(/is already the worktree of/, 'ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', lineWt);
 });
 
 test('merge: a normal integration merges --no-ff, records the SHA, delivers, pushes and cleans up; a rerun changes nothing', (t) => {
@@ -385,4 +385,47 @@ test('merge refuses what it cannot do, without touching anything', (t) => {
   assert.equal(integrate('merge', '#1').code, 2);
   assert.equal(integrate('merge', '#1', '--worktree', lineWt, '--checks', 'x').code, 2);
   assert.equal(integrate('frobnicate').code, 2);
+});
+
+test('ticket-init and merge refuse a branch that is not the ticket\'s own, touching nothing', (t) => {
+  const { dir, git, g, ok, queue, work, statePath, refused, lineWt } = withLine(t, ['#1', '#2', '#3']);
+  const wt1 = join(dir, 'wt-1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt1);
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  work(wt1, { 'b.md': 'b\n' }, '#1: add b');
+  work(wt2, { 'c.md': 'c\n' }, '#2: add c');
+  queue('#1');
+  queue('#2');
+  queue('#3');
+  const snapshot = () => ({
+    state: readFileSync(statePath, 'utf8'),
+    refs: git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads'),
+    worktrees: git('worktree', 'list', '--porcelain'),
+    line: g(lineWt, 'rev-parse', 'HEAD'),
+    status: g(lineWt, 'status', '--porcelain'),
+  });
+  const untouched = (re, ...argv) => {
+    const before = snapshot();
+    refused(re, ...argv);
+    assert.deepEqual(snapshot(), before);
+  };
+  const m = (id, branch) => ['merge', id, '--worktree', lineWt, '--branch', branch];
+  const ti = (id, branch) => ['ticket-init', id, '--branch', branch, '--worktree', join(dir, 'wt-new')];
+
+  untouched(/#1's recorded ticket branch is run-1\/01-a, not run-1\/02-b/, ...m('#1', 'run-1/02-b'));
+  untouched(/run-1\/02-b is #2's ticket branch/, ...m('#3', 'run-1/02-b'));
+  untouched(/run-1\/line-a is an integration branch of this run/, ...m('#3', LINE));
+  untouched(/main is a protected branch/, ...m('#3', 'main'));
+  untouched(/#1's recorded ticket branch is run-1\/01-a, not run-1\/01-z/, ...ti('#1', 'run-1/01-z'));
+  untouched(/run-1\/02-b is #2's ticket branch/, ...ti('#3', 'run-1/02-b'));
+  untouched(/run-1\/line-a is an integration branch of this run/, ...ti('#3', LINE));
+  untouched(/master is a protected branch/, ...ti('#3', 'master'));
+  assert.equal(existsSync(join(dir, 'wt-new')), false);
+
+  // A delivered ticket's rerun with the line as --branch must not remove the integration worktree.
+  ok('merge', '#1', '--worktree', lineWt);
+  untouched(/#1's recorded ticket branch is run-1\/01-a, not run-1\/line-a/, ...m('#1', LINE));
+  assert.equal(existsSync(lineWt), true);
+  assert.equal(existsSync(wt2), true);
 });

@@ -31,6 +31,10 @@
 //              `line` in the state), with a worktree at `--worktree`, and records the branch on the ticket
 //              (`state.mjs set --branch`). An existing branch is reused as it is; a worktree already holding it must
 //              be the one at `--worktree`. Refused for a ticket at an end state.
+//              Ticket branch rule (ticket-init and merge, checked before anything is touched): the branch is
+//              refused when it is an integration branch of the run (the ticket's line or another), a protected
+//              branch (see push), or another ticket's recorded branch; once the ticket has a recorded branch, a
+//              different `--branch` is refused too.
 //              Output: { "format", "command": "ticket-init", "ticket", "line", "branch", "worktree", "head",
 //                        "from": "<line tip it was cut from>" | null, "created": { "branch", "worktree" } }
 // merge        Integrates one ticket (stage queued, integrating, or delivered for a rerun) in the integration
@@ -175,6 +179,15 @@ function state(ctx, command, ...args) {
   throw new Error(`state.mjs ${command}: ${message}`);
 }
 
+/** The ticket branch rule (see the header): refuse a branch that is not this ticket's own to merge and delete. */
+function checkTicketBranch(s, id, t, branch, repo) {
+  if (t.branch && branch !== t.branch) throw new Refusal(`${id}'s recorded ticket branch is ${t.branch}, not ${branch}`);
+  if (branch in s.lines) throw new Refusal(`${branch} is an integration branch of this run, not a ticket branch`);
+  if (isProtected(repo, branch)) throw new Refusal(`${branch} is a protected branch, not a ticket branch`);
+  const other = Object.entries(s.tickets).find(([k, o]) => k !== id && o.branch === branch);
+  if (other) throw new Refusal(`${branch} is ${other[0]}'s ticket branch`);
+}
+
 const ticketOf = (s, id) => {
   const t = s.tickets[id];
   if (!t) throw new Refusal(`${id} is not a ticket of this run (add it with state.mjs add)`);
@@ -231,6 +244,7 @@ function ticketInit(ctx, rest, flags) {
   if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
   const lineTip = branchTip(repo, t.line);
   if (lineTip === null) throw new Refusal(`${id}'s integration branch ${t.line} does not exist (line-init first)`);
+  checkTicketBranch(s, id, t, flags.branch, repo);
   const made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), lineTip);
   if (t.branch !== flags.branch) state(ctx, 'set', id, '--branch', flags.branch);
   return {
@@ -365,6 +379,7 @@ function merge(ctx, rest, flags) {
   }
   const branch = flags.branch ?? t.branch;
   if (!branch) throw new Refusal(`${id} has no ticket branch recorded: pass --branch, or create it with ticket-init`);
+  checkTicketBranch(s, id, t, branch, wt);
   const line = t.line;
   const on = currentBranch(wt);
   if (on !== line) throw new Refusal(`${wt} has ${on ?? 'no branch'} checked out, not ${id}'s integration branch ${line}`);
