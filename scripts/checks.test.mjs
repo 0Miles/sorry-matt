@@ -101,6 +101,44 @@ test('a skill script ships to dist unchanged', () => {
   });
 });
 
+const AGENT_SRC = '---\nname: rev\ndescription: 審查\ntools: Read, Bash, PowerShell\n---\n\n# 審查\n\n## 1. 規則\n\n讀 `${CLAUDE_PLUGIN_ROOT}/agents/other.md`。\n\n完成判準：裁決。\n';
+const AGENT_DIST = '---\nname: rev\ndescription: Review\ntools: Read, Bash, PowerShell\n---\n\n# Review\n\n## 1. Rules\n\nRead `${CLAUDE_PLUGIN_ROOT}/agents/other.md`.\n\nDone when: ruled.\n';
+
+test('an agent definition with a src reconciles like a skill; one without a src is allowed', () => {
+  const lone = '---\nname: lone\ndescription: Carries out its brief.\ntools: Read\n---\n\nCarry out the brief.\n';
+  withRepo({ 'src/agents/rev.md': AGENT_SRC, 'agents/rev.md': AGENT_DIST.replace(/\n/g, '\r\n'), 'agents/lone.md': lone }, (root) => {
+    assert.deepEqual(checkStructure(root), []);
+  });
+});
+
+test('agent definitions: a missing dist, frontmatter drift, or structure drift is reported', () => {
+  withRepo({ 'src/agents/rev.md': AGENT_SRC }, (root) => {
+    assert.match(checkStructure(root).join('\n'), /agents\/rev\.md exists in src but not in dist/);
+  });
+  withRepo({ 'src/agents/rev.md': AGENT_SRC, 'agents/rev.md': AGENT_DIST.replace('tools: Read, Bash, PowerShell', 'tools: Read, Bash, Edit') }, (root) => {
+    assert.match(checkStructure(root).join('\n'), /agents\/rev\.md: frontmatter tools differs between src and dist/);
+  });
+  withRepo({ 'src/agents/rev.md': AGENT_SRC, 'agents/rev.md': AGENT_DIST.replace('---\n\n', 'model: haiku\n---\n\n') }, (root) => {
+    assert.match(checkStructure(root).join('\n'), /agents\/rev\.md: frontmatter model differs between src and dist/);
+  });
+  const drifted = AGENT_DIST.replace('## 1. Rules\n', '').replace('Done when: ruled.\n', '').replace('/agents/other.md', '/agents/else.md');
+  withRepo({ 'src/agents/rev.md': AGENT_SRC, 'agents/rev.md': drifted }, (root) => {
+    const problems = checkStructure(root).join('\n');
+    assert.match(problems, /agents\/rev\.md: heading structure differs/);
+    assert.match(problems, /agents\/rev\.md: 完成判準 count 1 in src, "Done when:" count 0/);
+    assert.match(problems, /agents\/rev\.md: referenced files differ/);
+  });
+});
+
+test('every agent definition names itself after its file and has a description', () => {
+  withRepo({ 'agents/lone.md': '---\nname: other\n---\n\nbody\n', 'agents/bare.md': 'no frontmatter\n' }, (root) => {
+    const problems = checkStructure(root).join('\n');
+    assert.match(problems, /agents\/lone\.md: frontmatter name must be "lone"/);
+    assert.match(problems, /agents\/lone\.md: has no description/);
+    assert.match(problems, /agents\/bare\.md: missing frontmatter/);
+  });
+});
+
 const UPSTREAM = 'upstream text\n';
 const HASH = createHash('sha256').update(UPSTREAM).digest('hex').toUpperCase();
 const notice = (hash) =>

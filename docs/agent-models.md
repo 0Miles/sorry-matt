@@ -5,9 +5,39 @@
 
 | agent | 定義檔 | 模型 | 工具 |
 | --- | --- | --- | --- |
-| 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | 繼承主持人的模型 | Read, Glob, Grep, Bash, Write, Edit |
+| 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell, Write, Edit |
+| `prove-it` 的 Finder | `agents/finder.md`（`sorry-matt:finder`），原稿 `src/agents/finder.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
+| `prove-it` 的 Verifier | `agents/verifier.md`（`sorry-matt:verifier`），原稿 `src/agents/verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
+| `prove-it` 的 Fix Verifier | `agents/fix-verifier.md`（`sorry-matt:fix-verifier`），原稿 `src/agents/fix-verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 
-實作 agent、紅燈修正的 agent、`prove-it` 的 agents 與整併 agent 沒有定義檔，仍繼承主持人的模型。
+實作 agent、紅燈修正的 agent 與整併 agent 沒有定義檔，仍繼承主持人的模型。
+
+## 工具限制（#82、#104）
+
+`scripts/agent-tools.live.mjs` 在 Claude Code 2.1.328（2026-11-20，Windows 11）實測，結果寫在它的檔頭：
+
+- 定義檔的 `tools:` 就是 agent 的全部工具。三個審查類定義檔沒有 Edit 與 Write：以 `--agent` 跑的 session 解析出的工具
+  沒有這兩個，spawn 出來的同一行 `tools:` 的 agent 也呼叫不到（對照組有就呼叫得到）。
+- 它們留著 shell，因為審查要跑測試與 `git`，而 shell 寫得了檔。所以能證明的只是「沒有 Edit 與 Write 工具」，不是唯讀；
+  「審查不改這張票的 diff」仍靠定義檔的文字規則，加上 `prove-it` 的 `git status --porcelain` 檢查來發現。真正唯讀
+  要靠沒有寫入權限的執行環境，超出 plugin 的範圍。
+- 定義檔本文的 `${CLAUDE_PLUGIN_ROOT}` 會換成 plugin 的目錄：`agents/fix-verifier.md` 以它讀 `agents/verifier.md` 的三關與
+  blocking 判準，不另抄一份。
+- 只有 PowerShell tool、沒有 Bash tool 的 session 裡（以 `--tools` 模擬），`tools:` 只列 Bash 的定義檔解析成一個 shell
+  都沒有，不報錯；列了 session 沒有的工具會被略過。所以每個定義檔都列 `Bash, PowerShell`，展開 agent 也補上了
+  PowerShell（#74 併入 #82 的那一項）。
+
+## 實作 agent 與展開 agent 要不要跟進（#82 提案 3）
+
+評估結論：要跟進，但不在 #104 做，排在 `get-to-work` 的入口改寫（#124）之後另開票。
+
+- 工具限制幫不上：兩者都要 Edit 與 Write。展開 agent 的 `tools:` 已補上 PowerShell，剩下的差別只在 context。
+- context 有實益：`brief.mjs` 已經機械填好佔位，但主持人的 Agent 呼叫仍要把填好的全文當 `prompt` 輸出一次，
+  `IMPLEMENTER.md` 與 `EXPANDER.md` 分隔線以下的固定規則每次派送都算主持人的輸出 token。固定規則搬進定義檔本文後，
+  派工只剩佔位值。
+- 先不做的理由：兩份交付說明與 `brief.mjs`、`brief.test.mjs`、`ASKING.md` 的共用規則綁在一起，搬動要同時改模板、
+  填值腳本與它的測試，並讓定義檔多出 src 與 dist 兩份；#124 正要改寫同一批檔，先搬會和它衝突。通用 agent 的退回
+  也要照 `prove-it` 的做法改成「定義檔本文接上派工內容」。
 
 展開 agent 的定義檔原本寫 `model: sonnet`，下方的對照就是在那個設定下量的。目視驗收判定改後的驗收項與改前不等價
 （#86），定義檔因此拿掉 `model:`，只留工具集。只改工具集的那一組還沒有量過，下方「改後」的數字不代表現在的設定。

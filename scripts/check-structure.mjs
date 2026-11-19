@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Reconcile the Traditional Chinese source (src/skills) with the English dist (skills/).
+// Reconcile the Traditional Chinese source (src/skills, src/agents) with the English dist (skills/, agents/).
 // The two are written in different languages, so this compares structure, not wording:
 // file sets, heading levels and numbering, "Done when" counts, referenced file names,
 // pending-ticket markers, frontmatter, and byte-identical metadata, scripts and vendored files.
@@ -46,6 +46,29 @@ export const pendingMarkers = (text) => [...text.matchAll(/<!--\s*pending\s+(#\d
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 const diff = (a, b) => ({ onlyA: a.filter((x) => !b.includes(x)), onlyB: b.filter((x) => !a.includes(x)) });
 
+// The language-neutral structure of one src/dist Markdown pair; `distPath` resolves the dist's relative links.
+export function compareProse(where, src, dist, distPath) {
+  const problems = [];
+  if (!sameList(headings(src), headings(dist))) {
+    problems.push(`${where}: heading structure differs (src ${headings(src).join(' ')} | dist ${headings(dist).join(' ')})`);
+  }
+  const [ds, dd] = [doneWhenCount(src, 'src'), doneWhenCount(dist, 'dist')];
+  if (ds !== dd) problems.push(`${where}: 完成判準 count ${ds} in src, "Done when:" count ${dd} in dist`);
+  const refs = diff(references(src), references(dist));
+  if (refs.onlyA.length || refs.onlyB.length) {
+    problems.push(`${where}: referenced files differ (src only: ${refs.onlyA.join(', ') || '-'}; dist only: ${refs.onlyB.join(', ') || '-'})`);
+  }
+  if (!sameList(pendingMarkers(src), pendingMarkers(dist))) {
+    problems.push(`${where}: pending markers differ (src ${pendingMarkers(src).join(' ')} | dist ${pendingMarkers(dist).join(' ')})`);
+  }
+  for (const target of linkTargets(dist)) {
+    if (!existsSync(resolve(dirname(distPath), target.replace(/#.*$/, '')))) {
+      problems.push(`${where}: link target ${target} does not exist in dist`);
+    }
+  }
+  return problems;
+}
+
 export function checkSkill(root, name) {
   const problems = [];
   const srcDir = join(root, 'src/skills', name);
@@ -66,24 +89,7 @@ export function checkSkill(root, name) {
       continue;
     }
     if (!file.endsWith('.md')) continue;
-
-    if (!sameList(headings(src), headings(dist))) {
-      problems.push(`${where}: heading structure differs (src ${headings(src).join(' ')} | dist ${headings(dist).join(' ')})`);
-    }
-    const [ds, dd] = [doneWhenCount(src, 'src'), doneWhenCount(dist, 'dist')];
-    if (ds !== dd) problems.push(`${where}: 完成判準 count ${ds} in src, "Done when:" count ${dd} in dist`);
-    const refs = diff(references(src), references(dist));
-    if (refs.onlyA.length || refs.onlyB.length) {
-      problems.push(`${where}: referenced files differ (src only: ${refs.onlyA.join(', ') || '-'}; dist only: ${refs.onlyB.join(', ') || '-'})`);
-    }
-    if (!sameList(pendingMarkers(src), pendingMarkers(dist))) {
-      problems.push(`${where}: pending markers differ (src ${pendingMarkers(src).join(' ')} | dist ${pendingMarkers(dist).join(' ')})`);
-    }
-    for (const target of linkTargets(dist)) {
-      if (!existsSync(resolve(dirname(join(distDir, file)), target.replace(/#.*$/, '')))) {
-        problems.push(`${where}: link target ${target} does not exist in dist`);
-      }
-    }
+    problems.push(...compareProse(where, src, dist, join(distDir, file)));
     if (file === 'SKILL.md') {
       const [fs, fd] = [frontmatter(src), frontmatter(dist)];
       if (!fs || !fd) {
@@ -103,6 +109,44 @@ export function checkSkill(root, name) {
   return problems;
 }
 
+// Plugin agent definitions. `agents/<name>.md` is what the plugin loads, in English. A definition whose body holds
+// rules is written from a Traditional Chinese source, `src/agents/<name>.md`; one whose body holds none (it only
+// says to carry out the brief it is spawned with) has the dist file alone. Every frontmatter field but
+// `description` (name, tools, model, ...) is the same in both, since it is configuration, not prose.
+export function checkAgents(root) {
+  const problems = [];
+  const srcDir = join(root, 'src/agents');
+  const distDir = join(root, 'agents');
+  const srcFiles = listFiles(srcDir).filter((f) => f.endsWith('.md'));
+  const distFiles = listFiles(distDir).filter((f) => f.endsWith('.md'));
+  for (const file of distFiles) {
+    const fm = frontmatter(readLF(join(distDir, file)));
+    if (!fm) problems.push(`agents/${file}: missing frontmatter`);
+    else {
+      if (fm.name !== file.replace(/.md$/, '')) problems.push(`agents/${file}: frontmatter name must be "${file.replace(/.md$/, '')}"`);
+      if (!fm.description) problems.push(`agents/${file}: has no description`);
+    }
+  }
+  for (const file of srcFiles) {
+    const where = `agents/${file}`;
+    if (!distFiles.includes(file)) {
+      problems.push(`${where} exists in src but not in dist`);
+      continue;
+    }
+    const src = readLF(join(srcDir, file));
+    const dist = readLF(join(distDir, file));
+    const [fs, fd] = [frontmatter(src), frontmatter(dist)];
+    if (!fs) problems.push(`${where}: src has no frontmatter`);
+    else if (fd) {
+      for (const key of [...new Set([...Object.keys(fs), ...Object.keys(fd)])].filter((k) => k !== 'description')) {
+        if ((fs[key] || '') !== (fd[key] || '')) problems.push(`${where}: frontmatter ${key} differs between src and dist`);
+      }
+    }
+    problems.push(...compareProse(where, src, dist, join(distDir, file)));
+  }
+  return problems;
+}
+
 export function checkRepo(root) {
   const problems = [];
   const srcSkills = listDirs(join(root, 'src/skills'));
@@ -111,6 +155,7 @@ export function checkRepo(root) {
   for (const s of onlyA) problems.push(`skill ${s} exists in src but not in dist`);
   for (const s of onlyB) problems.push(`skill ${s} exists in dist but not in src`);
   for (const s of srcSkills.filter((x) => distSkills.includes(x))) problems.push(...checkSkill(root, s));
+  problems.push(...checkAgents(root));
 
   const pluginPath = join(root, '.claude-plugin/plugin.json');
   if (existsSync(pluginPath)) {
