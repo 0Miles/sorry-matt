@@ -117,6 +117,39 @@ test('a category or ticket named like an Object.prototype key is counted like an
   assert.equal(odd.json.spawns, 4);
 });
 
+test('a per-ticket tally also counts a category named like an Object.prototype key', (t) => {
+  const r = summarize(t, { spawns: 2, log: [{ type: 'constructor', description: 'x #1' }, { type: 'constructor', description: 'x #1' }] });
+  assert.equal(r.code, 0);
+  assert.equal(r.out.includes('"constructor": 2'), true);
+  assert.deepEqual(r.json.byTicket, { '#1': { constructor: 2 } });
+  assert.deepEqual(r.json.byType, { constructor: 2 });
+});
+
+test('a ticket file name next to punctuation is still the ticket', (t) => {
+  for (const description of ['implement 03-x.md.', 'implement 03-x.md,', 'implement (03-x.md)', 'implement 03-x.md:', 'implement "03-x.md"', 'implement 03-x.md; then stop', 'implement 「03-x.md」。']) {
+    assert.deepEqual(summarize(t, counters([gp(description)])).json.byTicket, { '03-x.md': { implement: 1 } }, description);
+  }
+});
+
+test('with several markers the first one is the ticket', (t) => {
+  const first = (description) => Object.keys(summarize(t, counters([gp(description)])).json.byTicket);
+  assert.deepEqual(first('expand 03-a.md, 04-b.md, 05-c.md'), ['03-a.md']);
+  assert.deepEqual(first('implement 03-x.md, #12'), ['03-x.md']);
+  assert.deepEqual(first('implement #12, 03-x.md'), ['#12']);
+  assert.deepEqual(first('expand 03-登入.md、04-登出.md'), ['03-登入.md']);
+});
+
+test('where a ticket file name ends: dots inside the slug belong to it, another extension makes it no ticket', (t) => {
+  const first = (description) => Object.keys(summarize(t, counters([gp(description)])).json.byTicket);
+  assert.deepEqual(first('implement 03-a.md.md'), ['03-a.md.md']);
+  assert.deepEqual(first('implement 03-v1.2-notes.md'), ['03-v1.2-notes.md']);
+  assert.deepEqual(first('implement 03-v1.2-notes.md.'), ['03-v1.2-notes.md']);
+  assert.deepEqual(first('implement 03-x.md.txt'), []);
+  assert.deepEqual(first('implement 03-x.mdx'), []);
+  assert.deepEqual(first('implement v2.03-x.md'), []);
+  assert.deepEqual(first('implement a03-x.md'), []);
+});
+
 test('the old counters format: every spawn is unknown', (t) => {
   const r = summarize(t, '{"spawns": 4, "agents": ["a","b"], "updated": "2026-11-18T00:00:00.000Z"}');
   assert.equal(r.code, 0);

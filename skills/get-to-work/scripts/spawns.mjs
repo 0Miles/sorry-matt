@@ -21,9 +21,14 @@
 //   - otherwise "general-purpose".
 //   Spawns counted but not logged (`spawns` minus the number of log entries) are "unknown".
 //
-// Ticket of a log entry: the first `#<digits>` or `<digits>-<slug>.md` marker in `description`; the slug is any
-// run of characters that are neither whitespace nor a path separator. An entry without one is in no ticket; it
-// still counts in `byType`.
+// Ticket of a log entry: the first `#<digits>` or `<digits>-<slug>.md` marker in `description`, by position. An
+// entry without one is in no ticket; it still counts in `byType`. A file-name marker:
+//   - starts at digits not preceded by a letter, a digit, `_`, `.` or `-` (so after a space, `/`, `(` and the like);
+//   - has a slug in any script: any characters but whitespace, path separators, and the punctuation that
+//     separates or wraps names: , ; : ( ) [ ] { } < > quotes, and the full-width ，、。；：（）「」;
+//   - ends at the last `.md` of that run which is not followed by a letter, a digit, `_` or `-`, nor by a `.` and
+//     one of those. So `03-a.md.md` and `03-v1.2-notes.md` are whole names, `03-x.md.` and `03-x.md,` give
+//     `03-x.md`, and `03-x.md.txt` is no ticket.
 //
 // Output (stdout, JSON, format "sorry-matt/spawns@1"; fields are only ever added, never renamed)
 //   {
@@ -43,9 +48,10 @@ import { UsageError, failure, runIfEntry } from './cli.mjs';
 export const FORMAT = 'sorry-matt/spawns@1';
 export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'finder', 'verifier', 'fix-verifier'];
 
-// A ticket file name is `<digits>-<slug>.md`, the slug being any characters that are neither whitespace nor a
-// path separator (so a slug in any script counts); the name starts and ends at whitespace or a path separator.
-const TICKET = /#\d+|(?<![^\s\/\\])\d+-[^\s\/\\]*\.md(?![^\s\/\\])/u;
+// The file-name marker is described in the header: its start, its slug and its end.
+const WORD = '\\p{L}\\p{N}_';
+const SLUG = '[^\\s\\/\\\\,;:()\\[\\]{}<>"\'`，、。；：（）「」]';
+const TICKET = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'u');
 const optionalString = (value) => value === null || value === undefined || typeof value === 'string';
 
 /** The category one log entry counts under. */
