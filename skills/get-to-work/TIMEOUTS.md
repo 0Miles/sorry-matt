@@ -14,9 +14,19 @@ file attached (dispatch, budget and breaker, the wake-up steps, the assignment r
    close it out under wake-up step 2, "handle the agents that reported", instead. Once stopped, take the first of
    these cases that applies:
    - **The progress fingerprint cannot be computed** — the agent was stopped because it still had an `error` after
-     the second scan → mark the ticket **awaiting ruling** with that `error` as the reason: the worktree's state
-     needs a person. Do not reassign it, and assign nothing else on the same worktree — `record` fails there the
-     same way, and an assignment with no assignment record does not stand (time limits in `SKILL.md`).
+     the second scan. The worktree's state needs a person: do not reassign it, and assign nothing else on the same
+     worktree — `record` fails there the same way, and an assignment with no assignment record does not stand (time
+     limits in `SKILL.md`). Settle it by what the agent was doing, with that `error` as the reason (an expansion
+     agent has no worktree and never reaches this case):
+     - **Implementing, fixing** (a red-light fix excepted) → mark the ticket **awaiting ruling**.
+     - **Integrating** → first put the integration worktree back at the HEAD of the assignment with the commands
+       of the "integrating" case below, then mark the ticket **awaiting ruling** (not sent back for a redo); the
+       queue moves on to the next ticket.
+     - **A red-light fix** → this stop counts as one failed fix round, not as a reassignment, and no second round
+       is started: when it maps to a ticket, go straight to the revert in `RED-LIGHT.md`, red-light handling
+       point 5; when it maps to no ticket, first `git -C <integration worktree> reset --hard <the HEAD in the
+       assignment record>` to clear the changes it left, then find the line to have failed verification per
+       point 6.
    - **The cause needs a person** — the ticket's status record names, under blockers, a decision for a person, a
      missing permission or a fact that cannot be found → mark it **awaiting ruling** with the cause.
    - **Integrating** → first check `git -C <integration worktree> rev-parse -q --verify MERGE_HEAD`: with output,

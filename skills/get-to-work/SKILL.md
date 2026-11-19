@@ -236,9 +236,17 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<ticket>=<n
 SendMessage, then add the agent id to that row — so no agent ever runs without its record in the reconciliation
 table. When `record` exits non-zero, stdout is empty and you do not assign: exit code 2 is a bad argument, so correct
 it and run again; exit code 1 means this worktree's progress fingerprint cannot be computed, and its state needs a
-person — mark the ticket **awaiting ruling** with stderr as the reason (which triggers a dispatch point per
-"Dispatch"), or, for a red-light fix that maps to no ticket, put it on the human-work list per `ASKING.md`
-section 4. Do not assign the work some other way instead.
+person: do not assign the work some other way instead. Settle it by the work you were about to assign, with stderr
+as the reason (an expansion agent's `record` reads no worktree, so it never exits 1):
+
+- **Implementation, a batched fix** (a red-light fix excepted) → mark the ticket **awaiting ruling**.
+- **A merge agent** → first `git -C <integration worktree> merge --abort` to put the integration worktree back to
+  where it was before the merge, then mark the ticket **awaiting ruling**; the queue moves on to the next ticket.
+- **A red-light fix** → it counts as one failed fix round and no further round is started: when it maps to a ticket,
+  go straight to the revert in `RED-LIGHT.md`, red-light handling point 5; when it maps to no ticket, find the line
+  to have failed verification per point 6.
+
+All three trigger a dispatch point per "Dispatch".
 
 Once the agent reports or is stopped, set that row's deadline to `—`. An **agent in flight** is any agent whose
 deadline is not `—`.
