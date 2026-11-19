@@ -647,8 +647,13 @@ Then deliver each line according to its mode:
      - heading: the reading position, the ticket number and the title;
      - commit range: each merge's `compare` link, with its commit count and `stat`; a red-light `-ci` merge gets
        its own entry;
-     - what changed: the host's summary of every commit message the ticket integrated into the line, batched-fix
-       commits included: `git log --format=%B -E --grep='#N([^0-9]|$)' <base branch>..<line integration branch>`;
+     - what changed: the host's summary of every commit message the ticket integrated into the line. Take them by
+       running `git log --format=%B <range>` once for each `range` (`<merge>^1..<merge>^2`) in the ticket's
+       `merges`, red-light `-ci` merges included; never search commits by ticket number — another ticket's commit
+       whose body mentions the number (say `Refs #8`) would be swept in. Batched fixes are made on the ticket
+       branch before integration, so they already sit inside the ticket's merge ranges and need no separate
+       search. A ticket in `missing` is handled as "commit range not found" above, with no alternative way to
+       take its commits;
      - acceptance evidence: the link to its status record;
      - a merge whose `resolved` is true is marked as carrying a conflict resolution, with its `remergeDiff`
        command and a note that it only works locally (git 2.36+) and GitHub's web views cannot show it; a ticket

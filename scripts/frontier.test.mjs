@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { githubFrontier, localFrontier, main, defaultDeps } from '../src/skills/get-to-work/scripts/frontier.mjs';
+import { githubFrontier, localFrontier, parseTicket, main, defaultDeps } from '../src/skills/get-to-work/scripts/frontier.mjs';
 import { shortPath } from './lib.mjs';
 
 const REPO = 'acme/app';
@@ -331,6 +331,162 @@ test('both trackers emit the same shape', () => {
   const gh = githubFrontier({ repo: REPO, numbers: ['6'], gh: fakeGh(ISSUES).gh });
   const local = localFrontier({ paths: [`${ISSUE_DIR}/02-api.md`], ...memory(FILES) });
   assert.deepEqual(keys(gh), keys(local));
+});
+
+// A delivered ticket: its own checkbox is ticked and the completion record is non-empty. `extra` goes after the
+// acceptance list, `tail` after the completion record.
+const delivered = (extra, tail = '') =>
+  [
+    '# 12: Delivered',
+    '',
+    '**Blocked by:** None',
+    '',
+    '## Acceptance criteria',
+    '',
+    '- [x] Real criterion',
+    '',
+    extra,
+    '',
+    '## sorry-matt completion',
+    '',
+    'commit abc',
+    '',
+    tail,
+  ].join('\n');
+
+test('local: a `- [ ]` inside fenced code does not keep a delivered ticket open', () => {
+  assert.equal(parseTicket(delivered('```markdown\n- [ ] Example inside a backtick fence\n```')).state, 'done');
+  assert.equal(parseTicket(delivered('~~~\n- [ ] Example inside a tilde fence\n~~~')).state, 'done');
+  // A backtick fence ignores tilde lines inside it, and the other way round.
+  assert.equal(parseTicket(delivered('```\n~~~\n- [ ] Inside the backtick fence\n```')).state, 'done');
+});
+
+test('local: a `- [ ]` in a Comments or sorry-matt section at any level does not keep a delivered ticket open', () => {
+  assert.equal(parseTicket(delivered('### Comments\n\n- [ ] A checkbox in a comment')).state, 'done');
+  assert.equal(parseTicket(delivered('### sorry-matt notes\n\n- [ ] A checkbox in a note')).state, 'done');
+  assert.equal(parseTicket(delivered('#### Sorry-matt scratch\n\n- [ ] Deeper still')).state, 'done');
+});
+
+test('local: a skipped section ends at the next heading of the same or a higher level', () => {
+  const ticket = delivered('### Comments\n\n- [x] A ticked comment\n\n## Acceptance criteria\n\n- [ ] Still open');
+  assert.equal(parseTicket(ticket).state, 'open');
+  // A deeper heading inside the skipped section does not end it.
+  assert.equal(parseTicket(delivered('### Comments\n\n#### Reply\n\n- [ ] Still a comment')).state, 'done');
+});
+
+test('local: an unchecked item outside fences and skipped sections still keeps the ticket open', () => {
+  assert.equal(parseTicket(delivered('- [ ] Not yet')).state, 'open');
+  assert.equal(parseTicket(delivered('* [ ] Star bullet')).state, 'open');
+  assert.equal(parseTicket(delivered('+ [ ] Plus bullet')).state, 'open');
+  assert.equal(parseTicket(delivered('### Notes\n\n- [ ] Under an own subheading')).state, 'open');
+  assert.equal(parseTicket(delivered('')).state, 'done');
+});
+
+test('local: completion, blocker and Blocked by headings count at any level', () => {
+  const only = '# 13: Deep\n\n**Blocked by:** None\n\n- [x] One\n\n### sorry-matt completion\n\ncommit abc\n';
+  assert.equal(parseTicket(only).state, 'done');
+  assert.equal(parseTicket('# 13: Deep\n\n- [x] One\n\n### sorry-matt completion\n\n').state, 'open');
+  assert.equal(parseTicket(`${only}\n### sorry-matt blocker\n\nreason: CI red, merge reverted\n`).state, 'stuck');
+  assert.equal(parseTicket('# 13: Deep\n\n- [x] One\n\n### Sorry-matt blocker\n\nreason: conflict\n').state, 'stuck');
+  assert.deepEqual(parseTicket('# 14: Listed\n\n### Blocked by\n\n- 01\n- #2\n\n### What to build\n\n- [ ] x\n').refs, ['01', '#2']);
+});
+
+test('local: Blocked by and completion inside fenced code do not count', () => {
+  const fencedBlocker = '# 15: Fenced\n\n```\nBlocked by: 01\n```\n\n- [ ] One\n';
+  assert.deepEqual(parseTicket(fencedBlocker).refs, []);
+  const fencedList = '# 15: Fenced\n\n~~~\n## Blocked by\n\n- 01\n~~~\n';
+  assert.deepEqual(parseTicket(fencedList).refs, []);
+  const fencedCompletion = '# 16: Fenced\n\n- [x] One\n\n```markdown\n## Sorry-matt completion\n\ncommit abc\n```\n';
+  assert.equal(parseTicket(fencedCompletion).state, 'open');
+  const fencedBlockerHeading = `${delivered('')}\n\`\`\`\n## sorry-matt blocker\n\nreason: example\n\`\`\`\n`;
+  assert.equal(parseTicket(fencedBlockerHeading).state, 'done');
+
+  const files = {
+    [`${ISSUE_DIR}/01-schema.md`]: FILES[`${ISSUE_DIR}/01-schema.md`],
+    [`${ISSUE_DIR}/15-fenced.md`]: fencedBlocker,
+  };
+  const out = localFrontier({ paths: [`${ISSUE_DIR}/15-fenced.md`], ...memory(files) });
+  assert.deepEqual(out.tickets[0].blockedBy, []);
+});
+
+test('github: a Blocked by line inside fenced code in the issue body is not a body blocker', () => {
+  const issues = {
+    3: { state: 'open', title: 'Three', blockedBy: [] },
+    4: { state: 'open', title: 'Four', body: 'Example:\n\n```\nBlocked by: #3\n```\n', blockedBy: [] },
+    5: { state: 'open', title: 'Five', body: '~~~\n## Blocked by\n\n- #3\n~~~\n\n### Blocked by\n\n- #4\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['3', '4', '5'], gh: fakeGh(issues).gh });
+  const by = Object.fromEntries(out.tickets.map((t) => [t.id, t]));
+  assert.deepEqual(by['#4'].blockedBy, []);
+  assert.deepEqual(by['#5'].blockedBy, [{ id: '#4', state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, ['#3', '#4']);
+});
+
+test('local: a delivered ticket once misread as open is done, off the frontier, and unblocks its downstream', () => {
+  const files = {
+    [`${ISSUE_DIR}/20-fenced.md`]: delivered('```\n- [ ] Example inside a fence\n```'),
+    [`${ISSUE_DIR}/21-commented.md`]: delivered('### Comments\n\n- [ ] A checkbox in a comment'),
+    [`${ISSUE_DIR}/22-downstream.md`]: '# 22: Downstream\n\n**Blocked by:** 20, 21\n\n- [ ] Build on both\n',
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(
+    out.tickets.map((t) => [t.id.slice(ISSUE_DIR.length + 1), t.state, t.ready]),
+    [
+      ['20-fenced.md', 'done', false],
+      ['21-commented.md', 'done', false],
+      ['22-downstream.md', 'open', true],
+    ],
+  );
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/22-downstream.md`]);
+});
+
+test('local: the ticket title never opens a skipped section, whatever it says', () => {
+  const files = {
+    [`${ISSUE_DIR}/01-first.md`]: '# 01: First\n\n**Blocked by:** None\n\n- [ ] a\n',
+    [`${ISSUE_DIR}/02-comments.md`]: '# Comments vanish on reload\n\n**Blocked by:** 01\n\n- [ ] b\n',
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  const by = Object.fromEntries(out.tickets.map((t) => [t.id.slice(ISSUE_DIR.length + 1), t]));
+  assert.deepEqual(by['02-comments.md'].blockedBy, [{ id: `${ISSUE_DIR}/01-first.md`, state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/01-first.md`]);
+
+  const titled = (title) => `# ${title}\n\n**Blocked by:** 01\n**Status:** ready-for-agent\n\n- [ ] b\n\n## sorry-matt completion\n\ncommit abc\n`;
+  for (const title of ['Comments vanish on reload', 'Comments', 'sorry-matt: wire the parser']) {
+    assert.deepEqual(parseTicket(titled(title)), { title, status: 'ready-for-agent', refs: ['01'], state: 'open' });
+  }
+});
+
+test('local: only a section titled exactly Comments is skipped', () => {
+  assert.equal(parseTicket(delivered('## Comments API\n\n- [ ] endpoint returns 200')).state, 'open');
+  assert.equal(parseTicket(delivered('### comments\n\n- [ ] in a comment')).state, 'done');
+});
+
+test('local: a skipped section ends at the next heading of the same level', () => {
+  assert.equal(parseTicket(delivered('## Comments\n\nlooks good\n\n## Acceptance criteria\n\n- [ ] Still open')).state, 'open');
+});
+
+test('local: a heading with a closing run of # still names its section', () => {
+  assert.equal(parseTicket('# 01: x\n\n- [x] a\n\n## sorry-matt completion ##\n\nmerged abc\n').state, 'done');
+  assert.equal(parseTicket('# 01: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n### sorry-matt blocker ###\n\nreverted\n').state, 'stuck');
+});
+
+test('local: inline code that starts with three backticks does not open a fence', () => {
+  const t = parseTicket('# 01: x\n\n```npm test``` runs first.\n\n**Blocked by:** 01\n\n- [x] a\n\n## sorry-matt completion\n\ncommit abc\n');
+  assert.deepEqual([t.refs, t.state], [['01'], 'done']);
+  // A real fence still opens on a line with an info string and no further backtick.
+  assert.equal(parseTicket(delivered('```js title="x"\n- [ ] fenced\n```')).state, 'done');
+});
+
+test('github: a body Blocked by line inside a Comments or sorry-matt section is not a body blocker', () => {
+  const issues = {
+    3: { state: 'open', title: 'Three', blockedBy: [] },
+    4: { state: 'open', title: 'Four', body: '## Comments\n\nBlocked by: #3\n', blockedBy: [] },
+    5: { state: 'open', title: 'Five', body: '### sorry-matt notes\n\nBlocked by: #3\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['3', '4', '5'], gh: fakeGh(issues).gh });
+  const by = Object.fromEntries(out.tickets.map((t) => [t.id, t]));
+  assert.deepEqual([by['#4'].blockedBy, by['#5'].blockedBy], [[], []]);
+  assert.deepEqual(out.frontier, ['#3', '#4', '#5']);
 });
 
 test('cli: bad arguments exit 2 without calling the tracker', () => {

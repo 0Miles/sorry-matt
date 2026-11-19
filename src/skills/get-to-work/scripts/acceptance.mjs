@@ -63,28 +63,28 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
+import { scan, section, ownRows, lines, startsHeading } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
 export const MARKER = '<!-- sorry-matt:expansion -->';
 
 const ACCEPTANCE_HEADING = /^(acceptance criteria|acceptance|驗收\S*)$/i;
-const SKIPPED_SECTION = /^(comments|sorry-matt\b)/i;
 const LIST_ITEM = /^\s*[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$/;
 const CHECKBOX = /^\s*[-*+]\s+\[[ xX]\]\s+(.*)$/;
 const KEY_LINE = /^(by|run|round|acceptance|rulings):\s*(.*)$/;
 const collapse = (s) => s.replace(/\s+/g, ' ').trim();
 
-// List items of `lines`, each with its continuation lines; `pick` decides which lines start an item. A blank line,
-// a heading, or a list item that `pick` rejects ends the item.
-function listItems(lines, pick = LIST_ITEM) {
+// List items of `input` (text lines), each with its continuation lines; `pick` decides which lines start an item. A
+// blank line, a heading, or a list item that `pick` rejects ends the item.
+function listItems(input, pick = LIST_ITEM) {
   const items = [];
   let open = false;
-  for (const line of lines) {
+  for (const line of input) {
     const m = pick.exec(line);
     if (m) {
       items.push(m[1]);
       open = true;
-    } else if (open && line.trim() && !LIST_ITEM.test(line) && !/^\s*#{1,6}\s/.test(line)) {
+    } else if (open && line.trim() && !LIST_ITEM.test(line) && !startsHeading(line)) {
       items[items.length - 1] += ` ${line}`;
     } else {
       open = false;
@@ -93,47 +93,12 @@ function listItems(lines, pick = LIST_ITEM) {
   return items.map(collapse).filter(Boolean);
 }
 
-// Lines of the markdown, marking fenced code and headings (level and title).
-function scan(text) {
-  let fence = null;
-  return text.split(/\r?\n/).map((line) => {
-    const f = /^\s*(`{3,}|~{3,})/.exec(line);
-    if (f) {
-      if (!fence) fence = f[1][0];
-      else if (f[1][0] === fence) fence = null;
-      return { line, fenced: true };
-    }
-    if (fence) return { line, fenced: true };
-    const h = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
-    return h ? { line, level: h[1].length, title: h[2].trim() } : { line };
-  });
-}
-
-// The rows under the first heading matching `test`, up to the next heading of the same or a higher level.
-function section(rows, test) {
-  const start = rows.findIndex((r) => r.level && test(r.title));
-  if (start < 0) return null;
-  const out = [];
-  for (const r of rows.slice(start + 1)) {
-    if (r.level && r.level <= rows[start].level) break;
-    out.push(r);
-  }
-  return out;
-}
-
-const text = (rows) => rows.map((r) => (r.fenced ? '' : r.line));
-
 export function originalCriteria(body) {
   // Blank out fenced code and the Comments / sorry-matt sections, whatever their level, so an expansion section
   // nested under the acceptance heading is never counted twice.
-  let skipBelow = null;
-  const rows = scan(body).map((r) => {
-    if (r.level && skipBelow !== null && r.level <= skipBelow) skipBelow = null;
-    if (r.level && skipBelow === null && SKIPPED_SECTION.test(r.title)) skipBelow = r.level;
-    return skipBelow !== null || r.fenced ? { line: '' } : r;
-  });
+  const rows = ownRows(scan(body));
   const own = section(rows, (t) => ACCEPTANCE_HEADING.test(t));
-  return own ? listItems(text(own)) : listItems(text(rows), CHECKBOX);
+  return own ? listItems(lines(own)) : listItems(lines(rows), CHECKBOX);
 }
 
 // Every expansion block in `text`: each starts at a marker line and runs to the next marker or the end.
