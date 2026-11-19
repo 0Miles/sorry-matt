@@ -618,3 +618,95 @@ test('cli: local from a Windows 8.3 short-path cwd or argument still reports rep
     assert.deepEqual(JSON.parse(r.out).frontier, [file]);
   }
 });
+
+// ---------- #53: `+` list items, a Blocked by heading without a list, and the last completion ----------
+
+test('local: a `+` item under a Blocked by heading is a blocker', () => {
+  const files = {
+    [`${ISSUE_DIR}/01-first.md`]: '# 01: First\n\n**Blocked by:** None\n\n- [ ] a\n',
+    [`${ISSUE_DIR}/02-plus.md`]: '# 02: Plus\n\n## Blocked by\n\n+ 01\n\n## What to build\n\n- [ ] b\n',
+  };
+  assert.deepEqual(parseTicket(files[`${ISSUE_DIR}/02-plus.md`]).refs, ['01']);
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/01-first.md`]);
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: `${ISSUE_DIR}/01-first.md`, state: 'open', inSet: true }]);
+});
+
+test('github: a `+` item under a Blocked by heading in the issue body is a body blocker', () => {
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', body: '## Blocked by\n\n+ #5\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: '#5', state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, ['#5']);
+});
+
+test('local: a Blocked by heading with no list items leaves the inline Blocked by line in force', () => {
+  const text = '# 02: Prose\n\nBlocked by: 01\n\n## Blocked by\n\nThe schema has to land first.\n\n## What to build\n\n- [ ] b\n';
+  assert.deepEqual(parseTicket(text).refs, ['01']);
+  const files = {
+    [`${ISSUE_DIR}/01-first.md`]: '# 01: First\n\n**Blocked by:** None\n\n- [ ] a\n',
+    [`${ISSUE_DIR}/02-prose.md`]: text,
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: `${ISSUE_DIR}/01-first.md`, state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/01-first.md`]);
+});
+
+test('github: a Blocked by heading with no list items leaves the inline Blocked by line in force', () => {
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', body: 'Blocked by: #5\n\n## Blocked by\n\nThe schema has to land first.\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: '#5', state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, ['#5']);
+});
+
+test('a Blocked by heading with list items still wins over the inline Blocked by line', () => {
+  assert.deepEqual(parseTicket('# 03: Both\n\nBlocked by: 01\n\n## Blocked by\n\n- 02\n').refs, ['02']);
+  // An explicit `- None` is a list item: no blockers, and the inline line is not read.
+  assert.deepEqual(parseTicket('# 03: Both\n\nBlocked by: 01\n\n## Blocked by\n\n- None\n').refs, []);
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', blockedBy: [] },
+    7: { state: 'open', title: 'Seven', body: 'Blocked by: #5\n\n## Blocked by\n\n- #6\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6', '7'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[2].blockedBy, [{ id: '#6', state: 'open', inSet: true }]);
+});
+
+const HISTORY = {
+  completion: '## sorry-matt completion\n\ncommit abc\n',
+  blocker: '## sorry-matt blocker\n\nreason: CI red, merge reverted\n',
+};
+const withHistory = (...sections) => `# 30: Redelivered\n\n**Blocked by:** None\n\n- [x] One\n\n${sections.map((s) => HISTORY[s]).join('\n')}`;
+
+test('local: a ticket delivered again after a revert is done, off the frontier, and unblocks its downstream', () => {
+  const text = withHistory('completion', 'blocker', 'completion');
+  assert.equal(parseTicket(text).state, 'done');
+  const files = {
+    [`${ISSUE_DIR}/30-redelivered.md`]: text,
+    [`${ISSUE_DIR}/31-downstream.md`]: '# 31: Downstream\n\n**Blocked by:** 30\n\n- [ ] Build on it\n',
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(
+    out.tickets.map((t) => [t.state, t.ready]),
+    [
+      ['done', false],
+      ['open', true],
+    ],
+  );
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/31-downstream.md`]);
+});
+
+test('local: a blocker after the last completion still makes the ticket stuck', () => {
+  assert.equal(parseTicket(withHistory('completion', 'blocker')).state, 'stuck');
+  assert.equal(parseTicket(withHistory('completion', 'blocker', 'completion', 'blocker')).state, 'stuck');
+});
+
+test('local: an empty last completion section is not a delivery', () => {
+  assert.equal(parseTicket(`${withHistory('completion')}\n## sorry-matt completion\n`).state, 'open');
+  assert.equal(parseTicket(`${withHistory('completion', 'blocker')}\n## sorry-matt completion\n`).state, 'stuck');
+});
