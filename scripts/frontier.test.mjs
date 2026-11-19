@@ -467,7 +467,7 @@ test('local: a skipped section ends at the next heading of the same level', () =
 
 test('local: a heading with a closing run of # still names its section', () => {
   assert.equal(parseTicket('# 01: x\n\n- [x] a\n\n## sorry-matt completion ##\n\nmerged abc\n').state, 'done');
-  assert.equal(parseTicket('# 01: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n### sorry-matt blocker ###\n\nreverted\n').state, 'stuck');
+  assert.equal(parseTicket('# 01: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n### sorry-matt blocker ###\n\nreverted\n').state, 'done');
 });
 
 test('local: inline code that starts with three backticks does not open a fence', () => {
@@ -709,4 +709,89 @@ test('local: a blocker after the last completion still makes the ticket stuck', 
 test('local: an empty last completion section is not a delivery', () => {
   assert.equal(parseTicket(`${withHistory('completion')}\n## sorry-matt completion\n`).state, 'open');
   assert.equal(parseTicket(`${withHistory('completion', 'blocker')}\n## sorry-matt completion\n`).state, 'stuck');
+});
+
+// ---------- #72: same-line fields, prose None, the opening segment, nested records, numbered and empty items ----------
+
+test('local: an empty inline Blocked by line does not take the next line as its value', () => {
+  const text = '# 01: x\n\nBlocked by:\n\n## Blocked by\n\n## What to build\n\n- [ ] a\n';
+  assert.deepEqual(parseTicket(text).refs, []);
+  const files = { [`${ISSUE_DIR}/01-x.md`]: text };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.equal(out.tickets[0].stalled, null);
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/01-x.md`]);
+
+  const t = parseTicket('# 01: x\n\n**Blocked by:**\nStatus: ready-for-agent\n\n- [ ] a\n');
+  assert.deepEqual([t.refs, t.status], [[], 'ready-for-agent']);
+});
+
+test('prose None under a Blocked by heading means no blockers, and the inline line is not read', () => {
+  for (const none of ['None - can start immediately', 'none', 'None.']) {
+    assert.deepEqual(parseTicket(`# 02: x\n\nBlocked by: 01\n\n## Blocked by\n\n${none}\n`).refs, [], none);
+  }
+  // Prose that merely mentions the word later does not count.
+  assert.deepEqual(parseTicket('# 02: x\n\nBlocked by: 01\n\n## Blocked by\n\nNonetheless, see above.\n').refs, ['01']);
+});
+
+test('local: under a Blocked by heading without list items, a Blocked by line in a later section is not a blocker', () => {
+  const text = '# 03: x\n\n## Blocked by\n\nSee below.\n\n## Notes\n\nBlocked by: the vendor, not a ticket\n';
+  assert.deepEqual(parseTicket(text).refs, []);
+  const files = { [`${ISSUE_DIR}/03-x.md`]: text };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual([out.tickets[0].blockedBy, out.tickets[0].stalled], [[], null]);
+  // Without a Blocked by heading the whole ticket is still scanned.
+  assert.deepEqual(parseTicket('# 03: x\n\n## Notes\n\nBlocked by: 01\n').refs, ['01']);
+});
+
+test('local: a completion or blocker heading nested in a Comments or sorry-matt section is not a record', () => {
+  const reverted = '# 04: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n## sorry-matt blocker\n\nreverted\n';
+  assert.equal(parseTicket(`${reverted}\n## Comments\n\n### sorry-matt completion\n\nold record, quoted\n`).state, 'stuck');
+  assert.equal(parseTicket('# 04: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n### sorry-matt blocker\n\nquoted\n').state, 'done');
+  assert.equal(parseTicket('# 04: x\n\n- [ ] a\n\n## Comments\n\n### sorry-matt blocker\n\nquoted\n').state, 'open');
+  // Records that are not nested count as before, a closing run of # included.
+  assert.equal(parseTicket('# 04: x\n\n- [x] a\n\n## sorry-matt completion\n\nmerged abc\n\n## sorry-matt blocker ##\n\nreverted\n').state, 'stuck');
+  assert.equal(parseTicket(`${reverted}\n## sorry-matt completion\n\nmerged def\n`).state, 'done');
+});
+
+test('local: numbered items under a Blocked by heading are blockers', () => {
+  assert.deepEqual(parseTicket('# 05: x\n\n## Blocked by\n\n1. 02\n2) #3\n').refs, ['02', '#3']);
+  const files = {
+    [`${ISSUE_DIR}/02-first.md`]: '# 02: First\n\n- [ ] a\n',
+    [`${ISSUE_DIR}/05-numbered.md`]: '# 05: x\n\n## Blocked by\n\n1. 02\n\n## What to build\n\n- [ ] b\n',
+  };
+  const out = localFrontier({ paths: Object.keys(files), ...memory(files) });
+  assert.deepEqual(out.frontier, [`${ISSUE_DIR}/02-first.md`]);
+});
+
+test('local: an empty bullet under a Blocked by heading is not a list item', () => {
+  for (const bullet of ['- ', '* ', '+ ', '-', '1. ', '2)']) {
+    assert.deepEqual(parseTicket(`# 06: x\n\nBlocked by: 01\n\n## Blocked by\n\n${bullet}\n`).refs, ['01'], JSON.stringify(bullet));
+  }
+});
+
+test('github: the issue body follows the same Blocked by rules', () => {
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', blockedBy: [] },
+    7: { state: 'open', title: 'Seven', body: 'Blocked by: #5\n\n## Blocked by\n\n1. #6\n', blockedBy: [] },
+    8: { state: 'open', title: 'Eight', body: '## Blocked by\n\nSee below.\n\n## Notes\n\nBlocked by: #5\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6', '7', '8'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[2].blockedBy, [{ id: '#6', state: 'open', inSet: true }]);
+  assert.deepEqual(out.tickets[3].blockedBy, []);
+});
+
+test('the opening segment ends at the first heading unless that heading is the title', () => {
+  // A level-1 heading further down is not the title: the line above the first heading is still read.
+  assert.deepEqual(parseTicket('Blocked by: #5\n\n## Context\n\ntext\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n').refs, ['#5']);
+  assert.deepEqual(parseTicket('Blocked by: #5\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n').refs, ['#5']);
+  assert.deepEqual(parseTicket('Blocked by: 01\n\n# 02: x\n\n## Blocked by\n\nsee\n').refs, ['01']);
+  assert.deepEqual(parseTicket('## Blocked by\n\nSee below.\n\n# Notes\n\nBlocked by: the vendor, not a ticket\n').refs, []);
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', body: 'Blocked by: #5\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: '#5', state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, ['#5']);
 });

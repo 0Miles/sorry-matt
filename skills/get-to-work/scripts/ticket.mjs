@@ -9,11 +9,19 @@
 //   - A section is a heading's rows down to the next heading of the same or a higher level.
 //   - Sections titled exactly `Comments`, or `sorry-matt …` (any level, any case) are not the ticket's own text.
 //     The first level-1 heading is the ticket's title and never starts such a section, whatever it says.
+//   - A record heading (`sorry-matt completion`, `sorry-matt blocker`) nested in such a section (deeper than the
+//     section's heading, before the section ends) is not a record: it is quoted history. The title is never nested.
+//   - A list item is a `-`, `*` or `+` bullet, or a number followed by `.` or `)`, then whitespace and at least one
+//     non-blank character. A bullet or number with nothing after it is not a list item.
+//   - The opening segment is what comes before the first heading, plus, when that first heading is level 1 (the
+//     title leads the ticket), what follows it down to the next heading. A level-1 heading further down does
+//     not move it.
 
 const FENCE = /^\s*(`{3,}(?!.*`)|~{3,})/;
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 const HEADING_START = /^\s*#{1,6}\s/;
 const SKIPPED_SECTION = /^(comments$|sorry-matt\b)/i;
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(\S.*)$/;
 
 /** Lines of the markdown, each `{ line }`, plus `fenced: true` inside fenced code or `level` and `title` on a heading. */
 export function scan(text) {
@@ -47,8 +55,8 @@ export function sectionAt(rows, start) {
 /** Index of the first heading whose title passes `test`, or -1. */
 export const headingIndex = (rows, test) => rows.findIndex((r) => r.level && test(r.title));
 
-/** Index of the last heading whose title passes `test`, or -1. */
-export const lastHeadingIndex = (rows, test) => rows.findLastIndex((r) => r.level && test(r.title));
+/** The text of the list item on `line` (bullet or number dropped), or null when the line is not a list item. */
+export const listItem = (line) => LIST_ITEM.exec(line)?.[1].trim() ?? null;
 
 /** The rows under the first heading whose title passes `test`, or null when there is none. */
 export function section(rows, test) {
@@ -61,12 +69,41 @@ export function section(rows, test) {
  * included) blanked to `{ line: '' }`, whatever their level. The title (the first level-1 heading) is never one.
  */
 export function ownRows(rows) {
+  const skipped = skippedRows(rows);
+  return rows.map((r, i) => (skipped[i] || r.fenced ? { line: '' } : r));
+}
+
+/**
+ * Index of the last record heading whose title passes `test`, or -1. A heading nested in a `Comments` or
+ * `sorry-matt …` section is not a record; one that ends such a section, or stands outside any, is.
+ */
+export function lastRecordIndex(rows, test) {
+  const nested = skippedRows(rows, { nestedOnly: true });
+  return rows.findLastIndex((r, i) => r.level && !nested[i] && test(r.title));
+}
+
+/**
+ * The rows of the opening segment: those before the first heading, plus, when that heading is level 1 (the
+ * title), those after it down to the next heading.
+ */
+export function openingRows(rows) {
+  const first = rows.findIndex((r) => r.level);
+  if (first < 0) return rows;
+  if (rows[first].level !== 1) return rows.slice(0, first);
+  const next = rows.findIndex((r, i) => i > first && r.level);
+  return [...rows.slice(0, first), ...rows.slice(first + 1, next < 0 ? rows.length : next)];
+}
+
+// Per row: is it inside a `Comments` / `sorry-matt …` section? The heading that starts a section counts as
+// inside it, unless `nestedOnly`.
+function skippedRows(rows, { nestedOnly = false } = {}) {
   const title = rows.findIndex((r) => r.level === 1);
   let skipBelow = null;
   return rows.map((r, i) => {
     if (r.level && skipBelow !== null && r.level <= skipBelow) skipBelow = null;
-    if (r.level && skipBelow === null && i !== title && SKIPPED_SECTION.test(r.title)) skipBelow = r.level;
-    return skipBelow !== null || r.fenced ? { line: '' } : r;
+    const nested = skipBelow !== null;
+    if (r.level && !nested && i !== title && SKIPPED_SECTION.test(r.title)) skipBelow = r.level;
+    return nestedOnly ? nested : skipBelow !== null;
   });
 }
 
