@@ -74,12 +74,20 @@ fits, write why the other was not chosen. A package the `Component library` sect
 When the chosen component does not fit as is, climb from rung 1; stopping at rung N, write why rung N−1 falls
 short:
 
-1. A utility or prop at the call site.
+1. A utility or prop at the call site that changes only the component's **outer layout** there: position,
+   margin, width, alignment within its container; the component's own appearance and behavior stay the same.
+   For example `fullWidth`, or a margin utility on `className` (such as `mt-4`).
 2. A token.
-3. A variant, prop, or CSS variable the component exposes; with no component library, a prop or variant of the
-   shared component.
+3. Public API that changes the component's own appearance or behavior: a variant, a size, a tone-type prop, a
+   documented CSS variable; with no component library, a prop or variant of the shared component.
 4. Extend the shared component's source.
 5. A new component — that is, "new", bound by the **new-component bar**.
+
+The line between rung 1 and rung 3 is what gets changed, not whether it is spelled as a prop or a class: one
+and the same prop goes on the rung of what it changes. A prop that changes both outer layout and the
+component's own appearance is rung 3 — a `size` that changes width along with padding or font size, for
+example: it already changes the component's own appearance, so rung 1's "appearance stays the same" no longer
+holds.
 
 These six are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
 uses one:
@@ -133,20 +141,32 @@ two.
 
 ### 8. Maintain `ui.md`
 
-On any of the following, update `ui.md` in the same commit:
+When `ui.md` and the source conflict, the source wins. A skill that changes code handles it in two layers:
 
-- Adding, extracting, renaming, or deleting a shared component, or changing what it is for.
-- Introducing, upgrading, or removing a component library, or changing how it is loaded.
+1. **Mismatch this change touches**: a mismatch this change causes or touches is corrected in `ui.md`, in the
+   same commit as that change. These always belong to this layer:
+   - Adding, extracting, renaming, or deleting a shared component, or changing what it is for. When adding or
+     extracting one, the component file, the page code that starts using it, and its `ui.md` row go in the
+     same commit; the component is not committed on its own first: the `Shared components` table only holds
+     components two or more pages use, so the row is not true until the pages use it.
+   - Introducing, upgrading, or removing a component library, or changing how it is loaded.
+   - Reusing an existing component that so far only another page used: in the component choice table it is
+     "reused", with its file path as the location; when this change makes two or more pages or features use it,
+     the same commit adds a row for it to the `Shared components` table, with its actual path in `Location`;
+     moving the file is not required.
+2. **Mismatch found along the way**: a mismatch found along the way and not caused by this change leaves
+   `ui.md` alone and goes into the report's **`ui.md` mismatches**: the `ui.md` section and row, and the source
+   location; "none" when there are none. It gets no separate commit.
 
-The `Shared components` table holds one row each, sorted by name. A component used on a single page stays out
-of `ui.md`. When `ui.md` and the source conflict, the source wins: a skill that changes code fixes `ui.md`
-directly; a read-only skill leaves `ui.md` alone and writes the mismatch into its own output.
+A read-only skill leaves `ui.md` alone and writes the mismatch into its own output. The `Shared components`
+table holds one row each, sorted by name. A component used on a single page stays out of `ui.md`.
 
 Done when: every UI element falls into exactly one of three categories — "reused" with its location, "customized,
 rung N" with its rationale, or "new" with the knowledge it brings and why existing components fall short; a native
 HTML element is "reused", with the location written "native `<tag>`" (for example "native `<p>`"), and does not go
 through the **new-component bar**; a **page-local component** is "reused", with its file path as the location;
-and `ui.md` matches this change, or is explicitly recorded as needing no update.
+`ui.md` matches this change, or is explicitly recorded as needing no update; and every mismatch found along the
+way is written into the report one by one, or "none" is stated.
 
 ## State matrix
 
