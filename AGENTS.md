@@ -6,7 +6,7 @@
 - `src/skills/<name>/agents/openai.yaml` — OpenAI UI 與 invocation metadata 原稿
 - `src/skills/<name>/references/upstream/` — runtime 直接讀取、亦供升級對帳的 pinned 上游原文
 - `src/skills/<name>/<REFERENCE>.md` — 只有部分 branch 會走到的自有 reference,或多個 skill
-  共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`;
+  共讀的契約,由 `SKILL.md` 以相對路徑指標帶入(如 `review-pr/FOLLOW-UP.md`,以及 `get-to-work` 的 `RED-LIGHT.md`、`TIMEOUTS.md`、`SEND-BACK.md`、`FINISH.md`;
   `have-it-all-done/ASKING.md` 由 `have-it-all-done`、`get-to-work`、`take-this` 三者共讀;
   `build-the-ui-right/FRONTEND.md` 由五支前端 skill 共讀)
 - `src/skills/<name>/scripts/` — skill 執行(不載入)的零依賴腳本,由 `SKILL.md` 以
@@ -374,10 +374,22 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 單行寫法(`ui.md`) | single-line form |
 | 用途(字面值的) | purpose |
 | 「新共用元件：無」(`ui.md`) | `New shared components: None` |
+| 角色字 | role word |
+| agent 類型 | agent type |
+| 分段計量 | spawn breakdown |
+| 類別(分段計量的) | kind |
+| 專案指令契約 | project command contract |
+| 讀取點(專案指令契約的) | reader |
+| 缺檔時 | when the file is missing |
+| 產生規則 | generation rules |
 | agent 定義檔 | agent definition file |
 | 通用 agent | general-purpose agent |
 | 指令輸出 | command output |
 | 結尾摘要 | closing summary |
+| 審查分級 | review tier |
+| 合線 | join lines |
+| 索引檔 | index file |
+| 觀察(審查區塊的) | observation |
 
 ## 外部語義來源
 
@@ -439,3 +451,7 @@ The five default roles, each label string equal to its role name (`needs-triage`
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Commands
+
+The project command contract: full checks, targeted checks, coverage, failures-only output and sensitive paths. See `docs/agents/commands.md`; its fields are defined in `src/skills/have-it-all-done/ASKING.md` section 0.
