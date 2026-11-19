@@ -121,9 +121,21 @@ PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的總 PR，關�
 
 最終輸出每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源（CI，或
 本機與原因）、涵蓋全部初始票的**對帳表**（含每張票的退回次數）
-與**本 run 的計量與預算**（`ASKING.md` 第 7 節第 9 欄，停下時含停止原因）、需授權動作的結果（ledger
+與**本 run 的計量與預算**（`ASKING.md` 第 7 節第 9 欄，停下時含停止原因；附下一段的分段計量）、需授權動作的結果（ledger
 第 5 欄），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。獨立執行時，輸出後把 ledger 第一行改成
 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
+
+**分段計量**：本 run 的計量與預算附上 spawn 依 agent 類別、依票的彙總。對 ledger 旁由 hook 寫的 `<run>.counters.json`
+執行本 skill 的 `scripts/spawns.mjs`，輸出格式寫在腳本檔頭：
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/spawns.mjs" <ledger 所在目錄>/<run>.counters.json
+```
+
+把輸出的 `byType`（每一類 agent 的 spawn 數，總和等於 `spawns`）與 `byTicket`（每張票各類的 spawn 數）原樣附上。類別是
+具名的 agent 類型（如 `sorry-matt:expander`）；通用 agent 是它 `description` 開頭的角色字（`SKILL.md` 第 1 節「時限」），
+所以退回通用 agent 的展開會列在 `expand` 而不是 `sorry-matt:expander`；`unknown` 是 hook 開始逐筆記錄之前計入的
+spawn。沒有 counters 檔（hook 沒有載入）或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。
 
 完成判準：每條線都跑過一次線級精簡、一次併入基底與一次完整驗證，收在綠燈或標明驗證未過並留給人
 合併；精簡的修法與併入基底各是自己的 commit，沒有混進票的 commit；總 PR body 有依 `review-guide.mjs` 輸出寫的
@@ -134,4 +146,4 @@ PR 已合併，或仍在 queue 中與 PR URL；仍在 queue 中的總 PR，關�
 merge queue 時走 queue）並回報；已合併的總 PR，其完成票都已關閉；留給人合併而關鍵字不生效的，
 人工作業清單有關票指令；對帳表不重不漏地涵蓋凍結票集，每列都指向該票的接續紀錄；所有
 ticket worktree 與本地 ticket 分支均已移除；Local Markdown 的整合 worktree 已移除而整合
-分支仍保留；輸出已列出需授權動作的結果與本 run 的計量與預算；獨立執行時 ledger 第一行已是 ended 標記。
+分支仍保留；輸出已列出需授權動作的結果與本 run 的計量與預算，計量附有 `spawns.mjs` 的 `byType` 與 `byTicket`，或寫明沒有分段計量與原因；獨立執行時 ledger 第一行已是 ended 標記。

@@ -163,12 +163,22 @@ Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時�
 做的修正也算。`prove-it` 的 finder、verifier 與 Fix Verifier 以前景派送（`prove-it` 第 2 節），在主持人自己的
 回合裡跑完才回來，主持人等的期間不會被喚醒，所以審查不設時限。
 
+**spawn 的 `description`**：每次 spawn 一個 agent，Agent tool 的 `description` 都以該 agent 的角色字開頭、後接票的
+識別碼（GitHub 是 `#N`，Local Markdown 是票檔名），如 `implement #72`。角色字：`expand`（展開 agent，後接它負責的
+每張票，如 `expand #75 #83`）、`implement`（實作 agent，含退回後新 spawn 的與實作中改派的）、`fix`（修正中改派的
+agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該線的整合分支）、`merge`（整併 agent）；`prove-it` 的
+`finder`、`verifier`、`fix-verifier` 寫在它自己的規則裡。plugin 的 hook 把每個 spawn 的 agent 類型與這個 `description`
+記進 ledger 旁的 `<run>.counters.json`，收官的分段計量（`FINISH.md`）靠這個前綴認出通用 agent 做的是哪一種工作、
+屬於哪張票：前綴寫錯的 spawn 會算進 `general-purpose`。
+
 **階段時限**是 ledger 第 9 欄的四行 `budget:`，單位分鐘（`ASKING.md` 第 7 節）：`timeout-implement`（實作中）、
 `timeout-fix`（修正中，含紅燈修正）、`timeout-expand`（展開中）、`timeout-merge`（整併中的整併 agent）。
 
 **派送紀錄**：每次派送時在對帳表該票那一列記下（一個展開 agent 負責的每張票都記）：
 
-- agent id、派送時間、階段時限與到期時間。時間一律 UTC，寫成 `date -u +%Y-%m-%dT%H:%M:%SZ` 的格式，到期時間 =
+- agent id、agent 類型、派送時間、階段時限與到期時間。agent 類型是 spawn 時 Agent tool 實際用的 `subagent_type`
+  （展開 agent 是 `sorry-matt:expander`，退回通用 agent 時是 `general-purpose`）；以 SendMessage 交回原 agent 的派送
+  沿用那個 agent 的類型。時間一律 UTC，寫成 `date -u +%Y-%m-%dT%H:%M:%SZ` 的格式，到期時間 =
   派送時間 + 階段時限；同格式的時間可以直接按字串比大小。延長記 `no`。
 - **進度指紋**：agent 工作的 worktree 的 HEAD 與工作樹的 tree。實作與修正是 ticket worktree（紅燈修正是 `-ci`
   分支的 worktree；對不到票的是整合 worktree），整併是整合 worktree。一律以 Bash 執行 —— PowerShell 的管線與
@@ -207,7 +217,8 @@ agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 ag
 
 沒有在途 agent 時照 `/loop` 本來的自我調速。
 
-完成判準：每次派送都在對帳表留下派送紀錄（agent id、派送時間、階段時限、到期時間與進度指紋）；每次喚醒都在
+完成判準：每次派送都在對帳表留下派送紀錄（agent id、agent 類型、派送時間、階段時限、到期時間與進度指紋）；每次 spawn 的
+`description` 都以角色字開頭、後接票的識別碼；每次喚醒都在
 處理回報之後掃描了每個在途 agent，含展開與紅燈修正的；舊 agent 的回報沒有被收；每次喚醒結束時還有在途 agent 就排了 fallback 喚醒，背景 `sleep` 同一時間至多一個。
 
 ### 派票
@@ -246,7 +257,9 @@ agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 ag
    才完整展開的票）交給**展開 agent**：讀同層的 [`EXPANDER.md`](EXPANDER.md)，把這個派票點所有這類票
    填進佔位，以填好的全文在背景 spawn 一個展開 agent，不另加規則。Agent tool 的 `subagent_type` 是
    `sorry-matt:expander` —— plugin 的 agent 定義檔 `agents/expander.md`，展開 agent 的模型與可用工具由它定，主持人
-   不另外指定。這個 agent 類型不在可用清單時改用通用 agent、不指定模型，prompt 相同。它在 tracker 寫下標明 `by`、`run`、
+   不另外指定；`description` 是 `expand` 後接這批每張票的識別碼（「時限」）。這個 agent 類型不在可用清單時改用通用
+   agent、不指定模型，prompt 與 `description` 相同，並在這批每張票的派送紀錄把 agent 類型記為 `general-purpose`：這時用的
+   是主持人的模型與全部工具，不是定義檔指定的，對帳表與計量要看得出來。它在 tracker 寫下標明 `by`、`run`、
    `round` 的展開區塊，`round` 是這個派票點的次數（第 9 欄）。這些票的階段改為展開中，這個派票點不再往下
    走，所以下一個派票點不會再為它們 spawn 展開。展開 agent 回報觸發派票點，這些票回到候選，從本步驟重跑
    腳本；仍為 true 或被回報為待裁決的票列為**待裁決**，本 run 不再派，之後的派票點從 frontier 剔除。
@@ -280,11 +293,11 @@ agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 ag
 5. 從所屬線整合分支的最新尖端建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。Local Markdown 的展開區塊
    已 commit 在整合分支上，ticket 分支從它之後切出。
 6. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
-   在背景 spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
+   在背景 spawn 一個實作 agent，不另加規則；`description` 是 `implement` 後接票的識別碼（「時限」）。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
    的展開區塊在留言裡，票面全文裡沒有。專案指令契約的佔位填 ticket worktree 裡 `docs/agents/commands.md` 的絕對
    路徑，那裡沒有這份檔就填 none。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
    退回後重派的票：原 agent 還在就以 SendMessage 交給它退回紀錄與重建的 worktree，不新 spawn；不在了才照
-   `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
+   `IMPLEMENTER.md` 新 spawn（`description` 同樣是 `implement` 後接票的識別碼），退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
    派送紀錄。
 
 完成判準：每個派票點都先照「預算與斷路」判過上限、再照「讀 CI」讀過該讀的線，才往下派；每張派出的票在 spawn
@@ -325,7 +338,7 @@ agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 ag
    （`git rev-parse HEAD`）記進 ledger 對帳表該票的 merge SHA，紅燈修正的 `-ci` merge 也記：紅燈對票與收官（`FINISH.md`）的
    **逐票導覽**都以它為準，subject 只是沒記 SHA 時的退路。這個 merge 的第二親代範圍 `<merge>^1..<merge>^2` 就是
    這張票的 commit。
-   有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
+   有 conflict 時交給一個**整併 agent** 逐塊解（Agent tool 的 `description` 是 `merge` 後接票的識別碼，「時限」）：給它整合 worktree、兩邊的票面與 commit message，
    以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與 commit
    message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。解法只留在
    這個 merge commit 裡（`git commit --no-edit` 收尾），不改寫 ticket 分支；本機的

@@ -66,7 +66,8 @@ and the diff is saved.
 
 ## 2. Finder: candidates in parallel
 
-Give each lens to its own finder subagent, all dispatched in one message. Two kinds of diff get a single finder
+Give each lens to its own finder subagent, all dispatched in one message, the Agent tool's `description` being
+`finder` followed by the ticket's identifier. Two kinds of diff get a single finder
 that applies every lens:
 
 - A single file of no more than a few dozen lines.
@@ -76,6 +77,11 @@ that applies every lens:
 This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground,
 never in the background: the caller waits within its own turn until every one of them is back. `get-to-work` puts
 no time limit on review because of this rule.
+
+For all three, the Agent tool's `description` always starts with the role word, followed by the ticket's identifier
+(`#N` on GitHub, the ticket file name in Local Markdown): `finder #72`, `verifier #72`, `fix-verifier #72`. The
+plugin's hook records it in the run's counters file, and `get-to-work` relies on this prefix when finishing to break
+the run's spawns down by role and by ticket; one written wrong is counted as a general-purpose agent of unknown use.
 
 - **Line by line:** for every line of every hunk, ask which inputs, states, timings, or platforms break it. Check
   especially for inverted conditions, off-by-one, falsy zero, a missing `await`, a copy-pasted wrong variable, and
@@ -201,7 +207,8 @@ empty; every surviving mutant has become a candidate.
 
 Group the candidates (including the live-run and mutation candidates from section 3) by file plus failure
 mechanism: candidates in the same file with the same failure mechanism go to one verifier subagent, every other
-candidate to its own, all dispatched in parallel. The host judges the failure mechanism from `summary` and
+candidate to its own, all dispatched in parallel, with `verifier` followed by the ticket's identifier as the
+`description`. The host judges the failure mechanism from `summary` and
 `failure_scenario`; when unsure, keep them apart. Grouping only cuts the number of verifiers and never merges
 candidates: a verifier rules on each candidate in its group separately, each with its own `file:line` evidence.
 Verifiers only handle candidates; none rereads the whole diff.
@@ -336,7 +343,7 @@ is not a second review: no Finders run, and only the lines the previous findings
 Rebuild the review worktree per section 1 at the fixed ticket branch tip.
 
 1. **Fix Verifier:** give each finding (except `acceptance`, see step 4) to its own subagent, dispatched in
-   parallel. The prompt is self-contained: the review worktree path, the finding's `summary`, `evidence`, and `fix`,
+   parallel, with `fix-verifier` followed by the ticket's identifier as the `description`. The prompt is self-contained: the review worktree path, the finding's `summary`, `evidence`, and `fix`,
    and the diff of the fix commits (`git diff <previous head>..<ticket branch>`); leave out the implementer's
    explanation. Try to disprove the fix first, answering each of the four with `file:line`:
    1. Is every failure window in the finding closed?

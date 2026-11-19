@@ -46,11 +46,13 @@ the fix leave it red, map the red back to the original ticket by mistake.
    `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log` (in the shared directory, next to the ledger); the red one
    is the failure output, and the host takes only the failing lines.
 4. **Fix, two rounds at most:** when it maps to a ticket, hand it back to that ticket's original agent (if it is gone,
-   spawn a new one per `IMPLEMENTER.md` with the failure summary attached to the ticket text), to fix on a
+   spawn a new one per `IMPLEMENTER.md`, the Agent tool's `description` being `ci-fix` followed by the ticket's
+   identifier, with the failure summary attached to the ticket text), to fix on a
    `<run>/<NN>-<slug>-ci` branch freshly cut from the integration branch: the CI failure is the finding, and it goes
    through close-out step 3's batched fix (`recheck` attaching that ticket's previous review block) and steps 4–7,
    integrating without queueing. When it maps to no ticket, the host or the agent that ran that step fixes it in the
-   integration worktree, commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies. A
+   integration worktree (when an agent is newly spawned for it, its `description` is `ci-fix` followed by that
+   line's integration branch), commits (with no ticket ID in the subject) and pushes. The flaky-red hard rail applies. A
    fix agent stopped for running over its time limit counts as a round too ([`TIMEOUTS.md`](TIMEOUTS.md)).
    Every fix round ends with a push (skipped with no `origin`), and the next verification gives its result: in the
    pipeline that is the next CI read (for a line on local verification, the local verification run then, on the new

@@ -367,6 +367,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
 | 逐檔選(「元件庫」段多條時) | choose per file |
 | import 掃描 | import scan |
+| 角色字 | role word |
+| agent 類型 | agent type |
+| 分段計量 | spawn breakdown |
+| 類別(分段計量的) | kind |
 | 專案指令契約 | project command contract |
 | 讀取點(專案指令契約的) | reader |
 | 缺檔時 | when the file is missing |

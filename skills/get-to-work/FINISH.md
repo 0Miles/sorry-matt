@@ -158,9 +158,24 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 Report each line's aggregate PR or integration branch, its merged base SHA (or marked unsynced), and the full
 verification's SHA and source (CI, or local with the reason); the **reconciliation table** covering the entire initial
 set (with each ticket's send-back count); this run's **run metrics and budget** (`ASKING.md` section 7, field 9, with
-the stop reason when it stopped); the authorization outcomes (ledger field 5); and every raw ticket filed along the
+the stop reason when it stopped, and with the spawn breakdown of the next paragraph); the authorization outcomes (ledger field 5); and every raw ticket filed along the
 way, asking the user to run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run
 ended -->` after this output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
+
+**Spawn breakdown:** this run's run metrics and budget come with the spawns summed up by kind of agent and by ticket.
+Run this skill's `scripts/spawns.mjs` on `<run>.counters.json`, the file the hook writes beside the ledger; the
+output format is in the script's header:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/spawns.mjs" <the ledger's directory>/<run>.counters.json
+```
+
+Attach its `byType` (the spawns of each kind of agent, adding up to `spawns`) and its `byTicket` (each ticket's
+spawns by kind) as they are. A kind is a named agent type (such as `sorry-matt:expander`); for a general-purpose
+agent it is the role word its `description` starts with (`SKILL.md` section 1, time limits), so an expansion that
+fell back to a general-purpose agent is listed under `expand`, not `sorry-matt:expander`; `unknown` is spawns
+counted before the hook started logging each one. With no counters file (the hook is not loaded), or when the script
+exits non-zero, state that this run has no spawn breakdown and why; do not estimate one.
 
 Done when: every line went through one line-level simplify, one base sync and one full verification, ending green
 or marked as failed verification and left for a human to merge; the simplify pass and the base sync are each their
@@ -178,5 +193,6 @@ reported; every completed ticket of a merged aggregate PR is closed, and where a
 and the keyword does not apply, the human-work list carries the close commands; the reconciliation table covers
 the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree and local
 ticket branch is removed; Local Markdown integration worktrees are removed while their integration branches remain;
-the output lists the authorization outcomes and this run's metrics and budget; running standalone, the ledger's
+the output lists the authorization outcomes and this run's metrics and budget, the metrics carrying `byType` and
+`byTicket` from `spawns.mjs` or stating that there is no spawn breakdown and why; running standalone, the ledger's
 first line is the ended marker.

@@ -25,7 +25,9 @@
 // (`general-purpose` when absent) and `description` in `pending`, and the next new SubagentStart of the same
 // type takes the oldest one. A pending call older than ten minutes never became a subagent (another hook or a
 // permission prompt stopped it) and is dropped. Recording a pending call never changes the allow or deny
-// decision: a failure there is only a warning.
+// decision: a failure there is only a warning. The field names were checked on real events with
+// scripts/spawn-deny.live.mjs on Claude Code 2.1.328 (2026-11-19): the logged type and description were the
+// Agent call's `subagent_type` and `description`.
 // That deny really stops the spawn: checked live on Claude Code 2.1.325 (2026-11-19) with
 // scripts/spawn-deny.live.mjs — at the limit, a foreground and a background Agent call both came back as this
 // deny and no SubagentStart fired. Re-run it by hand after a Claude Code upgrade that touches hooks or Agent.

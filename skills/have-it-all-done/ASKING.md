@@ -276,7 +276,7 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, its **assignment record** (assigned time, stage time limit, deadline, whether it was
+   its responsible agent's id, its **assignment record** (agent type, assigned time, stage time limit, deadline, whether it was
    extended, progress fingerprint; `get-to-work` section 1, time limits, recorded at every assignment), its timeout
    reassignment count per stage, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
    The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
@@ -303,7 +303,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
      pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers, and the task id of
      the background `sleep` still running (the fallback wake-up in `get-to-work` section 1, time limits; "none" when
      there is none). Spawns come from `spawns` in
-     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
+     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. The file
+     also holds a `log`, one entry per spawn with its agent type, the Agent call's `description` and the time; the
+     host only reads that too, and `get-to-work` reports the spawn breakdown from it when finishing. No
      such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
      the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
      `get-to-work` section 1, budget and breaker.

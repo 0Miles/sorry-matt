@@ -529,3 +529,20 @@ run `2026-11-19-backlog-sweep` 的三張純文字票（#16、#49、#50），每�
 | `prove-it` 第 2 節 finder 回報格式 | 加 `suspected`：`spec`（附被指定的原文）、`pre-existing`（附 fixed point 位置）或 `none` | finder 已經寫在報告裡的懷疑，原本因「省略 finder 的推理」傳不到 verifier。 |
 | `prove-it` 第 4 節「每個候選各一個 verifier」 | 依「檔案＋失效機制」分組，同組交給同一個 verifier，仍逐條裁決、各附 `file:line` 證據；標了 `suspected` 的走簡化流程：先查 fixed point 與 spec，成立就直接裁決 pre-existing 或新增的 spec 層級（記成觀察，標 `(spec-level)`），不成立再走一般流程 | 同機制的候選要查的是同幾行，分開派是重複讀；簡化流程不成立就退回一般流程，不會讓真的缺陷少走反駁與三關。 |
 | `prove-it` 第 3 節突變 | 沒有可執行的行時跳過，不跑 `mutate.mjs lines`，紀錄寫 `skipped: no executable lines`；第 6 節補 `skipped` 的寫法，實跑紅燈也用它（`skipped: red baseline`） | 三張票都跑完才得到「無可突變行」，各自用自由文字記。 |
+
+## #75：spawn 依 agent 類型分段計量
+
+`ASKING.md` 第 4 節的「每張票典型約 15 個 spawn」沒有數字可依：counters 檔只有總數與 agent id。這張票只加紀錄與彙總，
+不改 `budget: spawns` 的公式。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `<run>.counters.json` 只有 `spawns`、`agents`、`updated` | 加 `log`（每個計入的 spawn 一筆：`id`、`type`、`description`、`at`）與 `pending`（已放行、還沒配到 SubagentStart 的 Agent 呼叫）；缺席都當空陣列 | 舊檔照樣讀；擋 spawn 仍只看 `spawns` 與 `agents`。 |
+| （新增）類型與 description 的來源 | 類型取 SubagentStart 的 `agent_type`；description 取 PreToolUse(Agent) 的 `tool_input.description`，以「同類型、先到先配」配對，待配對超過 10 分鐘丟掉 | 兩個事件沒有共同 id。配錯只影響彙總的角色與票，不影響計數與擋 spawn；PreToolUse 上的記錄失敗只進 warnings，不改放行或擋下。 |
+| （新增）`get-to-work`、`prove-it` 每次 spawn 的 `description` | 以角色字開頭（`expand`、`implement`、`fix`、`ci-fix`、`merge`、`finder`、`verifier`、`fix-verifier`）、後接票的識別碼 | 通用 agent 的 `subagent_type` 都是 `general-purpose`，分不出角色；不等每個角色都有 agent 定義檔。 |
+| `get-to-work` 派票步驟 1「類型不在可用清單時改用通用 agent」 | 加：在派送紀錄把 agent 類型記為 `general-purpose`；派送紀錄與 `ASKING.md` 第 7 節第 8 欄加「agent 類型」 | 退回通用 agent 的 run 靜默用主持人的模型，對帳表與計量原本看不出差別（從 #74 併入）。 |
+| `FINISH.md` 最終輸出的「本 run 的計量與預算」 | 加**分段計量**：執行 `scripts/spawns.mjs <counters 檔>`，附 `byType` 與 `byTicket`；沒有 counters 檔時寫明沒有 | 要砍 `prove-it` 的 fan-out 或調預算公式，先要有每一類的數字。 |
+
+新增：`get-to-work/scripts/spawns.mjs`（零依賴，src/dist 逐位元組相同，輸出 `sorry-matt/spawns@1`），測試在
+`scripts/spawns.test.mjs`；hook 的新欄位測試加在 `scripts/budget.test.mjs`。真實事件的欄位以
+`scripts/spawn-deny.live.mjs` 在 Claude Code 2.1.328 實跑驗證：log 的 `type` 與 `description` 等於 Agent 呼叫給的值。
