@@ -112,8 +112,9 @@
 //              Output: { "format", "command": "ci-init", "ticket", "line", "branch", "worktree", "head",
 //                        "from": "<line tip>" | null, "created": { "branch", "worktree" } }
 // revert       The red-light revert of a ticket (RED-LIGHT.md step 5), in the integration worktree, which must have
-//              the ticket's line checked out. The ticket is delivered (or stuck from an earlier run of this
-//              command: some merge of it is already reverted; a ticket stuck another way is refused). Each step
+//              the ticket's line checked out. The ticket is delivered, or integrating with a merge recorded (a
+//              merge whose later steps were refused), or stuck from an earlier run of this command (some merge of
+//              it is already reverted; a ticket stuck another way is refused). Each step
 //              checks whether it is done first, so a rerun after an interruption finishes the rest:
 //                1. revert    Every merge recorded on the ticket (the `-ci` merges included; each must be on the
 //                             line), newest first: `git revert -m 1 --no-edit <merge>` (no `-m` for a commit with
@@ -176,8 +177,9 @@
 //              `touched` is what the old attempt changed (`git diff --name-only <line>...<ref>`); with
 //              `--predicted`, `uncovered` is touched minus predicted and `predicted` the widened list (predicted,
 //              then the conflicts and touched files not in it): the send-back record and step 2 of SEND-BACK.md.
-// stuck        The git part of "mark stuck" (SEND-BACK.md), for a ticket at any stage but delivered (use revert),
-//              awaiting-ruling or an end state other than stuck (a rerun):
+// stuck        The git part of "mark stuck" (SEND-BACK.md), for a ticket with no merge recorded, at any stage but
+//              awaiting-ruling (stuck: a rerun). A ticket with a merge on the line (delivered, or integrating after a
+//              refused later step) is refused: rerun merge to finish it, or revert it (revert marks it stuck).
 //                1. record  Local Markdown (`--local`, with `--worktree` the integration worktree on the ticket's
 //                           line): a `## sorry-matt blocker` section (reason, `--attempts`, the ticket branch and its
 //                           kept ref, the integration branch, the run) and `Status: ready-for-human`, committed as
@@ -186,8 +188,10 @@
 //                2. keep    When the ticket branch exists: its tip kept at `…/stuck` (create only), then its worktree
 //                           removed (never forced) and the branch deleted (`git branch -D`).
 //                3. review  `--review-worktree`: prove-it's review worktree, removed with `git worktree remove
-//                           --force` when registered. A worktree there with a branch checked out is refused (a
-//                           review worktree is always detached).
+//                           --force` when registered. Checked before anything is touched, it must be this ticket's:
+//                           detached, its HEAD one of the ticket's own commits (an ancestor of the ticket branch,
+//                           or of its kept ref once the branch is gone, and not on the line). Any other worktree
+//                           there (a branch checked out, another ticket's review worktree) is refused.
 //                4. state   → stuck with `--reason`.
 //                5. push    As merge's step 5 (the line of `--worktree`; without it "not-requested").
 //              Output: { "format", "command": "stuck", "ticket", "line", "record": "committed" | "already" |
@@ -807,7 +811,9 @@ function revert(ctx, rest, flags) {
   const wt = ctx.path(flags.worktree);
   let s = load(ctx.state);
   const t = ticketOf(s, id);
-  if (!['delivered', 'stuck'].includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket`);
+  if (!['delivered', 'integrating', 'stuck'].includes(t.stage)) {
+    throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket, or an integrating one with its merge recorded`);
+  }
   if (!t.merges.length) throw new Refusal(`${id} has no merge recorded; there is nothing to revert`);
   const line = t.line;
   onLine(wt, line, id);
@@ -877,7 +883,7 @@ function revert(ctx, rest, flags) {
   }
 
   // 3. state
-  if (t.stage === 'delivered') state(ctx, 'stage', 'stuck', id, '--reason', `${flags.reason}; reverted ${pairs}`);
+  if (t.stage !== 'stuck') state(ctx, 'stage', 'stuck', id, '--reason', `${flags.reason}; reverted ${pairs}`);
 
   // 4. dependents
   const upstream = `upstream reverted: ${id} (${revertShas})`;
@@ -1003,18 +1009,29 @@ function stuck(ctx, rest, flags) {
   const t = ticketOf(s, id);
   if (t.stage === 'delivered') throw new Refusal(`${id} is delivered; a delivered ticket is marked stuck by revert`);
   if (t.stage === 'awaiting-ruling') throw new Refusal(`${id} is awaiting a ruling, an end state`);
+  if (t.merges.length) {
+    throw new Refusal(`${id} has a merge on ${t.line} (${t.merges[0].sha}); rerun merge to finish integrating it, or revert it (which marks it stuck)`);
+  }
   if (t.branch) checkTicketBranch(s, id, t, t.branch, repo);
   if (wt) onLine(wt, t.line, id);
+  const ref = t.branch ? keptRef(s.run, t.branch, 'stuck') : null;
   let review = 'not-requested';
   let reviewPath = null;
   if (flags['review-worktree'] !== undefined) {
     reviewPath = ctx.path(flags['review-worktree']);
     const w = worktrees(repo).find((x) => samePath(x.path, reviewPath));
     if (w?.branch) throw new Refusal(`${reviewPath} has ${w.branch} checked out; a review worktree is always detached`);
+    if (w) {
+      // Only this ticket's: its HEAD carries at least one of the ticket's own commits (an ancestor of the ticket
+      // branch or its kept ref, not on the line). Another ticket's review worktree, or any other one, is refused.
+      const attempt = t.branch ? (branchTip(repo, t.branch) ?? commitOf(repo, ref)) : null;
+      const head = tryGit(w.path, 'rev-parse', '--verify', '-q', 'HEAD');
+      const own = attempt !== null && head !== null && isAncestor(repo, head, attempt) && !isAncestor(repo, head, `refs/heads/${t.line}`);
+      if (!own) throw new Refusal(`${w.path} is not ${id}'s review worktree: its HEAD ${head ?? '(none)'} is not one of ${id}'s own commits`);
+      reviewPath = w.path;
+    }
     review = w ? 'present' : 'absent';
-    if (w) reviewPath = w.path;
   }
-  const ref = t.branch ? keptRef(s.run, t.branch, 'stuck') : null;
   const keeps = t.branch && (branchTip(repo, t.branch) !== null || commitOf(repo, ref) !== null);
 
   // 1. record

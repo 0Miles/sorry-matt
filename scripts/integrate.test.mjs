@@ -842,3 +842,62 @@ test('stuck refuses a delivered ticket (revert marks it) and one awaiting a ruli
   assert.equal(integrate('revert', '#1', '--worktree', env.lineWt).code, 2);
   assert.equal(integrate('revert', '#1', '--worktree', env.lineWt, '--reason', 'x', '--dependent', '#2=f.md').code, 2);
 });
+
+test("stuck --review-worktree removes only the ticket's own review worktree; another one is refused and left as it was", (t) => {
+  const env = withLine(t, ['#1', '#2']);
+  const { dir, git, g, ok, statePath, refused, lineWt } = env;
+  const one = implementing(env, '#1', 'run-1/01-a', { 'b.md': 'b\n' });
+  const two = implementing(env, '#2', 'run-1/02-b', { 'c.md': 'c\n' });
+  const review1 = join(dir, 'review-1');
+  const review2 = join(dir, 'review-2');
+  const verify = join(dir, 'verify');
+  git('worktree', 'add', '-q', '--detach', review1, one.tip);
+  git('worktree', 'add', '-q', '--detach', review2, two.tip);
+  git('worktree', 'add', '-q', '--detach', verify, g(lineWt, 'rev-parse', 'HEAD'));
+  writeFileSync(join(review2, 'c.md'), 'review notes in progress\n');
+  writeFileSync(join(verify, 'a.md'), 'verification scratch\n');
+  const snapshot = () => ({
+    state: readFileSync(statePath, 'utf8'),
+    refs: git('for-each-ref', '--format=%(refname) %(objectname)'),
+    worktrees: git('worktree', 'list', '--porcelain'),
+  });
+
+  for (const other of [review2, verify]) {
+    const before = snapshot();
+    refused(/is not #1's review worktree: its HEAD .* is not one of #1's own commits/, 'stuck', '#1', '--reason', 'x', '--review-worktree', other);
+    assert.deepEqual(snapshot(), before, 'nothing touched');
+  }
+  assert.equal(readFileSync(join(review2, 'c.md'), 'utf8'), 'review notes in progress\n');
+  assert.equal(readFileSync(join(verify, 'a.md'), 'utf8'), 'verification scratch\n');
+  assert.equal(existsSync(one.wt), true);
+
+  const out = ok('stuck', '#1', '--reason', 'x', '--review-worktree', review1);
+  assert.equal(out.review, 'removed');
+  assert.equal(existsSync(review1), false);
+  assert.equal(existsSync(review2), true);
+  assert.equal(existsSync(two.wt), true);
+});
+
+test('an integrating ticket whose merge landed is not marked stuck by stuck; revert takes it and marks it stuck', (t) => {
+  const env = withLine(t, ['#1']);
+  const { dir, g, ok, state, refused, queue, work, lineWt } = env;
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt);
+  work(wt, { 'b.md': 'b\n' }, '#1: b');
+  queue('#1');
+  // The delivery step is refused after the merge is recorded: the ticket stays integrating with its merge.
+  refused(/--local issues\/none\.md is not committed/, 'merge', '#1', '--worktree', lineWt, '--local', 'issues/none.md', '--checks', 'x');
+  const merged = g(lineWt, 'rev-parse', 'HEAD');
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+  assert.deepEqual(state().tickets['#1'].merges.map((m) => m.sha), [merged]);
+
+  refused(/#1 has a merge on run-1\/line-a .*rerun merge to finish integrating it, or revert it/, 'stuck', '#1', '--reason', 'x');
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+  assert.equal(existsSync(wt), true);
+
+  const out = ok('revert', '#1', '--worktree', lineWt, '--reason', 'gave up');
+  assert.deepEqual(out.reverts.map((r) => [r.merge, r.found]), [[merged, 'reverted']]);
+  assert.equal(out.stage, 'stuck');
+  assert.equal(existsSync(join(lineWt, 'b.md')), false);
+  assert.match(state().tickets['#1'].reason, /^gave up; reverted /);
+});
