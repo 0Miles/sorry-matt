@@ -100,6 +100,21 @@ test('changed lines count additions plus deletions: 400 is standard, 401 is full
   assert.equal(at401.fixVerifiers, 'per-file');
 });
 
+test('a renamed file counts only the lines it changed, as plain git diff --numstat reports them', (t) => {
+  const base = { 'src/a.js': lines(300) };
+  const pure = judge(repo(t, base, { 'src/a.js': null, 'lib/a.js': lines(300) }));
+  assert.equal(pure.signals.changedLines, 0);
+  assert.equal(pure.signals.deleted, 0);
+  assert.equal(pure.tier, 'light');
+  assert.deepEqual(pure.reasons, ['few-lines']);
+
+  const edited = judge(repo(t, base, { 'src/a.js': null, 'lib/a.js': `${lines(300)}extra();\n` }));
+  assert.equal(edited.signals.added, 1);
+  assert.equal(edited.signals.deleted, 0);
+  assert.equal(edited.tier, 'light');
+  assert.deepEqual(edited.signals.sensitive, []);
+});
+
 test('a sensitive path from the contract makes a two-line diff full; the same diff elsewhere is light', (t) => {
   const contract = { 'docs/agents/commands.md': CONTRACT('```text\nguard/\nconfig/deploy.json\n```') };
   const hit = judge(repo(t, contract, { 'guard/check.js': 'a();\nb();\n' }));

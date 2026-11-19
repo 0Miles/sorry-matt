@@ -10,7 +10,8 @@
 //
 // judge  Judges the tier once from `git diff <base>...<head>` (head defaults to HEAD). Signals:
 //          files          changed paths (`--no-renames`: a rename counts as its old and its new path)
-//          added/deleted  lines from `git diff --numstat`; a binary file counts 0; changedLines is their sum
+//          added/deleted  lines from `git diff --numstat -M` (rename detection on, so a moved file counts only the
+//                         lines it changed); a binary file counts 0; changedLines is their sum
 //          docsOnly       every changed path is documentation: an extension in DOC_EXTENSIONS
 //          sensitive      changed paths (old or new) that match a sensitive pattern. Patterns are the union of the
 //                         `## Sensitive paths` section of docs/agents/commands.md on base and on head, so a ticket
@@ -269,11 +270,27 @@ export function judgeTier(signals, thresholds = DEFAULT_THRESHOLDS) {
   };
 }
 
-export function collectSignals({ numstat, diffText, base: baseContract, head: headContract, treePaths }) {
+// `git diff --numstat -M` (rename detection on) -> { added, deleted }. Only the two count columns are read, so the
+// rename forms of the path column (`a => b`, `{a => b}/c`) do not matter.
+export function countLines(numstatText) {
+  let added = 0;
+  let deleted = 0;
+  for (const line of numstatText.split('\n')) {
+    const m = /^(\d+|-)\t(\d+|-)\t/.exec(line.replace(/\r$/, ''));
+    if (!m) continue;
+    if (m[1] !== '-') added += Number(m[1]);
+    if (m[2] !== '-') deleted += Number(m[2]);
+  }
+  return { added, deleted };
+}
+
+// numstat: --no-renames -z (paths, old and new); counts: -M (line counts as a rename-aware diff reports them).
+export function collectSignals({ numstat, counts, diffText, base: baseContract, head: headContract, treePaths }) {
   const rows = parseNumstat(numstat);
   const paths = [...new Set(rows.map((r) => r.path))];
-  const added = rows.reduce((n, r) => n + r.added, 0);
-  const deleted = rows.reduce((n, r) => n + r.deleted, 0);
+  const { added, deleted } = counts == null
+    ? { added: rows.reduce((n, r) => n + r.added, 0), deleted: rows.reduce((n, r) => n + r.deleted, 0) }
+    : countLines(counts);
   const lists = [parseSensitive(baseContract), parseSensitive(headContract)].filter((l) => l && l.length > 0);
   const sensitiveSource = lists.length ? 'commands.md' : 'default';
   const patterns = (lists.length ? [...new Set(lists.flat())] : DEFAULT_SENSITIVE).map(patternRegex);
@@ -431,6 +448,7 @@ export function main(argv, deps = defaultDeps()) {
     const range = `${args.base}...${head}`;
     const signals = collectSignals({
       numstat: deps.git(['diff', '--numstat', '-z', '--no-renames', '--no-color', '--no-ext-diff', range]),
+      counts: deps.git(['diff', '--numstat', '-M', '--no-color', '--no-ext-diff', range]),
       diffText: deps.git(['-c', 'core.quotePath=false', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', range]),
       base: contractAt(deps, args.base),
       head: contractAt(deps, head),
