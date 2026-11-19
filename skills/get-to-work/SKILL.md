@@ -218,7 +218,7 @@ ticket it covers):
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --worktree <worktree> --limit <stage time limit>
-node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions <ticket>=<n> [--expansions <ticket>=<n> …] --limit <stage time limit>
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<ticket>=<n>' [--expansions '<ticket>=<n>' …] --limit <stage time limit>
 ```
 
 - The output gives the assigned time, the stage time limit, the deadline, extended (`no`) and the **progress
@@ -229,7 +229,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions <ticket>=<n>
   working tree (untracked files included, ignored ones not), computed as the script's header says; the real index
   and the working tree are left alone.
 - An expansion agent works in no worktree; use the second form: `--expansions` takes the `expansions` count
-  `acceptance.mjs` reads for each ticket it covers, and those numbers are its progress fingerprint.
+  `acceptance.mjs` reads for each ticket it covers, and those numbers are its progress fingerprint. Always quote
+  `<ticket>=<n>`: unquoted, a shell reads `#12=0` as a comment.
 
 Once the agent reports or is stopped, set that row's deadline to `—`. An **agent in flight** is any agent whose
 deadline is not `—`.
@@ -243,8 +244,17 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 ```
 
 An agent whose `overdue` is `true` in the output is **overdue**, and its `action` is the handling the script judged:
-`extend` (extend once) or `stop`. The script only computes: it stops no agent and writes no ledger. For each overdue
-agent:
+`extend` (extend once) or `stop`. The script only computes: it stops no agent and writes no ledger.
+
+- **A non-zero exit:** stdout is empty and no agent has been judged. Stop or extend no agent on that basis: fix the
+  plan file as stderr says and run it again; it must succeed before this wake-up ends.
+- **An agent whose `error` is not `null`:** it is overdue, but its progress fingerprint could not be computed (the
+  worktree is gone, git refuses, a file is locked), and its `action` is `null`; the other agents are judged as usual.
+  When the cause is a wrong worktree in the plan file, correct it; then run `scan` once more. If the `error` is still
+  there, handle the agent as a `stop` — progress that cannot be shown earns no extension — and write the `error`
+  into its timeout handling. An agent with an `error` is not counted in `fallback`.
+
+For each overdue agent:
 handle it per the sibling [`TIMEOUTS.md`](TIMEOUTS.md) — extending, the cases after a stop,
 keeping a record; when the deadline scan finds an overdue agent, read it in full on reaching this point and follow it.
 

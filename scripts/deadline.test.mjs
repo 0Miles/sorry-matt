@@ -1,13 +1,22 @@
 // node --test scripts/deadline.test.mjs
 // Drives deadline.mjs through main(). Fingerprints come from real git repositories built in a temp dir, with every
 // git setting that could change a tree pinned by the test; times are fixed with --now, never by sleeping.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { main } from '../src/skills/get-to-work/scripts/deadline.mjs';
+
+// Nothing a tree depends on is inherited from the machine: no system or global config, no system attributes, and
+// (in repo() below) a fixed object format and an empty init template. The script's own git calls run in this
+// process, so they see the same environment.
+const pinned = mkdtempSync(join(tmpdir(), 'sorry-matt-deadline-pin-'));
+after(() => rmSync(pinned, { recursive: true, force: true }));
+mkdirSync(join(pinned, 'template'));
+writeFileSync(join(pinned, 'gitconfig'), '');
+Object.assign(process.env, { GIT_CONFIG_NOSYSTEM: '1', GIT_ATTR_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(pinned, 'gitconfig') });
 
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-deadline-'));
@@ -25,7 +34,7 @@ const put = (dir, name, text) => {
 // ignore rules do not depend on the machine.
 function repo(t) {
   const dir = scratch(t);
-  git(dir, 'init', '-q', '-b', 'main');
+  git(dir, 'init', '-q', '-b', 'main', '--object-format=sha1', `--template=${join(pinned, 'template')}`);
   for (const [k, v] of [
     ['user.name', 'test'],
     ['user.email', 'test@example.invalid'],
@@ -264,7 +273,7 @@ test('scan: only a deadline earlier than now is overdue; equal is not, and an ag
     ['exact', false, null],
     ['early', false, null],
   ]);
-  assert.deepEqual(r.agents[1], { id: 'exact', overdue: false, action: null, deadline: '2026-03-10T12:00:00Z', extended: 'no', fingerprint: null });
+  assert.deepEqual(r.agents[1], { id: 'exact', overdue: false, action: null, deadline: '2026-03-10T12:00:00Z', extended: 'no', fingerprint: null, error: null });
 });
 
 test('scan: the plan\'s `now` is used when --now is absent, and --now wins over it', (t) => {
@@ -289,6 +298,7 @@ test('scan: overdue, not extended, a new commit (head differs) → extend to now
       deadline: '2026-03-10T12:30:00Z',
       extended: 'yes',
       fingerprint: { assigned: agent.fingerprint, current: { head, tree: agent.fingerprint.tree } },
+      error: null,
     },
   ]);
 });
@@ -317,6 +327,7 @@ test('scan: overdue, not extended, the fingerprint is the same → stop, deadlin
       deadline: '2026-03-10T11:30:00Z',
       extended: 'no',
       fingerprint: { assigned: agent.fingerprint, current: agent.fingerprint },
+      error: null,
     },
   ]);
 });
@@ -344,6 +355,7 @@ test('scan: an expansion agent progresses when any of its tickets has more expan
       deadline: '2026-03-10T12:15:00Z',
       extended: 'yes',
       fingerprint: { assigned: { expansions: { '#1': 0, '#2': 1 } }, current: { expansions: { '#1': 0, '#2': 2 } } },
+      error: null,
     },
   ]);
 });
@@ -420,8 +432,53 @@ test('scan: an agent on time needs no readable worktree', (t) => {
     worktree: join(dir, 'gone'),
   };
   assert.equal(scanOf(t, { agents: [agent] }, NOW).agents[0].action, null);
-  const late = call(['scan', plan(dir, { agents: [{ ...agent, deadline: '2026-03-10T11:55:00Z' }] }), '--now', NOW]);
-  assert.equal(late.code, 1, 'an overdue agent whose worktree cannot be read is an error, not a stop');
+});
+
+test('scan: an overdue agent whose worktree is gone carries an error; the others are judged and the scan exits 0', (t) => {
+  const dir = repo(t);
+  const healthy = assignedIn(dir, 'healthy');
+  put(dir, 'wip.txt', 'half done\n');
+  const gone = { ...healthy, id: 'gone', worktree: join(dir, 'no-such-worktree') };
+  const onTime = expander('on-time', '2026-03-10T12:20:00Z', { '#2': 0 }, { '#2': 0 });
+  const r = scanOf(t, { agents: [gone, healthy, onTime] }, NOW);
+  const [a, b, c] = r.agents;
+  assert.equal(typeof a.error, 'string');
+  assert.ok(a.error.length > 0);
+  assert.deepEqual({ ...a, error: null }, {
+    id: 'gone',
+    overdue: true,
+    action: null,
+    deadline: '2026-03-10T11:30:00Z',
+    extended: 'no',
+    fingerprint: { assigned: healthy.fingerprint, current: null },
+    error: null,
+  });
+  assert.deepEqual([b.id, b.action, b.deadline, b.extended, b.error], ['healthy', 'extend', '2026-03-10T12:30:00Z', 'yes', null]);
+  assert.deepEqual([c.id, c.action, c.error], ['on-time', null, null]);
+  assert.deepEqual(r.fallback, { deadline: '2026-03-10T12:20:00Z', seconds: 1200, scheduleWakeup: 1200 });
+});
+
+test('scan: an agent with an error is not counted in the fallback', (t) => {
+  const dir = scratch(t);
+  const gone = {
+    id: 'gone',
+    assigned: '2026-03-10T11:00:00Z',
+    limit: 30,
+    deadline: '2026-03-10T11:30:00Z',
+    extended: 'no',
+    fingerprint: { head: 'a'.repeat(40), tree: 'b'.repeat(40) },
+    worktree: join(dir, 'no-such-worktree'),
+  };
+  const r = scanOf(t, { agents: [gone] }, NOW);
+  assert.equal(r.agents[0].action, null);
+  assert.notEqual(r.agents[0].error, null);
+  assert.equal(r.fallback, null);
+});
+
+test('record: the ticket in --expansions may itself hold "="', () => {
+  const r = call(['record', '--expansions', 'a=b.md=3', '--limit', '15', '--now', NOW]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.fingerprint, { expansions: { 'a=b.md': 3 } });
 });
 
 test('scan: a log on an ignored path rewritten on every retry is no progress → stop (#74)', (t) => {

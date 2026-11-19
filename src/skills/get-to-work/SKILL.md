@@ -171,7 +171,7 @@ Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時�
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --worktree <worktree> --limit <階段時限>
-node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions <票>=<數> [--expansions <票>=<數> …] --limit <階段時限>
+node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<票>=<數>' [--expansions '<票>=<數>' …] --limit <階段時限>
 ```
 
 - 輸出派送時間、階段時限、到期時間、延長（`no`）與**進度指紋**。時間一律 UTC，寫成 `YYYY-MM-DDTHH:MM:SSZ`。
@@ -179,7 +179,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions <票>=<數> 
   worktree；對不到票的是整合 worktree），整併是整合 worktree。進度指紋是它的 HEAD 與整個工作樹（含未追蹤檔，
   不含 ignored）的 tree，算法在腳本檔頭；真正的 index 與工作樹不動。
 - 展開 agent 不在 worktree 裡工作，用第二式：`--expansions` 給它負責的每張票以 `acceptance.mjs` 讀出的
-  `expansions` 數，進度指紋就是這組數字。
+  `expansions` 數，進度指紋就是這組數字。`<票>=<數>` 一律加引號：`#12=0` 不加引號會被 shell 當成註解。
 
 agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 agent** 就是到期時間不是 `—` 的 agent。
 
@@ -191,7 +191,16 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 ```
 
 輸出裡 `overdue` 是 `true` 的 agent 就是**超時**，它的 `action` 是腳本判好的處置：`extend`（延長一次）或
-`stop`（停下）。腳本只算：不停 agent、不寫 ledger。對每個超時的 agent：
+`stop`（停下）。腳本只算：不停 agent、不寫 ledger。
+
+- **結束代碼不是 0**：stdout 是空的，沒有任何 agent 被判過。不憑它停或延長任何 agent：照 stderr 修好計畫檔再跑，
+  這次喚醒結束前要跑成功。
+- **某個 agent 的 `error` 不是 `null`**：它超時了，但進度指紋算不出來（worktree 不見、git 拒絕、檔案被鎖），
+  `action` 是 `null`；其他 agent 照常判好。原因是計畫檔寫錯 worktree 就改掉；然後再跑一次 `scan`。仍有 `error`
+  就把它當成 `stop` 處置 —— 進展無從證明就不延長 —— 並把 `error` 寫進它的時限處置。有 `error` 的 agent 不算進
+  `fallback`。
+
+對每個超時的 agent：
 照同層的 [`TIMEOUTS.md`](TIMEOUTS.md) 處置 —— 延長、停下後的各分支、留紀錄；時限掃描發現超時的 agent 時，走到這裡時全文讀取並照做。
 
 **fallback 喚醒**：每次喚醒結束時還有在途 agent，就排下一次喚醒；所有 agent 都不回報時，主持人

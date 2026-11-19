@@ -5,7 +5,9 @@ scan finds an overdue agent, and handle each overdue agent with the four steps b
 file attached (dispatch, budget and breaker, the wake-up steps, the assignment record) are in `SKILL.md`.
 
 1. **Take the handling:** this agent's `action` in the output of `deadline.mjs scan` (the rules are in the script's
-   header). Do not recompute the progress fingerprint or judge progress yourself.
+   header). Do not recompute the progress fingerprint or judge progress yourself. An agent whose `action` is `null`
+   with an `error`, and that still has the `error` after the second scan time limits in `SKILL.md` asks for, is
+   handled as a `stop` under step 3, with the `error` written into step 4's record.
 2. **`extend` → extend once:** set the deadline in that row of the reconciliation table to the output's `deadline`,
    and record extended as `yes`.
 3. **`stop` (no progress, or already extended) → stop it:** `TaskStop` the agent; if it happens to have finished already,

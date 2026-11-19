@@ -6,7 +6,8 @@
 //
 // Usage
 //   node deadline.mjs record --worktree <worktree> --limit <minutes> [--now <UTC>]
-//   node deadline.mjs record --expansions <ticket>=<n> [--expansions <ticket>=<n> …] --limit <minutes> [--now <UTC>]
+//   node deadline.mjs record --expansions '<ticket>=<n>' [--expansions '<ticket>=<n>' …] --limit <minutes> [--now <UTC>]
+//   Quote each <ticket>=<n>: a shell reads an unquoted `#12=0` as the start of a comment.
 //   node deadline.mjs scan <plan.json> [--now <UTC>]
 //   node deadline.mjs progress <plan.json>
 //
@@ -38,15 +39,21 @@
 //   fingerprint is recomputed (or, for an expansion agent, taken from `expansions`): progress is a different head
 //   or a different tree, or any ticket's count above its recorded one. Overdue, not yet extended, with progress →
 //   "extend": the new deadline is now + the same limit, extended becomes "yes". Overdue otherwise → "stop"; once
-//   extended, progress is not judged again.
+//   extended, progress is not judged again. When the fingerprint of an overdue agent cannot be computed (its
+//   worktree is gone, git refuses the working tree, a file is locked), only that agent is affected: its entry has
+//   no action and carries the error, and the scan still exits 0 with every other agent judged.
 //   Output
 //   { "format": "sorry-matt/deadline@1", "command": "scan", "now": "<UTC>",
-//     "agents": [{ "id": "…", "overdue": true | false, "action": "extend" | "stop" | null,   // null: not overdue
+//     "agents": [{ "id": "…", "overdue": true | false,
+//                  "action": "extend" | "stop" | null,            // null: not overdue, or `error` is set
 //                  "deadline": "<the deadline after this scan>", "extended": "no" | "yes",
-//                  "fingerprint": { "assigned": {…}, "current": {…} } | null }],              // null: not overdue
+//                  "fingerprint": { "assigned": {…}, "current": {…} | null } | null,   // null: not overdue;
+//                                                                 // current null: it could not be computed
+//                  "error": "<why the fingerprint could not be computed>" | null }],
 //     "fallback": { "deadline": "<UTC>", "seconds": <n>, "scheduleWakeup": <n clamped to 60–3600> } | null }
 //   `fallback` is the earliest deadline among the agents still in flight after the scan — those not overdue and
-//   those just extended, at their new deadline; stopped ones are out — minus now. null when none is left.
+//   those just extended, at their new deadline; stopped ones are out, and so are those with an `error`, which the
+//   host settles in the same wake-up (scan again, then stop) — minus now. null when none is left.
 //
 // progress — one dispatch point, after the host updated the usage
 //   plan.json:
@@ -67,7 +74,8 @@
 //     "stop": true | false, "stoppedBy": ["rounds", "spawns", "hours", "no-progress"],   // those reached, this order
 //     "rounds": <usage.rounds + 1 when not stopped, usage.rounds when stopped> }
 //
-// Exit codes: 0 output written; 1 a plan file or a worktree could not be read; 2 bad arguments or plan.
+// Exit codes: 0 output written; 1 a plan file, or `record`'s worktree, could not be read; 2 bad arguments or plan.
+// On 1 or 2 nothing is written to stdout and no agent has been judged.
 import { readFileSync, copyFileSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -229,23 +237,31 @@ function scan(argv, deps) {
     let deadline = a.deadline;
     let extended = a.extended;
     let prints = null;
+    let error = null;
     if (overdue) {
       const assigned = a.fingerprint;
-      const current = a.expander ? { expansions: a.expansions } : fingerprint(resolve(a.worktree), deps.git);
+      let current = null;
+      try {
+        current = a.expander ? { expansions: a.expansions } : fingerprint(resolve(a.worktree), deps.git);
+      } catch (e) {
+        error = (e.stderr && String(e.stderr).trim()) || e.message || String(e);
+      }
       prints = { assigned, current };
-      const progressed = a.expander
-        ? Object.keys(assigned.expansions).some((t) => current.expansions[t] > assigned.expansions[t])
-        : current.head !== assigned.head || current.tree !== assigned.tree;
-      if (extended === 'no' && progressed) {
-        action = 'extend';
-        deadline = now + a.limit * 60_000;
-        extended = 'yes';
-      } else {
-        action = 'stop';
+      if (current !== null) {
+        const progressed = a.expander
+          ? Object.keys(assigned.expansions).some((t) => current.expansions[t] > assigned.expansions[t])
+          : current.head !== assigned.head || current.tree !== assigned.tree;
+        if (extended === 'no' && progressed) {
+          action = 'extend';
+          deadline = now + a.limit * 60_000;
+          extended = 'yes';
+        } else {
+          action = 'stop';
+        }
       }
     }
-    if (action !== 'stop' && (earliest === null || deadline < earliest)) earliest = deadline;
-    return { id: a.id, overdue, action, deadline: formatTime(deadline), extended, fingerprint: prints };
+    if (action !== 'stop' && error === null && (earliest === null || deadline < earliest)) earliest = deadline;
+    return { id: a.id, overdue, action, deadline: formatTime(deadline), extended, fingerprint: prints, error };
   });
 
   const seconds = earliest === null ? null : (earliest - now) / 1000;
