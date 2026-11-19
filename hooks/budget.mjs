@@ -8,6 +8,9 @@
 //   { "spawns": <int>, "agents": [<agent_id>, ...], "updated": "<ISO time>" }
 // SubagentStart adds one per new agent_id (it also fires when a subagent is resumed, so a seen id is not
 // counted again); PreToolUse on Agent denies the spawn once the count has reached the limit.
+// That deny really stops the spawn: checked live on Claude Code 2.1.325 (2026-11-19) with
+// scripts/spawn-deny.live.mjs — at the limit, a foreground and a background Agent call both came back as this
+// deny and no SubagentStart fired. Re-run it by hand after a Claude Code upgrade that touches hooks or Agent.
 // Writes take an exclusive lock file (`<counters>.lock`, created with O_EXCL) and replace the counters
 // through a temporary file and a rename, so parallel SubagentStart hooks neither lose a count nor leave
 // a half-written file. Reads take no lock: a rename never exposes a half-written file.
