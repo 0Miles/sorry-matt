@@ -42,17 +42,32 @@ every time. When the project uses no ready-made component library (the `Componen
 
 ### 1. Prerequisite
 
-Before starting, read `docs/agents/ui.md`. When it does not exist, stop here: write no code, produce no UI brief
+Before starting, check on `docs/agents/ui.md`: read it in full only when this conversation has not read it yet,
+or when it has been changed since it was read; otherwise go on with what was already read and do not read it
+again. "Read" counts only the full text you yourself read in this conversation: someone else's retelling, a
+summary (the one a compacted conversation leaves behind included), or a read done by a parent conversation does
+not count. "Changed" does not depend on who changed it: after you edit it yourself in this conversation, read it
+once more the next time you need it. When it does not exist, stop here: write no code, produce no UI brief
 or other deliverable, and do not create `ui.md` yourself; ask the user to run `/set-up-ui-skills`, and continue
 once it exists. Running as a subagent that cannot reach the user, stop the same way and state in the report that
 a human needs to run `/set-up-ui-skills`. Answering a question without producing a deliverable is exempt, but the
 answer mentions once that `ui.md` is missing.
 
+When the `Component library` section has a single entry with no `Scope` line, use that entry. When it has
+several entries, each with a `Scope` line (a monorepo), choose per file: for each file this change touches, take
+the entry whose `Scope` covers that file's path; when several cover it, take the one with the longest path. When
+the change spans two scopes, each file uses its own entry — do not pick one entry for the whole change. A changed
+file that falls inside no `Scope` is handled as if the `Component library` section read "None", and goes into
+the report's **`ui.md` mismatches**. In the steps below, "the component library" means the entry chosen for
+that file.
+
 ### 2. The bundled skill first
 
 When the `Bundled skill` field of the `Component library` section names a skill, call the Skill tool with the
-bundled skill recorded in `ui.md` before starting. When it is missing
-from the available skills, finish the work under this contract and name it once in the report.
+bundled skill recorded in `ui.md` before starting — only when this conversation has not loaded it yet; once it
+is loaded, go on with it and do not call it again. When the `Component library` section has several entries,
+call only the bundled skills recorded on the entries the prerequisite chose, and none from the others. When it is
+missing from the available skills, finish the work under this contract and name it once in the report.
 
 ### 3. Read the API before using it
 
@@ -89,7 +104,7 @@ component's own appearance is rung 3 — a `size` that changes width along with 
 example: it already changes the component's own appearance, so rung 1's "appearance stays the same" no longer
 holds.
 
-These six are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
+These ten are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
 uses one:
 
 - Overriding a component's internal styles from an outside selector.
@@ -98,6 +113,15 @@ uses one:
 - Copying a component under a new name.
 - Wrapping a component only to rename it, unless the wrapper convention in the `Conventions` section requires it.
 - Hand-writing keyboard, focus, or state behavior the component library or a shared component already has.
+- Editing files in `node_modules`.
+- Patching the component library package.
+- Copying a library component's source into the project.
+- Importing an **internal path** of the component library.
+
+The last four are the **package-level** prohibitions. An **internal path** is a path that neither the `exports`
+of the package's `package.json` nor the library's documentation lists; when the package has no `exports` field,
+only paths the documentation names count, and every deep path the documentation does not mention is an internal
+path.
 
 ### 6. Hard-coded values
 

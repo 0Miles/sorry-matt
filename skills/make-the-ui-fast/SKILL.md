@@ -11,9 +11,10 @@ stays has before-and-after numbers.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**precedence**, **component reuse**, and **browser support policy** below.
+**precedence**, **component reuse**, **internal path**, and **browser support policy** below.
 
-Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
+Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
+when it does not exist, stop before
 step 1: measure no baseline, change no code, and ask the user to run `/set-up-ui-skills` (running as a subagent,
 put that in the report as the prerequisite says).
 
@@ -61,16 +62,14 @@ When the bottleneck involves the component library, first sort out where its cos
 - It comes from how the project loads or uses the library (a barrel import, loading the whole package, providers
   or styles it does not use), and the library has a **public alternative**: this is one change inside the
   project. Switch to that alternative, and update the `Loading` line of the `Component library` section in
-  `ui.md` in the same diff. A public alternative is a subpath listed in the `exports` of the package's
-  `package.json`, or an approach the library's documentation describes; when the package has no `exports` field,
-  only paths the documentation names count, and a deep path the documentation does not mention is an internal
-  path.
+  `ui.md` in the same diff. A public alternative is an import path that is not an **internal path**, or an approach
+  the library's documentation describes.
 - There is no public alternative, and the cost sits in the library's own code: record it as a component library
   finding as the next paragraph says, and leave the diff untouched.
 
 When the bottleneck sits in the component library package's own code (the project's shared components do not
-count), record it as a component library finding and do not fork in place: no edits to `node_modules`, no
-patch, no copying a library component into the project, no importing the library's internal paths. There is
+count), record it as a component library finding and do not fork in place: do none of the
+**package-level** prohibitions of **component reuse**. There is
 then no change to measure: skip the measuring in step 5 and go straight to its "Decide what comes next".
 
 Done when: the diff holds one change aimed at this bottleneck, traceable to consulted guidance or to a piece of

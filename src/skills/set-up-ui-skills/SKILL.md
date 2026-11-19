@@ -28,7 +28,11 @@ disable-model-invocation: true
 - **共用元件目錄**：常見位置如 `src/components/`、`components/ui/`、`src/shared/`、`app/components/`、
   `packages/ui/`；以 repo 實際存在的為準。
 - **barrel 匯出**：共用目錄的 `index.ts`、`index.js` 重新匯出了哪些元件。
-- **import 次數**：每個候選元件被多少個不同檔案 import，分佈在幾個頁面或功能。
+- **import 次數**：整個 repo 的 import 只掃一次，留下一份「檔案 → 它 import 的模組與名稱」的結果；
+  每個候選元件被多少個不同檔案 import、分佈在幾個頁面或功能，都從這同一份結果算，不為個別候選再掃
+  一次。掃描涵蓋四種寫法：靜態 `import`（含只有副作用的與只 import type 的）、`export … from`、
+  `require()`、動態 `import()`。經 barrel 重新匯出的 import 算到被匯出的候選元件上；barrel 檔本身
+  不計入使用它的檔案數。
 - **重複實作**：同名或同用途的元件出現在兩處以上（如兩個 `Button`）。
 - **Storybook**：`.storybook/` 是否存在，哪些元件有 `*.stories.*`。
 - **tokens／theme 檔**：design tokens、theme 物件、CSS 自訂屬性的定義檔、utility 框架的 theme 設定；

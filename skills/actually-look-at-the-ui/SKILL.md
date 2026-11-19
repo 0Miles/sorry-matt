@@ -14,7 +14,8 @@ this skill loaded and read the sibling
 **component reuse**, **hard-coded value**, **state matrix**, **evidence grade**, and **eyes-on list** below, while the **component
 choice table** is what step 1 of `build-the-ui-right` produces.
 
-Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop: list no
+Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
+when it does not exist, stop: list no
 claims, produce no evidence table, and ask the user to run `/set-up-ui-skills` (running as a subagent, put that
 in the report as the prerequisite says).
 

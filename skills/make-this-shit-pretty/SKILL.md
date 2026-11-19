@@ -13,7 +13,8 @@ Before starting, take the base directory shown when this skill loaded and read t
 contract**; it defines the bold **component reuse**, **hard-coded value**, **state matrix**, **accessibility
 floor**, **evidence grade**, and **eyes-on list** below.
 
-Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
+Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
+when it does not exist, stop before
 step 1: create no branch, produce no findings, and ask the user to run `/set-up-ui-skills`.
 
 **Hard rail — behavior stays unchanged.** The **behavior baseline** is these six: routes, data flow, fields
