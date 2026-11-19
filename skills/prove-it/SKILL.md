@@ -61,32 +61,37 @@ changes neither this ticket's diff nor the repo's dependencies. New-file line nu
 `git show <ticket branch>:<path>`.
 
 The **review tier** is judged here, once, from the diff, written into the review block as `tier`, and kept for the
-whole ticket, rechecks included. It sets the number of finders and verifiers and the mutation cap. Changed lines are
-the added plus deleted lines of `git diff --numstat <fixed point>...<ticket branch>`; sensitive paths come from
-`Sensitive paths` in the review worktree's `docs/agents/commands.md`, and when that file is missing or the section is
-`none`, they are the paths of CI configuration, hooks and guards, release and deploy configuration, permission
-settings and database migrations. Top to bottom, the first row that matches is the tier:
+whole ticket, rechecks included. It sets the number of finders and the lenses each applies, how verifiers and Fix
+Verifiers are batched, and the mutation cap. At the root of the review worktree, run the **tier command**:
 
-| `tier` | Condition | Finders | Verifiers | Mutation cap |
-| --- | --- | --- | --- | --- |
-| `light` | Prose only: every changed file is documentation such as `.md` or `.txt`, with no code, tests, scripts, configuration, or generated files | 1 | 1 | — |
-| `full` | The diff touches a sensitive path, or has more than 400 changed lines | 3 | one per file | 10 |
-| `light` | No more than 50 changed lines | 1 | 1 | 3 |
-| `standard` | Everything else | 2 | one per file, at most 3 | 5 |
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <ticket branch> > <scratchpad>/review-<ticket>-tier.json 2> <scratchpad>/review-<ticket>-tier.err
+```
+
+The output format, how each signal is computed, the thresholds, and the flags that override them are in the script
+header. Read the output as it is; never recompute it:
+
+- `tier`: goes into the review block. `reasons` are the conditions that put it at this tier.
+- `finders`: section 2 dispatches Finders from it.
+- `verifiers.max`, `fixVerifiers`: sections 4 and 7 batch by them.
+- `mutationCap`: section 3's mutation cap; `null` means prose only, with no executable lines.
+
+When the tier command exits non-zero, take `tier` as `full`, `finders` as
+`[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`, the mutation cap as 10, and
+use `--tier full` in sections 4 and 7; add the path of `<scratchpad>/review-<ticket>-tier.err` to the status record's
+"evidence paths" field.
 
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed
 acceptance criteria have been recorded as an `acceptance` finding; the review worktree sits at the ticket branch tip
-and the diff is saved; `tier` has been judged from the table above.
+and the diff is saved; `tier` comes from the tier command's output, or is `full` when it failed.
 
 ## 2. Finder: candidates in parallel
 
-The number of finders follows `tier`; dispatch them all in one message, the Agent tool's `description` being
-`finder` followed by the ticket's identifier. The lenses are split like this:
-
-- `light`: one finder applies every lens.
-- `standard`: two — correctness (line by line, deleted behaviour, cross-file contracts) and conformance (acceptance
-  check, repo conventions).
-- `full`: three — line by line with deleted behaviour, cross-file contracts, and conformance.
+Dispatch one finder per inner array of the tier output's `finders`, applying the lenses that array lists; dispatch
+them all in one message, the Agent tool's `description` being `finder` followed by the ticket's identifier. The lenses
+in `pruned` were pruned mechanically from the diff; dispatch them nowhere and put them in no prompt: no deleted lines
+means no deleted-behaviour lens, no rule file covering the changed files means no repo-conventions lens, and with no
+signature changed the cross-file lens is folded into line by line.
 
 This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground:
 the caller waits within its own turn until every one of them is back. `get-to-work` puts no time limit on review
@@ -101,24 +106,25 @@ For all three, the Agent tool's `description` always starts with the role word, 
 plugin's hook records it in the run's counters file, and `get-to-work` relies on this prefix when finishing to break
 the run's spawns down by role and by ticket; one written wrong is counted as a general-purpose agent of unknown use.
 
-- **Line by line:** for every line of every hunk, ask which inputs, states, timings, or platforms break it. Check
-  especially for inverted conditions, off-by-one, falsy zero, a missing `await`, a copy-pasted wrong variable, and
-  a catch that swallows errors.
-- **Deleted behaviour:** identify the invariant each deleted or rewritten block used to hold and locate where the
+- **Line by line** (`line-by-line`): for every line of every hunk, ask which inputs, states, timings, or platforms
+  break it. Check especially for inverted conditions, off-by-one, falsy zero, a missing `await`, a copy-pasted wrong
+  variable, and a catch that swallows errors. When the cross-file lens is folded in, also check that a changed
+  function's return values, exceptions, and timing still hold at its direct callers.
+- **Deleted behaviour** (`deleted-behaviour`): identify the invariant each deleted or rewritten block used to hold and locate where the
   new code rebuilds it; if nowhere, it is a candidate.
-- **Cross-file contracts:** trace the callers and callees of each changed function and check whether new
+- **Cross-file contracts** (`cross-file`): trace the callers and callees of each changed function and check whether new
   preconditions, return shapes, exceptions, or timing break either side.
-- **Acceptance check:** locate, for each criterion in the acceptance snapshot, where the diff implements it and which
+- **Acceptance check** (`acceptance`): locate, for each criterion in the acceptance snapshot, where the diff implements it and which
   test verifies it. List criteria that are missing or half done, ones that look done but are done wrong, and changes
   the ticket did not ask for (scope creep). Quote each criterion and its source (`original`, or `expansion` with
   `by` and `round`).
-- **Repo conventions:** apply the rules in any `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, or
-  `CODING_STANDARDS.md` covering the changed files. List only what can quote the rule's text; skip anything tooling
+- **Repo conventions** (`conventions`): apply the rule files listed in the tier output's `signals.ruleFiles` (the
+  `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, and `CODING_STANDARDS.md` covering the changed files). List only what can quote the rule's text; skip anything tooling
   already enforces.
 
 Finders cannot see this conversation, so each prompt is self-contained: the absolute paths of the repo and the
 review worktree, the fixed point, the ticket branch, the diff file path, the full ticket text, the full text of
-that lens, and the scope it must trace outward (complete new files, implementations of called functions, every
+every lens it applies, and the scope it must trace outward (complete new files, implementations of called functions, every
 caller, and type definitions). A finder only raises candidates and never rules; it reports what it is unsure of.
 
 Report format: `file`, `line` (new-file line number), `lens`, a one-sentence `summary`, a `failure_scenario`
@@ -182,8 +188,8 @@ Choosing lines:
 1. Take only covered, executable code lines; never mutate test files, comments, docs, configuration, or generated
    files. Uncovered lines are not mutated; their count goes into the record. When the ticket changes executable code
    lines and none of them is covered, that fact is itself a candidate (lens `mutation`).
-2. **At most one mutant per line, and a per-ticket cap set by `tier`** (the table in section 1; pass it to the script
-   as `--cap`). Over the cap, take in order: lines a Finder
+2. **At most one mutant per line, and a per-ticket cap of the tier output's `mutationCap`** (pass it to the script as
+   `--cap`). Over the cap, take in order: lines a Finder
    candidate points at → lines an acceptance criterion directly depends on → conditions, boundaries, and return
    values → other statements; within a priority, spread across hunks.
 3. For each line pick the operator most likely to slip past the tests: invert a condition, shift a boundary
@@ -225,12 +231,21 @@ empty; every surviving mutant has become a candidate.
 
 ## 4. Verifier: an independent ruling per candidate
 
-Group the candidates (including the live-run and mutation candidates from section 3) by file and give each group to
-one verifier subagent, all dispatched in parallel, with `verifier` followed by the ticket's identifier as the
-`description`. The number of groups follows `tier`: `light` puts every candidate in one group; `standard` makes one
-group per file and, past three groups, folds the groups with the fewest candidates into one; `full` makes one group
-per file. Grouping only sets the number of verifiers: a verifier rules on each candidate in its group separately,
-each with its own `file:line` evidence. A verifier handles only the candidates it was given; anything else it sees
+The script **batches** the candidates (including the live-run and mutation candidates from section 3). Give each
+candidate an `id`, write the `id`, `file`, and `suspected` of each as a JSON array, and at the root of the review
+worktree run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/review-<ticket>-tier.json --items <scratchpad>/review-<ticket>-candidates.json
+```
+
+When the tier command failed, pass `--tier full` instead of `--tier-file`. Each batch in the output's `batches` goes
+to one verifier subagent, all dispatched in parallel, with `verifier` followed by the ticket's identifier as the
+`description`. Candidates marked `suspected` go together to one verifier (the batch's `short`); the rest are grouped
+by file (the batch's `normal`), and the batches never outnumber the tier output's `verifiers.max`. Batching only sets
+the number of verifiers and never merges candidates: a verifier rules on each candidate in its batch separately, each
+with its own `file:line` evidence; the `short` candidates take the short path, and any for which neither check holds
+go on through the normal path with the same verifier. A verifier handles only the candidates it was given; anything else it sees
 while ruling goes, one line each, into the report's `noticed`, which the caller treats as observations.
 
 The prompt is self-contained and holds only the absolute paths of the repo and the review worktree, the ticket
@@ -300,7 +315,7 @@ candidate; `none` when it meets none), the `file:line` evidence, the result of e
 short path, and the fix direction (findings only). The last line is `noticed`, or `none`.
 
 Done when: every candidate has exactly one ruling with `file:line` evidence, and either the result of each gate or
-the two checks of the short path; candidates in a group were each ruled on separately; every finding has the `rule`
+the two checks of the short path; candidates in a batch were each ruled on separately; every finding has the `rule`
 it meets, that rule's quote and a falsifiable fix direction; every mutant has a disposition in the mutation record.
 
 ## 5. Verdict
@@ -389,8 +404,11 @@ recheck answers one question: is each of the previous findings closed? Its scope
 the fix commits (`git diff <previous head>..<ticket branch>`), so each round has less to verify than the one before.
 Rebuild the review worktree per section 1 at the fixed ticket branch tip; `tier` stays what the initial review set.
 
-1. **Fix Verifier:** for `light` and `standard`, one subagent per ticket takes every finding; for `full`, one per
-   finding, dispatched in parallel. An `acceptance` finding does not go to it (step 4). The `description` is
+1. **Fix Verifier:** write the `id` and `file` of each finding (except an `acceptance` finding, which takes step 4)
+   as a JSON array and batch them with
+   `node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier <the kept tier> --stage fix --items <scratchpad>/review-<ticket>-r<round>-findings.json`:
+   one batch per ticket for `light` and `standard`, one per file for `full`. One subagent per batch, dispatched in
+   parallel; it answers for each finding in its batch separately, and each gets its own ruling. The `description` is
    `fix-verifier` followed by the ticket's identifier. The prompt is self-contained: the review worktree path, each
    finding's `summary`, `evidence`, `rule` and `fix`, and the diff of the fix commits; leave out the implementer's
    explanation. For each finding it re-runs the scenario recorded in `evidence` and answers two questions with

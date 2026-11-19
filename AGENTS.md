@@ -391,6 +391,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 合線 | join lines |
 | 索引檔 | index file |
 | 觀察(審查區塊的) | observation |
+| 判級指令 | tier command |
+| 裁剪(lens) | prune |
+| 併入(lens) | fold into |
+| 合批 | batch |
 
 ## 外部語義來源
 
