@@ -21,8 +21,9 @@
 //   - otherwise "general-purpose".
 //   Spawns counted but not logged (`spawns` minus the number of log entries) are "unknown".
 //
-// Ticket of a log entry: the first `#<digits>` or `<digits>-<slug>.md` marker in `description`. An entry
-// without one is in no ticket; it still counts in `byType`.
+// Ticket of a log entry: the first `#<digits>` or `<digits>-<slug>.md` marker in `description`; the slug is any
+// run of characters that are neither whitespace nor a path separator. An entry without one is in no ticket; it
+// still counts in `byType`.
 //
 // Output (stdout, JSON, format "sorry-matt/spawns@1"; fields are only ever added, never renamed)
 //   {
@@ -42,7 +43,9 @@ import { UsageError, failure, runIfEntry } from './cli.mjs';
 export const FORMAT = 'sorry-matt/spawns@1';
 export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'finder', 'verifier', 'fix-verifier'];
 
-const TICKET = /#\d+|(?<![\w.-])\d+-[\w.-]*\.md(?![\w-])/;
+// A ticket file name is `<digits>-<slug>.md`, the slug being any characters that are neither whitespace nor a
+// path separator (so a slug in any script counts); the name starts and ends at whitespace or a path separator.
+const TICKET = /#\d+|(?<![^\s\/\\])\d+-[^\s\/\\]*\.md(?![^\s\/\\])/u;
 const optionalString = (value) => value === null || value === undefined || typeof value === 'string';
 
 /** The category one log entry counts under. */
@@ -64,14 +67,17 @@ export function summarize(counters, path = 'the input') {
   if (log.some((e) => !e || typeof e !== 'object' || !optionalString(e.type) || !optionalString(e.description))) throw wrong();
   if (log.length > spawns) throw new Error(`${path} has ${log.length} log entries but ${spawns} spawns`);
 
-  const byType = {};
-  const byTicket = {};
-  const add = (tally, key) => (tally[key] = (tally[key] || 0) + 1);
+  // Null-prototype tallies: an agent type or ticket named like an Object.prototype key (`constructor`,
+  // `__proto__`) is a key like any other.
+  const tally = () => Object.create(null);
+  const byType = tally();
+  const byTicket = tally();
+  const add = (counts, key) => (counts[key] = (counts[key] || 0) + 1);
   for (const entry of log) {
     const kind = category(entry);
     add(byType, kind);
     const ticket = ticketOf(entry.description);
-    if (ticket) add((byTicket[ticket] ||= {}), kind);
+    if (ticket) add((byTicket[ticket] ||= tally()), kind);
   }
   if (spawns > log.length) byType.unknown = (byType.unknown || 0) + spawns - log.length;
   return { format: FORMAT, spawns, byType, byTicket };

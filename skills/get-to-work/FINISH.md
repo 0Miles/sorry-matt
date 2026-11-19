@@ -17,7 +17,8 @@ Every line passes **three line-level gates** first, in this order:
    into the integration branch: with an `origin`, `git fetch origin <base branch>` then
    `git merge origin/<base branch>`; in Local Markdown mode with no remote, merge the local `<base branch>`; either
    way with `--no-edit`. Record the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from
-   section 1, close-out step 4, under the same criterion and the same rule that the resolution lives only in this
+   section 1, close-out step 4 (this merge belongs to no ticket, so the Agent tool's `description` is `merge`
+   followed by the line's integration branch), under the same criterion and the same rule that the resolution lives only in this
    merge commit: one side is the line (its tickets' text and commit messages), the other is the base
    (`git log --format=%B <merge-base>..<merged base ref>`), and the goal of this merge is the line's intent landing
    on the latest base. The host records the tradeoffs in the self-answer log. When the merge agent reports a

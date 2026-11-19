@@ -13,7 +13,7 @@
    最新基底上才算數。在整合 worktree 把最新的基底尖端合併進整合分支：有 `origin` 時
    `git fetch origin <基底分支>` 再 `git merge origin/<基底分支>`；Local Markdown 沒有 remote 時
    合併本地 `<基底分支>`，都帶 `--no-edit`。併入的基底 SHA 記進 ledger 第 4 欄。有 conflict 時交給第 1 節收票
-   步驟 4 的**整併 agent**，判準與「解法只留在這個 merge commit 裡」照用：一邊是這條線（各票票面與 commit message），另一邊是基底
+   步驟 4 的**整併 agent**（這個 merge 不屬於任何一張票，Agent tool 的 `description` 是 `merge` 後接該線的整合分支），判準與「解法只留在這個 merge commit 裡」照用：一邊是這條線（各票票面與 commit message），另一邊是基底
    （`git log --format=%B <merge-base>..<併入的基底 ref>`），合併目標是讓線的意圖落在最新基底上。
    主持人把取捨記進自答清單。整併 agent 回報無法安全解決時 `git merge --abort`，這條線就是
    **未併入**：ledger 第 4 欄記嘗試併入的基底 SHA 與「未併入」，交付物與人工作業清單寫明衝突的

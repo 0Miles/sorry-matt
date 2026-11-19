@@ -99,6 +99,24 @@ test('tickets: the first #N or NN-slug.md marker; a spawn without one is in no t
   assert.equal(total(r.json.byType), 7);
 });
 
+test('a ticket file name with a slug outside ASCII is a ticket', (t) => {
+  const r = summarize(t, counters([gp('implement 03-登入.md'), gp('finder docs/tickets/03-登入.md'), gp('merge 04-café-menu.md')]));
+  assert.deepEqual(r.json.byTicket, { '03-登入.md': { implement: 1, finder: 1 }, '04-café-menu.md': { merge: 1 } });
+});
+
+test('a category or ticket named like an Object.prototype key is counted like any other', (t) => {
+  const r = summarize(t, counters([entry('constructor', null), entry('constructor', null)], 3));
+  assert.equal(r.code, 0);
+  assert.equal(r.out.includes('"constructor": 2'), true);
+  assert.deepEqual(r.json, { format: 'sorry-matt/spawns@1', spawns: 3, byType: { constructor: 2, unknown: 1 }, byTicket: {} });
+
+  const odd = summarize(t, counters([entry('__proto__', 'x #1'), entry('toString', 'x #1'), entry('toString', 'x #1'), entry('hasOwnProperty', null)]));
+  assert.equal(odd.out.includes('"__proto__": 1'), true);
+  assert.equal(odd.out.includes('"toString": 2'), true);
+  assert.equal(odd.out.includes('"hasOwnProperty": 1'), true);
+  assert.equal(odd.json.spawns, 4);
+});
+
 test('the old counters format: every spawn is unknown', (t) => {
   const r = summarize(t, '{"spawns": 4, "agents": ["a","b"], "updated": "2026-11-18T00:00:00.000Z"}');
   assert.equal(r.code, 0);
