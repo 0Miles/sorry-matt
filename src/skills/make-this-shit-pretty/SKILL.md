@@ -59,8 +59,7 @@ disable-model-invocation: true
   不符合定義的字面值不記 finding。
 
 這一類 finding 的**證據等級**：手刻近似元件與外部覆寫為實測（瀏覽器裡讀到的 DOM 與 computed
-style），沒有瀏覽器時為未驗證，並附原始碼 `file:line`；寫死的值照定義為實測，證據是搜尋指令
-或 `file:line`，沒有瀏覽器時照樣判定。
+style），沒有瀏覽器時為未驗證，並附原始碼 `file:line`；寫死的值的證據等級與證據照**寫死的值**的定義。
 
 完成判準：旅程的每一步與中斷情境都走過；每個 lens 都有 findings 或明記「沒有發現」；
 每則 finding 五欄俱全。

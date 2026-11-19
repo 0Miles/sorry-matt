@@ -71,8 +71,7 @@ sections of `ui.md`, and catches three kinds:
 
 The **evidence grade** of these findings: hand-rolled lookalikes and outside overrides are measured (the DOM and
 computed style read in the browser), and with no browser they are unverified, with the source `file:line`
-attached; hard-coded values are measured as the definition says, with a search command or `file:line` as the
-evidence, and are judged the same way with no browser.
+attached; the evidence grade and evidence for hard-coded values follow the **hard-coded value** definition.
 
 Done when: every step of the journey and the interruption were walked; every lens has findings or an explicit
 "nothing found"; every finding has all five fields.

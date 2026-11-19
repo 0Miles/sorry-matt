@@ -15,9 +15,7 @@ call the Skill tool with `figure-out-the-ui`.
 
 Choose components under **component reuse**; when `docs/agents/ui.md` does not exist, stop at its prerequisite
 step. New code reuses the naming, structure, and styling approach of the chosen components and tokens. `ui.md`
-follows the two layers of "Maintain `ui.md`" in **component reuse**: a mismatch this change touches (adding or
-extracting a shared component, for example) is corrected in the same commit as the change; one found along the
-way leaves `ui.md` alone and waits for the step 4 report.
+follows "Maintain `ui.md`" in **component reuse**; a mismatch found along the way waits for the step 4 report.
 
 Produce a component choice table, one row per UI element:
 
