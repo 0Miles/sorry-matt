@@ -58,8 +58,9 @@ disable-model-invocation: true
 - 偵測到一套 → 照證據記，不問。這一條只適用於單一 package 的專案，或每個前端 package 都用同一套的
   monorepo；這兩種情況都不寫「適用範圍」。
 - 前端 package 的元件庫不全相同（含有的 package 沒有元件庫）→ 不問；每套現役元件庫各記一條並附
-  「適用範圍」（package 路徑），沒有元件庫的 package 記一條「無」並附「適用範圍」。多個 package 共用
-  同一套（或同樣沒有）時合成一條，「適用範圍」列出這些 package 的路徑。
+  「適用範圍」（package 路徑），沒有元件庫的 package 記一條「無」並附「適用範圍」。現役元件庫相同
+  （或同樣沒有）、且「既有、不再新用」的標記也相同的 package 才合成一條，「適用範圍」列出這些 package
+  的路徑；標記不同的各自一條。
 - 同一個 package 裡偵測到兩套以上 → 問該 package 的新程式碼用哪套。建議答案：有限制 import 的 lint
   規則或遷移註記時取它指向的那套，否則取 import 次數多的那套。其餘記為「既有、不再新用」——這個標記
   只用於這種情況。
@@ -134,10 +135,11 @@ disable-model-invocation: true
 - 寫入或更新了哪些檔案，改的是哪一份指示檔。
 - 會讀 `ui.md` 的前端 skills：`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
   `make-the-ui-fast`、`make-this-shit-pretty`。
-- 之後可以直接編輯 `ui.md`；只有要從頭重來、或要補回 `### UI` 時才需要重跑本 skill。
+- 之後可以直接編輯 `ui.md`。證據有變（元件庫、共用元件、tokens 或慣例變了）或要補回 `### UI` 時
+  重跑本 skill；重跑會沿用既有 `ui.md`。要從頭來時，請使用者先刪掉 `docs/agents/ui.md` 再重跑。
 - 兩支 setup 寫同一個 `## Agent skills` 區塊：重跑 `/setup-matt-pocock-skills` 後若 `### UI` 不見了，
   請使用者重跑 `/set-up-ui-skills` 補回。前端 skills 直接讀 `docs/agents/ui.md`，`### UI` 不見時照常運作。
 
-完成判準：回報列出寫入的檔案路徑與那五支前端 skill，說明可直接編輯 `ui.md`、重跑只在要重來或補回
-`### UI` 時需要，並告訴使用者重跑 `/setup-matt-pocock-skills` 後若 `### UI` 不見了，要重跑
+完成判準：回報列出寫入的檔案路徑與那五支前端 skill，說明可直接編輯 `ui.md`、證據有變或要補回
+`### UI` 時重跑且重跑會沿用既有 `ui.md`、要從頭來先刪掉 `docs/agents/ui.md` 再重跑，並告訴使用者重跑 `/setup-matt-pocock-skills` 後若 `### UI` 不見了，要重跑
 `/set-up-ui-skills` 補回。

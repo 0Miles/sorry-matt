@@ -341,6 +341,22 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 決定下一步 | decide what comes next |
 | 目標(`make-the-ui-fast` 回報項) | target |
 | 畫面確認 | UI check |
+| 相同（元件補上 <按鍵>）(行為基準複核的值) | same (component adds <key>) |
+| 假設用盡 | hypotheses exhausted |
+| 已推翻的假設 | overturned hypotheses |
+| 同一用途 | the same purpose |
+| 值相同 | same value |
+| 角色(token 的) | role |
+| 刻度(token 的) | scale |
+| 比對對象(主張 (a) 的) | reference |
+| 根節點結構 | root-node structure |
+| `var()` 解析檢查 | `var()` resolution check |
+| `var()` 解析未檢查 | `var()` resolution not checked |
+| 排版 prop | layout prop |
+| 爬梯 | climb the ladder |
+| 本次新造元件 | component newly built in this change |
+| 「命名規則」行(`ui.md` 的 Tokens 段) | `Naming rule` line |
+| 「適用範圍」欄(`ui.md` 的共用元件表) | `Scope` column |
 | 內部路徑 | internal path |
 | 套件層(禁止事項) | package-level |
 | 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
