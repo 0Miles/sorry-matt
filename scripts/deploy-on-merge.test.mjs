@@ -295,3 +295,49 @@ test('the workflows that count are the ones the merge leaves: PR head, or the pu
   assert.equal(pushed.deploys, true);
   assert.match(pushed.reason, /讀自 HEAD/);
 });
+
+test('a PR in a repo this clone does not track is read from GitHub', () => {
+  const graphql = (repository) => JSON.stringify({ data: { repository } });
+  const dir = (files) => ({ entries: files.map((f) => ({ name: f.name, type: 'blob', object: { text: f.text } })) });
+  const remote = (repository, extra = {}) =>
+    stub({
+      'git rev-parse --show-toplevel': '/repo\n',
+      'git remote get-url origin': 'https://github.com/o/r.git\n',
+      'gh pr view 7 --repo x/y': prJson(),
+      'gh api graphql': graphql(repository),
+      ...extra,
+    });
+  const target = { kind: 'pr', arg: '7', repo: 'x/y' };
+
+  const deploys = remote({ head: { oid: 'f00d' }, headDir: dir([wf('pages.yml', PAGES)]), baseDir: dir([]) });
+  const yes = mergeDeploys(target, { env: {}, run: deploys.run, fs: noFs });
+  assert.equal(yes.deploys, true);
+  assert.match(yes.reason, /pages\.yml.*讀自 x\/y@f00d/);
+  const call = deploys.calls.find((c) => c.startsWith('gh api graphql'));
+  assert.match(call, /-f owner=x -f name=y -f head=f00d -f headDir=f00d:\.github\/workflows -f baseDir=main:\.github\/workflows$/);
+
+  const quiet = mergeDeploys(target, { env: {}, run: remote({ head: { oid: 'f00d' }, headDir: dir([wf('ci.yml', CI_ONLY)]), baseDir: null }).run, fs: noFs });
+  assert.equal(quiet.deploys, false);
+  // No workflows directory at the head at all.
+  assert.equal(mergeDeploys(target, { env: {}, run: remote({ head: { oid: 'f00d' }, headDir: null, baseDir: null }).run, fs: noFs }).deploys, false);
+  // The head commit is not reachable: the base is read, and the reason says so.
+  const base = mergeDeploys(target, { env: {}, run: remote({ head: null, headDir: null, baseDir: dir([wf('pages.yml', PAGES)]) }).run, fs: noFs });
+  assert.equal(base.deploys, true);
+  assert.match(base.reason, /x\/y@main；讀不到 PR head，改讀 base/);
+
+  // Lookups that fail, or a repo spelled as a variable, cannot tell.
+  assert.equal(mergeDeploys(target, { env: {}, run: remote({}, { 'gh api graphql': false }).run, fs: noFs }).deploys, null);
+  assert.equal(mergeDeploys(target, { env: {}, run: remote({ head: { oid: 'f00d' }, headDir: { entries: [{ name: 'a.yml', type: 'blob', object: { text: null } }] } }).run, fs: noFs }).deploys, null);
+  const unexpanded = mergeDeploys({ ...target, repo: '$R' }, { env: {}, run: remote({}).run, fs: noFs });
+  assert.equal(unexpanded.deploys, null);
+  assert.match(unexpanded.reason, /看不懂 --repo \$R/);
+
+  // This clone's .claude/sorry-matt.json speaks for this clone only; the env speaks for every repo.
+  const config = { ...noFs, read: () => JSON.stringify({ mergeDeploysProduction: false }) };
+  assert.equal(mergeDeploys(target, { env: {}, run: deploys.run, fs: config }).deploys, true);
+  assert.equal(mergeDeploys(target, { env: { SORRY_MATT_MERGE_DEPLOYS: 'no' }, run: deploys.run, fs: noFs }).deploys, false);
+  // The same repo as origin, spelled with a host or another case, is read locally.
+  const local = repo([wf('pages.yml', PAGES)]);
+  assert.equal(mergeDeploys({ kind: 'pr', arg: '12', repo: 'github.com/O/R' }, { env: {}, run: local.run, fs: noFs }).deploys, true);
+  assert.ok(!local.calls.some((c) => c.startsWith('gh api graphql')));
+});
