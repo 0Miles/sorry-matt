@@ -55,8 +55,12 @@ diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>
 
 ## 2. Finder：平行找候選
 
-每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出。diff 只有一個檔案且不超過
-數十行時，一個 finder 套用全部 lens。
+每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出。以下兩種 diff 只派一個 finder，
+由它套用全部 lens：
+
+- 只有一個檔案，而且不超過數十行。
+- 只動 Markdown 或其他文件，沒有可執行程式碼：每個改動檔都是說明文字（`.md`、`.txt` 這類），
+  不含程式、測試、腳本、設定或產生檔。src 與 dist 兩版都改的 skill 文字也算。
 
 本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送，不在背景跑：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
@@ -77,15 +81,21 @@ Finder 看不到目前對話，prompt 要自足：repo 與審查用 worktree 的
 ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須向外追查的範圍（完整的新檔內容、
 被呼叫函式的實作、所有呼叫端與型別定義）。Finder 只找候選、不裁決；尚未確定的也回報。
 
-回報格式：`file`、`line`（新檔行號）、`lens`、一句 `summary`，以及描述使用者可見後果的
-`failure_scenario`（錯誤輸出、crash、資料遺失，而非中間狀態）。每個 finder 最多六則，沒有就
-回傳空清單。
+回報格式：`file`、`line`（新檔行號）、`lens`、一句 `summary`、描述使用者可見後果的
+`failure_scenario`（錯誤輸出、crash、資料遺失，而非中間狀態），以及 `suspected`（疑似 spec 層級
+或既有）：
+
+- `spec`：候選指的行為或措辭，正是票面或驗收項指定的。附上被指定的原文。
+- `pre-existing`：fixed point 上就已經這樣。附上 fixed point 上的位置。
+- `none`：兩者都不像。
+
+每個 finder 最多六則，沒有就回傳空清單。
 
 每位 reviewer 是一組 Finder，候選帶 `by` 欄標明來自哪位。目前只有 `primary`；多一位 reviewer
 只是多一個候選來源，第 3 節以後的步驟不變。
 
 完成判準：所有 finder 都已回報；同一行、同一失效機制的候選已去重，保留 `failure_scenario`
-最具體的一則；每個 hunk 都至少經過一次逐行 lens。
+最具體的一則；每則候選都有 `suspected`；每個 hunk 都至少經過一次逐行 lens。
 
 ## 3. 實跑與突變
 
@@ -100,6 +110,10 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
   這次不突變，突變紀錄寫明原因。
 
 ### 突變
+
+**沒有可執行的行就跳過突變。** 本票 diff 的改動全落在文件、註解、設定或產生檔，沒有一行可執行
+程式行時，不跑 `mutate.mjs lines`、不寫 plan，突變紀錄寫 `skipped: no executable lines`（格式見
+第 6 節）。實跑照跑。
 
 **範圍只限本票 diff 中有測試覆蓋的行。** 在審查用 worktree 列出改動行與覆蓋
 （`${CLAUDE_SKILL_DIR}` 是本 skill 載入時標示的 base directory）：
@@ -148,18 +162,32 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 結果：`killed` 與 `timeout` 算被測試抓到；`survived` 是一則候選（lens `mutation`），
 `failure_scenario` 寫一個會讓原碼與 mutant 產生不同可觀察結果、而現有測試都沒擋下的具體輸入。
 
-完成判準：實跑結果已記錄；突變只碰本票 diff 中有覆蓋的行，每行至多一個、總數不超過上限；
-每個 mutant 都有結果；審查用 worktree 的 `git status --porcelain` 為空；每個存活的 mutant 都成為候選。
+完成判準：實跑結果已記錄；沒有可執行的行時突變已跳過，紀錄寫 `skipped: no executable lines`；
+突變只碰本票 diff 中有覆蓋的行，每行至多一個、總數不超過上限；每個 mutant 都有結果；
+審查用 worktree 的 `git status --porcelain` 為空；每個存活的 mutant 都成為候選。
 
 ## 4. Verifier：逐項獨立裁決
 
-每個候選（含第 3 節的實跑與突變候選）各交給一個獨立的 verifier subagent，並行派出。Verifier
-只處理候選，不重讀整份 diff。
+候選（含第 3 節的實跑與突變候選）依「檔案＋失效機制」分組：同一個檔案、同一種失效機制的候選
+交給同一個 verifier subagent，其餘各自一個，全部並行派出。失效機制由主持人依 `summary` 與
+`failure_scenario` 判斷，拿不準就分開。分組只減少 verifier 的數量，不合併候選：verifier 對組內
+每個候選逐條裁決，各附 `file:line` 證據。Verifier 只處理候選，不重讀整份 diff。
 
-Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、候選的欄位與
-以下裁決規則。省略 finder 的推理，避免錨定偏誤。
+Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、該組候選的欄位與
+以下裁決規則。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給，那是待查的
+線索，不是裁決。
 
-先嘗試**反駁**：找出能推翻候選的程式碼並引用。不確定的技術事實用一次性的程式實跑查證。
+**標了 `suspected`（`spec` 或 `pre-existing`）的候選走簡化流程**，不走完三關。兩項都查：
+
+- 在 fixed point 上做同一項檢查（第二關）。fixed point 也有 → 直接裁決 **pre-existing**。
+- 對照票面與驗收快照的原文。fixed point 正常，但候選指的行為或措辭正是 spec 指定的 → 直接裁決
+  **spec 層級**：實作照 spec 做，要改的是 spec。
+- 兩項都不成立 → 當成 `none`，照下面的一般流程從反駁開始。
+
+簡化流程的裁決同樣附 `file:line` 證據：fixed point 上的位置，或 spec 原文的出處。
+
+`suspected: none` 的候選走一般流程。先嘗試**反駁**：找出能推翻候選的程式碼並引用。不確定的
+技術事實用一次性的程式實跑查證。
 存活 mutant 的反駁是證明它是等價 mutant —— 沒有任何輸入能讓原碼與 mutant 的可觀察結果不同。
 反駁失敗後逐關檢查：
 
@@ -169,22 +197,24 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
    通過這一關。
 3. **具體失效情境**：失效路徑真實可達，後果可觀察。
 
-裁決三種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗）、
-**不成立**。裁決引用的 `file:line` 與 ticket 分支對不上時，換一個 verifier 重驗。
+裁決四種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗，或簡化
+流程查到 fixed point 也有）、**spec 層級**（只出自簡化流程）、**不成立**。裁決引用的 `file:line`
+與 ticket 分支對不上時，換一個 verifier 重驗。
 
 分流：
 
 - **成立且 blocking**（會改變這張票該不該整併的決定）→ finding。測試沒釘住本票改的行為，所以
   成立的存活 mutant 一律算 blocking。
 - **成立但不 blocking** → 觀察，不觸發修正。
+- **spec 層級** → 觀察，句末標 `(spec-level)`，不觸發修正。
 - **pre-existing** → 交主持人依 get-to-work 的期間開票處理。
 - **不成立** → 丟棄；突變候選的處置寫進突變紀錄（例如「等價 mutant，不成立」）。
 
 每則 finding 附一句**修法方向**，說出修前修後可觀察的差異（輸出、錯誤、某個測試由紅轉綠）。
 說不出來的是風格偏好，撤掉。存活 mutant 的修法方向是補一個殺得掉它的測試，寫出輸入。
 
-完成判準：每個候選恰有一項裁決並附證據與三關結果；每則 finding 都有可證偽的修法方向；每個
-mutant 在突變紀錄都有處置。
+完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同組的
+候選也逐條裁決；每則 finding 都有可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
 
 ## 5. 結論
 
@@ -225,7 +255,15 @@ mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mu
 restored: yes | no
 ```
 
-沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
+沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
+觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
+
+該輪沒有跑突變時，`mutation` 那段只寫一行、不列 mutant，`restored` 照寫：
+
+- 沒有可執行的行：`mutation (round <n>): skipped: no executable lines`
+- 實跑紅燈：`mutation (round <n>): skipped: red baseline`
+
+有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
 重排；`verdict` 以全部 reviewer 的 finding 推得。
 
 把這個區塊寫進該票接續紀錄的「驗證結果」欄，取代上一個 `sorry-matt:review` 區塊，`round`
@@ -260,7 +298,8 @@ ticket 分支尖端重建。
    的成為本輪新 finding。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。
 3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10），用本輪新的
-   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
+   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。finding 涉及的行
+   沒有可執行程式行時，照第 3 節跳過，寫 `skipped: no executable lines`。
 4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
    關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
