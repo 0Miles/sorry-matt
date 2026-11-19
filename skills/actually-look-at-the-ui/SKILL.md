@@ -31,6 +31,9 @@ Every row of the component choice table yields two claims:
   "native `<tag>`", what renders is that native tag.
 - (b) Its own style source contains no **hard-coded value**; for how, see step 3.
 
+Rows and claims map one to one and are never merged: when two rows name the same component, each still has its
+own (a) and (b). The number of (a) claims equals the number of table rows.
+
 When no component choice table was handed over (called on its own, or called by `make-the-ui-fast`), (a) and (b)
 instead cover every UI element the diff adds or changes. For each element, derive the **expected component** by
 "Choose components by job" in **component reuse**: write down its job, and pick the one that fits that job from
