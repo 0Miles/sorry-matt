@@ -341,6 +341,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 決定下一步 | decide what comes next |
 | 目標(`make-the-ui-fast` 回報項) | target |
 | 畫面確認 | UI check |
+| 內部路徑 | internal path |
+| 套件層(禁止事項) | package-level |
+| 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
+| 逐檔選(「元件庫」段多條時) | choose per file |
+| import 掃描 | import scan |
 
 ## 外部語義來源
 

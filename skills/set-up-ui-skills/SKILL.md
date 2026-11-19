@@ -33,8 +33,12 @@ each frontend package separately.
 - **Shared component directories**: common locations such as `src/components/`, `components/ui/`,
   `src/shared/`, `app/components/`, `packages/ui/`; go by what actually exists in the repo.
 - **Barrel exports**: which components the shared directories' `index.ts` or `index.js` re-export.
-- **Import counts**: for each candidate component, how many distinct files import it, spread over how many pages
-  or features.
+- **Import counts**: scan the whole repo's imports once, keeping one result of "file → the modules and names it
+  imports"; compute every candidate's count from that same result — how many distinct files import it, spread
+  over how many pages or features — and do not scan again per candidate. The scan covers four spellings: static
+  `import` (side-effect-only and type-only ones included), `export … from`, `require()`, and dynamic
+  `import()`. An import that goes through a barrel re-export counts toward the candidate component the barrel
+  exports; the barrel file itself is not counted among the files using it.
 - **Duplicate implementations**: components with the same name or purpose in two or more places (for example two
   `Button`s).
 - **Storybook**: whether `.storybook/` exists, and which components have `*.stories.*`.

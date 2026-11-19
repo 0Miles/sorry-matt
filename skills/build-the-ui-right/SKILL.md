@@ -13,8 +13,8 @@ call the Skill tool with `figure-out-the-ui`.
 
 ## 1. Reuse what the project has
 
-Choose components under **component reuse**; when `docs/agents/ui.md` does not exist, stop at its prerequisite
-step. New code reuses the naming, structure, and styling approach of the chosen components and tokens. `ui.md`
+Choose components under **component reuse**, starting from its prerequisite: the prerequisite decides whether to
+read `docs/agents/ui.md`, and when the file does not exist, stop at that prerequisite step. New code reuses the naming, structure, and styling approach of the chosen components and tokens. `ui.md`
 follows "Maintain `ui.md`" in **component reuse**; a mismatch found along the way waits for the step 4 report.
 
 Produce a component choice table, one row per UI element:
