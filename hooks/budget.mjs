@@ -6,9 +6,26 @@
 //     the hook enforces only `budget: spawns <N>`; the others (`rounds`, `hours`, `no-progress`, and the stage
 //     time limits `timeout-<stage>` in minutes) are for the host
 // The spawn count lives next to the ledger in `<run>.counters.json`, written only by the hook:
-//   { "spawns": <int>, "agents": [<agent_id>, ...], "updated": "<ISO time>" }
+//   {
+//     "spawns":  <int>,
+//     "agents":  [<agent_id>, ...],
+//     "log":     [{ "id": <agent_id> | null, "type": <agent type> | null, "description": <string> | null,
+//                   "at": "<ISO time>" }, ...],          // one entry per counted spawn, in the order counted
+//     "pending": [{ "type": <agent type>, "description": <string> | null, "at": "<ISO time>" }, ...],
+//     "updated": "<ISO time>"
+//   }
+// `log` and `pending` were added later: a file without them (written by an older hook) reads the same, with
+// both taken as empty, so its `spawns` may be larger than its `log`. Only `spawns` and `agents` are validated
+// or used for the limit. The log is summed up by type and by ticket with
+// skills/get-to-work/scripts/spawns.mjs.
 // SubagentStart adds one per new agent_id (it also fires when a subagent is resumed, so a seen id is not
 // counted again); PreToolUse on Agent denies the spawn once the count has reached the limit.
+// The type in the log is SubagentStart's `agent_type`. That event carries no description and shares no id with
+// the Agent call that caused it, so a PreToolUse on Agent that is let through leaves its `subagent_type`
+// (`general-purpose` when absent) and `description` in `pending`, and the next new SubagentStart of the same
+// type takes the oldest one. A pending call older than ten minutes never became a subagent (another hook or a
+// permission prompt stopped it) and is dropped. Recording a pending call never changes the allow or deny
+// decision: a failure there is only a warning.
 // That deny really stops the spawn: checked live on Claude Code 2.1.325 (2026-11-19) with
 // scripts/spawn-deny.live.mjs — at the limit, a foreground and a background Agent call both came back as this
 // deny and no SubagentStart fired. Re-run it by hand after a Claude Code upgrade that touches hooks or Agent.
@@ -145,20 +162,55 @@ export function writeAtomic(path, text) {
   }
 }
 
-/** Count one subagent against a ledger. Returns the new count; a seen agent_id is not counted again. */
-export function recordSpawn(ledger, agentId, { now = () => new Date() } = {}) {
+const PENDING_TTL = 10 * 60 * 1000;
+const list = (value) => (Array.isArray(value) ? value : []);
+const text = (value) => (typeof value === 'string' && value ? value : null);
+
+/** The pending Agent calls still young enough to become a subagent. */
+const waiting = (counters, at) =>
+  list(counters.pending).filter((call) => call && at.getTime() - Date.parse(call.at) <= PENDING_TTL);
+
+const save = (path, counters, at) =>
+  writeAtomic(path, JSON.stringify({ ...counters, updated: at.toISOString() }, null, 2) + '\n');
+
+/**
+ * Count one subagent against a ledger and log it with its type and the description of the oldest pending
+ * Agent call of that type. Returns the new count; a seen agent_id is not counted again and changes nothing.
+ */
+export function recordSpawn(ledger, agentId, { now = () => new Date(), type = null, lock } = {}) {
   const path = countersPath(ledger);
   return withLock(path, () => {
     const counters = readCounters(path);
     if (agentId && counters.agents.includes(agentId)) return counters.spawns;
+    const at = now();
+    const pending = waiting(counters, at);
+    const match = pending.findIndex((call) => call.type === type);
+    const description = match < 0 ? null : text(pending.splice(match, 1)[0].description);
     const next = {
       spawns: counters.spawns + 1,
       agents: agentId ? [...counters.agents, agentId] : counters.agents,
-      updated: now().toISOString(),
+      log: [...list(counters.log), { id: agentId, type, description, at: at.toISOString() }],
+      pending,
     };
-    writeAtomic(path, JSON.stringify(next, null, 2) + '\n');
+    save(path, next, at);
     return next.spawns;
-  });
+  }, lock);
+}
+
+/** Leave an Agent call that was let through waiting for its SubagentStart. Changes no count. */
+export function recordCall(ledger, { type, description }, { now = () => new Date(), lock } = {}) {
+  const path = countersPath(ledger);
+  withLock(path, () => {
+    const counters = readCounters(path);
+    const at = now();
+    const next = {
+      spawns: counters.spawns,
+      agents: counters.agents,
+      log: list(counters.log),
+      pending: [...waiting(counters, at), { type, description, at: at.toISOString() }],
+    };
+    save(path, next, at);
+  }, lock);
 }
 
 const off = (env) => String(env.SORRY_MATT_BUDGET || '').toLowerCase() === 'off';
@@ -176,11 +228,11 @@ const deny = (text) => ({
  * @param {object} event the parsed hook event
  * @returns {{ decision: object | null, warnings: string[] }}
  */
-export function decideSpawn(event, { env = process.env, git = spawnSync, read } = {}) {
+export function decideSpawn(event, { env = process.env, git = spawnSync, read, ledgers } = {}) {
   const warnings = [];
   if (off(env)) return { decision: null, warnings };
-  for (const { ledger, text } of ledgersForEvent(event, git)) {
-    const limit = parseBudget(text).spawns;
+  for (const { ledger, text: ledgerText } of ledgers ?? ledgersForEvent(event, git)) {
+    const limit = parseBudget(ledgerText).spawns;
     if (limit === undefined) continue;
     let spawns;
     try {
@@ -204,18 +256,37 @@ export function decideSpawn(event, { env = process.env, git = spawnSync, read } 
  * SubagentStart: count the subagent against every run in progress. Never blocks (it cannot).
  * @returns {{ ledger: string, spawns?: number, error?: string }[]}
  */
-export function countSpawn(event, { env = process.env, git = spawnSync } = {}) {
+export function countSpawn(event, { env = process.env, git = spawnSync, now, lock } = {}) {
   if (off(env)) return [];
-  const agentId = typeof event.agent_id === 'string' && event.agent_id ? event.agent_id : null;
+  const agentId = text(event.agent_id);
   const counted = [];
   for (const { ledger } of ledgersForEvent(event, git)) {
     try {
-      counted.push({ ledger, spawns: recordSpawn(ledger, agentId) });
+      counted.push({ ledger, spawns: recordSpawn(ledger, agentId, { now, type: text(event.agent_type), lock }) });
     } catch (error) {
       counted.push({ ledger, error: error.message });
     }
   }
   return counted;
+}
+
+/**
+ * PreToolUse on Agent, once let through: leave the call pending in every run in progress, so the SubagentStart
+ * it causes can be logged with its description. Never throws.
+ * @returns {string[]} one warning per run the call could not be recorded for
+ */
+export function noteCall(event, ledgers, { now, lock } = {}) {
+  const input = event.tool_input || {};
+  const call = { type: text(input.subagent_type) || 'general-purpose', description: text(input.description) };
+  const warnings = [];
+  for (const { ledger } of ledgers) {
+    try {
+      recordCall(ledger, call, { now, lock });
+    } catch (error) {
+      warnings.push(`sorry-matt budget could not record this Agent call for ${ledger}: ${error.message}; its spawn will be logged without a description`);
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -237,14 +308,21 @@ export function handle(raw, deps = {}) {
     return { decision: null, warnings };
   }
   if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Agent') {
+    let judged;
     try {
-      return decideSpawn(event, deps);
+      const { env = process.env, git = spawnSync } = deps;
+      if (off(env)) return { decision: null, warnings: [] };
+      const ledgers = ledgersForEvent(event, git);
+      judged = { ledgers, ...decideSpawn(event, { ...deps, ledgers }) };
     } catch (error) {
       return {
         decision: deny(`sorry-matt budget failed on this spawn (${error.message}), so it is blocked. Report it to the user as a budget hook error.`),
         warnings: [],
       };
     }
+    const { ledgers, decision, warnings } = judged;
+    // Recorded only after the decision stands, and outside its try: a recording failure cannot turn into a deny.
+    return { decision, warnings: decision ? warnings : [...warnings, ...noteCall(event, ledgers, deps)] };
   }
   return { decision: null, warnings: [] };
 }
