@@ -56,7 +56,7 @@ component's root-node attributes applies only when (a) passes for that library c
 
 Done when: every screen the diff touches, every affected state cell, and every row of the component choice
 table maps to at least one claim; every row of the component choice table has exactly one (a) and one (b) (only
-(a) when the `Tokens` section reads "None"); with no table, every UI element the diff touches has an expected
+(a) when the `Tokens` entry chosen for it is "None"); with no table, every UI element the diff touches has an expected
 component, and the source of the component library list is recorded.
 
 ## 2. Get it running
@@ -68,7 +68,8 @@ viewport width, device pixel ratio, theme.
 When that cannot be done, check every claim other than claim (b) against source and tests as far as those hold,
 and mark them all unverified; claim (a) is likewise always marked unverified with a reason, and having read the
 source does not mark it passed. Claim (b) is a source check to begin with: judge it pass or fail as step 3 says,
-fix its failures under step 4, then go to step 5.
+fix its failures under step 4; step 3's `var()` resolution check needs a browser, so skip it here and write
+"`var()` resolution not checked" once in the report. Then go to step 5.
 
 Done when: the UI is open in a browser with the viewing conditions recorded, or the reason it could not be is
 recorded.
@@ -83,19 +84,35 @@ For each claim, bring the screen into that state by actually operating it, then 
 - Console errors and failed network requests count as failures.
 - When a view from before the change is on hand, set the two side by side as a **before/after pair**.
 - Claim (a): read the element's rendered DOM (tag, role, the classes or data attributes the component
-  generates) or the framework's component tree, and compare it with what the same component renders at one
-  existing call site; a mismatch is a failure — a `div role="button"` styled to look like `Button`, for
-  example. This claim is graded measured.
+  generates) or the framework's component tree, and compare it with the reference; a mismatch is a failure — a
+  `div role="button"` styled to look like `Button`, for example. The reference is the first of these that can
+  be read:
+  1. What the same component renders at another existing call site in the project.
+  2. With no other call site, the root-node structure in the component's source (tag, role, the classes or data
+     attributes it emits); the evidence adds the root node's `file:line`.
+  3. When neither can be read, mark the claim unverified with a reason.
+
+  A component used once, on this page only, always takes the second, and never fails for "no other call site
+  found". This claim is graded measured.
 - Claim (b): under the **hard-coded value** definition in **component reuse**, search the UI element's own style
   source (the classes and inline style at the call site, the project stylesheet rules that apply to it, and, for
-  a shared component, its source) for hard-coded values, taking the matching tokens from the files recorded in
-  the `Location` line of the `Tokens` section of `ui.md`. It passes only when there is none; finding one is a
+  a shared component, a page-local component, or a component newly built in this change, its source) for
+  hard-coded values, taking the matching tokens from the files recorded in the `Location` line of the `Tokens`
+  section of `ui.md`; when the `Tokens` section has several entries, each style source file uses the entry the
+  prerequisite of **component reuse** chooses for it. It passes only when there is none; finding one is a
   failure, with its `file:line`. When (a) passes for that library component, the attributes the library puts on
   its root node are exempt, and only the styles the project adds at the call site are checked; when (a) fails or
-  is unverified, nothing is exempt. Do not read
-  computed style, and do not compare computed values with the tokens' resolved values. This claim is graded
-  measured, with a search command or `file:line` as the evidence. When the `Tokens` section reads "None", no (b)
-  claim is produced, and the report says so once.
+  is unverified, nothing is exempt. The hard-coded value verdict comes from source alone: do not read computed
+  style, and do not compare computed values with the tokens' resolved values. This claim is graded measured,
+  with a search command or `file:line` as the evidence.
+
+  With a browser, (b) checks one more thing: for every `var(--x)` with no fallback on a line the diff adds or
+  changes in the UI element's own style source, read the resolved value of the custom property `--x` on that
+  element; an empty value fails (b), and the evidence gives the property name, the `file:line`, and the value
+  read. A `var(--x, …)` with a fallback is not checked.
+
+  When the `Tokens` section reads "None" (with several entries: every style source file of the element chooses
+  "None"), no (b) claim is produced and no `var()` resolution check is done, and the report says so once.
 
 Give each claim one result — pass, fail, or unverified — and one **evidence grade**.
 
@@ -107,7 +124,10 @@ Fix each failure to a pass under the rules of `build-the-ui-right`, then look ag
 neighboring claims the fix touched. Failures outside this change's scope go into the report as they stand. A
 (b) failure is fixed the way **hard-coded value** prescribes, by switching to the matching token; never fix it
 with a prohibition of **component reuse** — an outside override, raised specificity or `!important`, a private
-class or private CSS variable, for example.
+class or private CSS variable, for example. For a failure where `var(--x)` resolves to empty: when the token
+file has a token whose name matches (a misspelling, for example), change to that name; otherwise (there is no
+such token, or the token file is not loaded on this screen) list it in the report as it stands with the reason,
+and add no new token.
 
 `ui.md` follows the two layers of "Maintain `ui.md`" in **component reuse**: where the fix touches a spot on
 which `ui.md` and the source disagree, the source wins, and `ui.md` is corrected in the same commit as that fix;
@@ -121,7 +141,7 @@ Done when: every failure was looked at again and passed, or is listed in the rep
   component choice table row number and the UI element it belongs to — "(a) row 3: Create order", for example;
   never stand in for the individual rows with a range row ("(a) for rows 1–16", for example) or a count summary.
 - The **eyes-on list**.
-- The viewing conditions.
+- The viewing conditions; with no browser, "`var()` resolution not checked", written once.
 - With no component choice table handed over: the source of the component library list (which of the four
   sources in step 1).
 - **`ui.md` mismatches**: every mismatch found along the way and not corrected in step 4, naming the `ui.md`

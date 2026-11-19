@@ -69,8 +69,9 @@ dependencies and imports.
   to a monorepo where every frontend package uses the same one; neither case writes a "Scope" line.
 - The frontend packages' libraries are not all the same (a package with no library counts) → do not ask; every
   active library is recorded as its own entry with a "Scope" line (the package path), and the packages with no
-  library get one "none" entry with a "Scope" line. When several packages share the same library (or equally
-  have none), merge them into one entry whose "Scope" line lists those packages' paths.
+  library get one "none" entry with a "Scope" line. Only packages with the same active library (or equally
+  none) and the same "Existing, not for new use" marking merge into one entry, whose "Scope" line lists those
+  packages' paths; packages whose marking differs each get their own entry.
 - Two or more detected in the same package → ask which one that package's new code uses. Recommended answer: the
   one a lint rule restricting imports or a migration note points to; otherwise the one with more imports. Record
   the others as "existing, not for new use" — that label is for this case only.
@@ -162,12 +163,14 @@ drafts is unchanged, word for word.
 - Which files were written or updated, and which instructions file was edited.
 - The frontend skills that read `ui.md`: `figure-out-the-ui`, `build-the-ui-right`, `actually-look-at-the-ui`,
   `make-the-ui-fast`, `make-this-shit-pretty`.
-- `ui.md` can be edited directly from now on; re-running this skill is only needed to start over or to restore
-  `### UI`.
+- `ui.md` can be edited directly from now on. Re-run this skill when the evidence has changed (the component
+  library, shared components, tokens, or conventions changed) or to restore `### UI`; a re-run builds on the
+  existing `ui.md`. To start from scratch, ask the user to delete `docs/agents/ui.md` first and then re-run.
 - Both setups write the same `## Agent skills` block: if `### UI` is gone after a re-run of
   `/setup-matt-pocock-skills`, ask the user to re-run `/set-up-ui-skills` to restore it. The frontend skills read
   `docs/agents/ui.md` directly and keep working without `### UI`.
 
 Done when: the report lists the paths written and those five frontend skills; says that `ui.md` can be edited
-directly and that a re-run is only needed to start over or to restore `### UI`; and tells the user that if `### UI`
+directly, that a re-run is for changed evidence or for restoring `### UI` and builds on the existing `ui.md`,
+and that starting from scratch means deleting `docs/agents/ui.md` first and then re-running; and tells the user that if `### UI`
 is gone after re-running `/setup-matt-pocock-skills`, they should re-run `/set-up-ui-skills` to restore it.

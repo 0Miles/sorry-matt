@@ -47,7 +47,8 @@ Use the measured data to point at one bottleneck, written as a hypothesis that c
 
 A bottleneck already recorded as a component library finding is not taken up again as a new hypothesis. When
 every remaining bottleneck hypothesis is a component library finding, follow the **loop stop** of step 5 and
-look for no next one.
+look for no next one. When no new hypothesis can be found and there is no component library finding either,
+follow the "hypotheses exhausted" branch of step 5 to a **loop stop**.
 
 Done when: the hypothesis points to one piece of evidence in the measured data and states what result would
 overturn it; or the **loop stop** has led on to step 6.
@@ -90,9 +91,12 @@ Decide what comes next:
   the next bottleneck.
 - Target unmet, and every remaining bottleneck hypothesis is a component library finding: **loop stop**. Do not
   return to step 3; go to step 6, and the step 7 report states that the target was not met.
+- Target unmet, and no bottleneck hypothesis is left at all (none waiting to be tried, and no component library
+  finding): the hypotheses are exhausted — **loop stop**. Do not return to step 3; go to step 6, and the step 7
+  report states that the target was not met and lists the overturned hypotheses.
 
 Done when: every attempted change has before-and-after medians and a verdict of "kept" or "reverted"; the
-working tree holds only the kept changes; what comes next was decided as one of the three above.
+working tree holds only the kept changes; what comes next was decided as one of the four above.
 
 ## 6. Confirm the UI still works
 
@@ -107,7 +111,8 @@ change, the report states "no change was kept; `actually-look-at-the-ui` was not
 ## 7. Report
 
 - **Target**: met; or a statement that the target was not met, listing the remaining bottlenecks and the
-  component library finding each maps to.
+  component library finding each maps to. When the hypotheses are exhausted, list the overturned hypotheses
+  instead and write "none" for the remaining bottlenecks.
 - **Before-and-after table**: `metric | baseline median | current median | noise range | target`.
 - **Change list**: every kept and reverted change, each with its bottleneck and its numbers.
 - **Component library findings**: `package and version | bottleneck and measured evidence | why not changed in
@@ -122,5 +127,6 @@ change, the report states "no change was kept; `actually-look-at-the-ui` was not
 
 Done when: every "current" number in the table comes from the last measurement in step 5; every kept change
 maps to an improvement in the table; an unmet target is stated, with the remaining bottlenecks and their
-component library findings listed; `ui.md` matches this change, or is explicitly recorded as needing no update;
+component library findings listed — or, when the hypotheses are exhausted, with the overturned hypotheses
+listed and "none" for the remaining bottlenecks; `ui.md` matches this change, or is explicitly recorded as needing no update;
 the `ui.md` mismatches are listed one by one, or stated as "none".
