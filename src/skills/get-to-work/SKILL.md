@@ -60,9 +60,10 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
    不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
    - **exec**：在 bash（Windows 是 Git Bash）照抄 `command`，以結束代碼 record。不在 `okExit` 的結束代碼會在
      下一份清單變成要你處理的 `judge`。
-   - **spawn**：Agent tool 照 `spawn` 欄原樣送出，不另加規則：交付說明已由 `scripts/brief.mjs` 填好，
-     `description` 的規則在它的檔頭。`sorry-matt:expander` 不在可用清單時改用通用 agent、不指定模型，prompt 與
-     `description` 不變，record 加 `--type general-purpose`。
+   - **spawn**：Agent tool 照 `spawn` 欄原樣送出，不另加規則：實作與展開 agent 的固定規則在 plugin 的 agent 定義檔
+     （`sorry-matt:implementer`、`sorry-matt:expander`），派工檔的值已由 `scripts/brief.mjs` 填好，`description` 的
+     規則在它的檔頭。`subagent_type` 不在可用清單時改送 `fallback` 欄的通用 agent 與 prompt（定義檔本文接上同樣的
+     值），不指定模型，`description` 不變，record 加 `--type general-purpose`。
    - **judge**：要你判斷的事。讀 `reference`，做 `do` 寫的事，以 `outcomes` 之一 record。
    - **ask**：只有人能裁的事，照第 3 節。
 3. 再跑 `next`，直到 `then` 是 `end` 或 `done`。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，

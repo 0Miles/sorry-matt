@@ -20,7 +20,7 @@ already extended, or a progress fingerprint that could not be computed (the `jud
      merge agent never pushes, so the restore is local. Send the ticket back for a redo per
      [`SEND-BACK.md`](SEND-BACK.md) (`send-back`).
    - **A red-light fix** (`RED-LIGHT.md` point 4): one failed fix round, not counted as a reassignment. In the first
-     round, open the second — mapped to a ticket, spawn a new `ci-fix` agent by `IMPLEMENTER.md` on the same worktree,
+     round, open the second — mapped to a ticket, spawn a new `ci-fix` agent by `IMPLEMENTER.md` (agent type and fallback per the spawn in `SKILL.md` section 1) on the same worktree,
      the failure summary and the timeout note added to the ticket text; mapped to no ticket, `reset --hard <the
      assignment record's HEAD>` first, then fix. In the second round, revert or fail the line per points 5 and 6;
      never mark it stuck.

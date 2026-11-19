@@ -84,7 +84,11 @@
 //     "record": "<the record command to run afterwards, with <placeholders>>",
 //     exec:  "argv": [...], "command": "<one POSIX shell line>", "stdout": "<file>" | null, "cwd": "<dir>" | null,
 //            "okExit": [0, …]             // run it in bash (Git Bash on Windows); record its exit code
-//     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false }
+//     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false,
+//                       "fallback": { "subagent_type": "general-purpose", "prompt" } }   // implement and expand only
+//            when `subagent_type` (sorry-matt:implementer, sorry-matt:expander) is not an available agent type, the
+//            host sends `fallback`'s type and prompt instead (the definition body followed by the values, written by
+//            brief.mjs) with the same description, and records the spawn with `--type general-purpose`
 //     judge, ask: "do": "<what to settle>", "outcomes": ["<word>"] }
 //   The same id is never issued for a different thing; an action the host already recorded is not issued again.
 //   A background spawn handed out before, runnable then (everything it waited for done) and still not recorded
@@ -136,14 +140,18 @@ import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './s
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
-import { description as roleDescription } from './brief.mjs';
+import { description as roleDescription, fallbackPath, AGENT_TYPES } from './brief.mjs';
 
 export const FORMAT = 'sorry-matt/tick@1';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const SKILL = dirname(SCRIPTS);
 const SELF = join(SCRIPTS, 'tick.mjs');
 const js = (name) => join(SCRIPTS, name);
-const doc = (file, part) => ({ path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : join(SKILL, file), part });
+// `agents/<name>.md` is a plugin agent definition, two levels up from this skill (src: src/agents; dist: agents).
+const doc = (file, part) => ({
+  path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
+  part,
+});
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -470,12 +478,12 @@ const COLLECT = {
   implementing: {
     outcomes: ['green', 'red', 'blocked'],
     what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
-    reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('IMPLEMENTER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
   },
   expanding: {
     outcomes: ['reported'],
     what: (ids) => `Take the expansion agent's report for ${ids.join(', ')}. Record reported; --value lists, comma-separated, the tickets it reported as awaiting ruling (they leave the run), the others go back to candidate.`,
-    reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('EXPANDER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('agents/expander.md', 'section 4, the report it returns')],
   },
   fixing: {
     outcomes: ['fixed', 'blocked'],
@@ -710,7 +718,7 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
   const rec = c.tick('rec', `${tag}.json`);
   const before = create?.after ?? [];
   const r1 = c.emit(exec(`rec:${id}:${n}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', worktree, '--limit', String(limitFor(c, stage))], { stdout: rec, tickets: [id], line: t.line, after: before }));
-  const type = mode === 'send' ? (c.book.agents[prevAgent]?.type ?? 'general-purpose') : 'general-purpose';
+  const type = mode === 'send' ? (c.book.agents[prevAgent]?.type ?? 'general-purpose') : AGENT_TYPES.implement;
   const r2 = c.emit(
     exec(`assign:${id}:${n}`, 'assignment', stateArgv(c, 'assign', id, '--record', rec, '--type', type, '--worktree', worktree, ...(reassign ? ['--reassign'] : [])), {
       tickets: [id],
@@ -733,7 +741,7 @@ const WHY = {
 
 /** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
 function agentTail(c, id, t, p, after) {
-  const spawnRecord = (n) => `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:${id}:${n}`)} --agent <agent id>`;
+  const spawnRecord = (n) => `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:${id}:${n}`)} --agent <agent id> [--type general-purpose]`;
   if (p.mode === 'send') {
     c.emit(
       judge(
@@ -796,12 +804,15 @@ function agentTail(c, id, t, p, after) {
     tickets: [id],
     line: t.line,
     after: [b, ...after],
-    spawn: { subagent_type: 'general-purpose', description: roleDescription(p.role, [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
-    reference: [doc('SKILL.md', 'section 1 (the loop)')],
+    spawn: { subagent_type: AGENT_TYPES.implement, description: roleDescription(p.role, [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
+    reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
     record: spawnRecord(p.n),
   };
   c.emit(a);
 }
+
+/** The general-purpose spawn for a session without the agent type: brief.mjs's fallback of the spawn file `out`. */
+const fallbackSpawn = (out) => ({ subagent_type: 'general-purpose', prompt: `Read ${fallbackPath(resolve(out))} in full and follow it.` });
 
 /** An assignment with no agent id yet: the spawn or SendMessage that fills it. */
 function pendingAgent(c, id, t) {
@@ -1434,7 +1445,7 @@ function expandDispatch(c, r, group, { reassign = false } = {}) {
   );
   const rec = c.tick('rec', `expand-r${r}.json`);
   const r1 = c.emit(exec(`rec:expand:r${r}`, 'assignment', ['node', js('deadline.mjs'), 'record', ...group.flatMap((x) => ['--expansions', `${x.id}=${x.count}`]), '--limit', String(c.limits['timeout-expand'])], { stdout: rec, tickets: ids }));
-  const r2 = c.emit(exec(`assign:expand:r${r}`, 'assignment', stateArgv(c, 'assign', ...ids, '--record', rec, '--type', 'sorry-matt:expander', ...(reassign ? ['--reassign'] : [])), { tickets: ids, after: [r1] }));
+  const r2 = c.emit(exec(`assign:expand:r${r}`, 'assignment', stateArgv(c, 'assign', ...ids, '--record', rec, '--type', AGENT_TYPES.expand, ...(reassign ? ['--reassign'] : [])), { tickets: ids, after: [r1] }));
   const r3 = reassign ? null : c.emit(exec(`stage:expanding:r${r}`, 'stage', stateArgv(c, 'stage', 'expanding', ...ids), { tickets: ids, after: [r2] }));
   c.book.expansions[r] = ids;
   for (const id of ids) c.flag(id).pending = { mode: 'expand', round: r };
@@ -1453,7 +1464,7 @@ function expandTail(c, r, after = []) {
     tickets: ids,
     line: null,
     after: [b, ...after],
-    spawn: { subagent_type: 'sorry-matt:expander', description: roleDescription('expand', ids), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
+    spawn: { subagent_type: AGENT_TYPES.expand, description: roleDescription('expand', ids), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
     reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
     record: `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:expand:r${r}`)} --agent <agent id> [--type general-purpose]`,
   });
@@ -1736,15 +1747,16 @@ export function record(path, id, flags, now, deps) {
   };
   const meta = issued.meta ?? {};
   const tickets = issued.tickets ?? [];
-  // A spawn's agent fills the assignment of its tickets (an expansion falling back to another type re-records it).
+  // A spawn's agent fills the assignment of its tickets (a spawn falling back to another type re-records it).
   const spawned = (tids) => {
     const pending = flag(tids[0]).pending;
-    if (flags.type) {
-      const rec = pending?.mode === 'expand' ? join(dirname(path), state.run, 'tick', 'rec', `expand-r${pending.round}.json`) : null;
-      if (rec) S('assign', ...tids, '--record', rec, '--type', flags.type);
+    if (flags.type && pending) {
+      const recs = join(dirname(path), state.run, 'tick', 'rec');
+      if (pending.mode === 'expand') S('assign', ...tids, '--record', join(recs, `expand-r${pending.round}.json`), '--type', flags.type);
+      else S('assign', ...tids, '--record', join(recs, `${keyOf(tids[0])}-${pending.n}.json`), '--type', flags.type, '--worktree', pending.worktree);
     }
     named(tids, flags.agent);
-    register(flags.agent, pending?.mode === 'expand' ? 'expand' : (pending?.role ?? 'implement'), flags.type ?? (pending?.mode === 'expand' ? 'sorry-matt:expander' : 'general-purpose'), tids);
+    register(flags.agent, pending?.mode === 'expand' ? 'expand' : (pending?.role ?? 'implement'), flags.type ?? (pending?.mode === 'expand' ? AGENT_TYPES.expand : AGENT_TYPES.implement), tids);
   };
   const register = (agent, role, type, tids = tickets) => {
     book.agents[agent] = { tickets: [...new Set([...(book.agents[agent]?.tickets ?? []), ...tids])], role, type, status: 'current', at: now };
@@ -1818,7 +1830,7 @@ export function record(path, id, flags, now, deps) {
       if (outcome === 'spawned') {
         if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <its id>`);
         named(tickets, flags.agent);
-        register(flags.agent, 'implement', flags.type ?? 'general-purpose');
+        register(flags.agent, 'implement', flags.type ?? ticket(tickets[0])?.assignment?.type ?? AGENT_TYPES.implement);
       } else {
         release(tickets);
         flag(tickets[0]).redispatch = { mode: 'spawn' };

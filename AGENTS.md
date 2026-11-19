@@ -19,11 +19,14 @@
 - `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
   含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
 - `agents/*.md` — plugin 自帶的 agent 定義檔(frontmatter 帶模型與工具限制),英文,plugin 實際載入的是這份。
-  本文有規則的(`prove-it` 的 `finder.md`、`architect.md`、`verifier.md`、`fix-verifier.md`)是 dist:原稿在
-  `src/agents/<name>.md`(繁中),照 skill 的規則從 src 重寫;本文沒有規則、只叫 agent 照派工內容做的
-  (`expander.md`)只有這一份。frontmatter 除 `description` 外兩版相同。`tools:` 一律列 `Bash, PowerShell`
+  每份都是 dist:原稿在 `src/agents/<name>.md`(繁中),照 skill 的規則從 src 重寫 —— `prove-it` 的 `finder.md`、
+  `architect.md`、`verifier.md`、`fix-verifier.md`,以及 `get-to-work` 的 `implementer.md`、`expander.md`(#126,
+  `brief.mjs` 填的派工檔只放值,通用 agent 的退回是定義檔本文接上派工檔)。frontmatter 除 `description` 外兩版
+  相同。有 `tools:` 的一律列 `Bash, PowerShell`
   兩種 shell:session 缺的那個會被略過,只列 Bash 的定義檔在只有 PowerShell tool 的 session 裡一個 shell 都沒有
-  (`scripts/agent-tools.live.mjs`)。審查類定義檔不給 Edit 與 Write,但 shell 寫得了檔,不寫成唯讀保證
+  (`scripts/agent-tools.live.mjs`)。審查類定義檔不給 Edit 與 Write,但 shell 寫得了檔,不寫成唯讀保證。
+  `implementer.md` 不寫 `tools:`,繼承主持人的全部工具(兩種 shell、Skill tool 與 MCP 工具都在內),與改前的通用
+  agent 相同:實作 agent 可能要以 Skill tool 載入前端 skill 或用瀏覽器工具,列舉不完
 - `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
   由 `.github/workflows/check.yml` 在 PR 上執行
 - `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
@@ -74,8 +77,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 - 不寫「載入上游全文,再覆寫其中幾行」:要改上游的行為,就寫自有流程取代它,或只填上游留的
   參數位置。決定與理由記進 `docs/matt-skills.md`
 - 交給 subagent 的內容要自足:它問不到使用者,也讀不到主持人的 skill 檔。它要遵守的規則都寫在
-  交付內容裡(如 `get-to-work/IMPLEMENTER.md`),要讀的檔案給絕對路徑。以 agent 定義檔派送的(如 `prove-it` 的
-  `sorry-matt:verifier`),定義檔本文加上派工內容合起來涵蓋全部規則:固定規則寫在本文,派工只傳值;本文要讀 plugin
+  交付內容裡,要讀的檔案給絕對路徑。以 agent 定義檔派送的(如 `prove-it` 的
+  `sorry-matt:verifier`、`get-to-work` 的 `sorry-matt:implementer`),定義檔本文加上派工內容合起來涵蓋全部規則:固定規則寫在本文,派工只傳值;本文要讀 plugin
   內的檔用 `${CLAUDE_PLUGIN_ROOT}`。退回通用 agent 時,prompt 是定義檔本文接上同樣的派工內容
 
 以上只約束 **operative** 指令 —— skill 自己的步驟要 agent 現在就去跑另一個 skill。純粹列給人
@@ -406,6 +409,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 能不能更簡單 | could it be simpler |
 | 代價(architect 觀察的 `cost`) | cost |
 | 派工內容 | spawn prompt |
+| 派工檔 | spawn file |
 | 筆記目錄 | notes directory |
 | 工具限制 | tool restriction |
 | 審查主持 agent | review host agent |

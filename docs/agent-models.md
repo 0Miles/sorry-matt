@@ -5,13 +5,14 @@
 
 | agent | 定義檔 | 模型 | 工具 |
 | --- | --- | --- | --- |
-| 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell, Write, Edit |
+| 實作 agent（含 `fix`、`ci-fix`） | `agents/implementer.md`（`sorry-matt:implementer`），原稿 `src/agents/implementer.md` | 繼承主持人的模型 | 不寫 `tools:`，繼承主持人的全部工具 |
+| 展開 agent | `agents/expander.md`（`sorry-matt:expander`），原稿 `src/agents/expander.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell, Write, Edit |
 | `prove-it` 的 Finder | `agents/finder.md`（`sorry-matt:finder`），原稿 `src/agents/finder.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 | `prove-it` 的 architecture 專項 reviewer（只在 `full` 級） | `agents/architect.md`（`sorry-matt:architect`），原稿 `src/agents/architect.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 | `prove-it` 的 Verifier | `agents/verifier.md`（`sorry-matt:verifier`），原稿 `src/agents/verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 | `prove-it` 的 Fix Verifier | `agents/fix-verifier.md`（`sorry-matt:fix-verifier`），原稿 `src/agents/fix-verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 
-實作 agent、紅燈修正的 agent 與整併 agent 沒有定義檔，仍繼承主持人的模型。
+整併 agent 與審查主持 agent 沒有定義檔，以通用 agent 派送，繼承主持人的模型。
 
 ## 工具限制（#82、#104）
 
@@ -32,7 +33,12 @@
 
 ## 實作 agent 與展開 agent 要不要跟進（#82 提案 3）
 
-評估結論：要跟進，但不在 #104 做，排在 `get-to-work` 的入口改寫（#124）之後另開票。
+評估結論：要跟進，但不在 #104 做，排在 `get-to-work` 的入口改寫（#124）之後另開票。#126 已照這個結論做：兩者的
+固定規則搬進 `agents/implementer.md` 與 `agents/expander.md`（原稿在 `src/agents/`）的本文，`IMPLEMENTER.md` 與
+`EXPANDER.md` 只剩 `brief.mjs` 填的值；`brief.mjs` 另寫一份定義檔本文接上同樣值的檔，給沒有這兩個 agent 類型的
+session 派通用 agent，tick 的 spawn 以 `fallback` 欄帶著它。實作 agent 的定義檔不寫 `tools:`：它與改前的通用 agent
+一樣繼承主持人的全部工具，因為實作可能要以 Skill tool 載入前端 skill 或用 MCP 瀏覽器工具，這些列舉不完；工具限制本來
+就不是這一項的目的。下面是當時的評估。
 
 - 工具限制幫不上：兩者都要 Edit 與 Write。展開 agent 的 `tools:` 已補上 PowerShell，剩下的差別只在 context。
 - context 有實益：`brief.mjs` 已經機械填好佔位，但主持人的 Agent 呼叫仍要把填好的全文當 `prompt` 輸出一次，

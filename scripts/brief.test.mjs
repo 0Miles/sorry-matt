@@ -1,8 +1,9 @@
 // node --test scripts/brief.test.mjs
-// Drives get-to-work's brief.mjs through main() — the src copy, which fills the Traditional Chinese templates, and
-// the dist copy, which fills the English ones — and, once, as a process. Values files, ticket texts and acceptance
-// snapshots are written to a temp dir. The expected lines are copied by hand from the templates' text around each
-// placeholder; the role and ticket a description stands for are read back with spawns.mjs.
+// Drives get-to-work's brief.mjs through main() — the src copy, which fills the Traditional Chinese templates and
+// reads the Traditional Chinese agent definitions in src/agents, and the dist copy, which fills the English ones and
+// reads agents/ — and, once, as a process. Values files, ticket texts and acceptance snapshots are written to a temp
+// dir. The expected lines are copied by hand from the templates' and the definitions' text; the role and ticket a
+// description stands for are read back with spawns.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
@@ -63,8 +64,13 @@ const runImplement = (t, overrides, entry = main) => {
   const dir = scratch(t);
   const values = implementValues(dir, overrides);
   const r = parse(entry(['implement', put(dir, 'values.json', values)]));
-  return { ...r, dir, values, brief: r.code === 0 ? readFileSync(r.json.brief, 'utf8') : null };
+  return { ...r, dir, values, ...written(r) };
 };
+// The spawn file and its general-purpose fallback a successful run wrote.
+const written = (r) => ({
+  brief: r.code === 0 ? readFileSync(r.json.brief, 'utf8') : null,
+  fallback: r.code === 0 ? readFileSync(r.json.fallback, 'utf8') : null,
+});
 
 function expandValues(dir, overrides = {}) {
   return {
@@ -89,7 +95,7 @@ const runExpand = (t, overrides, entry = main) => {
   const dir = scratch(t);
   const values = expandValues(dir, typeof overrides === 'function' ? overrides(dir) : overrides);
   const r = parse(entry(['expand', put(dir, 'values.json', values)]));
-  return { ...r, dir, values, brief: r.code === 0 ? readFileSync(r.json.brief, 'utf8') : null };
+  return { ...r, dir, values, ...written(r) };
 };
 
 test('implement fills every IMPLEMENTER.md placeholder and prints the brief path and the description', (t) => {
@@ -102,10 +108,10 @@ test('implement fills every IMPLEMENTER.md placeholder and prints the brief path
   assert.equal(r.json.brief, r.values.out);
   assert.equal(r.json.prompt, `Read ${r.values.out} in full and follow it.`);
   assert.doesNotMatch(r.brief, LEFTOVER, 'no placeholder is left');
-  assert.ok(r.brief.startsWith('你是實作 agent，負責一張票。'), 'the brief is the text below the rule, without the host header');
-  assert.doesNotMatch(r.brief, /主持人填好/);
+  assert.ok(r.brief.startsWith('派工內容：這張票的值。'), 'the brief is the text below the rule, without the host header');
+  assert.doesNotMatch(r.brief, /brief\.mjs` 填好/);
   assert.doesNotMatch(r.brief, /\r/, 'LF line ends');
-  for (const line of [
+  const values = [
     '- 票：#72（tracker：GitHub (acme/widgets)）',
     `- ticket worktree：${r.values.worktree}（分支 r1/72-widgets）`,
     '- 整合分支：r1/line-a',
@@ -113,10 +119,24 @@ test('implement fills every IMPLEMENTER.md placeholder and prints the brief path
     '- 展開區塊：<!-- sorry-matt:expansion -->\n  by: expansion-agent\n  run: r1\n  round: 2\n\n  acceptance:\n  - [ ] prints ok\n',
     '- 專案指令契約：none\n',
     '- 退回紀錄：none\n',
-    '## 1. 開工',
-    '完成判準：成果已 commit 到 ticket 分支',
-  ])
-    assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+  ];
+  for (const line of values) assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+  // #126: the fixed rules are in the agent definition, not in the spawn file; the fallback carries both
+  for (const rule of ['## 1. 開工', '完成判準：成果已 commit 到 ticket 分支'])
+    assert.ok(!r.brief.includes(rule) && r.fallback.includes(rule), `${JSON.stringify(rule)} only in the fallback`);
+  for (const line of values) assert.ok(r.fallback.includes(line), `the fallback has ${JSON.stringify(line)}`);
+});
+
+test('implement names the agent type and writes the general-purpose fallback: the definition body, then the values', (t) => {
+  const r = runImplement(t);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.agentType, 'sorry-matt:implementer');
+  assert.equal(r.json.fallback, join(r.dir, 'briefs', '72.general-purpose.md'));
+  assert.equal(r.json.fallbackPrompt, `Read ${r.json.fallback} in full and follow it.`);
+  assert.ok(r.fallback.startsWith('# 實作 agent\n\n你是 sorry-matt `get-to-work` 的實作 agent，負責一張票。'), 'the body, no frontmatter');
+  assert.doesNotMatch(r.fallback, /^name: implementer$/m);
+  assert.ok(r.fallback.endsWith(`\n\n---\n\n${r.brief}`), 'the body is followed by the spawn file itself');
+  assert.doesNotMatch(r.fallback, /\r|[ \t]$/m, 'LF line ends, no trailing whitespace');
 });
 
 test('implement points at the worktree command contract when it exists, and fills a send-back record', (t) => {
@@ -150,8 +170,12 @@ test('the dist copy fills the English IMPLEMENTER.md the same way', (t) => {
   const r = runImplement(t, {}, distMain);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.json.description, 'implement #72');
+  assert.equal(r.json.agentType, 'sorry-matt:implementer');
   assert.doesNotMatch(r.brief, LEFTOVER);
-  assert.ok(r.brief.startsWith('You are the implementation agent for one ticket.'));
+  assert.ok(r.brief.startsWith("Spawn file: this ticket's values."));
+  assert.ok(r.fallback.startsWith('# Implementation agent\n\nYou are the implementation agent of the sorry-matt `get-to-work` skill, for one ticket.'));
+  assert.ok(r.fallback.includes('## 1. Start') && !r.brief.includes('## 1. Start'));
+  assert.ok(r.fallback.endsWith(`\n\n---\n\n${r.brief}`));
   for (const line of [
     '- Ticket: #72 (tracker: GitHub (acme/widgets))',
     `- Ticket worktree: ${r.values.worktree} (branch r1/72-widgets)`,
@@ -169,8 +193,13 @@ test('expand fills every EXPANDER.md placeholder with each line and each ticket'
   assert.equal(r.json.kind, 'expand');
   assert.equal(r.json.role, 'expand');
   assert.equal(r.json.description, 'expand #75 #83');
+  assert.equal(r.json.agentType, 'sorry-matt:expander');
+  assert.equal(r.json.fallback, join(r.dir, 'briefs', 'expand-3.general-purpose.md'));
+  assert.equal(r.json.fallbackPrompt, `Read ${r.json.fallback} in full and follow it.`);
   assert.doesNotMatch(r.brief, LEFTOVER);
-  assert.ok(r.brief.startsWith('你是展開 agent'));
+  assert.ok(r.brief.startsWith('派工內容：這次展開的值。'));
+  assert.ok(r.fallback.startsWith('# 展開 agent\n\n你是 sorry-matt `get-to-work` 的展開 agent'));
+  assert.ok(r.fallback.endsWith(`\n\n---\n\n${r.brief}`));
   const [a, b] = r.values.lines.map((l) => l.worktree);
   for (const line of [
     '- run：r1；派票點：3\n',
@@ -178,9 +207,9 @@ test('expand fills every EXPANDER.md placeholder with each line and each ticket'
     `- 整合 worktree：\n  - r1/line-a: ${a}\n  - r1/line-b: ${b}\n`,
     '- spec：none\n',
     '- 待展開的票：\n  - #75 [r1/line-a]\n    Body 75\n    second line\n  - #83 [r1/line-b]\n    Body 83\n',
-    '## 1. 查證',
   ])
     assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+  assert.ok(r.fallback.includes('## 1. 查證') && !r.brief.includes('## 1. 查證'), 'the rules only in the fallback');
 });
 
 test('the dist copy fills the English EXPANDER.md; a Local Markdown run names the spec', (t) => {
@@ -188,6 +217,8 @@ test('the dist copy fills the English EXPANDER.md; a Local Markdown run names th
   assert.equal(r.code, 0, r.err);
   assert.equal(r.json.description, 'expand 03-a.md');
   assert.doesNotMatch(r.brief, LEFTOVER);
+  assert.ok(r.fallback.startsWith('# Expansion agent\n\n'));
+  assert.ok(r.fallback.includes('## 1. Establish the facts') && !r.brief.includes('## 1. Establish the facts'));
   for (const line of ['- Run: r1; dispatch point: 3\n', '- Tracker: Local Markdown\n', '- Spec: docs/spec.md\n', '- Tickets to expand:\n  - .scratch/f/issues/03-a.md [r1/line-a]\n    A\n'])
     assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
 });
@@ -202,6 +233,7 @@ test('a missing required value exits 2 and writes nothing', (t) => {
     assert.match(r.err, new RegExp(`missing ${key}`));
     assert.equal(r.out, '');
     assert.equal(existsSync(join(dir, 'briefs', '72.md')), false);
+    assert.equal(existsSync(join(dir, 'briefs', '72.general-purpose.md')), false);
   }
   for (const key of ['out', 'run', 'round', 'tracker', 'repo', 'lines', 'spec', 'tickets']) {
     const dir = scratch(t);
@@ -299,6 +331,38 @@ test('a template whose placeholders changed apart from the script exits 1 and wr
   assert.equal(r.code, 1);
   assert.match(r.err, /changed apart/);
   assert.equal(existsSync(values.out), false);
+});
+
+// A copy of the plugin's layout: the scripts under skills/get-to-work/scripts, the src templates beside them, and
+// agents/ holding the given definitions.
+async function pluginCopy(dir, definitions) {
+  const skill = join(dir, 'plugin', 'skills', 'get-to-work');
+  for (const name of ['brief.mjs', 'cli.mjs', 'spawns.mjs'])
+    put(skill, `scripts/${name}`, readFileSync(join(root, 'src/skills/get-to-work/scripts', name), 'utf8'));
+  for (const name of ['IMPLEMENTER.md', 'EXPANDER.md']) put(skill, name, readFileSync(join(root, 'src/skills/get-to-work', name), 'utf8'));
+  for (const [name, text] of Object.entries(definitions)) put(join(dir, 'plugin', 'agents'), name, text);
+  return import(pathToFileURL(join(skill, 'scripts/brief.mjs')).href);
+}
+
+test('the fallback replaces ${CLAUDE_PLUGIN_ROOT} in the definition body with the plugin directory', async (t) => {
+  const dir = scratch(t);
+  const copy = await pluginCopy(dir, { 'implementer.md': '---\r\nname: implementer\r\ndescription: d\r\n---\r\n\r\nRead ${CLAUDE_PLUGIN_ROOT}/agents/x.md.  \r\n' });
+  const r = parse(copy.main(['implement', put(dir, 'values.json', implementValues(dir))]));
+  assert.equal(r.code, 0, r.err);
+  assert.ok(readFileSync(r.json.fallback, 'utf8').startsWith(`Read ${join(dir, 'plugin')}/agents/x.md.\n\n---\n\n派工內容：`));
+});
+
+test('a missing definition file, or one without frontmatter, exits 1 and writes nothing', async (t) => {
+  for (const definitions of [{}, { 'expander.md': 'no frontmatter\n' }]) {
+    const dir = scratch(t);
+    const copy = await pluginCopy(dir, definitions);
+    const values = expandValues(dir);
+    const r = copy.main(['expand', put(dir, 'values.json', values)]);
+    assert.equal(r.code, 1, JSON.stringify(definitions));
+    assert.equal(r.out, '');
+    assert.equal(existsSync(values.out), false);
+    assert.equal(existsSync(join(dir, 'briefs', 'expand-3.general-purpose.md')), false);
+  }
 });
 
 test('as a process it prints the JSON and exits 0', (t) => {

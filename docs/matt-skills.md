@@ -14,8 +14,8 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 
 | matt skill | 用在哪 | 決定 | 理由 |
 | --- | --- | --- | --- |
-| `implement` | `get-to-work` 派票，交給實作 agent | 自有流程取代：`get-to-work/IMPLEMENTER.md` | 上游六行裡有三行被覆寫：「at pre-agreed seams」用 `tdd`、結尾跑完整套件、自己呼叫 `code-review`。剩下的「讀票先寫票名」「commit 到目前分支」併進交付說明。實作 agent 問不到人，交付內容要自足（#6）。 |
-| `tdd` | 經 `implement` 由實作 agent 呼叫 | 自有流程取代：`IMPLEMENTER.md` 第 2 節 | 上游要求「confirm them with the user. No test is written at an unconfirmed seam」，實作 agent 做不到。改為 seams 以票為準、沒寫就自定並記入接續紀錄；保留測試原則（測公開介面、期望值來自獨立來源、一次一個切片）。 |
+| `implement` | `get-to-work` 派票，交給實作 agent | 自有流程取代：實作 agent 定義檔 `agents/implementer.md`（原稿 `src/agents/implementer.md`），派工內容 `get-to-work/IMPLEMENTER.md` | 上游六行裡有三行被覆寫：「at pre-agreed seams」用 `tdd`、結尾跑完整套件、自己呼叫 `code-review`。剩下的「讀票先寫票名」「commit 到目前分支」併進交付說明。實作 agent 問不到人，交付內容要自足（#6）。 |
+| `tdd` | 經 `implement` 由實作 agent 呼叫 | 自有流程取代：`agents/implementer.md` 第 2 節 | 上游要求「confirm them with the user. No test is written at an unconfirmed seam」，實作 agent 做不到。改為 seams 以票為準、沒寫就自定並記入接續紀錄；保留測試原則（測公開介面、期望值來自獨立來源、一次一個切片）。 |
 | `to-spec` | `take-this` 第 3 步 | 自有流程取代：`take-this` 第 3 步與 `TEMPLATES.md` | 上游第 2 步「Check with the user that these seams match」被代答覆寫。seams 改為代答後寫進 Testing Decisions，供票與實作 agent 沿用。模板保留。 |
 | `to-tickets` | `take-this` 第 4 步 | 自有流程取代：`take-this` 第 4 步與 `TEMPLATES.md` | 上游第 4 步「Quiz the user… Iterate until the user approves」被代答覆寫；「深度只到 frontier」又覆寫了模板的寫法。切片規則、expand–contract、發布方式改寫進 skill；票模板加 Seams 欄。 |
 | `handoff` | `take-this` 第 1 步，壓縮前 | 原樣使用（vendored） | 沒有任何覆寫。上游是 user-invoked，Skill tool 叫不到，所以 pin 在 `take-this/references/upstream/`。 |
@@ -46,14 +46,14 @@ sorry-matt 用到的每個 mattpocock skill，以及它在這裡的用法。三�
 
 | 上游檔案 | 被取代時的 SHA-256（LF 正規化） | 對應的自有檔 |
 | --- | --- | --- |
-| `skills/engineering/implement/SKILL.md` | `483BDC4CCF4AC31D86AC7BEEAA0D0DB80313E71E120BB8C59B3196AE5DECD53D` | `get-to-work/IMPLEMENTER.md` |
-| `skills/engineering/tdd/SKILL.md` | 未 vendored，以 `1.3.2` 為準 | `get-to-work/IMPLEMENTER.md` 第 2 節 |
+| `skills/engineering/implement/SKILL.md` | `483BDC4CCF4AC31D86AC7BEEAA0D0DB80313E71E120BB8C59B3196AE5DECD53D` | `agents/implementer.md`（#126 前在 `get-to-work/IMPLEMENTER.md`） |
+| `skills/engineering/tdd/SKILL.md` | 未 vendored，以 `1.3.2` 為準 | `agents/implementer.md` 第 2 節 |
 | `skills/engineering/to-spec/SKILL.md` | `43AD9CF318E5E7D3D1FA360253A37021796DC87A0C2E595AD262661A10F85088` | `take-this/SKILL.md` 第 3 步、`take-this/TEMPLATES.md` |
 | `skills/engineering/to-tickets/SKILL.md` | `56EC23C5B2782785D4E65BFF9E315B6D3AEB4EF977C174A219E99489FADA1995` | `take-this/SKILL.md` 第 4 步、`take-this/TEMPLATES.md` |
 | `skills/engineering/research/SKILL.md` | 未 vendored，以 `1.3.2` 為準 | `grill-them/SKILL.md` 第 3 步 |
 | `skills/engineering/code-review/SKILL.md` | `9C921A8D88138A41401D8897CA1BB852088AB1B7B605CDD04EDC13E3E8AAB6DD`（取自 `1.3.2` 安裝副本） | `prove-it/SKILL.md` 第 2 節 |
 
-`take-this/TEMPLATES.md` 與 `get-to-work/IMPLEMENTER.md` 第 1、2 節改寫自 MIT 授權的上游原文，授權聲明在
+`take-this/TEMPLATES.md` 與 `agents/implementer.md`（原稿 `src/agents/implementer.md`）第 1、2 節改寫自 MIT 授權的上游原文，授權聲明在
 `take-this/references/upstream/NOTICE.md`。
 
 仍以 Skill tool 呼叫的第三方 skill：`grilling`、`domain-modeling`、`wizard`（皆為
