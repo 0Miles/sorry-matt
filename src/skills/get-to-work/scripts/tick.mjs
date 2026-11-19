@@ -26,8 +26,8 @@
 //   The state file is the source of truth for stages, reviews, assignments, merge SHAs and usage. git is the source
 //   of truth for branches: when the two disagree, tick follows git and says so in `reconcile`:
 //   - a ticket queued or integrating whose branch is already merged into its target is not merged again: tick
-//     records the merge SHA and gives what is left of close-out steps 5–8 (delivery record, push, removing the
-//     worktree and branch, delivered). Merged means: with the ticket branch present, `git merge-base --is-ancestor
+//     gives `integrate.mjs merge` once more, which finds that merge and does what is left (record, delivery
+//     record, delivered, push, cleanup). Merged means: with the ticket branch present, `git merge-base --is-ancestor
 //     <ticket branch> <target>` and a first-parent merge of the target that brought it in; with the branch gone, a
 //     first-parent merge matched by the rules of merges.mjs (the header of review-guide.mjs).
 //   - an integration branch whose tip differs from the state's `tip` (another ticket's merge, a host commit) gets
@@ -37,9 +37,9 @@
 //   The target of a line is its integration branch, or the base branch under profile `integrate: direct`.
 //
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
-//   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`; spawns.mjs does not know that
-//                    role word yet and counts it as general-purpose) instead of prove-it's `judge`, with a brief tick
-//                    writes: blocking findings only, `verdict: pass | fix`
+//   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
+//                    instead of the review host's `judge`, with a brief tick writes: blocking findings only,
+//                    `verdict: pass | fix`
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
 //   onUnfixed: file-issue  findings still open → a `judge` to file a raw issue; queued only once its id is recorded
 //   expand: skip     no expansion; a ticket with no criteria goes on with its own text
@@ -87,6 +87,11 @@
 //     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false }
 //     judge, ask: "do": "<what to settle>", "outcomes": ["<word>"] }
 //   The same id is never issued for a different thing; an action the host already recorded is not issued again.
+//   A background spawn handed out before, runnable then (everything it waited for done) and still not recorded
+//   means the host was interrupted between the spawn and its record: it comes back as a `judge` (step
+//   "spawn-check": is that agent running? `spawned` with `--agent`, or `none` to have the spawn issued again),
+//   never as a second spawn. A foreground spawn (the minimal reviewer) ends with the host's turn, so it is issued
+//   again as it is.
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
@@ -107,9 +112,14 @@
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
 //
-// The registry (OPERATIONS below) holds one builder per operation the host is handed. A later script that takes an
-// operation over (integrate.mjs #121: merge, push, ticket branch and cleanup; verify.mjs #122: local verification;
-// the gates of #118) replaces that one entry with an `exec` of itself.
+// The registry (OPERATIONS below) holds one builder per operation the host is handed, each an `exec` of the script
+// that owns it: integrate.mjs ticket-init (the ticket branch and worktree, the branch recorded) and merge (merge,
+// record, Local Markdown delivery, delivered, push, cleanup; a conflict aborts and exits 4, and the ticket goes to
+// a merge agent, after whose commit the same command is run again), verify.mjs (local verification and its per-SHA
+// record; exit 4 asks the host for the checks, exit 5 skips the SHA this wake-up), and the gates of state.mjs check
+// (`stopped` and `finish` before the wrap-up; `finish` only under the profile's integrate: aggregate-pr and ci: read,
+// which is what gates.mjs's finish assertions assume). A gate that fails exits 4: the next list carries the
+// `failed` judge, and the host puts right what the gate's output lists before retry.
 //
 // Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
 // names them); tick's own plans and outputs go under its `tick/`.
@@ -126,7 +136,7 @@ import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './s
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
-import { description as roleDescription, ticketName } from './brief.mjs';
+import { description as roleDescription } from './brief.mjs';
 
 export const FORMAT = 'sorry-matt/tick@1';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
@@ -134,7 +144,6 @@ const SKILL = dirname(SCRIPTS);
 const SELF = join(SCRIPTS, 'tick.mjs');
 const js = (name) => join(SCRIPTS, name);
 const doc = (file, part) => ({ path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : join(SKILL, file), part });
-const skill = (name, part) => ({ skill: name, part });
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -263,30 +272,75 @@ function judge(id, step, what, outcomes, reference, { tickets = [], line = null,
 }
 const stateArgv = (c, ...args) => ['node', js('state.mjs'), args[0], c.path, ...args.slice(1)];
 
-/**
- * One builder per operation the host is handed. A later script that takes an operation over replaces its entry
- * with an exec of itself; nothing else in this file changes.
- */
+/** The checks a Local Markdown delivery record names, when the state has no `verification` for the ticket. */
+function checksText(t) {
+  const r = t.reviews.at(-1);
+  return `targeted checks green (status record)${r ? `; ${r.kind} ${r.mode} review: ${r.verdict}` : ''}`;
+}
+
+/** One builder per operation the host is handed: an exec of the script that owns it. */
 export const OPERATIONS = {
-  // #121 integrate.mjs
-  createTicketBranch: (c, { id, branch, worktree, base, exists }) =>
-    exec(`branch:${id}:${basename(worktree)}`, 'ticket-branch', ['git', '-C', c.git.wtOf(base) ?? c.cfg.root, 'worktree', 'add', ...(exists ? [worktree, branch] : ['-b', branch, worktree, base])], { tickets: [id] }),
+  // integrate.mjs ticket-init: the ticket branch from the line's tip, its worktree, the branch recorded
+  createTicketBranch: (c, { id, branch, worktree, tag }) =>
+    exec(`branch:${id}:${basename(worktree)}:${tag}`, 'ticket-branch', ['node', js('integrate.mjs'), 'ticket-init', c.path, id, '--branch', branch, '--worktree', worktree, '--repo', c.cfg.root], { tickets: [id] }),
+  // integrate.mjs merge: merge, record, deliver, delivered, push, clean; a conflict is aborted and exits 4
   merge: (c, { id, t, wt, tag }) =>
-    exec(`merge:${id}:${tag}`, 'merge', ['git', '-C', wt, 'merge', '--no-ff', '--no-edit', t.branch], { okExit: [0, 1], tickets: [id], line: t.line }),
-  push: (c, { target, tag, after }) => exec(`push:${target}:${tag}`, 'push', ['git', '-C', c.git.wtOf(target) ?? c.cfg.root, 'push', '-u', 'origin', target], { line: target, after }),
-  removeWorktree: (c, { id, path, tag, after }) => exec(`rm-worktree:${id}:${tag}`, 'cleanup', ['git', '-C', c.cfg.root, 'worktree', 'remove', '--force', path], { tickets: [id], after }),
-  removeBranch: (c, { id, branch, tag, after }) => exec(`rm-branch:${id}:${tag}`, 'cleanup', ['git', '-C', c.cfg.root, 'branch', '-D', branch], { tickets: [id], after }),
-  // #122 verify.mjs
-  verifyLocal: (c, { line, sha, reason, wt }) =>
-    judge(
-      `verify:${line}@${sha}`,
-      'verify-local',
-      `Local verification of ${line} at ${sha} (reason ${reason}): run the repo's full automatic checks in ${wt ?? 'the integration worktree'} with its tree at exactly that SHA, save the output, and record green or red.`,
-      ['green', 'red'],
-      [doc('SKILL.md', 'Reading CI: local verification'), doc('RED-LIGHT.md', 'point 3: saving the output')],
-      { line, meta: { sha, reason } },
+    exec(
+      `merge:${id}:${tag}`,
+      'merge',
+      [
+        'node',
+        js('integrate.mjs'),
+        'merge',
+        c.path,
+        id,
+        '--worktree',
+        wt,
+        ...(c.cfg.tracker === 'local' ? ['--local', c.ticketPath(id), ...(t.verification ? [] : ['--checks', checksText(t)])] : []),
+        ...(c.profile.integrate === 'direct' ? [] : ['--push']),
+      ],
+      { stdout: c.tick('merge', `${keyOf(id)}-${slugOf(tag)}.json`), okExit: [0, 4], tickets: [id], line: t.line },
     ),
+  push: (c, { target, tag, after }) => exec(`push:${target}:${tag}`, 'push', ['git', '-C', c.git.wtOf(target) ?? c.cfg.root, 'push', '-u', 'origin', target], { line: target, after }),
+  // verify.mjs: local verification of one SHA and its per-SHA record
+  verifyLocal: (c, { line, sha, reason, wt, tag, selfFound = null }) =>
+    exec(
+      `verify${selfFound ? '-self' : ''}:${line}@${sha}:${tag}`,
+      'verify-local',
+      ['node', js('verify.mjs'), c.path, line, '--worktree', wt ?? c.cfg.root, '--reason', reason, '--sha', sha, ...(selfFound ? ['--self-found', selfFound] : [])],
+      { stdout: c.tick('verify', `${slugOf(line)}-${sha.slice(0, 12)}-${tag}${selfFound ? '-self' : ''}.json`), okExit: [0, 4, 5], line },
+    ),
+  // state.mjs check: a stage-exit gate (gates.mjs)
+  gate: (c, { gate, after = [] }) => exec(`gate:${gate}`, 'gate', ['node', js('state.mjs'), 'check', c.path, gate, '--repo', c.cfg.root], { after }),
 };
+
+/**
+ * Local verification of `sha` on `line` through verify.mjs: true while it is under way this wake-up, false once the
+ * SHA has a record or verify.mjs found the worktree not at the SHA (exit 5: the line keeps its last result; a later
+ * wake-up tries again). Exit 4 (no usable contract) hands the checks to the host, then runs with --self-found.
+ */
+function localVerify(c, line, sha, reason, wt, final = false) {
+  const tag = `${final ? 'final-' : ''}w${c.book.wakeup}`;
+  if (c.state.lines[line].local.some((x) => x.sha === sha)) return false;
+  const first = OPERATIONS.verifyLocal(c, { line, sha, reason, wt, tag });
+  if (!c.done(first.id)) return c.emit(first) !== null;
+  const exit = c.book.done[first.id].exit;
+  if (exit !== 4) return false;
+  const list = c.tick('verify', `${slugOf(line)}-${sha.slice(0, 12)}.self-found.txt`);
+  const found = c.emit(
+    judge(
+      `self-find:${line}@${sha}`,
+      'self-find',
+      `${line} has no usable project command contract at ${sha} (verify.mjs exited 4). Find the repo's full automatic checks from the manifest and the CI settings and write them to ${list}, one command per line. Record written.`,
+      ['written'],
+      [{ path: js('verify.mjs'), part: 'header, step 3' }, doc('ASKING.md', 'section 0 (the project command contract)')],
+      { line },
+    ),
+  );
+  if (found) return true;
+  const second = OPERATIONS.verifyLocal(c, { line, sha, reason, wt, tag, selfFound: list });
+  return c.emit(second) !== null;
+}
 
 // ---- context --------------------------------------------------------------------------------------------------------
 
@@ -364,8 +418,19 @@ function context(path, state, now, deps) {
         'failed',
         `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
         ['retry', 'settled'],
-        a.reference ?? [doc('SKILL.md', 'the step that issued it')],
+        a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
+      );
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (a.after ?? []).every((x) => !x || c.done(x))) {
+      // Handed out before, runnable then, never recorded: the host was interrupted between spawn and record.
+      const k = book.spawnChecks?.[a.id] ?? 0;
+      action = judge(
+        `spawn-check:${a.id}:${k}`,
+        'spawn-check',
+        `${a.id} (\`${a.spawn.description}\`) was handed out before and never recorded. Before spawning anything, check whether an agent with that description is running or has finished (its task, its completion notice). spawned: record its id with --agent; none: there is no such agent, and the spawn is issued again.`,
+        ['spawned', 'none'],
+        a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
+        { tickets: a.tickets, line: a.line, meta: { of: a.id }, needs: { agent: 'the agent id, with spawned' } },
       );
     }
     if (!c.actions.some((x) => x.id === action.id)) {
@@ -405,22 +470,22 @@ const COLLECT = {
   implementing: {
     outcomes: ['green', 'red', 'blocked'],
     what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
-    reference: [doc('SKILL.md', 'Close-out, step 1 (targeted checks)'), doc('IMPLEMENTER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('IMPLEMENTER.md', 'the report it returns')],
   },
   expanding: {
     outcomes: ['reported'],
     what: (ids) => `Take the expansion agent's report for ${ids.join(', ')}. Record reported; --value lists, comma-separated, the tickets it reported as awaiting ruling (they leave the run), the others go back to candidate.`,
-    reference: [doc('SKILL.md', 'Dispatch, step 1 (expansion)'), doc('EXPANDER.md', 'the report it returns')],
+    reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('EXPANDER.md', 'the report it returns')],
   },
   fixing: {
     outcomes: ['fixed', 'blocked'],
     what: (ids) => `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
-    reference: [doc('SKILL.md', 'Close-out, step 3 (batched fix)')],
+    reference: [doc('SKILL.md', 'section 2, Batched fix')],
   },
   integrating: {
     outcomes: ['resolved', 'unresolved'],
     what: (ids) => `Take the merge agent's report for ${ids.join(', ')}: record each trade-off in the self-answer log. resolved: the merge is committed; unresolved: it could not be resolved safely and the ticket is sent back.`,
-    reference: [doc('SKILL.md', 'Close-out, step 4 (integration)')],
+    reference: [doc('SKILL.md', 'section 2, Merge conflicts')],
   },
 };
 
@@ -438,7 +503,7 @@ function stepReports(c) {
       const id = `collect:${agent}@${t0.assignment.assigned}`;
       if (!spec) {
         c.emit(
-          judge(id, 'collect', `Take ${agent}'s report for ${ids.join(', ')} (stage ${t0.stage}) into the status record.`, ['logged'], [doc('SKILL.md', 'Wake-up, step 2')], {
+          judge(id, 'collect', `Take ${agent}'s report for ${ids.join(', ')} (stage ${t0.stage}) into the status record.`, ['logged'], [doc('SKILL.md', 'section 1 (the loop)')], {
             tickets: ids,
             line: t0.line,
             meta: { agent, stage: t0.stage },
@@ -469,7 +534,7 @@ function stepReports(c) {
           ? `Do not take this report: ${agent} is no longer the agent of ${tickets.join(', ')} (${why}). Add one line to each one's status record: \`${agent} reported ${c.now}: ignored (${why})\`.`
           : `Do not take this report: ${agent} is no agent of this run. Note it in the run's self-answer log.`,
         ['logged'],
-        [doc('SKILL.md', 'Wake-up, step 2 (reports of replaced agents)')],
+        [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets },
       ),
     );
@@ -507,7 +572,7 @@ function stepRed(c) {
     );
     if (c.profile.ci === 'skip' || !tip || target !== line) continue;
     if (!c.git.hasOrigin || L.ciNotCovering) {
-      if (!L.local.some((r) => r.sha === tip)) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt: c.git.wtOf(target) }));
+      localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target));
       continue;
     }
     ciRead(c, line, target, tip, `w${book.wakeup}`, false);
@@ -639,7 +704,7 @@ function bodyFile(c, id, t, after) {
  * SendMessage to the agent that has the context, or the merge agent. `create` is set for a fresh dispatch from
  * candidate: the worktree and branch actions it waits for, and the stage move to implementing.
  */
-function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null }) {
+function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null }) {
   const n = (c.book.dispatches[id] ?? 0) + 1;
   const tag = `${keyOf(id)}-${n}`;
   const rec = c.tick('rec', `${tag}.json`);
@@ -655,7 +720,7 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
   );
   let r3 = null;
   if (create) r3 = c.emit(exec(`stage:${id}:implementing:h${hist(t)}`, 'stage', stateArgv(c, 'stage', 'implementing', id), { tickets: [id], line: t.line, after: [r2, ...(create.stageAfter ?? [])] }));
-  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}) };
+  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}) };
   c.flag(id).pending = pending;
   agentTail(c, id, t, pending, [r2, r3, ...before]);
 }
@@ -676,20 +741,21 @@ function agentTail(c, id, t, p, after) {
         'send',
         `SendMessage ${p.prevAgent} (it keeps its context) for ${id}: ${WHY[p.why] ?? p.why}. sent: it has the work again; gone: it no longer exists (a new agent is spawned instead).`,
         ['sent', 'gone'],
-        [doc('SKILL.md', p.why === 'red' ? 'Close-out, step 1' : p.why === 'fix' ? 'Close-out, step 3' : 'Dispatch, step 6'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
+        [doc('SKILL.md', p.why === 'red' ? 'section 2, Close-out checks and review' : p.why === 'fix' ? 'section 2, Batched fix' : 'section 1 (the loop)'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
         { tickets: [id], line: t.line, after },
       ),
     );
     return;
   }
   if (p.mode === 'merge') {
+    const files = p.files?.length ? ` (${p.files.join(', ')})` : '';
     c.emit(
       judge(
         `merge-agent:${id}:${p.n}`,
         'merge-agent',
-        `${id}'s merge conflicts in ${p.worktree}. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the brief close-out step 4 gives (the integration worktree, both sides' ticket text and commit messages, the intent rule). Record spawned with --agent.`,
+        `Merging ${t.branch} into ${c.target(t.line)} conflicts${files}; integrate.mjs aborted the merge, so ${p.worktree} is clean. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the merge-conflict brief (both sides' ticket text and commit messages, the intent rule): in ${p.worktree} it runs \`git merge --no-ff --no-edit ${t.branch}\` again, resolves each conflict, and ends with \`git commit --no-edit\`; when it cannot resolve them safely it runs \`git merge --abort\` and reports unresolved. Record spawned with --agent.`,
         ['spawned'],
-        [doc('SKILL.md', 'Close-out, step 4 (integration)')],
+        [doc('SKILL.md', 'section 2, Merge conflicts')],
         { tickets: [id], line: t.line, after, needs: { agent: 'the merge agent id' } },
       ),
     );
@@ -731,7 +797,7 @@ function agentTail(c, id, t, p, after) {
     line: t.line,
     after: [b, ...after],
     spawn: { subagent_type: 'general-purpose', description: roleDescription(p.role, [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
-    reference: [doc('SKILL.md', 'Dispatch, step 6')],
+    reference: [doc('SKILL.md', 'section 1 (the loop)')],
     record: spawnRecord(p.n),
   };
   c.emit(a);
@@ -748,7 +814,7 @@ function pendingAgent(c, id, t) {
       'unnamed',
       `${id} has an assignment record with no agent id and no dispatch tick knows of. If an agent was spawned for it, record spawned with --agent <its id>; else record none (the assignment is released and the ticket dispatched again).`,
       ['spawned', 'none'],
-      [doc('SKILL.md', 'Time limits: no dispatch without an assignment record')],
+      [doc('SKILL.md', 'section 1 (the loop)')],
       { tickets: [id], line: t.line },
     ),
   );
@@ -769,7 +835,7 @@ function unfixed(c, id, t, what) {
         'file-issue',
         `${id}: ${what}. File one raw issue listing the open findings (location, one sentence, evidence path) linked to the status record, polished by ASKING section 6. Record filed with --value <issue id>; the ticket is then integrated.`,
         ['filed'],
-        [doc('SKILL.md', 'Filing along the way'), doc('ASKING.md', 'section 6')],
+        [doc('SKILL.md', 'section 2, Filing along the way'), doc('ASKING.md', 'section 6')],
         { tickets: [id], line: t.line, needs: { value: 'the issue id' } },
       ),
     );
@@ -803,9 +869,9 @@ function stepInReview(c, id, t) {
       judge(
         `review-stuck:${id}:${t.reviews.length}`,
         'review-stuck',
-        `prove-it returned stuck for ${id} with a release condition. Clear it and call prove-it again (record retry), or, when it cannot be cleared, record stuck with --value <reason> (SEND-BACK.md).`,
-        ['retry', 'stuck'],
-        [skill('prove-it', 'section 5'), doc('SEND-BACK.md', 'Mark stuck')],
+        `The review host returned stuck for ${id} with a release condition. Clear it and review again (record retry: the same mode, the previous review block in the status record); when it cannot be cleared, mark it stuck (SEND-BACK.md) and record stuck with --value <reason>. A review stopped by the budget hook (reason budget) awaits a ruling: record awaiting-ruling with --value <the hook's message>.`,
+        ['retry', 'stuck', 'awaiting-ruling'],
+        [doc('REVIEWER.md', 'section 1 and the report'), doc('SEND-BACK.md', 'Mark stuck')],
         { tickets: [id], line: t.line },
       ),
     );
@@ -845,8 +911,8 @@ function stepInReview(c, id, t) {
       tickets: [id],
       line: t.line,
       after: [ag],
-      spawn: { subagent_type: 'general-purpose', description: `review ${ticketName(id) ?? id}`, prompt: `Read ${brief} in full and follow it.`, background: false },
-      reference: [doc('SKILL.md', 'Close-out, step 2 (independent review)')],
+      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
+      reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
       meta: { mode, kind: 'minimal' },
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
@@ -856,9 +922,9 @@ function stepInReview(c, id, t) {
     judge(
       `review:${id}:${tag}`,
       'review',
-      `Call the Skill tool with prove-it, mode ${mode}, for ${id}: the ticket (id, ticket text and expansion block), the snapshot ${c.snapshot(id)} and the comparison ${against}, the fixed point ${c.target(t.line)}, the ticket branch ${t.branch} and the targeted-check result${mode === 'recheck' ? ', with the previous review block' : ''}. Act on its review block: findings go to the fix, observations and pre-existing ones to one raw ticket. Record its verdict, and with fix --findings <the finding ids>.`,
+      `Review ${id}, mode ${mode}: fill REVIEWER.md (the ticket's id and text with its expansion block, the snapshot ${c.snapshot(id)}, the comparison ${against}, the fixed point ${c.target(t.line)}, the ticket branch ${t.branch}, the targeted-check result, the line's CI coverage${mode === 'recheck' ? ', the previous review block: in the status record' : ''}) and spawn the review host agent in the foreground with description \`${roleDescription('review', [id])}\`. Take only its review report. Record its verdict, with fix also --findings <the finding ids>.`,
       ['pass', 'fix', 'stuck'],
-      [skill('prove-it', `mode ${mode}`), doc('SKILL.md', 'Close-out, steps 2 and 3')],
+      [doc('REVIEWER.md', 'the brief below the rule'), doc('SKILL.md', 'section 2, Close-out checks and review')],
       { tickets: [id], line: t.line, after: [ag], meta: { mode, kind: 'full' } },
     ),
   );
@@ -977,6 +1043,12 @@ function stepIntegration(c) {
       }
     }
     if (busy || !tip) continue;
+    // integrate.mjs pushes a line itself; a push to the base branch (integrate: direct) is the host's, so the
+    // guard hook sees it. One push per integration, before the next merge.
+    if (c.profile.integrate === 'direct' && c.git.hasOrigin && c.git.remote(target) !== tip && tickets.some(([, t]) => t.merges.length)) {
+      c.emit(OPERATIONS.push(c, { target, tag: `@${tip}`, after: [] }));
+      continue;
+    }
     const lines = new Set(tickets.map(([, t]) => t.line));
     if ([...lines].some((l) => book.red[l] && !book.failed[l])) continue; // the queue pauses on a red line
     const queued = tickets
@@ -985,7 +1057,7 @@ function stepIntegration(c) {
     if (!queued.length) continue;
     const [id, t] = queued[0];
     if (!wt) {
-      c.emit(judge(`no-worktree:${target}`, 'no-worktree', `No worktree has ${target} checked out, so ${id} cannot be merged. Create the integration worktree for it (git worktree add) and record done.`, ['done'], [doc('SKILL.md', 'Freeze, step 5')], { line: t.line }));
+      c.emit(judge(`no-worktree:${target}`, 'no-worktree', `No worktree has ${target} checked out, so ${id} cannot be merged. Create it with integrate.mjs line-init and record done.`, ['done'], [{ path: js('integrate.mjs'), part: 'header, line-init' }], { line: t.line }));
       continue;
     }
     const s = stageTo(c, id, t, 'integrating');
@@ -996,34 +1068,13 @@ function stepIntegration(c) {
   }
 }
 
-/** The ticket is merged in git: whatever of close-out steps 5–8 is not done yet, and never another merge. */
+/** The ticket is merged in git: integrate.mjs merge once more finds that merge and does what is left of it. */
 function closeOut(c, id, t, target, m) {
   const recorded = t.merges.some((x) => x.sha === m.sha || m.sha.startsWith(x.sha));
   if (t.stage === 'queued' || !recorded) {
     c.reconcile.push({ ticket: id, state: `${t.stage}${recorded ? '' : ', no merge SHA recorded'}`, git: `merged into ${target} at ${m.sha}`, follow: 'git' });
   }
-  const s1 = t.stage === 'queued' ? stageTo(c, id, t, 'integrating') : null;
-  const s2 = recorded ? null : c.emit(exec(`merge-record:${id}@${m.sha}`, 'merge-record', stateArgv(c, 'merge', id, m.sha), { tickets: [id], line: t.line, after: [s1] }));
-  let s5 = null;
-  if (c.cfg.tracker === 'local') {
-    s5 = c.emit(
-      judge(`deliver:${id}@${m.sha}`, 'deliver-ticket', `Close-out step 5 for ${id} (Local Markdown): on ${target}, tick each verified criterion (expansion ones too), set Status to ready-for-human, append \`## sorry-matt completion\` with the implementation commit, the integration branch and the checks passed, and commit it.`, ['done'], [doc('SKILL.md', 'Close-out, step 5')], {
-        tickets: [id],
-        line: t.line,
-        after: [s2],
-      }),
-    );
-  }
-  let push = null;
-  if (c.git.hasOrigin) {
-    const tip = c.git.ref(target);
-    if (s5) push = c.emit(OPERATIONS.push(c, { target, tag: `after-deliver:${id}`, after: [s5] }));
-    else if (c.git.remote(target) !== tip) push = c.emit(OPERATIONS.push(c, { target, tag: `@${tip}`, after: [s2] }));
-  }
-  const wtPath = t.branch ? c.git.wtOf(t.branch) : null;
-  const rw = wtPath ? c.emit(OPERATIONS.removeWorktree(c, { id, path: wtPath, tag: `h${hist(t)}`, after: [s2] })) : null;
-  const rb = t.branch && c.git.ref(t.branch) ? c.emit(OPERATIONS.removeBranch(c, { id, branch: t.branch, tag: `h${hist(t)}`, after: [rw, s2] })) : null;
-  stageTo(c, id, t, 'delivered', { after: [s1, s2, s5, push, rw, rb] });
+  c.emit(OPERATIONS.merge(c, { id, t, wt: c.git.wtOf(target) ?? c.cfg.root, tag: `@${m.sha.slice(0, 12)}` }));
 }
 
 function integrating(c, id, t, target, wt) {
@@ -1035,7 +1086,7 @@ function integrating(c, id, t, target, wt) {
       judge(
         `send-back:${id}:h${hist(t)}`,
         'send-back',
-        `Send ${id} back for a redo as SEND-BACK.md says: the sent-back ref, the send-back record (write it to ${c.sendBack(id)} as well), the widened prediction, worktree and branch removed. Record sent-back; stuck when it was sent back once already (with --value <reason>).`,
+        `Send ${id} back for a redo as SEND-BACK.md says (integrate.mjs send-back, then the send-back record, also written to ${c.sendBack(id)}, and the widened prediction). Record sent-back; when it was sent back once already, mark it stuck instead (SEND-BACK.md) and record stuck with --value <reason>.`,
         ['sent-back', 'stuck'],
         [doc('SEND-BACK.md', 'Send back for a redo')],
         { tickets: [id], line: t.line, after: [abort] },
@@ -1049,13 +1100,23 @@ function integrating(c, id, t, target, wt) {
     return; // the merge agent is at work
   }
   if (mh) {
+    // a merge left in progress with no agent on it (an interrupted merge agent): hand it to a merge agent again
     dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: wt });
     return;
   }
   const tag = `h${hist(t)}`;
-  if (c.done(`merge:${id}:${tag}`)) {
+  const mid = `merge:${id}:${tag}`;
+  if (c.done(mid)) {
+    const done = c.book.done[mid];
+    const handed = Object.values(c.book.agents).some((x) => x.role === 'merge' && x.tickets.includes(id) && x.at >= done.at);
+    if (done.exit === 4 && !handed) {
+      // integrate.mjs aborted a conflict (exit 4): the merge agent redoes the merge and resolves it
+      const out = readJsonFile(c.deps, c.tick('merge', `${keyOf(id)}-${slugOf(tag)}.json`));
+      dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: wt, files: Array.isArray(out?.files) ? out.files : null });
+      return;
+    }
     c.emit(
-      judge(`merge-check:${id}:${tag}`, 'merge-check', `The merge of ${t.branch} into ${target} ended with neither a merge nor a conflict. Find out why; record retry to merge again, or stuck / awaiting-ruling with --value <reason>.`, ['retry', 'stuck', 'awaiting-ruling'], [doc('SKILL.md', 'Close-out, step 4')], {
+      judge(`merge-check:${id}:${tag}`, 'merge-check', `The merge of ${t.branch} into ${target} is not on ${target}${handed ? ' although the merge agent reported' : ''}. Find out why; record retry to merge again, or stuck / awaiting-ruling with --value <reason>.`, ['retry', 'stuck', 'awaiting-ruling'], [doc('SKILL.md', 'section 2, Merge conflicts')], {
         tickets: [id],
         line: t.line,
       }),
@@ -1063,7 +1124,7 @@ function integrating(c, id, t, target, wt) {
     return;
   }
   if (!t.branch) {
-    c.emit(judge(`merge-manual:${id}:${tag}`, 'merge-manual', `${id} has no ticket branch in the state; merge it by close-out step 4 and record done.`, ['done'], [doc('SKILL.md', 'Close-out, step 4')], { tickets: [id], line: t.line }));
+    c.emit(judge(`merge-manual:${id}:${tag}`, 'merge-manual', `${id} has no ticket branch in the state; find it, run integrate.mjs merge with --branch, and record done.`, ['done'], [{ path: js('integrate.mjs'), part: 'header, merge' }], { tickets: [id], line: t.line }));
     return;
   }
   c.emit(OPERATIONS.merge(c, { id, t, wt: wt ?? c.cfg.root, tag }));
@@ -1152,10 +1213,7 @@ function dispatchSteps(c, d) {
     const tip = c.git.ref(target);
     if (!tip) continue;
     if (!c.git.hasOrigin || L.ciNotCovering) {
-      if (!L.local.some((x) => x.sha === tip)) {
-        c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt: c.git.wtOf(target) }));
-        waiting = true;
-      }
+      if (localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target))) waiting = true;
       continue;
     }
     if (c.git.remote(target) === null) continue; // never pushed: not read
@@ -1169,10 +1227,7 @@ function dispatchSteps(c, d) {
       const v = readJsonFile(c.deps, verdictFile);
       for (const run of v?.rerun ?? []) c.emit(exec(`rerun:${line}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { line }));
     }
-    if (L.ci?.verdict === 'query-failed' && !L.local.some((x) => x.sha === tip)) {
-      c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: 'no-verdict', wt: c.git.wtOf(target) }));
-      waiting = true;
-    }
+    if (L.ci?.verdict === 'query-failed' && localVerify(c, line, tip, 'no-verdict', c.git.wtOf(target))) waiting = true;
     if (L.ci?.verdict === 'no-run' && L.ci.reason === 'empty' && L.noRun.count >= 2 && !L.ciNotCovering) {
       const runs = c.tick('ci', `${slugOf(line)}-r${r}-branch.json`);
       const id = `ci-branch:${line}:r${r}`;
@@ -1241,7 +1296,7 @@ function dispatchSteps(c, d) {
     }
     if (!c.deps.exists(c.predicted(id))) {
       c.emit(
-        judge(`predict:${id}`, 'predict', `Write ${id}'s predicted files to ${c.predicted(id)}: one repo-relative path per line, \`/\` only when nothing narrower can be inferred, index files left out. Record written.`, ['written'], [doc('SKILL.md', 'Dispatch, step 3 (predicted files)')], {
+        judge(`predict:${id}`, 'predict', `Write ${id}'s predicted files to ${c.predicted(id)}: one repo-relative path per line, \`/\` only when nothing narrower can be inferred, index files left out. Record written.`, ['written'], [doc('SKILL.md', 'section 2, Predicted files')], {
           tickets: [id],
           line: t.line,
         }),
@@ -1336,13 +1391,11 @@ function frontier(c, r) {
 }
 
 function createDispatch(c, id, t, title) {
-  const target = c.target(t.line);
   const name = c.cfg.tracker === 'github' ? `${numOf(id).padStart(2, '0')}-${slugOf(String(title ?? 'ticket').toLowerCase()).slice(0, 40).replace(/-+$/, '') || 'ticket'}` : slugOf(basename(id).replace(/\.md$/i, ''));
   const branch = t.branch ?? `${c.state.run}/${name}`;
   const present = c.git.wtOf(branch);
   const worktree = present ?? join(c.cfg.worktrees, basename(branch));
-  const w = present ? null : c.emit(OPERATIONS.createTicketBranch(c, { id, branch, worktree, base: target, exists: !!c.git.ref(branch) }));
-  const sb = t.branch === branch ? null : c.emit(exec(`set-branch:${id}:${branch}`, 'set-branch', stateArgv(c, 'set', id, '--branch', branch), { tickets: [id], line: t.line }));
+  const w = present && t.branch === branch ? null : c.emit(OPERATIONS.createTicketBranch(c, { id, branch, worktree, tag: `h${hist(t)}` }));
   const prev = t.sendBacks ? implementerOf(c, id) : null;
   dispatchAgent(c, id, t, {
     role: 'implement',
@@ -1351,7 +1404,7 @@ function createDispatch(c, id, t, title) {
     worktree,
     prevAgent: prev,
     why: 'send-back',
-    create: { after: [w], stageAfter: [sb], branch },
+    create: { after: [w], stageAfter: [w], branch },
   });
 }
 
@@ -1401,7 +1454,7 @@ function expandTail(c, r, after = []) {
     line: null,
     after: [b, ...after],
     spawn: { subagent_type: 'sorry-matt:expander', description: roleDescription('expand', ids), prompt: `Read ${resolve(out)} in full and follow it.`, background: true },
-    reference: [doc('SKILL.md', 'Dispatch, step 1 (expansion agent; general-purpose when the type is not available)')],
+    reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
     record: `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:expand:r${r}`)} --agent <agent id> [--type general-purpose]`,
   });
 }
@@ -1431,6 +1484,11 @@ function stepFinish(c) {
   let all = true;
   for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
   if (!all) return;
+  // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs and a CI read.
+  const gates = [];
+  if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
+  if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
+  if (gates.some(Boolean)) return;
   c.emit(
     judge(
       'wrap-up',
@@ -1498,14 +1556,14 @@ function finalVerify(c, line, target, wt) {
   if (!tip) return true;
   if (!git.hasOrigin || L.ciNotCovering) {
     const rec = L.local.find((x) => x.sha === tip);
-    if (!rec) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt }));
+    if (!rec) localVerify(c, line, tip, git.hasOrigin ? 'ci-not-covering' : 'no-origin', wt, true);
     return rec ? rec.result === 'green' : false;
   }
   if (L.ci?.sha === tip && L.ci.verdict === 'green') return true;
   if (L.ci?.sha === tip && L.ci.verdict === 'red') return false; // red-light handling is on
   if (L.ci?.sha === tip && L.ci.verdict === 'query-failed') {
     const rec = L.local.find((x) => x.sha === tip);
-    if (!rec) c.emit(OPERATIONS.verifyLocal(c, { line, sha: tip, reason: 'no-verdict', wt }));
+    if (!rec) localVerify(c, line, tip, 'no-verdict', wt, true);
     return rec ? rec.result === 'green' : false;
   }
   const tag = `final-w${book.wakeup}-${tip.slice(0, 12)}`;
@@ -1525,14 +1583,11 @@ function finalVerify(c, line, target, wt) {
 
 // Where a git or gh command of the pipeline is described (node commands point to their script's header).
 const EXEC_REFERENCE = {
-  'ticket-branch': doc('SKILL.md', 'Dispatch, step 5'),
-  body: doc('SKILL.md', 'Dispatch, step 6'),
-  merge: doc('SKILL.md', 'Close-out, step 4'),
+  body: { path: js('brief.mjs'), part: 'header (bodyFile)' },
   abort: doc('SEND-BACK.md', 'Send back for a redo'),
-  push: doc('SKILL.md', 'Close-out, step 6'),
-  cleanup: doc('SKILL.md', 'Close-out, step 7'),
-  'ci-rerun': doc('SKILL.md', 'Reading CI: cancelled'),
-  'ci-branch': doc('SKILL.md', 'Reading CI: no run'),
+  push: { path: SELF, part: 'header (the registry: push)' },
+  'ci-rerun': { path: js('ci.mjs'), part: 'header (cancelled: rerun)' },
+  'ci-branch': { path: js('state.mjs'), part: 'header (ci: --branch-runs)' },
   'ci-watch': doc('FINISH.md', 'step 3 (full verification)'),
   'sync-base': doc('FINISH.md', 'step 2 (sync the base)'),
 };
@@ -1593,7 +1648,7 @@ export function next(path, reported, now, deps) {
           : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep).'
       } Record done.`,
       ['done'],
-      [doc('SKILL.md', 'Time limits: fallback wake-up'), doc('ASKING.md', 'section 7 (the ledger)')],
+      [doc('SKILL.md', 'section 1 (the loop: fallback wake-up)'), doc('ASKING.md', 'section 7 (the ledger)')],
     ),
   );
   return finish(c, 'end');
@@ -1603,7 +1658,7 @@ function finish(c, then) {
   const { book } = c;
   batches(c.actions);
   for (const a of c.actions) {
-    a.reference ??= a.argv?.[0] === 'node' ? [{ path: a.argv[1], part: 'header' }] : [EXEC_REFERENCE[a.step] ?? doc('SKILL.md', 'the pipeline')];
+    a.reference ??= a.argv?.[0] === 'node' ? [{ path: a.argv[1], part: 'header' }] : [EXEC_REFERENCE[a.step] ?? doc('SKILL.md', 'section 1 (the loop)')];
     a.record = recordLine(c, a);
     book.issued[a.id] = { kind: a.kind, step: a.step, tickets: a.tickets, line: a.line, ...(a.okExit ? { okExit: a.okExit } : {}), ...(a.outcomes ? { outcomes: a.outcomes } : {}), ...(a.meta ? { meta: a.meta } : {}) };
   }
@@ -1681,9 +1736,19 @@ export function record(path, id, flags, now, deps) {
   };
   const meta = issued.meta ?? {};
   const tickets = issued.tickets ?? [];
-  const register = (agent, role, type) => {
-    book.agents[agent] = { tickets: [...new Set([...(book.agents[agent]?.tickets ?? []), ...tickets])], role, type, status: 'current', at: now };
-    for (const tid of tickets) {
+  // A spawn's agent fills the assignment of its tickets (an expansion falling back to another type re-records it).
+  const spawned = (tids) => {
+    const pending = flag(tids[0]).pending;
+    if (flags.type) {
+      const rec = pending?.mode === 'expand' ? join(dirname(path), state.run, 'tick', 'rec', `expand-r${pending.round}.json`) : null;
+      if (rec) S('assign', ...tids, '--record', rec, '--type', flags.type);
+    }
+    named(tids, flags.agent);
+    register(flags.agent, pending?.mode === 'expand' ? 'expand' : (pending?.role ?? 'implement'), flags.type ?? (pending?.mode === 'expand' ? 'sorry-matt:expander' : 'general-purpose'), tids);
+  };
+  const register = (agent, role, type, tids = tickets) => {
+    book.agents[agent] = { tickets: [...new Set([...(book.agents[agent]?.tickets ?? []), ...tids])], role, type, status: 'current', at: now };
+    for (const tid of tids) {
       book.dispatches[tid] = (book.dispatches[tid] ?? 0) + 1;
       delete flag(tid).pending;
       delete flag(tid).redispatch;
@@ -1715,15 +1780,20 @@ export function record(path, id, flags, now, deps) {
     case 'ignore':
       book.inbox = book.inbox.filter((x) => `ignore:${x}` !== id);
       break;
-    case 'spawn': {
+    case 'spawn':
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
-      const pending = flag(tickets[0]).pending;
-      if (flags.type) {
-        const rec = pending?.mode === 'expand' ? join(dirname(path), state.run, 'tick', 'rec', `expand-r${pending.round}.json`) : null;
-        if (rec) S('assign', ...tickets, '--record', rec, '--type', flags.type);
+      spawned(tickets);
+      break;
+    case 'spawn-check': {
+      const of = meta.of;
+      if (outcome === 'spawned') {
+        if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <its id>`);
+        spawned(book.issued[of]?.tickets ?? tickets);
+        book.done[of] = { at: now, agent: flags.agent };
+      } else {
+        book.spawnChecks = { ...(book.spawnChecks ?? {}), [of]: (book.spawnChecks?.[of] ?? 0) + 1 };
+        delete book.issued[of]; // issued again as a spawn by the next list
       }
-      named(tickets, flags.agent);
-      register(flags.agent, pending?.mode === 'expand' ? 'expand' : (pending?.role ?? 'implement'), flags.type ?? (pending?.mode === 'expand' ? 'sorry-matt:expander' : 'general-purpose'));
       break;
     }
     case 'send': {
@@ -1768,6 +1838,7 @@ export function record(path, id, flags, now, deps) {
     }
     case 'review-stuck':
       if (outcome === 'retry') flag(tickets[0]).retryReviews = ticket(tickets[0]).reviews.length;
+      else if (outcome === 'awaiting-ruling') stageIf(tickets[0], 'awaiting-ruling', flags.value ?? 'the review was stopped by the budget');
       else stageIf(tickets[0], 'stuck', flags.value ?? 'prove-it stuck could not be cleared');
       break;
     case 'mark-stuck':
@@ -1800,14 +1871,10 @@ export function record(path, id, flags, now, deps) {
     case 'red-light':
       if (outcome === 'failed') book.failed[issued.line] = now;
       break;
-    case 'verify-local': {
-      const L = live().lines[issued.line];
-      if (!L.local.some((x) => x.sha === meta.sha)) {
-        S('local', issued.line, meta.sha, outcome, meta.reason);
-        S('usage', '--add', 'fullVerifications=1');
-      }
+    case 'verify-local':
+      // verify.mjs wrote the per-SHA record itself; a conclusion at the finish is one full verification
+      if (entry.exit === 0 && id.includes(':final-')) S('usage', '--add', 'fullVerifications=1');
       break;
-    }
     case 'merge-check':
     case 'sync-base':
       if (outcome === 'retry') delete book.done[id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`];

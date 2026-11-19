@@ -128,29 +128,36 @@ filled.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
   flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
   report body.
+- **The run profile**: whether this run relaxes the flow — review depth, fix rounds, the recheck, where findings that
+  stay open go, expansion, how tickets are integrated, whether CI is read, the simplify pass — is settled at the ruling
+  point (a standalone `get-to-work` settles it at the freeze) and written once with `get-to-work`'s
+  `scripts/state.mjs profile`; it cannot change afterwards. Its fields, defaults and the guards each one relaxes are in
+  that script's header. The default is the strict flow and is not asked about; write a profile only when the user asks
+  for a relaxed flow or a project exception rules a field out, and log the reason in the self-answer log. A profile
+  cannot relax the actions needing confirmation (section 5) or the limits of the next point.
 - Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
   `budget: rounds` scale with the ticket count:
   - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 12 spawns —
     expansion, implementation, one review host agent each for the initial review and the recheck, the two finders of a
     standard-tier `prove-it`, up to three verifiers and one fix round's Fix Verifier, merging — and 20 per ticket
-    leaves close to double that as a last-resort margin; the
-    constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
-    plus 20 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
+    leaves close to double that as a last-resort margin; the constant 50 covers planning and finishing the run; when
+    planning has already used more than 50, the spawns used plus 20 per ticket keep planning from eating into the
+    tickets' share.
   - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
     send-back, one stuck / revert / red-to-green), plus the first one.
 
   Rewrite both lines before the ruling point from the number of tickets the kickoff published; a standalone
   `get-to-work` has no ruling point and rewrites them when it freezes the ticket set. Limits and time limits are not
-  asked about by default; when there is a concrete reason to expect a default to fall short
-  (a long data migration or a large test suite the ticket names, say), make the change one question, sorted by cost
-  to reverse with the others. When one runs short mid-run, never answer on the user's behalf to raise it: a limit
-  stops the run as `get-to-work` section 1, budget and breaker, says, and a time limit is extended once or stopped
-  as the same section's time limits say.
+  asked about by default; when there is a concrete reason to expect a default to fall short (a long data migration or
+  a large test suite the ticket names, say), make the change one question, sorted by cost to reverse with the others.
+  When one runs short mid-run, never answer on the user's behalf to raise it: at a limit dispatching stops, and at a
+  time limit an agent is extended once or stopped, both decided by `get-to-work`'s scripts.
 - Eyes-on acceptance (`have-it-all-done` step 5) is an acceptance procedure, not a ruling, and this section does not
   limit it.
 
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
-it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; `budget: spawns` and
+it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; a run with a relaxed flow
+wrote its profile before the ruling point (at the freeze when running standalone); `budget: spawns` and
 `budget: rounds` were rewritten from the ticket count before the ruling point (at the freeze when running
 standalone), unless the user set a value at the ruling point.
 
@@ -192,52 +199,33 @@ Choosing "don't ask again" at a permission prompt does the same, written by Clau
 ### Actions needing confirmation
 
 The agent may run the actions below, but only after the user confirms them at a permission prompt; the plugin's
-`hooks/hooks.json` raises that prompt in PreToolUse before they run:
+`hooks/hooks.json` raises that prompt in PreToolUse before they run, with the classification and prompts in
+`hooks/classify.mjs`:
 
-- **Two-step confirmation**
-  - Catastrophic actions: a recursive delete of a home directory, a root, a drive root, a parent directory or a path
-    outside the project; formatting or overwriting a disk; dropping a database, schema or table; deleting a GitHub
-    repo; tearing down whole infrastructure (`terraform`/`pulumi destroy`, deleting a cloud project or resource
-    group, deleting a prod namespace, bucket or stack); force-pushing to or deleting a protected branch (main,
-    master, the remote's default branch).
-  - Outgoing messages and third-party communication: mail (`git send-email` included), chat, social posts,
-    third-party messaging APIs.
-  - Payments.
-- **Single confirmation**
-  - Releases and production deploys: package publishes, `gh release create`, `terraform apply`,
-    `fly`/`wrangler`/`firebase` deploy, other deploy tools and SQL writes aimed at production.
-  - Writes to settings that change how Claude Code behaves: settings files, hooks, MCP config, `~/.claude.json`,
-    `.claude/sorry-matt.json`.
-  - A merge that deploys to production right away: `gh pr merge` or a direct write to a protected branch, when a
-    workflow the merge leaves there deploys or releases on every push to it.
+- **Two-step confirmation**: catastrophic actions (a recursive delete of a home directory, a root, a drive root, a
+  parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema or
+  table; deleting a GitHub repo; tearing down whole infrastructure; force-pushing to or deleting a protected branch);
+  outgoing messages and third-party communication; payments.
+- **Single confirmation**: publishing a release and deploying to production; writing settings that change how Claude
+  Code behaves (settings files, hooks, MCP settings, `~/.claude.json`, `.claude/sorry-matt.json`); a merge that
+  triggers a production deploy at once.
 
-For a two-step action, the hook first swaps the command for `confirm.mjs`, which records the confirmation, and asks
-with a description of the consequences; once allowed, resend the original command unchanged and the hook asks a
-second time; only that second yes runs it. A tool whose input cannot be swapped (MCP) is denied the first time,
-and the denial carries the confirm command to run first. Only the exact line the hook hands out may run
-`confirm.mjs`; never rewrite it, chain it, or write the confirmation records.
+With two-step confirmation, run only the one confirmation line the hook gives, then resend the original command as it
+was; do not rewrite or chain it, and never write the confirmation record yourself.
 
-Subagents do not run these actions; they report them to the host. The host sends them as **prompting calls**,
-back to back after every other step (`have-it-all-done` section 0); a two-step resend follows right after its
-first confirmation. When the user refuses at the prompt, or the hook denies the call — in `bypassPermissions`
-mode nothing guarantees a prompt, so every two-step action is denied; while the user has unattended mode on, every
-action needing confirmation is denied outright, with no prompt — put it on the human-work list with the command to
-run and the consequences the hook described; do not retry with another spelling, and do not stop to wait: carry on
-with everything else you can do. Only the user switches unattended mode; never touch its switch file.
+Subagents do not run these actions; they put them in their report for the host. The host treats them as
+**prompting calls**, sent back to back after every other step (`have-it-all-done` section 0). When the user refuses at
+the prompt, the hook blocks it (in unattended mode every one is blocked), or the hook does not catch it and no prompt
+appears — the hook matches command text and is not a security boundary — do not run it yourself, do not retry it
+another way and do not stop to wait: put it on the human-work list with the command to run and the hook's account of
+the consequences, and keep doing what can be done. Only the user switches unattended mode; never touch its switch file.
+Force-pushing an ordinary branch, cloning, installing packages, reading or writing credential files, permission
+commands and deletions inside the project are not on this list; the permission settings decide those.
 
-The hook matches command text; it is not a security boundary. It does not recognize an interpreter wrapper
-(`node -e`, `python -c`), variable expansion, or commands like `find / -delete`; without managed settings, another
-hook returning allow can keep the prompt from appearing; `dontAsk` mode, or settings that turn prompts into
-denials, turn an ask into a deny; in `bypassPermissions` mode single-confirmation actions mostly run without a
-prompt. When the hook does not catch an action above, no prompt appears, or the user has turned the hook off, do
-not run it yourself either; list it on the human-work list. Force-pushing an ordinary branch, cloning, installing
-packages, reading or writing credential files, permission commands, and deletes inside the project are not on this
-list; the permission settings decide them.
-
-Done when: every action this run that needed authority went out as its canonical command, with its outcome in
+Done when: every action this round that needs authority was sent with its canonical command and its outcome is in
 ledger field 5; every action needing confirmation ran only after the user confirmed it at the prompt, or is on the
-human-work list with the command to run; every blocked action is on the human-work list with a permission rule
-snippet or the command to run; nothing this run wrote a settings file.
+human-work list with the command to run; every blocked action is on the human-work list with a permission rule snippet
+or the command to run; no settings file was written this round.
 
 ## 6. Language and outbound text
 
@@ -254,101 +242,70 @@ Done when: every question and every piece of outbound text this run follows all 
 
 ## 7. The run ledger and the context budget
 
-The **run ledger** is this run's source of truth for state, at `sorry-matt/runs/<run>.md` under the **common
-directory** (`git rev-parse --path-format=absolute --git-common-dir`). When the same task already has one, take it
-over rather than rebuilding from the conversation's compaction summary; otherwise create one.
+The **run ledger** is the source of truth for this run's narrative state, kept in the **common directory**
+(`git rev-parse --path-format=absolute --git-common-dir`) at `sorry-matt/runs/<run>.md`. When the same task already has
+a ledger, take it over directly, never rebuilding it from the conversation's compaction summary; otherwise create
+one. `get-to-work`'s machine state — lines, the reconciliation table, usage and the stop reason — is
+`<run>.state.json` next to the ledger, written only by its scripts, with its schema in the header of `get-to-work`'s
+`scripts/state.mjs`.
 
-Its first line is a state marker: `<!-- sorry-matt:run active -->` when created, changed to
-`<!-- sorry-matt:run ended -->` when the run's last step ends — when composed, after `have-it-all-done`'s handoff
-(if step 5 does not run) or its eyes-on acceptance; after the wrap-up when `get-to-work` runs standalone. Each of
-those steps spells this out. The plugin's SessionStart hook only recognizes a ledger whose first line (a BOM aside)
-is exactly the active marker, with no blank line before it. Ten fields:
+The first line is a state marker: `<!-- sorry-matt:run active -->` when created; when the whole run's last step ends
+it becomes `<!-- sorry-matt:run ended -->` — when composed, at `have-it-all-done`'s hand-off (when step 5 does not run)
+or after eyes-on acceptance; for a standalone `get-to-work`, after the finish. Nothing may come before the marker: the
+plugin's hooks read only the first line (a BOM aside). Ten fields:
 
-1. **Next action:** one line to follow on resuming.
+1. **Next action**: one line, followed after resuming.
 2. The task scope and where the adopted grilling source lives.
-3. The risk gate's three lights and the clearance record.
-4. Lines, integration branches, and tip SHAs, with the latest CI result read and its SHA (classified per
-   `get-to-work` section 1, reading CI); the base SHA `get-to-work` synced in when finishing the run (when
-   unsynced, the base SHA it tried and "unsynced"); the **per-SHA local verification records** (format and rules:
-   `get-to-work`'s `SKILL.md`, section 1, reading CI, "local verification"). A record line starts with `local:`, never with `rule:` or `budget:`.
-5. Authorization outcomes: every action needing authority or confirmation (section 5) that was sent, and the
-   permission verdict or confirmation result, with a permission rule snippet or the command to run for each
-   blocked one.
+3. The risk gate's three lights and their release record.
+4. Lines and integration branches: the state file's path; lines, tips, CI results, per-SHA local verification
+   records and the synced base are in the state.
+5. Authorization outcomes: every action sent that needs authority or confirmation (section 5) and whether it was let
+   through or confirmed; blocked ones with a permission rule snippet or the command to run.
 6. The run-level self-answer log.
 7. The human-work list.
-8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
-   ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, its **assignment record** (agent type, assigned time, stage time limit, deadline, whether it was
-   extended, progress fingerprint; `get-to-work` section 1, time limits, recorded at every assignment), its timeout
-   reassignment count per stage, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
-   The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
-   states delivered, stuck and awaiting ruling (`get-to-work` section 1); resuming relies on it and the agent id to
-   pick back up every ticket short of an end state, and on the deadlines to keep scanning time limits.
-9. **Run metrics and budget**, in five parts:
-   - **Limits:** one per line as `budget: <name> <integer>`, written with their defaults when the ledger is created,
-     and added when taking over a ledger that lacks them: `budget: spawns 200` (spawns), `budget: rounds 40` (dispatch points,
-     `get-to-work` section 1, dispatch; `rounds` means dispatch points, not review or fix rounds), `budget: hours 12`
-     (elapsed time, computed as under usage), and `budget: no-progress 3` (the consecutive count for the no-progress
-     breaker). `spawns` and `rounds` are rewritten per section 4 once the ticket count is known.
-   - **Stage time limits:** in the same format, in minutes: `budget: timeout-implement 30` (implementing),
-     `budget: timeout-fix 20` (fixing, red-light fixes included), `budget: timeout-expand 15` (expanding), and
-     `budget: timeout-merge 15` (the merge agent). How they are judged is in `get-to-work` section 1, time limits.
-     For changing a limit or a time limit, see section 4. The plugin's hook collects every `budget:` line in the
-     whole ledger and blocks spawns on `spawns` alone, so no other field starts a line with `budget:`.
-   - **Usage:** the start time (ISO 8601, recorded at the first dispatch point, so time spent waiting on the user
-     before the ruling point does not count; when taking over a ledger without one, record the takeover time and
-     note that earlier time is not counted), waiting time (from then on, the total from sending each question to the
-     user to receiving the answer), elapsed time (now minus the start time, minus waiting time), spawns, dispatch
-     points run, the consecutive no-progress count with the progress snapshot from the last dispatch point (judged
-     per `get-to-work` section 1, budget and breaker), review rounds, fix rounds, full verification runs (one per
-     verdict `get-to-work` reaches while finishing the run, from CI or local alike; CI triggered by close-out
-     pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers, and the task id of
-     the background `sleep` still running (the fallback wake-up in `get-to-work` section 1, time limits; "none" when
-     there is none). Spawns come from `spawns` in
-     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. The file
-     also holds a `log`, one entry per spawn with its agent type, the Agent call's `description` and the time; the
-     host only reads that too, and `get-to-work` reports the spawn breakdown from it when finishing. No
-     such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
-     the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
-     `get-to-work` section 1, budget and breaker.
-   - **Stop reason:** when the run stops on a limit or the no-progress breaker, which one, the usage at the time,
-     and where the run is stuck; "none" when it has not stopped.
-   - **Host session:** one line `session: <id>`, the value of the environment variable `CLAUDE_CODE_SESSION_ID` in
-     the host's own shell commands (read it with `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"`,
-     which runs in any shell). Write it when the ledger is created; read it again when taking over a ledger and on
-     every resume (except a `/loop` wake-up: same session, the value cannot change), and rewrite the line when the
-     value differs. The plugin's hook counts against this run only the spawns whose `session_id` matches this line,
-     and blocks only the matching session; when the value cannot be read (an empty string), leave the line out and
-     the hook falls back to counting and blocking every session in the repo. The hook reads only the first
-     `session:` line, so no other field starts a line with `session:`.
-10. **Rule files:** every rule file the host reads in and must follow for the whole run, one per line as
-    `rule: <absolute path>`, filled in when the ledger is created and completed when an existing ledger is taken
-    over (for example, `have-it-all-done` taking over a ledger that a standalone `get-to-work` created). List the
-    `SKILL.md` loaded through the Skill tool too: compaction re-attaches only its first 5,000 tokens. Files read only
-    at one step to fill in a hand-off (`EXPANDER.md`, `IMPLEMENTER.md`, `TEMPLATES.md`, and the like) are not
-    listed: the step that uses one reads it again anyway. `get-to-work`'s `RED-LIGHT.md`, `TIMEOUTS.md`, `SEND-BACK.md` and `FINISH.md` are not listed in field 10 either: the step that reaches that branch reads the file again. The hook collects every `rule: <absolute path>` line in
-    the whole ledger, so no other field starts a line with `rule:`.
+8. **Reconciliation table**: the state file's path (`state.mjs show`; one row per ticket with its stage, assignment
+   record, counts and merge SHAs).
+9. **Run metrics and budget**:
+   - **Limits**: one `budget: <name> <integer>` line each, written with the defaults when the ledger is created and
+     added when taking over a ledger without them: `budget: spawns 200`, `budget: rounds 40` (dispatch points, not
+     review or fix rounds), `budget: hours 12`, `budget: no-progress 3`. `spawns` and `rounds` are rewritten per
+     section 4 once the ticket count is known.
+   - **Stage time limits**: the same format, in minutes: `budget: timeout-implement 30`, `budget: timeout-fix 20`
+     (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`.
+   - **Usage and the stop reason** are the state's `usage` and `stop`. The spawn count comes from
+     `<run>.counters.json`, which the hook writes; read it, never write it. When you ask the user something, add the
+     seconds from sending to the answer to the waiting time with `state.mjs usage --wait`. Token counts are unknown
+     unless the environment itself reports them; never estimate them from time or agent counts.
+   - **Host session**: one `session: <id>` line, the value of the environment variable `CLAUDE_CODE_SESSION_ID` in the
+     host's own shell commands (read with `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"`). Written
+     when the ledger is created; re-read when taking over a ledger and at every resume (not at a `/loop` wake-up), and
+     rewritten when it differs. When no value can be read, leave the line out.
+10. **Rule files**: every rule file the host reads in for this run and must follow throughout, one
+    `rule: <absolute path>` line each, filled in when the ledger is created; when taking over a ledger, add the missing
+    ones. The `SKILL.md` loaded through the Skill tool is listed too: compaction re-attaches only its first 5,000
+    tokens. Files read only at one step (brief templates, `get-to-work`'s `RED-LIGHT.md`, `TIMEOUTS.md`,
+    `SEND-BACK.md`, `FINISH.md`) are not listed: the step that uses them reads them anyway.
 
-When the common directory is not writable, or the current directory is not inside a git repo, there is no ledger —
-the final report becomes the source of truth; say so in the report, and do not stop over it. Write the ledger
-current at the end of every step and every `get-to-work` wake-up.
+The plugin's hooks read every `budget:` and `rule:` line of the whole ledger and its first `session:` line, so no other
+field starts a line with those words.
 
-**Resuming:** after a compaction, a `/loop` wake-up, or any other resuming, the first action is to re-read the
-ledger, then every rule file its field 10 lists, in full, and only then follow field 1 — never infer from a summary
-in context. After a compaction the plugin's SessionStart hook prints the in-progress ledger and its rule file paths
-into context; the rule applies whether or not that reminder appears.
+When the common directory is not writable, or the current directory is not inside a git repo, there is no
+ledger — the final report becomes the source of truth instead, said so in the report, and work does not stop for it.
+Bring it up to date at the end of every step and at the end of every `get-to-work` wake-up.
 
-**The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
-and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
-when it needs detail, it pulls just those lines with a command. Review is hosted by the review host agent spawned at
-close-out, and the host takes only its review report of six lines at most (`get-to-work/REVIEWER.md`); the reports of
-`prove-it`'s finders, verifiers and Fix Verifiers stay with the review host agent, their fields and line counts in
-`prove-it`'s own rules. A task the host hands a subagent is bounded by that
-subagent's brief: a check the brief does not name becomes a raw ticket for a later run.
+**Resuming**: after a compaction, a `/loop` wake-up, or any resume, the first action is to re-read the ledger, then
+re-read in full every rule file field 10 lists, and only then follow field 1, never inferring from a summary in
+context. After a compaction, the plugin's SessionStart hook prints the active ledger and its rule-file paths into
+context; this rule applies whether or not that notice appears.
 
-Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
-"none", field 9 has the four `budget:` limits, the four stage time limits, current usage and, when a session id
-can be read, a `session:` line matching the current session, and field 10 has listed the rule files' absolute
-paths since creation; resuming always starts by re-reading the ledger and the rule files it lists; where there is
-no common directory, the report says the source of truth moved to it; the host's context holds no raw diffs, test
-logs, or agent reports.
+**The host's context has a budget.** Diffs, test logs, agent reports and full ticket text stay with subagents and in
+files; the host takes fixed-format summaries (at most fifteen lines) and evidence paths, and fetches just the lines
+it needs by command when it needs detail. Reviews are hosted by the review host agent spawned at close-out; the host
+takes only its review report of at most six lines (`get-to-work/REVIEWER.md`); the reports of `prove-it`'s finders,
+verifiers and Fix Verifier stay with the review host agent. What the host hands a subagent is bounded by its
+brief: a check the brief does not name becomes a raw ticket for the next run if it should be done.
+
+Done when: a `get-to-work` run ran `state.mjs check <state> ledger --ledger <path>` after the freeze and again after the
+ended marker (with `--ended`), and it passed; the first action of every resume was re-reading the ledger and the rule
+files it lists; without a common directory, the final report says it is the source of truth; the host's context holds
+no raw diffs, test logs, or agent reports.

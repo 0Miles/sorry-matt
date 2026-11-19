@@ -1,7 +1,7 @@
 // node --test scripts/tick.test.mjs
 // Replays of get-to-work's wake-ups through tick.mjs. Each test builds a real git repository with a bare origin and
 // an integration worktree, a real state file (state.mjs), and plays the host: it runs every action tick hands out
-// and records each result. Scripts run for real (state, deadline, brief, overlap, git); only the network is canned
+// and records each result. Scripts run for real (state, deadline, brief, overlap, integrate, verify, git); only the network is canned
 // (ci.mjs verdicts, frontier.mjs github, acceptance.mjs github, gh). The expected values are the pipeline's rules
 // as SKILL.md states them, written here by hand.
 import { test } from 'node:test';
@@ -15,6 +15,8 @@ import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
+import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
+import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 
 const REPO = 'o/r';
@@ -40,7 +42,10 @@ function world(t, { profile = null } = {}) {
   git(dir, 'init', '-q', '-b', 'main', repo);
   git(repo, 'config', 'commit.gpgsign', 'false');
   git(repo, 'config', 'core.autocrlf', 'false');
+  git(repo, 'config', 'user.name', 't'); // integrate.mjs commits with the repository's identity
+  git(repo, 'config', 'user.email', 't@t');
   write(join(repo, 'README.md'), 'hello\n');
+  write(join(repo, 'docs', 'agents', 'commands.md'), '# Commands\n\n## Full checks\n\n```bash\nnode -e "process.exit(0)"\n```\n');
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'remote', 'add', 'origin', origin);
@@ -53,6 +58,7 @@ function world(t, { profile = null } = {}) {
   const W = join(runs, 'r1');
 
   const h = {
+    line: profile?.integrate === 'direct' ? 'main' : LINE, // integrate: direct merges into the base branch itself
     dir,
     repo,
     intWt,
@@ -82,8 +88,8 @@ function world(t, { profile = null } = {}) {
   h.tick = (...args) => tick([...args, '--now', h.iso()]);
 
   h.S('init', '--run', 'r1');
-  h.S('add', '#1', '#2', '--line', LINE);
-  h.S('line', LINE, '--tip', git(intWt, 'rev-parse', 'HEAD'));
+  h.S('add', '#1', '#2', '--line', h.line);
+  h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
   if (profile) h.S('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
   write(join(W, 'files', '1.txt'), 'a.txt\n');
   write(join(W, 'files', '2.txt'), 'b.txt\n');
@@ -139,7 +145,9 @@ function world(t, { profile = null } = {}) {
       const script = basename(args[0]);
       const rest = args.slice(1);
       let r;
-      if (script === 'state.mjs') r = stateMain([...rest, '--now', h.iso()]);
+      if (script === 'state.mjs') r = stateMain(rest[0] === 'check' ? rest : [...rest, '--now', h.iso()]);
+      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()]);
+      else if (script === 'verify.mjs') r = verifyMain([...rest, '--now', h.iso()]);
       else if (script === 'deadline.mjs') r = deadlineMain(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
       else if (script === 'brief.mjs') r = briefMain(rest);
       else if (script === 'overlap.mjs') r = overlapMain(rest);
@@ -232,6 +240,7 @@ function world(t, { profile = null } = {}) {
         h.record(a.id, '--exit', String(code));
       } else if (a.kind === 'spawn') {
         const r = h.spawn(a);
+        if (h.crashAfter?.(a)) throw new Crash(a.id);
         if (Array.isArray(r)) h.record(a.id, ...r);
         else {
           h.record(a.id, ...r.flags);
@@ -429,7 +438,12 @@ test('a red line is read every wake-up; its result comes a wake-up late; green r
 test('merged but not recorded: the resumed host follows git and does not merge again', (t) => {
   const h = world(t);
   h.wake();
-  h.crashAfter = (a) => a.step === 'merge';
+  // the host is interrupted inside integrate.mjs merge, after git merged and before anything was recorded
+  h.crashAfter = (a) => {
+    if (a.step !== 'stage' || a.argv[4] !== 'integrating') return false;
+    git(h.intWt, 'merge', '--no-ff', '--no-edit', h.state().tickets[a.tickets[0]].branch);
+    return true;
+  };
   assert.throws(() => h.wake(), Crash);
   h.crashAfter = null;
   const merged = git(h.intWt, 'rev-parse', 'HEAD');
@@ -439,12 +453,11 @@ test('merged but not recorded: the resumed host follows git and does not merge a
   // resume: nothing but the state file, the ledger and git
   const r = JSON.parse(h.tick('next', h.path).out);
   assert.deepEqual(r.reconcile.find((x) => x.ticket === id), { ticket: id, state: 'integrating, no merge SHA recorded', git: `merged into ${LINE} at ${merged}`, follow: 'git' });
-  assert.ok(!r.actions.some((a) => a.step === 'merge'), 'no second merge');
-  const rec = r.actions.find((a) => a.step === 'merge-record');
-  assert.deepEqual(rec.argv.slice(-2), [id, merged]);
-  assert.ok(r.actions.some((a) => a.step === 'push'));
-  assert.ok(r.actions.some((a) => a.step === 'cleanup'));
+  const merges = r.actions.filter((a) => a.step === 'merge');
+  assert.deepEqual(ids(merges), [`merge:${id}:@${merged.slice(0, 12)}`], 'integrate.mjs merge once more, to finish what is left');
   h.run(r.actions);
+  const out = JSON.parse(readFileSync(merges[0].stdout, 'utf8'));
+  assert.deepEqual([out.found, out.merge], ['git', merged], 'it found the merge git has; it did not merge again');
   h.wake({ reported: [] });
   const after = h.state();
   assert.equal(after.tickets[id].stage, 'delivered');
@@ -492,7 +505,11 @@ test('a merge that conflicts goes to a merge agent with a time limit, then on th
   h.wake();
   h.work = work;
   h.policy['merge-agent'] = (a) => {
+    // N1: integrate.mjs aborted the conflict, so the merge agent finds a clean worktree and merges again itself
+    assert.throws(() => git(h.intWt, 'rev-parse', '-q', '--verify', 'MERGE_HEAD'), 'no merge left in progress');
+    assert.equal(git(h.intWt, 'status', '--porcelain', '--untracked-files=no'), '');
     const agent = `a${++h.agents}`;
+    assert.throws(() => git(h.intWt, 'merge', '--no-ff', '--no-edit', h.state().tickets[a.tickets[0]].branch));
     write(join(h.intWt, 'same.txt'), 'both\n');
     git(h.intWt, 'add', '-A');
     git(h.intWt, 'commit', '-q', '--no-edit');
@@ -504,6 +521,10 @@ test('a merge that conflicts goes to a merge agent with a time limit, then on th
   const conflicted = a2.find((a) => a.step === 'merge-agent');
   assert.ok(conflicted, 'the conflict goes to a merge agent');
   const [id] = conflicted.tickets;
+  const merge = a2.find((a) => a.step === 'merge' && a.tickets[0] === id);
+  assert.ok(merge.okExit.includes(4), 'integrate.mjs merge exits 4 on a conflict, which is not a failure');
+  assert.deepEqual(JSON.parse(readFileSync(merge.stdout, 'utf8')).files, ['same.txt']);
+  assert.match(conflicted.do, /same\.txt/, 'the merge agent is told which files conflict');
   assert.ok(a2.some((a) => a.id === `rec:${id}:2` && a.argv.includes('--limit') && a.argv[a.argv.indexOf('--limit') + 1] === '15'), 'the merge stage time limit');
   assert.match(conflicted.do, new RegExp(`merge ${id}`));
   assert.equal(stage(h, id), 'integrating');
@@ -513,6 +534,46 @@ test('a merge that conflicts goes to a merge agent with a time limit, then on th
   assert.equal(stage(h, id), 'delivered');
   const sha = h.state().tickets[id].merges[0].sha;
   assert.equal(git(h.intWt, 'rev-list', '--parents', '-n', '1', sha).split(' ').length, 3, 'one merge commit, two parents');
+});
+
+test('N3: a spawn interrupted before its record comes back as a check, not as a second spawn', (t) => {
+  const h = world(t);
+  let crashed = null;
+  h.crashAfter = (a) => a.kind === 'spawn' && !crashed && (crashed = a);
+  assert.throws(() => h.wake(), Crash);
+  h.crashAfter = null;
+  const started = `a${h.agents}`; // the agent the interrupted spawn did start
+  const [id] = crashed.tickets;
+  const other = id === '#1' ? '#2' : '#1';
+  const r = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(!r.actions.some((a) => a.kind === 'spawn'), 'no blind second spawn');
+  const checks = r.actions.filter((a) => a.step === 'spawn-check');
+  assert.deepEqual(checks.map((a) => a.meta.of).sort(), [`spawn:${id}:1`, `spawn:${other}:1`].sort());
+  assert.ok(checks.every((a) => a.kind === 'judge' && a.outcomes.join() === 'spawned,none'));
+  // the interrupted one was spawned: its agent fills the assignment
+  h.record(checks.find((a) => a.meta.of === crashed.id).id, '--outcome', 'spawned', '--agent', started);
+  assert.equal(h.state().tickets[id].assignment.agentId, started);
+  // the other one never went out: none issues the spawn again, once
+  h.record(checks.find((a) => a.meta.of !== crashed.id).id, '--outcome', 'none');
+  const r2 = JSON.parse(h.tick('next', h.path).out);
+  assert.deepEqual(ids(r2.actions.filter((a) => a.kind === 'spawn')), [`spawn:${other}:1`]);
+  assert.ok(!r2.actions.some((a) => a.step === 'spawn-check'));
+});
+
+test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
+  const h = world(t);
+  git(h.repo, 'remote', 'remove', 'origin');
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const verifies = h.log.filter((a) => a.step === 'verify-local');
+  assert.ok(verifies.length >= 2, 'the first dispatch point and the one after the integrations');
+  assert.ok(verifies.every((a) => a.kind === 'exec' && a.argv[a.argv.indexOf('--reason') + 1] === 'no-origin'));
+  const tip = git(h.intWt, 'rev-parse', 'HEAD');
+  const L = h.state().lines[LINE];
+  assert.ok(L.local.some((x) => x.sha === tip && x.result === 'green'), 'the latest SHA has its per-SHA record');
+  assert.equal(new Set(L.local.map((x) => x.sha)).size, L.local.length, 'one record per SHA');
+  assert.ok(!h.log.some((a) => ['ci-read', 'push'].includes(a.step)), 'nothing reads CI or pushes');
+  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
 });
 
 test('a failed command comes back as a judge; retry issues it again', (t) => {
@@ -570,6 +631,7 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
     'ci-record',
     'collect:expanding',
     'deliver-line', // integrate: direct (no aggregate PR) …
+    'gate', // … no finish gate (its assertions assume aggregate PRs and a CI read) …
     'review:initial', // review: minimal (no prove-it judge) …
     'review:recheck', // … and recheck: false
     'simplify', // simplify: false
@@ -579,11 +641,13 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
   ]);
   assert.deepEqual(only(relaxed, strict), [
     'file-issue', // onUnfixed: file-issue
+    'push', // integrate: direct (the base branch is pushed by the host, so the guard hook sees it)
     'spawn:general-purpose:review', // review: minimal
   ]);
   // integrate: direct merged into the base branch itself; the default into the line
   assert.equal(git(relaxed.h.repo, 'rev-list', '--first-parent', '--merges', '--count', 'main'), '2');
   assert.equal(git(strict.h.repo, 'rev-list', '--first-parent', '--merges', '--count', 'main'), '0');
+  assert.equal(git(relaxed.h.repo, 'rev-parse', 'origin/main'), git(relaxed.h.repo, 'rev-parse', 'main'), 'the host pushed the base branch');
   assert.equal(relaxed.h.state().tickets['#1'].unfixedIssue, '#99');
 });
 

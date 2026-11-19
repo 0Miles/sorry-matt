@@ -1,10 +1,11 @@
 # REVIEWER: the review host agent's brief
 
-At close-out (`SKILL.md` close-out steps 2 and 3) the host fills in the `{…}` placeholders and spawns one review host
-agent **in the foreground** with the full text below the rule as its prompt, adding no rules: `subagent_type` is the
-general-purpose agent, and the Agent tool's `description` is `review` followed by the ticket's identifier. This file
-is self-contained on purpose. The input list changes together with `prove-it` section 1, and the report format with
-the review report at the end of `prove-it` section 6 and with close-out steps 2 and 3.
+At close-out (`SKILL.md` section 2, "Close-out checks and review", tick's `review` action) the host fills in the `{…}`
+placeholders and spawns one review host agent **in the foreground** with the full text below the rule as its prompt,
+adding no rules: `subagent_type` is the general-purpose agent, and the `description` takes the role word `review` from
+the header of `brief.mjs`. This file is self-contained on purpose. The input list changes together with `prove-it`
+section 1, and the report format with the review report at the end of `prove-it` section 6 and with that part of
+`SKILL.md`.
 
 ---
 

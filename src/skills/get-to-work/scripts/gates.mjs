@@ -50,7 +50,8 @@
 //     stage              the ticket is delivered.
 //     branch-recorded, one-merge, no-ff, on-line, tip-recorded   (as in merged)
 //     pushed             with an `origin` remote, `origin`'s branch is the line's local tip (`git ls-remote`).
-//     cleaned            the ticket branch is gone locally and no worktree is on it or at its recorded worktree.
+//     cleaned            the ticket branch is gone locally and no worktree is on it or at its recorded worktree (an
+//                        integration worktree, recorded for a merge agent, excepted).
 //   wake-end                   A wake-up is done.
 //     pushed             (as in integrated, for every line with a recorded merge or already on `origin`: a line
 //                        is first pushed at its first integration)
@@ -246,7 +247,8 @@ function cleaned(r, g, state, ids) {
     if (t.branch === null) continue;
     if (g.head(t.branch) !== null) fail(id, `the local ticket branch ${t.branch} still exists; remove it`);
     for (const w of g.worktrees()) {
-      if (w.branch === t.branch || (t.assignment?.worktree && samePath(w.path, t.assignment.worktree))) {
+      // a merge agent's assignment records the integration worktree, which is the line's, not the ticket's
+      if (w.branch === t.branch || (t.assignment?.worktree && samePath(w.path, t.assignment.worktree) && !(w.branch in state.lines))) {
         fail(id, `a worktree is still there: ${w.path}; remove it`);
       }
     }
