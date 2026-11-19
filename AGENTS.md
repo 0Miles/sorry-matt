@@ -18,6 +18,8 @@
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
 - `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
   含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
+- `agents/*.md` — plugin 自帶的 agent 定義檔(frontmatter 帶模型與工具限制,如展開 agent 的
+  `agents/expander.md`);不分 src/dist,以英文撰寫
 - `scripts/` — repo 檢查腳本(src/dist 結構對帳、vendored SHA-256)與它們的測試,
   由 `.github/workflows/check.yml` 在 PR 上執行
 - `docs/matt-skills.md` — 用到的每個 matt skill 的決定(原樣使用/自有流程取代/只傳參數)與理由
@@ -344,6 +346,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 決定下一步 | decide what comes next |
 | 目標(`make-the-ui-fast` 回報項) | target |
 | 畫面確認 | UI check |
+| agent 定義檔 | agent definition file |
+| 通用 agent | general-purpose agent |
+| 指令輸出 | command output |
+| 結尾摘要 | closing summary |
 
 ## 外部語義來源
 

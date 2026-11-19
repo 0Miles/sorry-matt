@@ -53,6 +53,13 @@ all the rules you follow, and none of them points at a file or section you canno
 - One slice at a time: write one failing test, then just enough code to pass it, and repeat.
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
   relevant lint. The full suite is CI's job once the host integrates the ticket.
+- **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
+  the closing summary into context; when everything is green, keep only the summary line. To keep the full output,
+  redirect it to a file that sits outside the ticket worktree or is never committed, and give only its path in the
+  report and the status record. When the failing lines alone do not show the cause, you may read the lines around
+  that failure, never the whole output. Pass or fail is the command's own exit status, taken before any
+  filtering — behind a pipe, what you get is the filter's exit status; the absence of failing lines or of a summary
+  does not mean green.
 - Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
   independent review and mutation once during close-out; reviewing code you just wrote is not independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,

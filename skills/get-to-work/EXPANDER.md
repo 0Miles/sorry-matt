@@ -1,7 +1,10 @@
 # EXPANDER: the expansion agent's brief
 
 At a dispatch point the host fills in the `{…}` placeholders and hands everything below the rule to the expansion
-agent as its prompt. This file is self-contained on purpose. Where its rules for answering on the user's behalf
+agent as its prompt. This file is self-contained on purpose. It is run by the agent defined in
+`agents/expander.md` at the repo root (`sorry-matt:expander`; that definition file sets the model and the tools);
+change the two together: when the tools this file needs change, the definition's `tools:` changes with them. Where
+its rules for answering on the user's behalf
 overlap `IMPLEMENTER.md` section 3 or `ASKING.md` section 3, change them together; change the expansion block
 format together with the header of `scripts/acceptance.mjs`, `IMPLEMENTER.md` section 1, and `prove-it` section 1;
 change how criteria are written together with the ticket templates in

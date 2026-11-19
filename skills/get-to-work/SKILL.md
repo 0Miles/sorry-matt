@@ -312,7 +312,7 @@ is before it is **overdue**. For each overdue agent:
      stopped for running over its time limit, its commits and uncommitted changes are left for the new agent to
      judge whether to build on, and an existing status record is taken over and updated in place; for fixing, also
      attach that round's findings. For expanding, give the tickets it covered that still have no expansion block to a
-     new expansion agent. A reassignment is a new assignment: record it as above, replace the agent id in the
+     new expansion agent, spawned the way step 1 of dispatch says, not by a second set of rules. A reassignment is a new assignment: record it as above, replace the agent id in the
      reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
      blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
    - **This stage was already reassigned for a timeout** → for implementing and fixing, **mark it stuck**, giving the
@@ -397,7 +397,10 @@ candidate, in order:
    a ticket whose full expansion was deferred until it reached the frontier) go to an **expansion agent**: read
    the sibling [`EXPANDER.md`](EXPANDER.md), fill its placeholders with every such ticket at this dispatch point, and
    spawn one expansion agent in the background with the filled-in text as its prompt, adding no rules of your own.
-   It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
+   The Agent tool's `subagent_type` is `sorry-matt:expander` — the plugin's agent definition file
+   `agents/expander.md`, which sets the expansion agent's model and tools, so the host specifies neither. When that
+   agent type is not in the available list, use a general-purpose agent instead, with no model specified and the
+   same prompt. It writes an expansion block on the tracker stating `by`, `run` and `round`, where `round` is this dispatch
    point's number (field 9). These tickets move to the expanding stage and go no further at this dispatch point, so
    the next dispatch point does not spawn an expansion for them again. The expansion agent's report triggers a
    dispatch point, where they return to candidate and re-run the script from this step; a ticket still true, or

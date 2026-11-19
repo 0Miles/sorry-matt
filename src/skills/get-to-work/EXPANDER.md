@@ -1,6 +1,8 @@
 # EXPANDER：展開 agent 的交付說明
 
 主持人在派票點填好 `{…}` 佔位，把分隔線以下的全文作為 prompt 交給展開 agent。本檔刻意自足。
+執行它的是 repo 根目錄 `agents/expander.md` 定義的 agent（`sorry-matt:expander`，模型與可用工具由那個定義檔定）；
+兩者要一起改：本檔用到的工具變了，定義檔的 `tools:` 跟著改。
 代答規則與 `IMPLEMENTER.md` 第 3 節、`ASKING.md` 第 3 節重疊處要一起改；展開區塊的格式與
 `scripts/acceptance.mjs` 檔頭、`IMPLEMENTER.md` 第 1 節、`prove-it` 第 1 節要一起改；驗收項的寫法與
 [`../take-this/TEMPLATES.md`](../take-this/TEMPLATES.md) 的票模板要一起改。
