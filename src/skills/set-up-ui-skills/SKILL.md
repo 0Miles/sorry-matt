@@ -58,9 +58,8 @@ disable-model-invocation: true
 - 偵測到一套 → 照證據記，不問。這一條只適用於單一 package 的專案，或每個前端 package 都用同一套的
   monorepo；這兩種情況都不寫「適用範圍」。
 - 前端 package 的元件庫不全相同（含有的 package 沒有元件庫）→ 不問；每套現役元件庫各記一條並附
-  「適用範圍」（package 路徑），沒有元件庫的 package 記一條「無」並附「適用範圍」。現役元件庫相同
-  （或同樣沒有）、且「既有、不再新用」的標記也相同的 package 才合成一條，「適用範圍」列出這些 package
-  的路徑；標記不同的各自一條。
+  「適用範圍」（package 路徑），沒有元件庫的 package 記一條「無」並附「適用範圍」。哪些 package
+  合成一條，照 `UI-TEMPLATE.md`「元件庫」段的合併規則。
 - 同一個 package 裡偵測到兩套以上 → 問該 package 的新程式碼用哪套。建議答案：有限制 import 的 lint
   規則或遷移註記時取它指向的那套，否則取 import 次數多的那套。其餘記為「既有、不再新用」——這個標記
   只用於這種情況。

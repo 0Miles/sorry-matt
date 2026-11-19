@@ -24,7 +24,7 @@ triggered only once. There is one exception: when a step replaces a hand-rolled 
 bypasses the component library with a library component or a shared component, a key the target component brings
 with it and the original did not have is recorded as "same (component adds <key>)", and counts as "same". A key
 that used to trigger the action and no longer does after the replacement, or one key firing more than once, is
-still not the same. An action that was not migrated stays at "the same keys, triggered only once". What may
+still not the same. What may
 change is structure, hierarchy, semantic markup, styling, and the filling-in of missing states. A functional defect found along the way is recorded as a finding and handed back in the report
 for a separate change.
 

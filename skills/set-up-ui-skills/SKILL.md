@@ -69,9 +69,8 @@ dependencies and imports.
   to a monorepo where every frontend package uses the same one; neither case writes a "Scope" line.
 - The frontend packages' libraries are not all the same (a package with no library counts) → do not ask; every
   active library is recorded as its own entry with a "Scope" line (the package path), and the packages with no
-  library get one "none" entry with a "Scope" line. Only packages with the same active library (or equally
-  none) and the same "Existing, not for new use" marking merge into one entry, whose "Scope" line lists those
-  packages' paths; packages whose marking differs each get their own entry.
+  library get one "none" entry with a "Scope" line. Which packages merge into one entry follows the merge
+  rule for the "Component library" section in `UI-TEMPLATE.md`.
 - Two or more detected in the same package → ask which one that package's new code uses. Recommended answer: the
   one a lint rule restricting imports or a migration note points to; otherwise the one with more imports. Record
   the others as "existing, not for new use" — that label is for this case only.

@@ -75,7 +75,7 @@ components` line all mean the entry chosen for that file.
 When the `Bundled skill` field of the `Component library` section names a skill, call the Skill tool with the
 bundled skill recorded in `ui.md` before starting — only when this conversation has not loaded it yet; once it
 is loaded, go on with it and do not call it again. When the `Component library` section has several entries,
-call only the bundled skills recorded on the entries the prerequisite chose, and none from the others. When it is
+call only the bundled skills recorded on the entries the prerequisite chose. When it is
 missing from the available skills, finish the work under this contract and name it once in the report.
 
 ### 3. Read the API before using it
@@ -147,7 +147,7 @@ A **hard-coded value** is a literal value that meets all three of these:
 - It is written in the project's own styles: a call site, a project stylesheet, or the source of a shared
   component, a page-local component, or a component newly built in this change.
 - It is a color, spacing, radius, or font value.
-- The `Tokens` section of `ui.md` (the entry chosen for that file) is not "None", and it already has a
+- The `Tokens` section of `ui.md` is not "None", and it already has a
   **matching token**: one with the same value, or a token that already exists for the same purpose.
 
 "The same purpose" means only a token whose role (where this token is used) the `Tokens` section states, and
@@ -182,8 +182,7 @@ Before building a new component, always meet the first two:
 
 A new component that two or more pages or features will use also meets the other two:
 
-- Put it where the `New shared components` line of the `Conventions` section (the entry chosen for that file)
-  says.
+- Put it where the `New shared components` line of the `Conventions` section says.
 - Add what that same line requires, such as a barrel export, types, or a story.
 
 A new component used on a single page sits beside that page, stays out of `ui.md`, and is not bound by the last

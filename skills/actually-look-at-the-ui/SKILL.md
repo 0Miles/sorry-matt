@@ -68,8 +68,8 @@ viewport width, device pixel ratio, theme.
 When that cannot be done, check every claim other than claim (b) against source and tests as far as those hold,
 and mark them all unverified; claim (a) is likewise always marked unverified with a reason, and having read the
 source does not mark it passed. Claim (b) is a source check to begin with: judge it pass or fail as step 3 says,
-fix its failures under step 4; step 3's `var()` resolution check needs a browser, so skip it here and write
-"`var()` resolution not checked" once in the report. Then go to step 5.
+fix its failures under step 4; step 3's `var()` resolution check needs a browser, so skip it here. Then go to
+step 5.
 
 Done when: the UI is open in a browser with the viewing conditions recorded, or the reason it could not be is
 recorded.
