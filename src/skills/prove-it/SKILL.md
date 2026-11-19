@@ -256,10 +256,12 @@ restored: yes | no
 沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
 觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
 
-該輪沒有跑突變時，`mutation` 那段只寫一行、不列 mutant，`restored` 照寫：
+該輪沒有跑突變時，`mutation` 那段只寫一行、不列 mutant：
 
 - 沒有可執行的行：`mutation (round <n>): skipped: no executable lines`
 - 實跑紅燈：`mutation (round <n>): skipped: red baseline`
+
+這兩種情況 `restored` 都照寫，值是 `restored: yes`：沒有檔案被改過，等同已還原。
 
 有第二位 reviewer 時，每位各一段 `reviewer:`，finding 分開列、不合併
 重排；`verdict` 以全部 reviewer 的 finding 推得。

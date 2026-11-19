@@ -299,11 +299,13 @@ An empty list is written `none`. An `acceptance` finding's location is the accep
 `file:line`. A spec-level observation is marked `(spec-level)` at the end of its sentence, before
 `(evidence: …)`.
 
-When a round runs no mutation, its `mutation` section is a single line with no mutant list, and `restored` is still
-written:
+When a round runs no mutation, its `mutation` section is a single line with no mutant list:
 
 - No executable lines: `mutation (round <n>): skipped: no executable lines`
 - Red live run: `mutation (round <n>): skipped: red baseline`
+
+In both cases `restored` is still written, and its value is `restored: yes`: no file was changed, which is the same
+as restored.
 
 With a second reviewer, each gets its own `reviewer:` section, and findings stay separate, never merged
 or reranked; `verdict` follows from every reviewer's findings.
