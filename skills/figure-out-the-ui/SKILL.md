@@ -13,7 +13,8 @@ this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
 **precedence**, **component reuse**, **page-local component**, **new-component bar**, and **state matrix** below.
 
-Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop, produce
+Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
+when it does not exist, stop, produce
 no UI brief, and ask the user to run `/set-up-ui-skills`. This skill only reads `ui.md`: when it finds `ui.md`
 and the source disagreeing, it proceeds on the source and writes the mismatch into the brief's assumptions part.
 

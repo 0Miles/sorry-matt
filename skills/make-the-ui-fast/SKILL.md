@@ -11,9 +11,10 @@ stays has before-and-after numbers.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**precedence**, **component reuse**, and **browser support policy** below.
+**precedence**, **component reuse**, **internal path**, and **browser support policy** below.
 
-Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop before
+Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
+when it does not exist, stop before
 step 1: measure no baseline, change no code, and ask the user to run `/set-up-ui-skills` (running as a subagent,
 put that in the report as the prerequisite says).
 
@@ -46,7 +47,8 @@ Use the measured data to point at one bottleneck, written as a hypothesis that c
 
 A bottleneck already recorded as a component library finding is not taken up again as a new hypothesis. When
 every remaining bottleneck hypothesis is a component library finding, follow the **loop stop** of step 5 and
-look for no next one.
+look for no next one. When no new hypothesis can be found and there is no component library finding either,
+follow the "hypotheses exhausted" branch of step 5 to a **loop stop**.
 
 Done when: the hypothesis points to one piece of evidence in the measured data and states what result would
 overturn it; or the **loop stop** has led on to step 6.
@@ -61,16 +63,14 @@ When the bottleneck involves the component library, first sort out where its cos
 - It comes from how the project loads or uses the library (a barrel import, loading the whole package, providers
   or styles it does not use), and the library has a **public alternative**: this is one change inside the
   project. Switch to that alternative, and update the `Loading` line of the `Component library` section in
-  `ui.md` in the same diff. A public alternative is a subpath listed in the `exports` of the package's
-  `package.json`, or an approach the library's documentation describes; when the package has no `exports` field,
-  only paths the documentation names count, and a deep path the documentation does not mention is an internal
-  path.
+  `ui.md` in the same diff. A public alternative is an import path that is not an **internal path**, or an approach
+  the library's documentation describes.
 - There is no public alternative, and the cost sits in the library's own code: record it as a component library
   finding as the next paragraph says, and leave the diff untouched.
 
 When the bottleneck sits in the component library package's own code (the project's shared components do not
-count), record it as a component library finding and do not fork in place: no edits to `node_modules`, no
-patch, no copying a library component into the project, no importing the library's internal paths. There is
+count), record it as a component library finding and do not fork in place: do none of the
+**package-level** prohibitions of **component reuse**. There is
 then no change to measure: skip the measuring in step 5 and go straight to its "Decide what comes next".
 
 Done when: the diff holds one change aimed at this bottleneck, traceable to consulted guidance or to a piece of
@@ -91,9 +91,12 @@ Decide what comes next:
   the next bottleneck.
 - Target unmet, and every remaining bottleneck hypothesis is a component library finding: **loop stop**. Do not
   return to step 3; go to step 6, and the step 7 report states that the target was not met.
+- Target unmet, and no bottleneck hypothesis is left at all (none waiting to be tried, and no component library
+  finding): the hypotheses are exhausted — **loop stop**. Do not return to step 3; go to step 6, and the step 7
+  report states that the target was not met and lists the overturned hypotheses.
 
 Done when: every attempted change has before-and-after medians and a verdict of "kept" or "reverted"; the
-working tree holds only the kept changes; what comes next was decided as one of the three above.
+working tree holds only the kept changes; what comes next was decided as one of the four above.
 
 ## 6. Confirm the UI still works
 
@@ -108,7 +111,8 @@ change, the report states "no change was kept; `actually-look-at-the-ui` was not
 ## 7. Report
 
 - **Target**: met; or a statement that the target was not met, listing the remaining bottlenecks and the
-  component library finding each maps to.
+  component library finding each maps to. When the hypotheses are exhausted, list the overturned hypotheses
+  instead and write "none" for the remaining bottlenecks.
 - **Before-and-after table**: `metric | baseline median | current median | noise range | target`.
 - **Change list**: every kept and reverted change, each with its bottleneck and its numbers.
 - **Component library findings**: `package and version | bottleneck and measured evidence | why not changed in
@@ -123,5 +127,6 @@ change, the report states "no change was kept; `actually-look-at-the-ui` was not
 
 Done when: every "current" number in the table comes from the last measurement in step 5; every kept change
 maps to an improvement in the table; an unmet target is stated, with the remaining bottlenecks and their
-component library findings listed; `ui.md` matches this change, or is explicitly recorded as needing no update;
+component library findings listed — or, when the hypotheses are exhausted, with the overturned hypotheses
+listed and "none" for the remaining bottlenecks; `ui.md` matches this change, or is explicitly recorded as needing no update;
 the `ui.md` mismatches are listed one by one, or stated as "none".

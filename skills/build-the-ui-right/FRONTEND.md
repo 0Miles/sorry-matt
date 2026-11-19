@@ -42,17 +42,41 @@ every time. When the project uses no ready-made component library (the `Componen
 
 ### 1. Prerequisite
 
-Before starting, read `docs/agents/ui.md`. When it does not exist, stop here: write no code, produce no UI brief
+Before starting, check on `docs/agents/ui.md`: read it in full only when this conversation has not read it yet,
+or when it has been changed since it was read; otherwise go on with what was already read and do not read it
+again. "Read" counts only the full text you yourself read in this conversation: someone else's retelling, a
+summary (the one a compacted conversation leaves behind included), or a read done by a parent conversation does
+not count. "Changed" does not depend on who changed it: after you edit it yourself in this conversation, read it
+once more the next time you need it. When it does not exist, stop here: write no code, produce no UI brief
 or other deliverable, and do not create `ui.md` yourself; ask the user to run `/set-up-ui-skills`, and continue
 once it exists. Running as a subagent that cannot reach the user, stop the same way and state in the report that
 a human needs to run `/set-up-ui-skills`. Answering a question without producing a deliverable is exempt, but the
 answer mentions once that `ui.md` is missing.
 
+When the `Component library` section has a single entry with no `Scope` line, use that entry. When it has
+several entries, each with a `Scope` line (a monorepo), choose per file: for each file this change touches, take
+the entry whose `Scope` covers that file's path; when several cover it, take the one with the longest path. When
+the change spans two scopes, each file uses its own entry — do not pick one entry for the whole change. A changed
+file that falls inside no `Scope` is handled as if the `Component library` section read "None", and goes into
+the report's **`ui.md` mismatches**. In the steps below, "the component library" means the entry chosen for
+that file.
+
+The same per-file rule applies to the `Tokens` section and to the `New shared components` line of the
+`Conventions` section: when they have several entries, each with a `Scope` line, take the entry whose `Scope`
+covers the file's path, and the one with the longest path when several cover it; a file inside no `Scope` is
+handled as "None" and goes into the report's **`ui.md` mismatches**. While a new component has no path yet, the
+`New shared components` line is chosen by the file that will use it. When the `Shared components` table has a
+`Scope` column, only the rows whose `Scope` covers the file's path are candidates for that file. In the steps
+below and in `actually-look-at-the-ui`, the `Tokens` section, its `Location` line, and the `New shared
+components` line all mean the entry chosen for that file.
+
 ### 2. The bundled skill first
 
 When the `Bundled skill` field of the `Component library` section names a skill, call the Skill tool with the
-bundled skill recorded in `ui.md` before starting. When it is missing
-from the available skills, finish the work under this contract and name it once in the report.
+bundled skill recorded in `ui.md` before starting — only when this conversation has not loaded it yet; once it
+is loaded, go on with it and do not call it again. When the `Component library` section has several entries,
+call only the bundled skills recorded on the entries the prerequisite chose. When it is
+missing from the available skills, finish the work under this contract and name it once in the report.
 
 ### 3. Read the API before using it
 
@@ -66,13 +90,21 @@ Write every UI element as "job → component": match the `Use when` column of th
 and when the job does not fit, look at `Instead`. Candidates come from four sources: components in the `Shared
 components` table, component library components, native HTML elements, and **page-local components** (existing
 components inside the page that only that page uses, and so are not in `ui.md`). When more than one candidate
-fits, write why the other was not chosen. A package the `Component library` section marks `Existing, not for new use`, and a duplicate the
-`Conventions` section marks as not for new use, stay out of new code.
+fits, write why the other was not chosen.
+
+`Existing, not for new use` counts only as marked under the entry chosen for that file: a package marked under
+that entry, and a duplicate the `Conventions` section marks as not for new use, stay out of new code. A package
+marked `Existing, not for new use` under some other entry is used as normal in the files that choose its own
+entry.
 
 ### 5. Customization ladder
 
-When the chosen component does not fit as is, climb from rung 1; stopping at rung N, write why rung N−1 falls
-short:
+Climb the ladder only when the chosen component does not fit as is. When a component's job is laying out its
+own children (`Stack`, `Grid`, for example), using its documented layout props (direction, gap, alignment,
+wrapping) to lay out its own children is "reused", not a climb; a prop of the same name on a component whose job
+is not layout (`gap` on a `Button`, for example) goes on the rung of what it changes.
+
+When climbing, start from rung 1; stopping at rung N, write why rung N−1 falls short:
 
 1. A utility or prop at the call site that changes only the component's **outer layout** there: position,
    margin, width, alignment within its container; the component's own appearance and behavior stay the same.
@@ -89,7 +121,7 @@ component's own appearance is rung 3 — a `size` that changes width along with 
 example: it already changes the component's own appearance, so rung 1's "appearance stays the same" no longer
 holds.
 
-These six are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
+These ten are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
 uses one:
 
 - Overriding a component's internal styles from an outside selector.
@@ -98,15 +130,31 @@ uses one:
 - Copying a component under a new name.
 - Wrapping a component only to rename it, unless the wrapper convention in the `Conventions` section requires it.
 - Hand-writing keyboard, focus, or state behavior the component library or a shared component already has.
+- Editing files in `node_modules`.
+- Patching the component library package.
+- Copying a library component's source into the project.
+- Importing an **internal path** of the component library.
+
+The last four are the **package-level** prohibitions. An **internal path** is a path that neither the `exports`
+of the package's `package.json` nor the library's documentation lists; when the package has no `exports` field,
+only paths the documentation names count, and every deep path the documentation does not mention is an internal
+path.
 
 ### 6. Hard-coded values
 
 A **hard-coded value** is a literal value that meets all three of these:
 
-- It is written in the project's own styles: a call site, a project stylesheet, or a shared component's source.
+- It is written in the project's own styles: a call site, a project stylesheet, or the source of a shared
+  component, a page-local component, or a component newly built in this change.
 - It is a color, spacing, radius, or font value.
-- The `Tokens` section of `ui.md` is not "None", and it already has a **matching token**: one with the same
-  value, or a token that already exists for the same purpose.
+- The `Tokens` section of `ui.md` is not "None", and it already has a
+  **matching token**: one with the same value, or a token that already exists for the same purpose.
+
+"The same purpose" means only a token whose role (where this token is used) the `Tokens` section states, and
+whose role is the same as the literal's use. A role counts only as written in the `Tokens` section: the naming
+rule says the names carry roles, or uses are stated token by token; never infer a role from a token's name. A
+token that is only a step on a scale (`--space-3`, `--gray-500`, for example), with no role stated in the
+`Tokens` section, is not "the same purpose", which leaves "same value" as the only way to match.
 
 None of these is a hard-coded value:
 
@@ -119,8 +167,9 @@ None of these is a hard-coded value:
 
 The verdict comes from the source, not from computed style, and never from comparing computed values with the
 tokens' resolved values: the evidence grade is measured, the evidence is a search command or `file:line`, and no
-browser is needed. There is one fix only: switch to that matching token. Add no new token, and do not switch to an
-outside override or any other prohibition.
+browser is needed. There is one fix only: switch to that matching token — when it matched by "same value", the
+token with the same value; when it matched by "the same purpose" with a different value, the token that states
+that role. Add no new token, and do not switch to an outside override or any other prohibition.
 
 ### 7. New-component bar
 
