@@ -8,6 +8,9 @@
 2. **`extend` → 延長一次**：對帳表該列的到期時間改為輸出的 `deadline`，延長記 `yes`。
 3. **`stop`（沒有進展，或已延長過）→ 停下**：`TaskStop` 這個 agent；它若剛好已經結束，改照喚醒步驟 2「處理已回報的
    agents」收。停下後依下列情況，先符合的為準：
+   - **進度指紋算不出來** —— 這個 agent 是因為再掃一次仍有 `error` 而停下的 → 標**待裁決**，原因寫那個 `error`：
+     worktree 的狀態要人處理。不改派，也不在同一個 worktree 再派送 —— `record` 在那裡同樣會失敗，沒有派送紀錄的
+     派送不成立（`SKILL.md`「時限」）。
    - **原因要人裁** —— 該票接續紀錄的「阻擋」寫了要人做的決定、缺的權限或查不到的事實 → 標**待裁決**，寫出原因。
    - **整併中** → 先查 `git -C <整合 worktree> rev-parse -q --verify MERGE_HEAD`：有輸出就
      `git -C <整合 worktree> merge --abort`；沒有輸出（整併 agent 已經 commit）就

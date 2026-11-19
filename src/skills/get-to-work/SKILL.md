@@ -181,6 +181,11 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<票>=<數>
 - 展開 agent 不在 worktree 裡工作，用第二式：`--expansions` 給它負責的每張票以 `acceptance.mjs` 讀出的
   `expansions` 數，進度指紋就是這組數字。`<票>=<數>` 一律加引號：`#12=0` 不加引號會被 shell 當成註解。
 
+**沒有派送紀錄的派送不成立。** 先跑 `record`，成功了才 spawn 或 SendMessage，再把 agent id 補進那一列 —— 所以
+不會有 agent 在跑而對帳表沒有它的紀錄。`record` 結束代碼不是 0 時 stdout 是空的，不派送：結束代碼 2 是參數寫錯，
+改好再跑；結束代碼 1 是這個 worktree 的進度指紋算不出來，它的狀態要人處理 —— 該票標**待裁決**並寫出 stderr
+（照「派票」觸發派票點），對不到票的紅燈修正則照 `ASKING.md` 第 4 節記進人工作業清單。不換一種方式照樣派送。
+
 agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 agent** 就是到期時間不是 `—` 的 agent。
 
 **時限掃描**：每次喚醒 —— `/loop` 的喚醒、agent 通知、fallback 喚醒都算 —— 在處理完已回報的 agents 之後做。

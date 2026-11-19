@@ -13,6 +13,10 @@ file attached (dispatch, budget and breaker, the wake-up steps, the assignment r
 3. **`stop` (no progress, or already extended) → stop it:** `TaskStop` the agent; if it happens to have finished already,
    close it out under wake-up step 2, "handle the agents that reported", instead. Once stopped, take the first of
    these cases that applies:
+   - **The progress fingerprint cannot be computed** — the agent was stopped because it still had an `error` after
+     the second scan → mark the ticket **awaiting ruling** with that `error` as the reason: the worktree's state
+     needs a person. Do not reassign it, and assign nothing else on the same worktree — `record` fails there the
+     same way, and an assignment with no assignment record does not stand (time limits in `SKILL.md`).
    - **The cause needs a person** — the ticket's status record names, under blockers, a decision for a person, a
      missing permission or a fact that cannot be found → mark it **awaiting ruling** with the cause.
    - **Integrating** → first check `git -C <integration worktree> rev-parse -q --verify MERGE_HEAD`: with output,

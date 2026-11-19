@@ -232,6 +232,14 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<ticket>=<n
   `acceptance.mjs` reads for each ticket it covers, and those numbers are its progress fingerprint. Always quote
   `<ticket>=<n>`: unquoted, a shell reads `#12=0` as a comment.
 
+**An assignment with no assignment record does not stand.** Run `record` first; only when it succeeds, spawn or
+SendMessage, then add the agent id to that row — so no agent ever runs without its record in the reconciliation
+table. When `record` exits non-zero, stdout is empty and you do not assign: exit code 2 is a bad argument, so correct
+it and run again; exit code 1 means this worktree's progress fingerprint cannot be computed, and its state needs a
+person — mark the ticket **awaiting ruling** with stderr as the reason (which triggers a dispatch point per
+"Dispatch"), or, for a red-light fix that maps to no ticket, put it on the human-work list per `ASKING.md`
+section 4. Do not assign the work some other way instead.
+
 Once the agent reports or is stopped, set that row's deadline to `—`. An **agent in flight** is any agent whose
 deadline is not `—`.
 
