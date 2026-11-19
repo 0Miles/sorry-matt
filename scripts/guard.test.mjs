@@ -4,13 +4,15 @@
 // everything else is left to Claude Code's permission settings.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide as decideWith, confirmCommand, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, enterCommand, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
+import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
 
@@ -735,4 +737,247 @@ test('unattended is switched by a file in ~/.claude or by SORRY_MATT_UNATTENDED'
     // Creating the switch is not a Claude settings write.
     assert.equal(bash('touch ~/.claude/sorry-matt-unattended'), null);
   });
+});
+
+// ---------- unattended: the automatic source ----------
+
+const PLUGIN = process.platform === 'win32' ? 'C:\\plugins\\sorry-matt' : '/plugins/sorry-matt';
+const ENTERED = { at: 1_700_000_000_000, reason: '使用者說要去睡了', by: 'agent', session: 's0' };
+const decisionOf = (result) => out(result)?.permissionDecision ?? null;
+const savedState = (home) => JSON.parse(readFileSync(autoStateFile(home), 'utf8'));
+
+test('the automatic state blocks exactly what the switch file blocks, and records no confirmation', () => {
+  const run = (home) => {
+    const store = memoryStore();
+    const deps = { home, store, now: 5, pluginRoot: PLUGIN, detect: () => ({ deploys: true, reason: 'deploy.yml' }) };
+    const token = tokenFor('s1', 'Bash', { command: 'rm -rf ~' });
+    const results = [
+      event('npm publish'),
+      event('gh pr merge 12'),
+      event('rm -rf ~'),
+      event(confirmCommand(PLUGIN, token)),
+      JSON.stringify({ tool_name: 'mcp__slack__send_message', tool_input: { channel: 'C1', text: 'hi' }, session_id: 's1' }),
+    ].map((raw) => out(decideWith(raw, {}, deps)));
+    assert.deepEqual(store.sessions, {}, 'no two-step token was started or approved');
+    assert.equal(decideWith(event('git status'), {}, deps), null);
+    return results.map((r) => [r.permissionDecision, r.permissionDecisionReason.replaceAll(home.replace(/\\/g, '/'), '~'), r.updatedInput]);
+  };
+  withDir((autoHome) => withDir((switchHome) => {
+    autoState(autoHome).enter(ENTERED);
+    mkdirSync(join(switchHome, '.claude'));
+    writeFileSync(unattendedFile(switchHome), '');
+    const auto = run(autoHome);
+    assert.deepEqual(auto.map(([decision]) => decision), ['deny', 'deny', 'deny', 'deny', 'deny']);
+    for (const [, reason] of auto) assert.match(reason, /^sorry-matt guard 無人值守模式：/);
+    assert.match(auto[0][1], /發布版本或部署正式環境/);
+    assert.match(auto[1][1], /會立即觸發正式部署/);
+    assert.match(auto[2][1], /不經資源回收筒/);
+    assert.match(auto[3][1], /兩段確認的第一次確認指令/);
+    assert.deepEqual(auto, run(switchHome));
+  }));
+});
+
+test('with neither source the guard asks as before and writes no state', () => {
+  withDir((home) => {
+    const deps = { home, store: memoryStore(), now: 5 };
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps)), 'ask');
+    assert.match(out(decideWith(event('rm -rf ~'), {}, deps)).permissionDecisionReason, /第一次確認/);
+    assert.equal(decideWith(event('git status'), {}, deps), null);
+    assert.deepEqual(readdirSync(home), [], 'nothing was written under the home directory');
+  });
+});
+
+test('the entry line is allowed without a prompt and puts every session in unattended mode', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now, pluginRoot: PLUGIN });
+    const line = enterCommand(PLUGIN, '使用者說要離開兩小時');
+    assert.equal(line, `node "${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs" "使用者說要離開兩小時"`);
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps(1000))), 'ask');
+
+    const allowed = out(decideWith(event(line), {}, deps(2000)));
+    assert.equal(allowed.permissionDecision, 'allow');
+    assert.equal(allowed.updatedInput, undefined);
+    assert.deepEqual(savedState(home), { entered: { at: 2000, reason: '使用者說要離開兩小時', by: 'agent', session: 's1' }, blocked: [] });
+
+    // The same session and another one: the next call that needs the user is blocked.
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps(3000))), 'deny');
+    assert.equal(decisionOf(decideWith(event('rm -rf ~', { session_id: 's2' }), {}, deps(4000))), 'deny');
+    assert.equal(decideWith(event('git status', { session_id: 's2' }), {}, deps(4500)), null);
+
+    // Entering again changes nothing: the first time and reason stay, and so does the list.
+    for (const again of [line, enterCommand(PLUGIN, '另一個原因')]) {
+      assert.equal(decisionOf(decideWith(event(again, { session_id: 's2', tool_name: 'PowerShell' }), {}, deps(9000))), 'allow');
+    }
+    assert.equal(enter('第三個原因', { state: autoState(home), now: 9500 }).ok, true);
+    const state = savedState(home);
+    assert.deepEqual(state.entered, { at: 2000, reason: '使用者說要離開兩小時', by: 'agent', session: 's1' });
+    assert.deepEqual(state.blocked.map((b) => [b.session, b.at, b.subject]), [['s1', 3000, 'npm publish'], ['s2', 4000, 'rm -rf ~']]);
+  });
+});
+
+test('only the entry line itself, unchanged and alone, is allowed', () => {
+  withDir((home) => {
+    const deps = { home, store: memoryStore(), now: 1, pluginRoot: PLUGIN };
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    const line = enterCommand(PLUGIN, 'away');
+    for (const command of [
+      `${line} && npm publish`,
+      `${line}; echo done`,
+      `echo go && ${line}`,
+      `${line} | cat`,
+      `${line} > out.txt`,
+      `bash -c '${line}'`,
+      `FOO=1 ${line}`,
+      `node --no-warnings "${script}" "away"`,
+      `node "${script}" "away" extra`,
+      `node "${script}"`,
+      `node "${script}" ""`,
+      `node "${script}" away`,
+      `node "${script}" "$(npm publish)"`,
+      `node "${script}" "\`npm publish\`"`,
+      `node "/elsewhere/hooks/enter-unattended.mjs" "away"`,
+      `node "${PLUGIN.replace(/\\/g, '/')}/hooks/confirm-state.mjs" "away"`,
+      `cd "${PLUGIN.replace(/\\/g, '/')}/hooks" && node enter-unattended.mjs "away"`,
+      `node -e "import('${script}')" "away"`,
+    ]) {
+      assert.notEqual(decisionOf(decideWith(event(command), {}, deps)), 'allow', command);
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'none of them entered');
+    // Another spelling of the same file is the same line; either quote holds the reason.
+    assert.equal(decisionOf(decideWith(event(`node "${PLUGIN.replace(/\\/g, '/')}/hooks//enter-unattended.mjs" 'away'`), {}, deps)), 'allow');
+    assert.equal(savedState(home).entered.reason, 'away');
+  });
+});
+
+test('every block while unattended, from either source, is added to the list', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now, pluginRoot: PLUGIN });
+    // The user's source alone: listed, and the automatic state stays off.
+    decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, deps(100));
+    assert.equal(savedState(home).entered, undefined);
+    assert.equal(autoState(home).active(), false);
+    // The automatic source.
+    autoState(home).enter(ENTERED);
+    decideWith(JSON.stringify({ tool_name: 'mcp__slack__send_message', tool_input: { channel: 'C1', text: 'hi' }, session_id: 's2' }), {}, deps(200));
+    decideWith(event('git status'), {}, deps(300));
+    const { blocked } = savedState(home);
+    assert.equal(blocked.length, 2, 'what is let through is not listed');
+    assert.deepEqual(blocked.map((b) => [b.session, b.at, b.subject]), [['s1', 100, 'npm publish'], ['s2', 200, 'mcp__slack__send_message']]);
+    assert.match(blocked[0].reason, /發布版本或部署正式環境.*npm publish/);
+    assert.match(blocked[1].reason, /送出後無法收回/);
+  });
+});
+
+test('a blocked call stays denied when the list cannot be written', () => {
+  const state = { active: () => true, record: () => { throw new Error('EACCES'); }, enter: () => { throw new Error('EACCES'); } };
+  assert.equal(decisionOf(decideWith(event('npm publish'), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  assert.equal(decisionOf(decideWith(event('rm -rf ~'), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  // With the user's switch as the only source, too.
+  const off = { ...state, active: () => false };
+  assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: '1' }, { state: off, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  // The entry line is still let through: the script it runs writes the entry itself, and says so when it cannot.
+  assert.equal(decisionOf(decideWith(event(enterCommand(PLUGIN, 'away')), {}, { state, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow');
+  assert.deepEqual(enter('away', { state, now: 1 }).ok, false);
+});
+
+test('an automatic state that is missing, unreadable or damaged is no automatic state', () => {
+  const damaged = ['', 'not json', '[]', 'null', '{"entered": "yes"}', '{"entered": {"reason": "no time"}}', '{"entered": {"at": "soon"}}', '{"blocked": [{"at": 1}]}'];
+  for (const text of damaged) {
+    withDir((home) => {
+      mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+      writeFileSync(autoStateFile(home), text);
+      const result = decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 });
+      assert.equal(decisionOf(result), 'ask', text);
+      assert.doesNotMatch(out(result).permissionDecisionReason, /guard 錯誤/, text);
+      assert.equal(decideWith(event('git status'), {}, { home, store: memoryStore(), now: 1 }), null, text);
+    });
+  }
+  withDir((home) => {
+    // A directory where the file should be: it cannot be read at all.
+    mkdirSync(autoStateFile(home), { recursive: true });
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 })), 'ask');
+  });
+  withDir((home) => {
+    // A damaged file can still be entered over.
+    mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+    writeFileSync(autoStateFile(home), 'not json');
+    assert.equal(decisionOf(decideWith(event(enterCommand(PLUGIN, 'away')), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 7 })), 'allow');
+    assert.deepEqual(savedState(home), { entered: { at: 7, reason: 'away', by: 'agent', session: 's1' }, blocked: [] });
+  });
+});
+
+test('the unattended deny says how each source ends and that the agent ends neither', () => {
+  withDir((home) => {
+    autoState(home).enter(ENTERED);
+    const reason = out(decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 })).permissionDecisionReason;
+    assert.ok(reason.includes(`使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED`), reason);
+    assert.match(reason, /自動進入的，使用者回來送出訊息後解除/);
+    assert.match(reason, /agent 兩種都不能動/);
+    assert.match(reason, /人工作業清單/);
+  });
+});
+
+test('the entry line end to end: the hook process enters, and other sessions are blocked on their next call', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const guard = (command, session_id) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id, permission_mode: 'default' }), encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+    };
+    assert.equal(guard('npm publish', 'a').permissionDecision, 'ask');
+    const before = Date.now();
+    const allowed = guard(enterCommand(root, '提問沒有人回'), 'a');
+    assert.equal(allowed.hookEventName, 'PreToolUse');
+    assert.equal(allowed.permissionDecision, 'allow');
+    const { entered } = savedState(home);
+    assert.equal(entered.reason, '提問沒有人回');
+    assert.equal(entered.session, 'a');
+    assert.ok(entered.at >= before && entered.at <= Date.now(), 'the entry time is when the hook ran');
+
+    // The line then runs: it reports the entry already in force and changes nothing.
+    const ran = spawnSync(process.execPath, [join(root, 'hooks', 'enter-unattended.mjs'), '提問沒有人回'], { encoding: 'utf8', env });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.match(ran.stdout, /已進入無人值守模式.*原因：提問沒有人回/s);
+    assert.deepEqual(savedState(home).entered, entered);
+    assert.equal(spawnSync(process.execPath, [join(root, 'hooks', 'enter-unattended.mjs')], { encoding: 'utf8', env }).status, 1, 'no reason, no entry');
+
+    assert.equal(guard('npm publish', 'a').permissionDecision, 'deny');
+    assert.equal(guard('rm -rf ~', 'b').permissionDecision, 'deny');
+    assert.equal(guard('git status', 'b'), null);
+    assert.deepEqual(savedState(home).blocked.map((b) => [b.session, b.subject]), [['a', 'npm publish'], ['b', 'rm -rf ~']]);
+  });
+});
+
+test('hook processes writing the state at the same time lose nothing and leave no partial file', async () => {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-guard-')));
+  try {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root, SORRY_MATT_UNATTENDED: 'on' };
+    delete env.SORRY_MATT_GUARD;
+    const hook = (command, session_id) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, [join(root, 'hooks', 'guard.mjs')], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.on('error', fail);
+      child.on('close', (code) => done({ code, decision: stdout ? JSON.parse(stdout).hookSpecificOutput.permissionDecision : null }));
+      child.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id, permission_mode: 'default' }));
+    });
+    const sessions = Array.from({ length: 12 }, (_, i) => `s${i}`);
+    const results = await Promise.all([
+      ...sessions.map((s) => hook(`npm publish --tag ${s}`, s)),
+      hook(enterCommand(root, 'first'), 'enter-1'),
+      hook(enterCommand(root, 'second'), 'enter-2'),
+    ]);
+    assert.deepEqual(results.map((r) => r.code), Array(14).fill(0));
+    assert.deepEqual(results.map((r) => r.decision), [...Array(12).fill('deny'), 'allow', 'allow']);
+    const state = savedState(home);
+    assert.deepEqual(state.blocked.map((b) => b.session).sort(), [...sessions].sort(), 'every block is on the list, once');
+    assert.deepEqual(state.blocked.map((b) => b.subject).sort(), sessions.map((s) => `npm publish --tag ${s}`).sort());
+    assert.ok(['first', 'second'].includes(state.entered.reason));
+    assert.deepEqual(readdirSync(dirname(autoStateFile(home))), ['unattended.json'], 'no lock or temp file is left behind');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
