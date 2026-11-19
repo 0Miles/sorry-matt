@@ -119,10 +119,8 @@ one result, classified in this order, the first match winning; record the result
 **Lines on local verification.** In the pipeline, a line with no `origin`, or one settled as not covered by CI, has
 no CI to read: at the moments it would have been read — a dispatch point; every wake-up while the line is in
 red-light handling — run the "local verification" of section 2 step 3 on the integration branch's latest SHA
-(`git rev-parse <integration branch>`) instead, and record it. When ledger field 4 already holds a record for that
-SHA, do not re-run; that record's result stands. A line whose local verification is red is treated exactly like a
-line whose CI is red: it dispatches nothing new and its integration queue pauses until it is green or the culprit is
-reverted, and it goes through the red-light handling below.
+(`git rev-parse <integration branch>`) instead, and record it. A line whose local verification is red is treated exactly like a
+line whose CI is red, and goes through the red-light handling below.
 
 **Red-light handling.** A red line **dispatches nothing new** and its **integration queue pauses** until it is green
 or the culprit is reverted. Tickets in flight keep implementing, being reviewed and being fixed, and those that pass
@@ -147,9 +145,8 @@ the fix leave it red, map the red back to the original ticket by mistake.
    to the subject). The host's commits — completion records, stuck records, tickets filed along the
    way — are not merges, so landing in between changes nothing. With several tickets (the pushes between them have
    no verdict), start from the earliest. With no merge mapped to a ticket — the red came from a host commit, the
-   simplify pass or the base sync — it **maps to no ticket**. A line on local verification runs the same command
-   with the two SHAs from point 1 (the previous green SHA or the lower bound, and the earliest red SHA), under the
-   same mapping rules.
+   simplify pass or the base sync — it **maps to no ticket**. A line on local verification uses the same command
+   and rules, putting point 1's lower bound in when there is no previous green SHA.
 3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
    lines. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
    CI): while running the checks, save their output to
@@ -312,8 +309,8 @@ is before it is **overdue**. For each overdue agent:
      stopped for running over its time limit, its commits and uncommitted changes are left for the new agent to
      judge whether to build on, and an existing status record is taken over and updated in place; for fixing, also
      attach that round's findings. For expanding, give the tickets it covered that still have no expansion block to a
-     new expansion agent, spawned the way step 1 of dispatch says, not by a second set of rules. A reassignment is a new assignment: record it as above, replace the agent id in the
-     reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
+     new expansion agent, spawned the way step 1 of dispatch says. A reassignment is a new assignment: record it as
+     above, replace the agent id in the reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
      blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
    - **This stage was already reassigned for a timeout** → for implementing and fixing, **mark it stuck**, giving the
      two timeouts as the reason; expanding tickets are marked **awaiting ruling**.
@@ -638,10 +635,10 @@ Every line passes **three line-level gates** first, in this order:
    **Every local verification appends one per-SHA local verification record for the line to ledger field 4**, a
    single line: `local: <integration branch> <full SHA> <green or red> <reason>` — the leading `local:` says the
    source is local, and the reason is `no-origin`, `ci-not-covering` or `no-verdict` (the three cases above). One
-   record per SHA, and a new record never overwrites an old one; a SHA that already has a record is not re-run. Save
-   the output as the checks run (red-light handling point 3). A local red goes through the whole of section 1's
-   red-light handling (points 1–6); after each fix round, re-run locally on the new SHA and record that result in
-   field 4 as well.
+   record per SHA, and a new record never overwrites an old one; a SHA that already has a record is not re-run,
+   and that record's result stands. Save the output as the checks run (red-light handling point 3). A local red goes
+   through the whole of section 1's red-light handling (points 1–6); after each fix round, re-run locally on the new
+   SHA.
 
    The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
    line is verified all the same, on its unsynced tree, and the report gives the base SHA it tried and "unsynced".
