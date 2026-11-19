@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
@@ -227,15 +227,16 @@ function world(t, { profile = null } = {}) {
     if (a.step === 'review') {
       const r = (h.policy.review ?? DEFAULTS.review)(a);
       const v = typeof r === 'string' ? { outcome: r } : r;
+      // the minimal reviewer writes its report to the file its brief names (#128)
+      write(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : [])];
     }
     return { agent, flags: ['--agent', agent] };
   };
 
-  /** Runs the actions batch by batch and records each. */
+  /** The host's turn as SKILL.md has it: batch 1 of the list, each recorded; the later batches come in later lists. */
   h.run = (actions) => {
-    const sorted = [...actions].sort((x, y) => x.batch - y.batch);
-    for (const a of sorted) {
+    for (const a of actions.filter((x) => x.batch === 1)) {
       h.log.push({ ...a, wakeup: h.wakes.length });
       if (a.kind === 'exec') {
         const code = h.exec(a);
@@ -269,7 +270,7 @@ function world(t, { profile = null } = {}) {
     const reports = reported ?? h.reportsNext.splice(0);
     const outs = [];
     h.wakes.push(outs);
-    for (let i = 0; i < 80; i += 1) {
+    for (let i = 0; i < 400; i += 1) {
       const r = h.tick('next', path, ...(i === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
       assert.equal(r.code, 0, r.err);
       const out = JSON.parse(r.out);
@@ -284,7 +285,13 @@ function world(t, { profile = null } = {}) {
 }
 
 const ids = (actions) => actions.map((a) => a.id);
+/** Each action once: a later batch is listed again by the lists after it until it is run (#128). */
+const distinct = (actions) => [...new Map(actions.map((a) => [a.id, a])).values()];
 const stage = (h, id) => h.state().tickets[id].stage;
+/** The file a spawn's prompt tells the agent to read. */
+const briefOf = (a) => a.spawn.prompt.match(/^Read (.+) in full and follow it\.$/)[1];
+/** The report file of a minimal reviewer: beside its brief, `.report.md` (#128). */
+const reportOf = (a) => briefOf(a).replace(/\.md$/, '.report.md');
 
 test('a plain run: dispatch, close-out, finish, in batches', (t) => {
   const h = world(t);
@@ -292,7 +299,7 @@ test('a plain run: dispatch, close-out, finish, in batches', (t) => {
   const a1 = h.actions(w1);
   // the first dispatch point: progress, CI, frontier, acceptance, overlap, then a branch and an agent per ticket
   assert.deepEqual(w1[0].dispatch.reasons, ['first wake-up']);
-  const spawns = a1.filter((a) => a.kind === 'spawn');
+  const spawns = distinct(a1).filter((a) => a.kind === 'spawn');
   assert.deepEqual(spawns.map((a) => a.spawn.description).sort(), ['implement #1', 'implement #2']);
   assert.ok(spawns.every((a) => a.spawn.subagent_type === 'sorry-matt:implementer' && a.spawn.background));
   // #107: what does not depend on each other goes out in one batch; the assignment record comes before the spawn
@@ -435,7 +442,7 @@ test('a red line is read every wake-up; its result comes a wake-up late; green r
   const w3 = h.wake();
   const a3 = h.actions(w3);
   assert.ok(w3.some((o) => o.dispatch?.reasons.includes('a red line turned green')));
-  assert.deepEqual(a3.filter((a) => a.kind === 'spawn').map((a) => a.tickets[0]).sort(), ['#1', '#2']);
+  assert.deepEqual(distinct(a3).filter((a) => a.kind === 'spawn').map((a) => a.tickets[0]).sort(), ['#1', '#2']);
 });
 
 test('merged but not recorded: the resumed host follows git and does not merge again', (t) => {
@@ -563,6 +570,126 @@ test('N3: a spawn interrupted before its record comes back as a check, not as a 
   assert.ok(!r2.actions.some((a) => a.step === 'spawn-check'));
 });
 
+test('#128 D1: next makes the directory of every exec stdout before it returns; the command runs as written in bash', (t) => {
+  const h = world(t);
+  assert.equal(existsSync(join(h.W, 'tick')), false, 'no tick/ directory before the first next');
+  // The programs are stubbed as shell functions; the command line itself, its cd and its redirect, run as written.
+  const STUBS = `node() { echo '{}'; }; gh() { echo '{}'; }; `;
+  const run = h.run;
+  const seen = [];
+  h.run = (actions) => {
+    for (const a of actions.filter((x) => x.kind === 'exec' && x.stdout)) {
+      assert.ok(existsSync(dirname(a.stdout)), `${a.id} (batch ${a.batch}): ${dirname(a.stdout)} exists when next returns`);
+      const p = spawnSync('bash', ['-c', `${STUBS}${a.command}`], { encoding: 'utf8' });
+      assert.equal(p.status, 0, `${a.id}: ${p.stderr}`);
+      assert.doesNotMatch(p.stderr, /No such file or directory/);
+      seen.push(a);
+    }
+    run(actions);
+  };
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const steps = new Set(seen.map((a) => a.step));
+  for (const step of ['progress', 'ci-read', 'frontier', 'acceptance', 'overlap', 'assignment', 'brief', 'body', 'merge', 'acceptance-check'])
+    assert.ok(steps.has(step), `an exec of ${step} with its stdout was checked`);
+  assert.ok(seen.some((a) => a.batch > 1), 'later batches included');
+});
+
+test('#128 D2: the host sends batch 1 of each list and runs next after each record: no spawn-check, on to done', (t) => {
+  const h = world(t);
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  const lists = h.wakes.flat();
+  assert.ok(!lists.some((o) => o.actions.some((a) => a.step === 'spawn-check')), 'no list carries a spawn-check');
+  assert.ok(lists.some((o) => o.actions.some((a) => a.kind === 'spawn' && a.batch > 1)), 'a spawn was listed at a later batch first');
+  assert.ok(h.log.every((a) => a.batch === 1), 'the host ran batch 1 only');
+  assert.equal(h.log.filter((a) => a.kind === 'spawn' && a.step === 'spawn').length, 2, 'one spawn per ticket');
+});
+
+test('#128 D2: a background spawn listed at batch 2 or later and not recorded comes back as the same spawn', (t) => {
+  const h = world(t);
+  let late = null;
+  for (let i = 0; i < 80 && !late; i += 1) {
+    const out = JSON.parse(h.tick('next', h.path).out);
+    late = out.actions.find((a) => a.kind === 'spawn' && a.batch > 1);
+    h.run(out.actions);
+  }
+  assert.ok(late, 'a list with a spawn at batch 2 or later');
+  const r = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(!r.actions.some((a) => a.step === 'spawn-check'), 'not a check: it was never handed out');
+  assert.equal(r.actions.find((a) => a.id === late.id)?.kind, 'spawn', `${late.id} is issued again as a spawn`);
+});
+
+test('#128 D3: under expand: skip the spawn file says the ticket text is the acceptance; under agent, the criteria', (t) => {
+  for (const [profile, line] of [
+    [{ expand: 'skip' }, '- 驗收來源：票面文字就是驗收\n'],
+    [null, '- 驗收來源：驗收項與展開區塊\n'],
+  ]) {
+    const h = world(t, { profile });
+    if (profile) h.acceptance['#1'] = { items: [], expansions: [] }; // no criteria: under skip it goes on with its text
+    const spawn = h.actions(h.wake()).find((a) => a.kind === 'spawn' && a.tickets[0] === '#1');
+    assert.ok(spawn, `#1 is dispatched under ${profile ? 'skip' : 'agent'}`);
+    for (const file of [briefOf(spawn), briefOf({ spawn: spawn.spawn.fallback })]) assert.ok(readFileSync(file, 'utf8').includes(line), `${file} has ${JSON.stringify(line)}`);
+  }
+});
+
+test('#128 D4: the minimal reviewer writes its report to a file; record fix is refused until the file holds it', (t) => {
+  const h = world(t, { profile: { review: 'minimal' } });
+  const spawn = h.spawn;
+  let refused = 0;
+  h.spawn = (a) => {
+    if (a.step !== 'review' || a.tickets[0] !== '#1' || a.meta.mode !== 'initial') return spawn(a);
+    const report = reportOf(a);
+    const W = h.W.replace(/\\/g, '/');
+    assert.equal(report.replace(/\\/g, '/'), `${W}/tick/review/1-1.report.md`);
+    const brief = readFileSync(briefOf(a), 'utf8');
+    assert.ok(brief.includes(report), 'the brief names the report file');
+    assert.match(brief, /write your full report/i);
+    const fix = () => h.tick('record', h.path, a.id, '--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1');
+    assert.equal(existsSync(report), false);
+    assert.equal(fix().code, 3, 'no report file: refused');
+    write(report, '  \n');
+    assert.equal(fix().code, 3, 'an empty report file: refused');
+    write(report, 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    refused += 1;
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
+  };
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(refused, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the same record is taken once the file holds the report');
+  // the fix round reads its findings from that file, not from the status record
+  const send = h.log.find((a) => a.step === 'send' && a.tickets[0] === '#1');
+  assert.ok(send.do.includes(join(h.W, 'tick', 'review', '1-1.report.md')), send.do);
+  assert.doesNotMatch(send.do, /status record/);
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+});
+
+test('#128 D4: a fix round given to a new agent names the findings source: the report file (minimal) or the status record (full)', (t) => {
+  for (const profile of [{ review: 'minimal' }, null]) {
+    const h = world(t, { profile });
+    h.policy.review = (a) => (a.tickets[0] === '#1' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+    h.policy.send = () => 'gone'; // the implementer is gone: a new agent takes the fix round
+    for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+    assert.equal(h.wakes.at(-1).at(-1).then, 'done', `the run under ${profile ? 'minimal' : 'full'} finished`);
+    const send = h.log.find((a) => a.step === 'send' && a.tickets[0] === '#1');
+    const respawn = h.log.find((a) => a.kind === 'spawn' && a.step === 'spawn' && a.tickets[0] === '#1' && a.spawn.description === 'fix #1');
+    assert.ok(send && respawn, 'a send, then a spawn of a fix agent');
+    const brief = readFileSync(briefOf(respawn), 'utf8');
+    const report = join(h.W, 'tick', 'review', '1-1.report.md');
+    if (profile) {
+      for (const text of [send.do, brief]) {
+        assert.ok(text.includes(report), `names ${report}`);
+        assert.doesNotMatch(text, /status record|狀態紀錄/);
+      }
+    } else {
+      assert.match(send.do, /verbatim \(summary, evidence, fix\) from the status record/);
+      assert.match(brief, /from the status record/);
+      assert.ok(!send.do.includes('.report.md') && !brief.includes('.report.md'));
+    }
+  }
+});
+
 test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
   const h = world(t);
   git(h.repo, 'remote', 'remove', 'origin');
@@ -607,7 +734,7 @@ test('#126: implementation agents spawn as sorry-matt:implementer with a general
     if (a.tickets[0] === '#2') r.flags.push('--type', 'general-purpose');
     return r;
   };
-  const spawns = h.actions(h.wake()).filter((a) => a.kind === 'spawn');
+  const spawns = distinct(h.actions(h.wake())).filter((a) => a.kind === 'spawn');
   assert.deepEqual(spawns.map((a) => a.spawn.description).sort(), ['implement #1', 'implement #2']);
   for (const a of spawns) {
     assert.equal(a.spawn.subagent_type, 'sorry-matt:implementer');

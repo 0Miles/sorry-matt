@@ -63,9 +63,10 @@ Each wake-up:
 
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" next <state>`, with one `--reported <agent id>` for each agent whose
    completion notice arrived. Whether its report is taken is tick's call.
-2. Do the `actions` by `batch`, lowest first; one batch goes out in one turn. After each action, run the command in its
-   `record` field; record nothing you did not do, and do nothing that was not handed out. `reference` is what that
-   action needs you to read.
+2. Do the `actions`, but send only the ones at `batch` 1 of each list, all in one turn. After each action, run the
+   command in its `record` field. Leave the later batches this time: once the actions before them are recorded, they
+   are handed out again in a later list (tick counts only a batch-1 background spawn as handed out). Record nothing
+   you did not do, and do nothing that was not handed out. `reference` is what that action needs you to read.
    - **exec**: run `command` as written in bash (Git Bash on Windows); record its exit code. One not in `okExit`
      comes back in the next list as a `judge`.
    - **spawn**: send the Agent tool the `spawn` fields as they are, adding no rules: the implementation and expansion
@@ -76,15 +77,15 @@ Each wake-up:
      `--type general-purpose` to the record.
    - **judge**: something for you to decide. Read the `reference`, do what `do` says, and record one of `outcomes`.
    - **ask**: something only a human can rule on: section 3.
-3. Run `next` again until `then` is `end` or `done` (the run has finished). `end`'s last action closes the wake-up:
+3. Once each batch-1 action is recorded, run `next` again, until `then` is `end` or `done` (the run has finished). `end`'s last action closes the wake-up:
    the ledger's narrative fields brought up to date and, while agents are in flight, a **fallback wake-up** —
    `ScheduleWakeup`, else a background `sleep` through Bash with its task id in the record, else the same `/loop` in
    interval mode at the shortest stage time limit.
 
 `record` exiting 3 is a refusal: the result fails the state's guards. Act on the message; never force it another way.
 
-Done when: every wake-up ran `next` to `end` or `done`; every action done was written back by its `record`; nobody
-edited the state file by hand.
+Done when: every wake-up ran `next` to `end` or `done`; each list had only its batch-1 actions sent; every action
+done was written back by its `record`; nobody edited the state file by hand.
 
 ## 2. What tick leaves to you
 
