@@ -170,8 +170,7 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
 
 - 提問、選項與結尾問句一律使用使用者在當前對話使用的語言。
 - **潤稿只給人看的兩種文字**：總 PR body，以及等人 triage 或處理的 issue（期間開票的
-  raw issue、卡住紀錄的 raw issue）。先呼叫 Skill tool 帶入 `speak-human`，再呼叫 Skill
-  tool 帶入 `no-bullshit`。
+  raw issue、卡住紀錄的 raw issue）。呼叫 Skill tool 帶入 `no-bullshit`。
 - 其餘寫到 tracker 或 git 的文字 —— spec、tickets、commit message、接續紀錄、tracker 留言 —— 以及
   run ledger，讀者是下一個 agent，不潤稿。
 - 所有對外文字都只講結論與方向，不反問對方偏好、不加客套與結尾邀請。

@@ -28,9 +28,8 @@ branch is the next step for the user to run.
   ticket branch against the integration branch as fixed point, through the evidence chain, a live run, and mutation
   limited to the ticket's diff, and writes the verdict into the ticket's status record; `get-to-work` calls it by
   itself during close-out.
-- **The agent is not speaking human** → `/speak-human`. Preserve facts, conditions, responsibility, and
-  uncertainty while rewriting in natural, common language for the target language and locale.
-- **The agent is padding and burying the point** → `/no-bullshit`.
+- **The agent is padding and burying the point** → `/no-bullshit`. Answer first and cut
+  ceremony and padding; facts, conditions, and uncertainty stay.
 - **Safely retire local branches and extra worktrees after the work is merged** → `/clean-it-up`. Remove only
   clean items backed by merge evidence; remote branches require separate explicit authority.
 - **Use the frontend skills in a frontend project for the first time, or rebuild the project's component map from

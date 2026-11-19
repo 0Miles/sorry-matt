@@ -49,7 +49,7 @@ Model 只能用 Skill tool 呼叫 **model-invoked**(frontmatter 沒有
 skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的指令會讓 agent 攤手
 自己模擬。skill 內文引用其他 skill 時:
 
-- 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`speak-human`、`no-bullshit`、
+- 對方是 **model-invoked**(自家的 `grill-them`、`issue-chain`、`no-bullshit`、
   `clean-it-up`、`prove-it`、`figure-out-the-ui`、`build-the-ui-right`、`actually-look-at-the-ui`、
   `make-the-ui-fast`;第三方與 harness 的以 frontmatter 認定 —— 寫進 skill 前確認它存在、且沒有
   `disable-model-invocation: true`)→ 措辭必須明寫
@@ -91,9 +91,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 線(票的分組) | line |
 | 整合分支 | integration branch |
 | 對帳表 | reconciliation table |
-| 語義帳本 | semantic ledger |
-| 母語重寫 | native rewrite |
-| 回帳 | reconcile |
+| 內容本體 | payload |
+| 客套 | ceremony |
+| 墊詞 | filler |
+| 虛詞 | function words |
+| 對話/稿子(`no-bullshit` 的用法) | conversation / draft |
 | 卡住 | stuck |
 | 期間開票 | filing along the way |
 | 紅燈/全綠 | red light / all green |
@@ -357,6 +359,13 @@ Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不
 `references/customizing.md`、`references/choosing.md`)與 `master-ui-components` 的
 `references/tiers.md`(寫入時 commit 為 `a06ab9608601cee635b427fc65c2d2004ec062e2`)。規則已一般化
 寫進契約本文,runtime 不讀、不 vendor,所以不進 `references/upstream/`;上游改了就回來對一次。
+
+`no-bullshit` 改寫自 `JuliusBrussee/caveman`(Apache-2.0)的 `skills/caveman/SKILL.md`、
+`skills/caveman-review/SKILL.md` 與 `skills/caveman-compress/SKILL.md`(寫入時為 `v4.1.0`,commit
+`1e91f1306d602d4ca23618701b1185575ae1869b`)。它取代了原本只有一行的 `no-bullshit`,並吸收已移除的 `speak-human`。規則已
+一般化寫進 skill 本文,runtime 不讀、不 vendor,也不呼叫上游的 plugin。因為是改寫 Apache-2.0 的原文,
+`no-bullshit/references/upstream/` 只放 `NOTICE.md`:pin、三份上游檔的 hash、改動說明與授權全文,沒有
+vendored 檔。上游改了就回來對一次,並更新 `NOTICE.md` 的 pin 與 hash。
 
 ## 收尾檢查
 
