@@ -1,7 +1,6 @@
 ---
 name: expander
 description: Expansion agent of the sorry-matt get-to-work pipeline. The get-to-work host spawns it at a dispatch point with a filled-in brief as the prompt; it adds acceptance criteria to tickets that have none. Not for general delegation.
-model: sonnet
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

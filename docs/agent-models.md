@@ -5,9 +5,12 @@
 
 | agent | 定義檔 | 模型 | 工具 |
 | --- | --- | --- | --- |
-| 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | `sonnet` | Read, Glob, Grep, Bash, Write, Edit |
+| 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | 繼承主持人的模型 | Read, Glob, Grep, Bash, Write, Edit |
 
 實作 agent、紅燈修正的 agent、`prove-it` 的 agents 與整併 agent 沒有定義檔，仍繼承主持人的模型。
+
+展開 agent 的定義檔原本寫 `model: sonnet`，下方的對照就是在那個設定下量的。目視驗收判定改後的驗收項與改前不等價
+（#86），定義檔因此拿掉 `model:`，只留工具集。只改工具集的那一組還沒有量過，下方「改後」的數字不代表現在的設定。
 
 ## 展開 agent（2026-11-19）
 
