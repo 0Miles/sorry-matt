@@ -13,11 +13,20 @@ call the Skill tool with `figure-out-the-ui`.
 
 ## 1. Reuse what the project has
 
-Find the existing component closest to this change; new code reuses its tokens, naming, structure, and
-styling approach.
+Choose components under **component reuse**; when `docs/agents/ui.md` does not exist, stop at its prerequisite
+step. New code reuses the naming, structure, and styling approach of the chosen components and tokens. When
+adding or extracting a shared component, update `ui.md` in the same commit.
 
-Done when: every reused token and component has a file location, and everything that must be newly built is
-listed item by item.
+Produce a component choice table, one row per UI element:
+
+| UI element | Component (location) | Customization rung | Rationale |
+| --- | --- | --- | --- |
+
+"Customization rung" takes exactly one of three values: "reused", "customized, rung N" (N is 1–4, the rung of
+the **component reuse** customization ladder), or "new".
+
+Done when: every row of the table falls into exactly one category and has a location and a rationale, and every
+"new" row also states the knowledge it brings and why existing components fall short.
 
 ## 2. Consult before writing
 
@@ -38,7 +47,9 @@ Done when: every cell of the matrix has an answer, and every "implemented" point
 ## 4. Hand it to the eyes
 
 Call the Skill tool with `actually-look-at-the-ui`, giving it the state matrix and this change's acceptance
-criteria as the claims to check. Report its evidence table, plus the existing tokens and components reused and
-the guidance consulted.
+criteria as the claims to check. Report its evidence table, the component choice table, the existing tokens
+reused, the guidance consulted, and the state of `ui.md`: which rows this change updated, or why it needs no
+update.
 
-Done when: every claim has a result from `actually-look-at-the-ui`.
+Done when: every claim has a result from `actually-look-at-the-ui`, the report includes the component choice
+table, and `ui.md` matches this change or is explicitly recorded as needing no update.

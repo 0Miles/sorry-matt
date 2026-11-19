@@ -25,11 +25,23 @@ grill them
 | `actually-look-at-the-ui` | After a frontend change, open it in a real browser, record evidence for each claim, and mark what was not seen as unverified. |
 | `make-the-ui-fast` | When the UI is slow, measure first, name the bottleneck, change one thing, and measure again. |
 | `make-this-shit-pretty` | Rework an existing piece of UI in small verified steps, with behavior unchanged. |
+| `set-up-ui-skills` | Map a frontend project's component library, tokens, shared components, and conventions into `docs/agents/ui.md` for the frontend skills. Run once per project. |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
 
 ## Frontend skills
+
+Run the setup once per frontend project before the frontend skills:
+
+```
+/set-up-ui-skills
+```
+
+It explores the project for its component library, tokens, shared components, and conventions, asks everything
+it cannot settle from evidence in one batch with a recommended answer each, shows you the draft, then writes
+`docs/agents/ui.md` and a `### UI` subsection in your `CLAUDE.md` or `AGENTS.md`. The frontend skills read that
+file as the project's component map. Edit it directly afterwards; re-run the setup only to start over.
 
 Four of the frontend skills need no command. The agent picks them up on its own while working on a web
 frontend, each at its own moment:
