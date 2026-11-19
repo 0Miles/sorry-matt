@@ -1,10 +1,19 @@
 // The run's spawn budget, enforced by hooks. Ledgers and their fields are defined in
-// skills/have-it-all-done/ASKING.md section 7; this module reads two things from them:
+// skills/have-it-all-done/ASKING.md section 7; this module reads three things from them:
 //   - in progress: the first line is `<!-- sorry-matt:run active -->` (runs.mjs)
 //   - field 9, limits: one line per limit, `budget: <name> <integer>` (a list bullet allowed, backticks allowed
 //     around the value, and the whole line may be wrapped in backticks; the shape is ledgerLine in runs.mjs);
 //     the hook enforces only `budget: spawns <N>`; the others (`rounds`, `hours`, `no-progress`, and the stage
 //     time limits `timeout-<stage>` in minutes) are for the host
+//   - field 9, host session: `session: <id>` in the same line shape, the host's CLAUDE_CODE_SESSION_ID; the
+//     first such line wins
+// A run counts and blocks only its own host's spawns: a hook event whose `session_id` is not the ledger's
+// `session:` id is neither counted against that run nor denied by it. A ledger without a `session:` line (older
+// ledgers, or a host that could not read its id) and an event without a `session_id` fall back to the repo-wide
+// rule: every session in the repo counts and is blocked. Checked live with scripts/host-session.live.mjs on Claude
+// Code 2.1.328 (2026-11-20): PreToolUse(Agent) and SubagentStart carry the host's session id — also for an Agent
+// call a subagent makes — it is CLAUDE_CODE_SESSION_ID in the host's shell commands, and `--resume` and a
+// compaction keep it.
 // The spawn count lives next to the ledger in `<run>.counters.json`, written only by the hook:
 //   {
 //     "spawns":  <int>,
@@ -40,9 +49,32 @@
 // count itself is still kept by SubagentStart and the next call reads it again.
 import { spawnSync } from 'node:child_process';
 import { closeSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ledgerLine, ledgersForEvent } from './runs.mjs';
 
 const BUDGET = ledgerLine('budget', /([a-z][a-z-]*)\s+(\d+)/);
+const SESSION = ledgerLine('session', /([^`\s]+)/);
+const END_RUN = fileURLToPath(new URL('./end-run.mjs', import.meta.url));
+
+/** The host session id of a ledger's first `session: <id>` line, or null without one. */
+export function parseSession(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const m = SESSION.exec(line);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Whether a hook event counts against a run: its host's session does, and any session when either side has no id. */
+export function ownsEvent(ledgerText, event) {
+  const host = parseSession(ledgerText);
+  const id = typeof event.session_id === 'string' && event.session_id ? event.session_id : null;
+  return !host || !id || host === id;
+}
+
+/** The runs in progress in the event's repo that this event's session counts against. */
+export const runsForEvent = (event, git = spawnSync) =>
+  ledgersForEvent(event, git).filter(({ text: ledgerText }) => ownsEvent(ledgerText, event));
 
 /** Every `budget: <name> <integer>` line in a ledger; the first line for a name wins. */
 export function parseBudget(text) {
@@ -218,7 +250,7 @@ export function recordCall(ledger, { type, description }, { now = () => new Date
 const off = (env) => String(env.SORRY_MATT_BUDGET || '').toLowerCase() === 'off';
 
 export function denyReason(ledger, spawns, limit) {
-  return `sorry-matt budget blocked this spawn: the run in ${ledger} has spawned ${spawns} subagents and its limit is ${limit} (\`budget: spawns ${limit}\`). Do not spawn another subagent or try another route. Dispatch no more tickets and hand off as get-to-work's budget rule says, writing which limit stopped the run; only the user raises a limit, by editing that ledger line. If that run is no longer running, its first line should be \`<!-- sorry-matt:run ended -->\`. (The user can turn this check off by setting SORRY_MATT_BUDGET=off under "env" in their Claude Code settings.)`;
+  return `sorry-matt budget blocked this spawn: the run in ${ledger} has spawned ${spawns} subagents and its limit is ${limit} (\`budget: spawns ${limit}\`). Do not spawn another subagent or try another route. Dispatch no more tickets and hand off as get-to-work's budget rule says, writing which limit stopped the run; only the user raises a limit, by editing that ledger line. If that run is not the one this session is executing and it is no longer running (it stopped without reaching its handoff: a crash, a closed terminal), end it with \`node "${END_RUN}" "${ledger}"\`, which changes its first line to \`<!-- sorry-matt:run ended -->\`; never end a run that is still running to get past its limit. (The user can turn this check off by setting SORRY_MATT_BUDGET=off under "env" in their Claude Code settings.)`;
 }
 
 const deny = (text) => ({
@@ -226,14 +258,16 @@ const deny = (text) => ({
 });
 
 /**
- * PreToolUse on Agent: deny once an active run's spawn count has reached its `budget: spawns` limit.
+ * PreToolUse on Agent: deny once the spawn count of an active run this session counts against has reached its
+ * `budget: spawns` limit.
  * @param {object} event the parsed hook event
  * @returns {{ decision: object | null, warnings: string[] }}
  */
 export function decideSpawn(event, { env = process.env, git = spawnSync, read, ledgers } = {}) {
   const warnings = [];
   if (off(env)) return { decision: null, warnings };
-  for (const { ledger, text: ledgerText } of ledgers ?? ledgersForEvent(event, git)) {
+  for (const { ledger, text: ledgerText } of ledgers ?? runsForEvent(event, git)) {
+    if (!ownsEvent(ledgerText, event)) continue;
     const limit = parseBudget(ledgerText).spawns;
     if (limit === undefined) continue;
     let spawns;
@@ -255,14 +289,15 @@ export function decideSpawn(event, { env = process.env, git = spawnSync, read, l
 }
 
 /**
- * SubagentStart: count the subagent against every run in progress. Never blocks (it cannot).
+ * SubagentStart: count the subagent against every run in progress whose host is the event's session (or
+ * that records no host). Never blocks (it cannot).
  * @returns {{ ledger: string, spawns?: number, error?: string }[]}
  */
 export function countSpawn(event, { env = process.env, git = spawnSync, now, lock } = {}) {
   if (off(env)) return [];
   const agentId = text(event.agent_id);
   const counted = [];
-  for (const { ledger } of ledgersForEvent(event, git)) {
+  for (const { ledger } of runsForEvent(event, git)) {
     try {
       counted.push({ ledger, spawns: recordSpawn(ledger, agentId, { now, type: text(event.agent_type), lock }) });
     } catch (error) {
@@ -273,7 +308,7 @@ export function countSpawn(event, { env = process.env, git = spawnSync, now, loc
 }
 
 /**
- * PreToolUse on Agent, once let through: leave the call pending in every run in progress, so the SubagentStart
+ * PreToolUse on Agent, once let through: leave the call pending in every run it counts against, so the SubagentStart
  * it causes can be logged with its description. Never throws.
  * @returns {string[]} one warning per run the call could not be recorded for
  */
@@ -314,7 +349,7 @@ export function handle(raw, deps = {}) {
     try {
       const { env = process.env, git = spawnSync } = deps;
       if (off(env)) return { decision: null, warnings: [] };
-      const ledgers = ledgersForEvent(event, git);
+      const ledgers = runsForEvent(event, git);
       judged = { ledgers, ...decideSpawn(event, { ...deps, ledgers }) };
     } catch (error) {
       return {

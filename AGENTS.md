@@ -142,6 +142,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 上下文預算 | context budget |
 | 正本 | source of truth |
 | 開局 agent | kickoff agent |
+| 主持人 session | host session |
 | 整併 agent | merge agent |
 | 針對性檢查 | targeted checks |
 | 獨立審查 | independent review |

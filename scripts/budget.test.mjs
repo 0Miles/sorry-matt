@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { parseBudget, countersPath, readCounters, recordSpawn, withLock, decideSpawn, countSpawn, handle, CorruptCounters } from '../hooks/budget.mjs';
+import { parseBudget, parseSession, countersPath, readCounters, recordSpawn, withLock, decideSpawn, countSpawn, handle, CorruptCounters } from '../hooks/budget.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'hooks/spawns.mjs');
@@ -598,6 +598,123 @@ test('end to end: the entry pairs an Agent call with its SubagentStart across tw
     assert.equal(counters.spawns, 1);
     assert.equal(counters.log[0].description, 'merge #72');
     assert.deepEqual(readdirSync(runs).sort(), ['r.counters.json', 'r.md']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- #109: a run counts and blocks only its host session's spawns ---
+
+const hostLedger = (limit, session = 'host-1') => ledgerText(limit).replace('- budget: rounds 30', `- budget: rounds 30\n- session: ${session}`);
+const from = (event, session_id) => ({ ...event, session_id });
+
+test('parseSession: the first `session: <id>` line in the ledger line shape, or null', () => {
+  assert.equal(parseSession('# run\n- budget: spawns 3\n- session: 0c1d-2e3f\n- session: other\n'), '0c1d-2e3f');
+  assert.equal(parseSession('* `session: abc`\r\n'), 'abc');
+  assert.equal(parseSession('session: ` abc `\n'), 'abc');
+  assert.equal(parseSession('the session: abc is prose\n- budget: spawns 3\n'), null);
+  assert.equal(parseSession('- session: two words\n'), null, 'an id has no space');
+  assert.equal(parseSession('- session:\n'), null);
+  assert.equal(parseSession('# run\n'), null);
+});
+
+test('two sessions in one repo: only the host session spawns are counted against its run', () => {
+  const f = fixture();
+  try {
+    const ledger = join(f.runs, 'r.md');
+    writeFileSync(ledger, hostLedger(10));
+    const deps = { git: f.git, env: {} };
+    assert.deepEqual(send(from(typedCall('general-purpose', 'side work'), 'other-1'), deps), { decision: null, warnings: [] });
+    assert.deepEqual(countSpawn(from(started('o1'), 'other-1'), deps), []);
+    assert.ok(!existsSync(countersPath(ledger)), 'the other session leaves no count and no pending call');
+
+    send(from(typedCall('general-purpose', 'implement #109'), 'host-1'), deps);
+    assert.deepEqual(countSpawn(from(started('h1'), 'host-1'), deps).map((c) => c.spawns), [1]);
+    send(from(typedStart('o2', 'general-purpose'), 'other-1'), deps);
+    const counters = readCounters(countersPath(ledger));
+    assert.equal(counters.spawns, 1);
+    assert.deepEqual(counters.agents, ['h1']);
+    assert.deepEqual(counters.log.map((e) => [e.id, e.description]), [['h1', 'implement #109']]);
+  } finally {
+    f.done();
+  }
+});
+
+test('a run at its limit denies its host session and still lets another session spawn', () => {
+  const f = fixture();
+  try {
+    const ledger = join(f.runs, 'r.md');
+    writeFileSync(ledger, hostLedger(1));
+    const deps = { git: f.git, env: {} };
+    countSpawn(from(started('h1'), 'host-1'), deps);
+    const denied = decision(from(agentCall(), 'host-1'), deps);
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(reasonOf(denied).includes(ledger));
+    assert.equal(decision(from(agentCall(), 'other-1'), deps), null);
+    assert.deepEqual(send(from(agentCall(), 'other-1'), deps), { decision: null, warnings: [] });
+    assert.deepEqual(readCounters(countersPath(ledger)).pending ?? [], [], 'the other session leaves no pending call');
+  } finally {
+    f.done();
+  }
+});
+
+test('two runs in one repo, each with its own host: each counts its own host, and one at its limit blocks only its host', () => {
+  const f = fixture();
+  try {
+    const a = join(f.runs, 'a.md');
+    const b = join(f.runs, 'b.md');
+    writeFileSync(a, hostLedger(5, 'host-a'));
+    writeFileSync(b, hostLedger(1, 'host-b'));
+    const deps = { git: f.git, env: {} };
+    assert.deepEqual(countSpawn(from(started('b1'), 'host-b'), deps).map((c) => c.ledger), [b]);
+    assert.deepEqual(countSpawn(from(started('a1'), 'host-a'), deps).map((c) => c.ledger), [a]);
+    assert.equal(readCounters(countersPath(a)).spawns, 1);
+    assert.equal(readCounters(countersPath(b)).spawns, 1);
+    assert.ok(reasonOf(decision(from(agentCall(), 'host-b'), deps)).includes(b));
+    assert.equal(decision(from(agentCall(), 'host-a'), deps), null);
+    assert.equal(decision(from(agentCall(), 'other'), deps), null);
+  } finally {
+    f.done();
+  }
+});
+
+test('without a session line, or with an event without a session_id, every session counts and is blocked as before', () => {
+  const f = fixture();
+  try {
+    const legacy = join(f.runs, 'legacy.md');
+    writeFileSync(legacy, ledgerText(2));
+    const deps = { git: f.git, env: {} };
+    countSpawn(from(started('x1'), 'session-x'), deps);
+    countSpawn(from(started('y1'), 'session-y'), deps);
+    assert.equal(readCounters(countersPath(legacy)).spawns, 2);
+    assert.ok(decision(from(agentCall(), 'session-z'), deps), 'a ledger without a host blocks every session');
+
+    const stamped = join(f.runs, 'stamped.md');
+    writeFileSync(legacy, ledgerText(2, 'ended'));
+    writeFileSync(stamped, hostLedger(1));
+    assert.deepEqual(countSpawn(started('n1'), deps).map((c) => c.ledger), [stamped], 'no session_id counts');
+    assert.ok(decision(agentCall(), deps), 'and is blocked');
+  } finally {
+    f.done();
+  }
+});
+
+test('end to end: two sessions through the entry; the other session spawns past the host run limit', () => {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-budget-session-')));
+  try {
+    spawnSync('git', ['-C', dir, 'init', '-q']);
+    const runs = join(dir, '.git', 'sorry-matt', 'runs');
+    mkdirSync(runs, { recursive: true });
+    const ledger = join(runs, 'r.md');
+    writeFileSync(ledger, hostLedger(1));
+    const run = (event) => spawnSync(process.execPath, [entry], { input: JSON.stringify(event), encoding: 'utf8', env: { ...process.env, SORRY_MATT_BUDGET: '' } });
+    assert.equal(run(from(agentCall(dir), 'host-1')).stdout, '');
+    assert.equal(run(from(started('h1', dir), 'host-1')).status, 0);
+    assert.equal(run(from(started('o1', dir), 'other-1')).status, 0);
+    assert.equal(readCounters(countersPath(ledger)).spawns, 1);
+    assert.equal(JSON.parse(run(from(agentCall(dir), 'host-1')).stdout).hookSpecificOutput.permissionDecision, 'deny');
+    const other = run(from(agentCall(dir), 'other-1'));
+    assert.deepEqual([other.status, other.stdout, other.stderr], [0, '', '']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

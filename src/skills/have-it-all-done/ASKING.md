@@ -225,7 +225,7 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
    merge）。階段是候選、展開中、實作中、審查中、修正中、
    待整併、整併中，或終局的已交付、卡住、待裁決（`get-to-work` 第 1 節）；恢復時靠它與 agent id 接回每張
    沒到終局的票，靠到期時間接著掃描時限。
-9. **計量與預算**，四部分：
+9. **計量與預算**，五部分：
    - **上限**：一行一項 `budget: <名稱> <整數>`，建立 ledger 時寫入預設值，接手沒有這幾行的 ledger 時補上：
      `budget: spawns 200`（spawn 數）、`budget: rounds 40`（派票點次數，`get-to-work` 第 1 節「派票」；`rounds`
      指派票點，不是審查或修正的輪）、`budget: hours 12`
@@ -247,6 +247,11 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
      載入，主持人自己累計。token 數除非執行環境自己提供，一律標為未知，不以耗時或 agent 數量推算。
      更新時機見 `get-to-work` 第 1 節「預算與斷路」。
    - **停止原因**：run 因上限或無進展斷路停下時，記停在哪一項、當時的用量與卡在哪裡；沒有停下寫「無」。
+   - **主持人 session**：一行 `session: <id>`，值是主持人自己的 shell 指令裡環境變數 `CLAUDE_CODE_SESSION_ID`
+     的值（以 `node -e "console.log(process.env.CLAUDE_CODE_SESSION_ID || '')"` 讀，任何 shell 都能跑）。建立 ledger
+     時寫入；接手 ledger 與每次恢復時（`/loop` 喚醒除外：同一個 session，值不會變）重讀一次，值不同就改寫成當前的。plugin 的 hook 只把 `session_id` 與這行相符的
+     spawn 記進本 run 的計數，也只擋相符的 session；讀不到值（空字串）時不寫這行，hook 退回整個 repo 都計數、
+     都擋。hook 只認第一行 `session:`，所以其他欄不要以 `session:` 開頭寫行。
 10. **規則檔**：主持人本 run 以讀檔帶入、全程要遵守的每份規則檔，一行一份
     `rule: <絕對路徑>`，建立 ledger 時就填好，接手既有 ledger 時補齊缺的（例如 `have-it-all-done`
     接手獨立 `get-to-work` 建的 ledger）。經 Skill tool 載入的那份 `SKILL.md` 也列：壓縮只重附它的
@@ -268,6 +273,6 @@ hook 比對的是指令文字，不是安全邊界：包一層直譯器（`node 
 沒寫的檢查，要做就開成 raw ticket，留給下一個 run。
 
 完成判準：ledger 第一行是與 run 狀態相符的標記，十個欄位都有內容或明記「無」，第 9 欄有四行
-`budget:` 上限、四行階段時限與最新用量，第 10 欄從建立時就列出規則檔的絕對路徑；每次恢復的第一個動作都是重讀 ledger 與它列出的規則檔；
+`budget:` 上限、四行階段時限、最新用量，以及讀得到 session id 時一行與當前 session 相符的 `session:`，第 10 欄從建立時就列出規則檔的絕對路徑；每次恢復的第一個動作都是重讀 ledger 與它列出的規則檔；
 沒有共用目錄時已明記正本改為最終報告；
 主持人的上下文裡沒有 diff、測試日誌或 agent 報告的原文。
