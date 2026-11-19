@@ -23,7 +23,10 @@ Produce a component choice table, one row per UI element:
 | --- | --- | --- | --- |
 
 "Customization rung" takes exactly one of three values: "reused", "customized, rung N" (N is 1–4, the rung of
-the **component reuse** customization ladder), or "new".
+the **component reuse** customization ladder), or "new". A native HTML element takes "reused", with
+`Component (location)` written "native `<tag>`" ("native `<p>`", "native `<button>`", for example), and does not
+go through the **new-component bar**; a **page-local component** takes "reused", with its file path as the
+location.
 
 Done when: every row of the table falls into exactly one category and has a location and a rationale, and every
 "new" row also states the knowledge it brings and why existing components fall short.

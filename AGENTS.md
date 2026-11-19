@@ -311,6 +311,17 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「Tokens」段(`ui.md`) | `Tokens` section |
 | 「檔案位置」行(`ui.md` 的 Tokens 段) | `Location` line |
 | 「載入方式」行(`ui.md`) | `Loading` line |
+| 專案自己的樣式 | the project's own styles |
+| 對應的 token | matching token |
+| 重設值 | reset value |
+| 繼承來的值 | inherited value |
+| 元件庫套件內部的值 | values inside the component library's package |
+| 禁止事項(元件複用的) | prohibitions |
+| 原生 `<tag>` | native `<tag>` |
+| 頁內元件 | page-local component |
+| 單頁的新元件 | new component used on a single page |
+| 鍵盤操作(行為基準第六項) | keyboard operation |
+| 業務邏輯 | business logic |
 
 ## 外部語義來源
 

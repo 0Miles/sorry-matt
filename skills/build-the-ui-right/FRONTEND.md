@@ -63,8 +63,10 @@ call site. Use only the props, variants, and classes found there; invent none fr
 ### 4. Choose components by job
 
 Write every UI element as "job → component": match the `Use when` column of the `Shared components` table first,
-and when the job does not fit, look at `Instead`. When more than one candidate fits, write why the other was not
-chosen. A package the `Component library` section marks `Existing, not for new use`, and a duplicate the
+and when the job does not fit, look at `Instead`. Candidates come from four sources: components in the `Shared
+components` table, component library components, native HTML elements, and **page-local components** (existing
+components inside the page that only that page uses, and so are not in `ui.md`). When more than one candidate
+fits, write why the other was not chosen. A package the `Component library` section marks `Existing, not for new use`, and a duplicate the
 `Conventions` section marks as not for new use, stay out of new code.
 
 ### 5. Customization ladder
@@ -79,7 +81,8 @@ short:
 4. Extend the shared component's source.
 5. A new component — that is, "new", bound by the **new-component bar**.
 
-No rung does any of these six:
+These six are the prohibitions of **component reuse**: no rung does any of them, and no fix for any failure
+uses one:
 
 - Overriding a component's internal styles from an outside selector.
 - Raising specificity or using `!important`.
@@ -88,18 +91,47 @@ No rung does any of these six:
 - Wrapping a component only to rename it, unless the wrapper convention in the `Conventions` section requires it.
 - Hand-writing keyboard, focus, or state behavior the component library or a shared component already has.
 
-### 6. New-component bar
+### 6. Hard-coded values
 
-Before building a new component, meet all four:
+A **hard-coded value** is a literal value that meets all three of these:
+
+- It is written in the project's own styles: a call site, a project stylesheet, or a shared component's source.
+- It is a color, spacing, radius, or font value.
+- The `Tokens` section of `ui.md` is not "None", and it already has a **matching token**: one with the same
+  value, or a token that already exists for the same purpose.
+
+None of these is a hard-coded value:
+
+- CSS-wide keywords and initial / reset values, including at least `0`, `none`, `transparent`, `inherit`,
+  `currentColor`, and `auto`.
+- Inherited values.
+- Values inside the component library's package.
+- A literal with no matching token, such as `color: #fff` when no token matches it: it is not flagged, not
+  failed, and not required to change.
+
+The verdict comes from the source, not from computed style, and never from comparing computed values with the
+tokens' resolved values: the evidence grade is measured, the evidence is a search command or `file:line`, and no
+browser is needed. There is one fix only: switch to that matching token. Add no new token, and do not switch to an
+outside override or any other prohibition.
+
+### 7. New-component bar
+
+Before building a new component, always meet the first two:
 
 - Search for synonymous names first (`Dialog` / `Modal` / `Sheet`, for example), and write which names were
   searched.
 - The new component carries state, behavior, material, or geometry no existing component can give, or a project
   convention requires extracting it; when neither holds, compose existing components.
+
+A new component that two or more pages or features will use also meets the other two:
+
 - Put it where the `New shared components` line of the `Conventions` section says.
 - Add what that same line requires, such as a barrel export, types, or a story.
 
-### 7. Maintain `ui.md`
+A new component used on a single page sits beside that page, stays out of `ui.md`, and is not bound by the last
+two.
+
+### 8. Maintain `ui.md`
 
 On any of the following, update `ui.md` in the same commit:
 
@@ -111,8 +143,10 @@ of `ui.md`. When `ui.md` and the source conflict, the source wins: a skill that 
 directly; a read-only skill leaves `ui.md` alone and writes the mismatch into its own output.
 
 Done when: every UI element falls into exactly one of three categories — "reused" with its location, "customized,
-rung N" with its rationale, or "new" with the knowledge it brings and why existing components fall short — and
-`ui.md` matches this change, or is explicitly recorded as needing no update.
+rung N" with its rationale, or "new" with the knowledge it brings and why existing components fall short; a native
+HTML element is "reused", with the location written "native `<tag>`" (for example "native `<p>`"), and does not go
+through the **new-component bar**; a **page-local component** is "reused", with its file path as the location;
+and `ui.md` matches this change, or is explicitly recorded as needing no update.
 
 ## State matrix
 

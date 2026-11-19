@@ -11,7 +11,7 @@ and left evidence behind.
 When this conversation has not yet read the **frontend contract**, first take the base directory shown when
 this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full; it defines the bold
-**component reuse**, **state matrix**, **evidence grade**, and **eyes-on list** below, while the **component
+**component reuse**, **hard-coded value**, **state matrix**, **evidence grade**, and **eyes-on list** below, while the **component
 choice table** is what step 1 of `build-the-ui-right` produces.
 
 Then read `docs/agents/ui.md` per the prerequisite of **component reuse**; when it does not exist, stop: list no
@@ -26,9 +26,10 @@ true or false: on which screen, in which state, what should appear or happen.
 
 Every row of the component choice table yields two claims:
 
-- (a) That UI element renders from the library component or shared component named in the row's
-  `Component (location)`, not from a hand-rolled lookalike.
-- (b) Its computed style matches the tokens; for the exception, see step 3.
+- (a) That UI element renders from the library component, shared component, or page-local component named in
+  the row's `Component (location)`, not from a hand-rolled lookalike; for a row whose location reads
+  "native `<tag>`", what renders is that native tag.
+- (b) Its own style source contains no **hard-coded value**; for how, see step 3.
 
 When no component choice table was handed over (called on its own, or called by `make-the-ui-fast`), (a) and (b)
 instead cover every UI element the diff adds or changes: the expected component comes from the diff's imports,
@@ -43,9 +44,10 @@ Start the UI the project's own way (follow `docs/agents/environment.md` when it 
 a browser tool already present in the environment. Record the **viewing conditions**: browser and version,
 viewport width, device pixel ratio, theme.
 
-When that cannot be done, check each claim against source and tests as far as those hold, mark every claim
-unverified, and go straight to step 5. The two component claims (a) and (b) are likewise always marked
-unverified with a reason; having read the source does not mark them passed.
+When that cannot be done, check every claim other than claim (b) against source and tests as far as those hold,
+and mark them all unverified; claim (a) is likewise always marked unverified with a reason, and having read the
+source does not mark it passed. Claim (b) is a source check to begin with: judge it pass or fail as step 3 says,
+fix its failures under step 4, then go to step 5.
 
 Done when: the UI is open in a browser with the viewing conditions recorded, or the reason it could not be is
 recorded.
@@ -63,11 +65,15 @@ For each claim, bring the screen into that state by actually operating it, then 
   generates) or the framework's component tree, and compare it with what the same component renders at one
   existing call site; a mismatch is a failure — a `div role="button"` styled to look like `Button`, for
   example. This claim is graded measured.
-- Claim (b): take the files recorded in the `Location` line of the `Tokens` section of `ui.md` as the basis,
-  read those tokens' resolved runtime values on the same page, then compare them one by one with the element's
-  color, background, border, spacing (margin / padding / gap), radius, and font computed styles. It passes only
-  when every one equals some token's resolved value; any one that equals no token is a failure. This claim is
-  graded derived. When the `Tokens` section reads "None", no (b) claim is produced, and the report says so once.
+- Claim (b): under the **hard-coded value** definition in **component reuse**, search the UI element's own style
+  source (the classes and inline style at the call site, the project stylesheet rules that apply to it, and, for
+  a shared component, its source) for hard-coded values, taking the matching tokens from the files recorded in
+  the `Location` line of the `Tokens` section of `ui.md`. It passes only when there is none; finding one is a
+  failure, with its `file:line`. For a library component already verified by (a), the attributes the library
+  puts on its root node are exempt; only the styles the project adds at the call site are checked. Do not read
+  computed style, and do not compare computed values with the tokens' resolved values. This claim is graded
+  measured, with a search command or `file:line` as the evidence. When the `Tokens` section reads "None", no (b)
+  claim is produced, and the report says so once.
 
 Give each claim one result — pass, fail, or unverified — and one **evidence grade**.
 
@@ -76,7 +82,10 @@ Done when: every claim has exactly one result, one grade, and one evidence locat
 ## 4. Fix what failed
 
 Fix each failure to a pass under the rules of `build-the-ui-right`, then look again at that claim and the
-neighboring claims the fix touched. Failures outside this change's scope go into the report as they stand.
+neighboring claims the fix touched. Failures outside this change's scope go into the report as they stand. A
+(b) failure is fixed the way **hard-coded value** prescribes, by switching to the matching token; never fix it
+with a prohibition of **component reuse** — an outside override, raised specificity or `!important`, a private
+class or private CSS variable, for example.
 
 Where the fix touches a spot on which `ui.md` and the source disagree, the source wins: correct `ui.md` in the
 same change as that fix. A mismatch the fix does not touch leaves `ui.md` alone and goes into the report.
