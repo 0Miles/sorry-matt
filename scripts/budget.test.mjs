@@ -59,6 +59,11 @@ test('parseBudget: the stage time limits share the format and leave the spawn li
   });
 });
 
+test('parseBudget: a space before the closing backtick does not hide the line', () => {
+  assert.deepEqual(parseBudget('- `budget: spawns 200 `\n'), { spawns: 200 });
+  assert.deepEqual(parseBudget('budget: `spawns 200 `\n'), { spawns: 200 });
+});
+
 test('countersPath sits next to the ledger', () => {
   assert.equal(countersPath('/r/.git/sorry-matt/runs/issue-4.md'), '/r/.git/sorry-matt/runs/issue-4.counters.json');
 });
@@ -206,6 +211,22 @@ test('decideSpawn: lets spawns through below the limit and denies at it', () => 
 
     writeFileSync(ledger, ledgerText(3));
     assert.equal(decision(agentCall(), deps), null, 'the hook re-reads the limit on every call');
+  } finally {
+    f.done();
+  }
+});
+
+test('decideSpawn: a spawn limit written with a space before the closing backtick still denies at the limit', () => {
+  const f = fixture();
+  try {
+    const ledger = join(f.runs, 'r.md');
+    writeFileSync(ledger, '<!-- sorry-matt:run active -->\n# run\n## 9. Run metrics and budget\n- `budget: spawns 1 `\n');
+    const deps = { git: f.git, env: {} };
+    assert.equal(decision(agentCall(), deps), null);
+    countSpawn(started('a1'), deps);
+    const out = decision(agentCall(), deps);
+    assert.equal(out?.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(reasonOf(out), /has spawned 1 subagents and its limit is 1/);
   } finally {
     f.done();
   }

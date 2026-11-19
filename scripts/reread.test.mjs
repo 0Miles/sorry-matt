@@ -65,6 +65,35 @@ test('ledgerLine: one line shape for any key, bullets and backticks around the v
   for (const no of ['the size: 7', 'size: seven', '-size: 7', 'sizes: 7']) assert.equal(line.exec(no), null, no);
 });
 
+test('parseLedger: a space before the closing backtick is not part of the rule path', () => {
+  const ledger = (...lines) => ['<!-- sorry-matt:run active -->', '## 10. Rule files', ...lines, ''].join('\n');
+  assert.deepEqual(parseLedger(ledger('- `rule: /abs/x.md `')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('rule: `/abs/x.md `')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('- `rule: /abs/x.md `', 'rule: /abs/x.md')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('rule: `/abs/x.md `', 'rule: /abs/x.md')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('- `rule: C:\\Program Files\\x.md `')).rules, ['C:\\Program Files\\x.md']);
+});
+
+test('ledgerLine: space is allowed before the closing backtick and stays out of the value', () => {
+  const line = ledgerLine('size', /(\d+)/);
+  for (const ok of ['- `size: 7 `', 'size: `7 `', '`size: 7\t`  ']) assert.equal(line.exec(ok)?.[1], '7', ok);
+  for (const no of ['the size: 7', 'size: seven', '-size: 7', 'sizes: 7']) assert.equal(line.exec(no), null, no);
+});
+
+test('respond: an existing rule file listed with a space before the closing backtick is not flagged as not found', () => {
+  const f = fixture();
+  try {
+    const rule = join(f.dir, 'SKILL.md');
+    writeFileSync(rule, 'x');
+    writeFileSync(join(f.runs, 'now.md'), `<!-- sorry-matt:run active -->\n## 10. Rule files\n- \`rule: ${rule} \`\n`);
+    const out = respond(event(), { git: gitAt(f.dir) });
+    assert.ok(out.includes(`  - rule: ${rule}\n`), out);
+    assert.ok(!out.includes('not found'), out);
+  } finally {
+    f.done();
+  }
+});
+
 test('activeLedgers: skips ended ledgers, non-markdown files and run directories', () => {
   const f = fixture();
   try {
