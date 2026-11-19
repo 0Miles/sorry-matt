@@ -176,6 +176,43 @@ test('the main worktree, a foreign directory and an unknown ref are refused, and
   assert.equal(main(['prune'], defaultDeps(r.dir)).code, 2);
 });
 
+test('a worktree with a branch checked out is refused by open, status and close, dirty or clean, and kept as it is', (t) => {
+  const r = repo(t);
+  const impl = join(r.root, 'impl');
+  r.git('worktree', 'add', '-q', impl, 'ticket'); // an implementer's ticket worktree
+  put(impl, { 'uncommitted.txt': 'work in progress\n', 'a.js': 'edited\n' });
+  for (const argv of [
+    ['open', '--path', impl, '--ref', 'ticket'],
+    ['open', '--path', impl, '--ref', 'HEAD'],
+    ['status', '--path', impl],
+    ['close', '--path', impl],
+  ]) {
+    const out = main(argv, defaultDeps(r.dir));
+    assert.equal(out.code, 2, argv.join(' '));
+    assert.match(out.err, /refs\/heads\/ticket checked out/);
+  }
+  assert.equal(readFileSync(join(impl, 'uncommitted.txt'), 'utf8'), 'work in progress\n');
+  assert.equal(readFileSync(join(impl, 'a.js'), 'utf8'), 'edited\n');
+  assert.equal(gitIn(impl)('rev-parse', '--abbrev-ref', 'HEAD'), 'ticket');
+
+  const clean = join(r.root, 'integration');
+  r.git('worktree', 'add', '-q', '-b', 'line', clean, 'main'); // a clean integration worktree
+  assert.equal(main(['close', '--path', clean], defaultDeps(r.dir)).code, 2);
+  assert.ok(existsSync(join(clean, 'a.js')));
+  assert.equal(registered(r), 3);
+});
+
+test('the worktree the command runs in is refused, even a detached one', (t) => {
+  const r = repo(t);
+  run(r, 'open', '--path', r.review, '--ref', 'ticket');
+  const inside = main(['close', '--path', '.'], defaultDeps(r.review));
+  assert.equal(inside.code, 2);
+  assert.match(inside.err, /runs in/);
+  assert.equal(main(['open', '--path', r.review, '--ref', 'ticket'], defaultDeps(r.review)).code, 2);
+  assert.ok(existsSync(join(r.review, 'a.js')));
+  assert.equal(registered(r), 2);
+});
+
 test('the command line prints the same JSON and exit code', (t) => {
   const r = repo(t);
   commitOnTicket(r, { 'a.js': 'a2\n' });

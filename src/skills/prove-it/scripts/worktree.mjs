@@ -23,7 +23,9 @@
 //         worktree of this repository is registered at --path.
 // close   Removes the review worktree (`git worktree remove --force`, then `git worktree prune`): `removed`, or
 //         `absent` when none is registered at --path. Removing it twice is not an error.
-// Every command refuses the main worktree.
+// Every command refuses, touching nothing, the main worktree, the worktree it runs in, and any worktree at --path that
+// is not detached (a branch checked out: an implementer's, the integration or the host's worktree). A review worktree
+// is always detached.
 //
 // Output (stdout, JSON; fields are only ever added, never renamed)
 //   open:   { "format": "sorry-matt/review-worktree@1", "command": "open", "path", "action": "created" | "reused" |
@@ -34,8 +36,8 @@
 //   close:  { "format", "command": "close", "path", "action": "removed" | "absent" }
 //
 // Exit codes: 0 done, 1 git failed (not a repository, a ref that does not resolve, a removal git refused) or --path
-// is a directory that is not a registered worktree, 2 usage (a missing or unknown argument, --path names the main
-// worktree).
+// is a directory that is not a registered worktree, 2 usage (a missing or unknown argument, --path names a worktree
+// that every command refuses).
 import { existsSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, basename } from 'node:path';
@@ -62,13 +64,19 @@ export function dirKey(p, platform = process.platform) {
   return platform === 'win32' ? k.toLowerCase() : k;
 }
 
-// `git worktree list --porcelain` -> [{ path, prunable }]; the first entry is the main worktree.
+// `git worktree list --porcelain` -> [{ path, branch, detached, prunable }]; the first entry is the main worktree.
+// `branch` is the checked-out ref (refs/heads/...) or null; `detached` is true only for a detached HEAD.
 export function parseWorktrees(text) {
   const out = [];
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\r$/, '');
-    if (line.startsWith('worktree ')) out.push({ path: line.slice('worktree '.length), prunable: false });
-    else if (line.startsWith('prunable') && out.length) out[out.length - 1].prunable = true;
+    const last = out[out.length - 1];
+    if (line.startsWith('worktree ')) {
+      out.push({ path: line.slice('worktree '.length), branch: null, detached: false, prunable: false });
+    } else if (!last) continue;
+    else if (line.startsWith('branch ')) last.branch = line.slice('branch '.length);
+    else if (line === 'detached') last.detached = true;
+    else if (line.startsWith('prunable')) last.prunable = true;
   }
   return out;
 }
@@ -103,11 +111,20 @@ function parseArgs(argv) {
   return args;
 }
 
+// The registered worktree at `path`, or null. Refuses (usage error, nothing touched) anything that is not a review
+// worktree: the main worktree, the worktree this command runs in, and any worktree with a branch checked out (an
+// implementer's ticket worktree, the integration worktree, the host's own). A review worktree is always detached.
 function locate(deps, path) {
   const list = parseWorktrees(deps.git(['worktree', 'list', '--porcelain']));
   const key = dirKey(resolve(deps.cwd, path));
   if (list.length && dirKey(list[0].path) === key) throw new UsageError(`${path} is the main worktree`);
-  return list.slice(1).find((w) => dirKey(w.path) === key) || null;
+  const own = deps.git(['rev-parse', '--show-toplevel']).trim();
+  if (own && dirKey(own) === key) throw new UsageError(`${path} is the worktree this command runs in`);
+  const found = list.slice(1).find((w) => dirKey(w.path) === key) || null;
+  if (found && !found.detached) {
+    throw new UsageError(`${path} has ${found.branch ?? 'a branch'} checked out; a review worktree is always detached`);
+  }
+  return found;
 }
 
 const status = (deps, dir) => statusLines(deps.git(['status', '--porcelain', '--untracked-files=all'], dir));
