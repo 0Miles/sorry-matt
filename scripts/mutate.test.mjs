@@ -196,6 +196,20 @@ test('run: the ledger carries the cap and one-per-line across runs of a round', 
   assert.equal(JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8')).mutants.length, 2);
 });
 
+test('run: a plan and a ledger that start with a UTF-8 BOM are read like ones without', (t) => {
+  const { dir } = project(t);
+  const ledger = { format: 'sorry-matt/mutate-ledger@1', mutants: [{ file: 'lib.js', line: 2, outcome: 'killed' }] };
+  writeFileSync(join(dir, 'ledger.json'), `﻿${JSON.stringify(ledger)}`);
+  writeFileSync(join(dir, 'plan.json'), `﻿${JSON.stringify({ mutants: [RETURN5] })}`);
+  assert.match(run(dir, '--cap', '1').err, /1 mutants and the ledger 1, over the cap of 1/, 'the BOM ledger counts toward the cap');
+  const { code, err } = run(dir, '--cap', '2');
+  assert.equal(code, 0, err);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8')).mutants, [
+    { file: 'lib.js', line: 2, outcome: 'killed' },
+    { file: 'lib.js', line: 5, outcome: 'survived' },
+  ]);
+});
+
 test('validatePlan: the default cap is 10, and a case-only duplicate is one line on Windows', () => {
   const plan = { mutants: Array.from({ length: 11 }, (_, i) => ({ file: 'lib.js', line: i + 1, original: 'x', mutant: 'y' })) };
   assert.match(validatePlan(plan, { cap: 10, read: () => Buffer.from('') }).join('\n'), /11 mutants and the ledger 0, over the cap of 10/);

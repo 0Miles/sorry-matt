@@ -44,7 +44,7 @@
 // Exit codes: 0 output written; 1 the file is missing, not JSON, or not a counters file (nothing on stdout);
 // 2 bad arguments.
 import { readFileSync } from 'node:fs';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, failure, parseJson, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/spawns@1';
 export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'finder', 'architect', 'verifier', 'fix-verifier'];
@@ -97,7 +97,7 @@ export function main(argv) {
     const text = readFileSync(path, 'utf8');
     let counters;
     try {
-      counters = JSON.parse(text);
+      counters = parseJson(text);
     } catch (e) {
       throw new Error(`${path} is not JSON (${e.message})`);
     }
