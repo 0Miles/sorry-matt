@@ -198,8 +198,9 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
 3. **具體失效情境**：失效路徑真實可達，後果可觀察。
 
 裁決四種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗，或簡化
-流程查到 fixed point 也有）、**spec 層級**（只出自簡化流程）、**不成立**。裁決引用的 `file:line`
-與 ticket 分支對不上時，換一個 verifier 重驗。
+流程查到 fixed point 也有）、**spec 層級**（只出自簡化流程）、**不成立**。每則引用標明出自哪裡：
+ticket 分支（預設）、fixed point，或票面／驗收快照。引用與它標明的來源對不上時，才換一個
+verifier 重驗；引用 fixed point 或 spec 原文、而且對得上的，不重驗。
 
 分流：
 

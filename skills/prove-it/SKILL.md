@@ -234,8 +234,9 @@ makes the original and the mutant differ observably. Only when disproof fails, g
 
 There are four rulings, each with `file:line` evidence: **confirmed** (all three gates pass), **pre-existing**
 (fails only the second gate, or the short path found it on the fixed point too), **spec-level** (from the short
-path only), and **invalid**. When a ruling's `file:line` does not match the ticket branch, have another verifier
-re-check that candidate.
+path only), and **invalid**. Every citation names its source: the ticket branch (the default), the fixed point, or
+the ticket text / acceptance snapshot. Only when a citation does not match the source it names, have another
+verifier re-check that candidate; a citation of the fixed point or of spec text that matches is not re-checked.
 
 Routing:
 
