@@ -7,19 +7,22 @@
 //
 // github  Blockers are the union of GitHub's native issue dependencies
 //         (GET /repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by) and the body's `Blocked by:` line or
-//         `## Blocked by` list (`#n`, `owner/repo#n` or an issue URL), the tracker's fallback where dependencies
-//         are unavailable. When the body lists blockers and native dependencies exist but the two differ, a
+//         `## Blocked by` list (`#n`, `owner/repo#n` or an issue URL; which of the two is read is under local),
+//         the tracker's fallback where dependencies are unavailable. When the body lists blockers and native dependencies exist but the two differ, a
 //         warning is added. A closed issue is done, whatever its state_reason (not_planned included): that is
 //         how GitHub counts open blockers (issue_dependencies_summary.blocked_by) and what the tracker contract
 //         says ("unblocked when every blocker is closed"). A ticket integrated during this run is still open on
 //         GitHub, so pass it with --done; pass a ticket the run marked stuck with --stuck.
 // local   One ticket file per issue (`.scratch/<feature>/issues/<NN>-<slug>.md`). Blockers come from the
-//         `Blocked by:` line (or a `Blocked by` heading's list): `NN`, `#NN`, a file name or a repo-relative
-//         path, comma-separated; "None ..." means no blockers. A ticket is done when it has a non-empty
-//         `sorry-matt completion` section, no unchecked `- [ ]` (`*` and `+` bullets too) outside the `Comments`
-//         and `sorry-matt ...` sections, and no `sorry-matt blocker` heading after the completion (get-to-work
-//         appends one when it reverts the merge); it is stuck when it has a `sorry-matt blocker` heading and is
-//         not done. `Status:` alone (ready-for-human included) never makes it done.
+//         list items under a `Blocked by` heading (`-`, `*` or `+` bullets) or, when there is no such heading or
+//         nothing under it is a list item, from the `Blocked by:` line: `NN`, `#NN`, a file name or a
+//         repo-relative path, comma-separated; "None ..." means no blockers (`- None` is still a list item, so
+//         the line is not read). A ticket is done when its last `sorry-matt completion` section is non-empty,
+//         it has no unchecked `- [ ]` (`*` and `+` bullets too) outside the `Comments` and `sorry-matt ...`
+//         sections, and no `sorry-matt blocker` heading comes after that last completion (get-to-work appends
+//         one when it reverts the merge; a completion appended after it is a new delivery); it is stuck when it
+//         has a `sorry-matt blocker` heading and is not done. `Status:` alone (ready-for-human included) never
+//         makes it done.
 //         How the file is read (ticket.mjs, shared with acceptance.mjs): fenced code is skipped, so nothing
 //         inside it counts; the `Comments`, `sorry-matt ...`, `Blocked by`, completion and blocker headings
 //         count at any level, and each section runs down to the next heading of the same or a higher level;
@@ -60,7 +63,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, relative, sep, posix } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
-import { scan, section, sectionAt, headingIndex, lastHeadingIndex, ownRows, lines } from './ticket.mjs';
+import { scan, section, sectionAt, lastHeadingIndex, ownRows, lines } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/frontier@1';
 
@@ -176,15 +179,12 @@ const field = (text, name) => {
 };
 
 // The raw blocker references of a ticket, from its own rows (see ownRows): a `Blocked by` heading's list, else a
-// `Blocked by:` line.
+// `Blocked by:` line. A heading with no list item under it (`-`, `*` or `+`) does not hide the line.
 function blockerRefs(own) {
-  const listed = section(own, (t) => /^blocked by$/i.test(t));
+  const listed = section(own, (t) => /^blocked by$/i.test(t)) ?? [];
+  const listItems = lines(listed).flatMap((l) => /^\s*[-*+]\s+(.*)$/.exec(l)?.[1] ?? []);
   const inline = field(lines(own).join('\n'), 'Blocked by');
-  const items = listed
-    ? lines(listed).flatMap((l) => /^\s*[-*]\s+(.*)$/.exec(l)?.[1] ?? [])
-    : inline
-      ? [inline]
-      : [];
+  const items = listItems.length ? listItems : inline ? [inline] : [];
   return items
     .flatMap((i) => i.split(','))
     .map((s) => s.trim())
@@ -305,11 +305,12 @@ export function parseTicket(text) {
   const rows = scan(text);
   const own = ownRows(rows);
   const ownText = lines(own);
-  const completionAt = headingIndex(rows, (t) => /^sorry-matt completion$/i.test(t));
+  const completionAt = lastHeadingIndex(rows, (t) => /^sorry-matt completion$/i.test(t));
   const blockerAt = lastHeadingIndex(rows, (t) => /^sorry-matt blocker$/i.test(t));
   const unchecked = ownText.some((l) => /^\s*[-*+]\s+\[ \]/.test(l));
   const recorded = completionAt >= 0 && sectionAt(rows, completionAt).some((r) => r.line.trim());
-  // A blocker after the completion record (a reverted merge) undoes it.
+  // Both are the last of their kind: a blocker after the completion record (a reverted merge) undoes it, and a
+  // completion after that blocker is a new delivery.
   const done = recorded && !unchecked && blockerAt < completionAt;
   const stuck = !done && blockerAt >= 0;
   return {
