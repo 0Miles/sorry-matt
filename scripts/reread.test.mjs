@@ -94,6 +94,53 @@ test('respond: an existing rule file listed with a space before the closing back
   }
 });
 
+test('parseLedger: a space after the opening backtick is not part of the rule path', () => {
+  const ledger = (...lines) => ['<!-- sorry-matt:run active -->', '## 10. Rule files', ...lines, ''].join('\n');
+  assert.deepEqual(parseLedger(ledger('rule: ` /abs/x.md`')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('- `rule:   /abs/x.md`')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('rule: ` /abs/x.md `')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('rule: `\t/abs/x.md`', 'rule: /abs/x.md')).rules, ['/abs/x.md']);
+  assert.deepEqual(parseLedger(ledger('rule: ` C:\\Program Files\\x.md`')).rules, ['C:\\Program Files\\x.md']);
+});
+
+test('ledgerLine: space is allowed after the opening backtick and stays out of the value', () => {
+  const line = ledgerLine('size', /(\d+)/);
+  for (const ok of ['size: ` 7`', '- size: `\t7 `', '` size: 7`']) assert.equal(line.exec(ok)?.[1], '7', ok);
+  for (const no of ['the size: 7', 'size: seven', '-size: 7', 'sizes: 7', 'size: ` `7`']) assert.equal(line.exec(no), null, no);
+});
+
+test('respond: an existing rule file listed with a space after the opening backtick is not flagged as not found', () => {
+  const f = fixture();
+  try {
+    const rule = join(f.dir, 'SKILL.md');
+    writeFileSync(rule, 'x');
+    writeFileSync(join(f.runs, 'now.md'), `<!-- sorry-matt:run active -->\n## 10. Rule files\nrule: \` ${rule}\`\n`);
+    const out = respond(event(), { git: gitAt(f.dir) });
+    assert.ok(out.includes(`  - rule: ${rule}\n`), out);
+    assert.ok(!out.includes('(not found'), out);
+  } finally {
+    f.done();
+  }
+});
+
+test('a long run of spaces before a stray backtick does not make the line pattern backtrack for seconds', () => {
+  const tail = ' '.repeat(2000) + String.fromCharCode(96) + 'y';
+  const timed = (fn) => {
+    const start = performance.now();
+    const result = fn();
+    return { result, ms: performance.now() - start };
+  };
+
+  const rules = timed(() => parseLedger(`<!-- sorry-matt:run active -->\n## 10. Rule files\nrule: /abs/x.md${tail}\n`));
+  assert.deepEqual(rules.result, { rules: [] });
+  assert.ok(rules.ms < 1000, `parseLedger took ${rules.ms} ms`);
+
+  const line = ledgerLine('size', /(\d+)/);
+  const size = timed(() => line.exec(`size: 7${tail}`));
+  assert.equal(size.result, null);
+  assert.ok(size.ms < 1000, `ledgerLine took ${size.ms} ms`);
+});
+
 test('activeLedgers: skips ended ledgers, non-markdown files and run directories', () => {
   const f = fixture();
   try {

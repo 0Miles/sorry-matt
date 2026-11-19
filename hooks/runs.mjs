@@ -17,12 +17,17 @@ export const ACTIVE = /^<!--\s*sorry-matt:run\s+active\s*-->$/;
 /**
  * The one shape of a ledger's `<key>: <value>` line: leading space, an optional `-`, `*` or `+` bullet,
  * optional backticks around the value or the whole line (each side on its own), trailing space.
- * Space is allowed before the closing backtick as well as after it, and is not part of the value: a `value`
- * that can match space must be lazy (as RULE's is) so that it leaves that space out.
+ * Space is allowed after an opening backtick (the value's or the whole line's) as well as before it, and before
+ * the closing backtick as well as after it; none of it is part of the value: the value neither starts nor ends with space, whatever `value`
+ * itself can match (the two lookarounds), so `rule: \` /abs/x.md \`` reads `/abs/x.md`.
+ * Each run of space has one place to match — the space after a backtick belongs to that backtick's group, and
+ * the lookarounds keep the value off both runs — so a line that fails does so without the nested backtracking
+ * a long run of spaces would otherwise cause.
  * The captures come from `value`, a RegExp: only its `.source` is used (flags are ignored), and it must not match
  * a backtick itself, or the optional closing backticks above stop meaning anything.
  */
-export const ledgerLine = (key, value) => new RegExp(`^\\s*(?:[-*+]\\s+)?\`?${key}:\\s*\`?${value.source}\\s*\`?\\s*$`);
+export const ledgerLine = (key, value) =>
+  new RegExp(`^\\s*(?:[-*+]\\s+)?(?:\`\\s*)?${key}:\\s*(?:\`\\s*)?(?!\\s)${value.source}(?<!\\s)\\s*(?:\`\\s*)?$`);
 
 const RULE = ledgerLine('rule', /([^`]+?)/);
 
