@@ -569,3 +569,22 @@ run `2026-11-19-backlog-sweep` 的三張純文字票（#16、#49、#50），每�
 | `have-it-all-done` 第 0 節兩段展開 | 加：設計還沒定的票在第一段就列進裁決點，沒排進的連同下游標待裁決 | 同上；讓設計定案在唯一的裁決點由人裁。 |
 | `ASKING.md` 第 4 節 `spawns` = `30 × 票數 + 50` | 改 `20 × 票數 + 50`，每票典型 10 個 | 分級後每張票的 spawn 少了；上限太寬，這次沒有擋住失控的審查。 |
 | `ASKING.md` 第 7 節上下文預算 | 加：交給 subagent 的任務以交付說明為界，沒寫的檢查開成 raw ticket | 同「主持人加碼」。 |
+
+## #102：審查分級改由腳本計算
+
+上一節把分級寫成 `prove-it` 第 1 節的表，主持人每次照表自己數行數、比對敏感路徑。這張票把表搬進
+`prove-it/scripts/tier.mjs`（零依賴，src/dist 逐位元組相同，輸出 `sorry-matt/tier@1` 與 `sorry-matt/tier-batch@1`，
+格式寫在檔頭），測試在 `scripts/tier.test.mjs`。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| `prove-it` 第 1 節的審查分級表與「改動行」「敏感路徑」的算法 | 刪；改為執行 `tier.mjs judge`，照輸出的 `tier`、`finders`、`verifiers`、`fixVerifiers`、`mutationCap` 走；腳本失敗時當成 `full` | 確定性的計算不交給 LLM。表的門檻原樣搬進腳本當預設值。 |
+| 敏感路徑「取審查用 worktree 裡的 `commands.md`」 | 改為 fixed point 與 ticket 分支兩邊「Sensitive paths」的聯集；兩邊都沒有清單時用腳本內建的預設樣式 | 只讀 ticket 分支，一張票改掉契約就能降低自己的級別。 |
+| `prove-it` 第 2 節 lens 依 `tier` 固定分組 | 分組不變，`light` 與 `standard` 加**機械裁剪**：沒有刪除行不派被刪除的行為、沒有規則檔涵蓋改動檔不派 repo 慣例、沒有簽章變動時跨檔案契約併入逐行；`full` 不裁剪 | #80 提案 2。`full` 是敏感或大型改動，保留三個 finder 當保守上限。 |
+| `prove-it` 第 4 節 verifier 依檔案分組 | 改由 `tier.mjs batch` **合批**：標了 `suspected` 的候選整批一個 verifier（走簡化流程，不成立的由同一個 verifier 接著走一般流程），其餘依檔案分組，總批數不超過 `verifiers.max` | #80 提案 3。 |
+| `prove-it` 第 7 節 `full` 一則 finding 一個 Fix Verifier | 改為一個檔案一個（`tier.mjs batch --stage fix`），同檔的 finding 合批、各自裁決 | #80 提案 3。 |
+
+門檻初值與來源：`lightMaxLines` 50、`fullOverLines` 400、`standardMaxVerifiers` 3、突變上限 3／5／10，全部取自
+28aa17b 寫進 `prove-it` 的表（該表依 run `2026-11-19-all-issues` 的檢討訂定），以 `judge` 的旗標覆寫。校正留給
+#97 第 4 組：依據是 `get-to-work` 的 `spawns.mjs` 輸出的 `byTicket`（每票的 `finder`、`verifier`、`fix-verifier`
+數）對照各票審查區塊的 `tier`。#80 提案 4（只升不降、升級重審）與 5（驗收對照補缺的情境）不在這張票重新展開後的範圍。

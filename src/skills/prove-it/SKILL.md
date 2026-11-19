@@ -50,28 +50,31 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 `pnpm install --frozen-lockfile` 這類凍結寫法）。不加相依、不下載新工具 —— 審查不改這張票的
 diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
-**審查分級**在這裡由 diff 判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 與 verifier 的
-數量和突變上限。改動行是 `git diff --numstat <fixed point>...<ticket 分支>` 新增與刪除的合計；敏感路徑取審查用
-worktree 裡 `docs/agents/commands.md` 的「Sensitive paths」，沒有這份檔或該欄是 `none` 時，取 CI 設定、hook 與
-guard、發布與部署設定、權限設定與資料庫 migration 的路徑。由上往下，第一個符合的就是：
+**審查分級**在這裡由 diff 判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 的數量與各自的
+lens、verifier 與 Fix Verifier 的合批方式和突變上限。在審查用 worktree 的根目錄執行**判級指令**：
 
-| `tier` | 條件 | finder | verifier | 突變上限 |
-| --- | --- | --- | --- | --- |
-| `light` | 只動說明文字：每個改動檔都是 `.md`、`.txt` 這類文件，不含程式、測試、腳本、設定或產生檔 | 1 | 1 | — |
-| `full` | diff 碰到敏感路徑，或改動行超過 400 | 3 | 一個檔案一個 | 10 |
-| `light` | 改動行不超過 50 | 1 | 1 | 3 |
-| `standard` | 其餘 | 2 | 一個檔案一個，至多 3 | 5 |
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <ticket 分支> > <scratchpad>/review-<票>-tier.json 2> <scratchpad>/review-<票>-tier.err
+```
+
+輸出格式、訊號的算法、門檻與覆寫旗標都寫在腳本檔頭；照輸出讀，不自己重算：
+
+- `tier`：寫進審查區塊。`reasons` 是判到這一級的條件。
+- `finders`：第 2 節照它派 Finder。
+- `verifiers.max`、`fixVerifiers`：第 4、7 節照它合批。
+- `mutationCap`：第 3 節的突變上限；`null` 表示只動說明文字，沒有可執行的行。
+
+判級指令以非 0 結束時，`tier` 當成 `full`，`finders` 當成 `[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`，
+突變上限 10，第 4、7 節用 `--tier full`；`<scratchpad>/review-<票>-tier.err` 的路徑補進接續紀錄的「證據路徑」欄。
 
 完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
-審查用 worktree 位於 ticket 分支尖端，diff 已存檔；`tier` 已依上表判定。
+審查用 worktree 位於 ticket 分支尖端，diff 已存檔；`tier` 取自判級指令的輸出，或在它失敗時是 `full`。
 
 ## 2. Finder：平行找候選
 
-Finder 的數量照 `tier`，同一則訊息一次派出，Agent tool 的 `description` 是 `finder` 後接票的識別碼。lens 這樣分：
-
-- `light`：一個 finder 套用全部 lens。
-- `standard`：兩個 —— 正確性（逐行、被刪除的行為、跨檔案契約）與符合性（驗收對照、repo 慣例）。
-- `full`：三個 —— 逐行與被刪除的行為、跨檔案契約、符合性。
+判級輸出的 `finders` 每個內層陣列派一個 finder，套用陣列裡列的 lens，同一則訊息一次派出，Agent tool 的
+`description` 是 `finder` 後接票的識別碼。`pruned` 列的 lens 已依 diff 機械裁剪，不派、不寫進任何 prompt：沒有
+刪除行不派被刪除的行為，沒有規則檔涵蓋改動檔不派 repo 慣例，簽章沒變時跨檔案契約併入逐行。
 
 本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
@@ -83,20 +86,21 @@ Finder 的數量照 `tier`，同一則訊息一次派出，Agent tool 的 `descr
 `finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
 這個前綴把 spawn 依角色與票分段計量；寫錯的會算成不明用途的通用 agent。
 
-- **逐行**：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
-  反轉、off-by-one、falsy zero、遺漏 `await`、copy-paste 錯變數與 catch 吞錯。
-- **被刪除的行為**：辨識每段被刪除或改寫的程式碼原本維持的不變量，在新程式碼中定位重建
+- **逐行**（`line-by-line`）：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
+  反轉、off-by-one、falsy zero、遺漏 `await`、copy-paste 錯變數與 catch 吞錯。跨檔案契約被併入時，也檢查被改
+  函式的回傳值、例外與時序在它的直接呼叫端是否仍成立。
+- **被刪除的行為**（`deleted-behaviour`）：辨識每段被刪除或改寫的程式碼原本維持的不變量，在新程式碼中定位重建
   位置；找不到就列為候選。
-- **跨檔案契約**：追蹤被改函式的呼叫端與被呼叫端，檢查新的前置條件、回傳形狀、例外或時序
+- **跨檔案契約**（`cross-file`）：追蹤被改函式的呼叫端與被呼叫端，檢查新的前置條件、回傳形狀、例外或時序
   是否破壞任一端。
-- **驗收對照**：把驗收快照的每一項定位到 diff 中實現它的位置與驗證它的測試。列出缺漏或只做一半
+- **驗收對照**（`acceptance`）：把驗收快照的每一項定位到 diff 中實現它的位置與驗證它的測試。列出缺漏或只做一半
   的、看起來做了但做錯的，以及票沒要求的改動（範圍蔓延）。每則引用驗收項原文與出處（`original`，
   或 `expansion` 附 `by`、`round`）。
-- **repo 慣例**：套用涵蓋變更檔的 `CLAUDE.md`、`AGENTS.md`、`CONTRIBUTING.md`、
-  `CODING_STANDARDS.md` 規則。只有能引用規則原文的才列；工具已經強制的不列。
+- **repo 慣例**（`conventions`）：套用判級輸出 `signals.ruleFiles` 列的規則檔（涵蓋變更檔的 `CLAUDE.md`、
+  `AGENTS.md`、`CONTRIBUTING.md`、`CODING_STANDARDS.md`）。只有能引用規則原文的才列；工具已經強制的不列。
 
 Finder 看不到目前對話，prompt 要自足：repo 與審查用 worktree 的絕對路徑、fixed point、
-ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須向外追查的範圍（完整的新檔內容、
+ticket 分支、diff 檔路徑、票面全文、它套用的每個 lens 的全文，以及必須向外追查的範圍（完整的新檔內容、
 被呼叫函式的實作、所有呼叫端與型別定義）。Finder 只找候選、不裁決；尚未確定的也回報。
 
 回報格式：`file`、`line`（新檔行號）、`lens`、一句 `summary`、描述使用者可見後果的
@@ -154,7 +158,7 @@ coverage、coverage.py）或執行環境內建的（Node 22 的
 1. 只取有覆蓋、可執行的程式行；測試檔本身、註解、文件、設定與產生檔不突變。未覆蓋的行不
    突變，行數寫進紀錄。本票改了可執行程式行卻沒有一行有覆蓋時，這件事本身是一則候選
    （lens `mutation`）。
-2. **每行至多一個 mutant，每張票的上限照 `tier`**（第 1 節的表；以 `--cap` 傳給腳本）。超過上限時依序取：Finder 候選指到的行 → 驗收項
+2. **每行至多一個 mutant，每張票的上限是判級輸出的 `mutationCap`**（以 `--cap` 傳給腳本）。超過上限時依序取：Finder 候選指到的行 → 驗收項
    直接依賴的行 → 條件、邊界與回傳值 → 其他敘述；同一優先級分散到不同 hunk。
 3. 每行挑一個最可能被測試漏掉的運算子：條件反轉、邊界移位（`<` ↔ `<=`）、回傳值換成常數或
    空值、刪除敘述（呼叫、賦值、`await`）。mutant 必須改變某個可觀察行為。
@@ -189,10 +193,18 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 
 ## 4. Verifier：逐項獨立裁決
 
-候選（含第 3 節的實跑與突變候選）依檔案分組，一組交給一個 verifier subagent，全部並行派出，`description` 是
-`verifier` 後接票的識別碼。組數照 `tier`：`light` 全部候選一組；`standard` 一個檔案一組，超過三組時把候選最少的
-幾組併成一組；`full` 一個檔案一組。分組只決定 verifier 的數量：verifier 對組內每個候選逐條裁決，各附
-`file:line` 證據。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由呼叫方
+候選（含第 3 節的實跑與突變候選）由腳本**合批**。每個候選給一個 `id`，把 `id`、`file`、`suspected` 寫成 JSON
+陣列，在審查用 worktree 的根目錄執行：
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/review-<票>-tier.json --items <scratchpad>/review-<票>-candidates.json
+```
+
+判級指令失敗時以 `--tier full` 取代 `--tier-file`。輸出的 `batches` 每批交給一個 verifier subagent，全部並行派出，
+`description` 是 `verifier` 後接票的識別碼。標了 `suspected` 的候選整批交給一個 verifier（批的 `short`），其餘依
+檔案分組（批的 `normal`），總批數不超過判級輸出的 `verifiers.max`。合批只決定 verifier 的數量，不合併候選：verifier
+對批內每個候選逐條裁決，各附 `file:line` 證據；`short` 的候選走簡化流程，兩項都不成立的由同一個 verifier 接著走
+一般流程。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由呼叫方
 當成觀察。
 
 Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、該組候選的欄位與
@@ -251,7 +263,7 @@ verifier 重驗。
 Verifier 的回報，每個候選一段，至多五行：裁決、`rule`（成立時；沒命中寫 `none`）、`file:line` 證據、三關結果或
 簡化流程查過的兩項、修法方向（finding 才有）。最後一行 `noticed`，沒有寫 `none`。
 
-完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同組的
+完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同批的
 候選也逐條裁決；每則 finding 都有命中的 `rule`、它的引用與可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
 
 ## 5. 結論
@@ -329,8 +341,11 @@ review 或 `suggestion` 區塊；審查用 worktree 已移除。
 finding 關上了沒有。它的範圍是那幾則 finding 與修正 commit 的 diff（`git diff <上次 head>..<ticket 分支>`），
 所以每一輪要驗的東西只會變少。審查用 worktree 依第 1 節以修正後的 ticket 分支尖端重建，`tier` 沿用初審的。
 
-1. **Fix Verifier**：`light` 與 `standard` 一張票一個 subagent，收全部 finding；`full` 一則 finding 一個，並行
-   派出。`acceptance` finding 不交給它（第 4 步）。`description` 是 `fix-verifier` 後接票的識別碼。Prompt 自足，
+1. **Fix Verifier**：把 finding（`acceptance` finding 除外，它走第 4 步）的 `id`、`file` 寫成 JSON 陣列，以
+   `node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier <沿用的 tier> --stage fix --items <scratchpad>/review-<票>-r<round>-findings.json`
+   合批：`light` 與 `standard` 一張票一批，`full`
+   一個檔案一批。每批一個 subagent，並行派出；同批的每則 finding 各自作答、各得一項裁決。`description` 是
+   `fix-verifier` 後接票的識別碼。Prompt 自足，
    含審查用 worktree 路徑、每則 finding 的 `summary`、`evidence`、`rule` 與 `fix`，以及修正 commit 的 diff；
    省略實作者的說明。它對每則 finding 重跑 `evidence` 記的那個情境，兩題作答並附 `file:line`：
    1. 那個情境現在的可觀察結果是什麼？和 `fix` 寫的修後結果一致就是**已關閉**，否則**未關閉**。
