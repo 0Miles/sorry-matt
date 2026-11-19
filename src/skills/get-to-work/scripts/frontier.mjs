@@ -14,13 +14,17 @@
 //         says ("unblocked when every blocker is closed"). A ticket integrated during this run is still open on
 //         GitHub, so pass it with --done; pass a ticket the run marked stuck with --stuck.
 // local   One ticket file per issue (`.scratch/<feature>/issues/<NN>-<slug>.md`). Blockers come from the
-//         `Blocked by:` line (or a `## Blocked by` list): `NN`, `#NN`, a file name or a repo-relative path,
-//         comma-separated; "None ..." means no blockers. A ticket is done when it has a non-empty
-//         `## sorry-matt completion` section and no unchecked `- [ ]` outside the `## Comments` and
-//         `## sorry-matt ...` sections, and no `## sorry-matt blocker` after the completion (get-to-work appends
-//         one when it reverts the merge); it is stuck when it has `## sorry-matt blocker` and is not done.
-//         `Status:` alone (ready-for-human included) never makes it done. Without --ref the files are read
-//         from the working tree; with --ref they are read from that commit.
+//         `Blocked by:` line (or a `Blocked by` heading's list): `NN`, `#NN`, a file name or a repo-relative
+//         path, comma-separated; "None ..." means no blockers. A ticket is done when it has a non-empty
+//         `sorry-matt completion` section, no unchecked `- [ ]` (`*` and `+` bullets too) outside the `Comments`
+//         and `sorry-matt ...` sections, and no `sorry-matt blocker` heading after the completion (get-to-work
+//         appends one when it reverts the merge); it is stuck when it has a `sorry-matt blocker` heading and is
+//         not done. `Status:` alone (ready-for-human included) never makes it done.
+//         How the file is read (ticket.mjs, shared with acceptance.mjs): fenced code is skipped, so nothing
+//         inside it counts; the `Comments`, `sorry-matt ...`, `Blocked by`, completion and blocker headings
+//         count at any level, and each section runs down to the next heading of the same or a higher level.
+//         The GitHub issue body is read the same way. Without --ref the files are read from the working tree;
+//         with --ref they are read from that commit.
 // --line  Report only the tickets of that line (an id from `line`). With Local Markdown, done and stuck live on
 //         each line's own integration branch, so run once per line with that branch as --ref and the line's
 //         id as --line, passing the whole set each time; the run's frontier is the union of those outputs.
@@ -55,6 +59,7 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, relative, sep, posix } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
+import { scan, section, sectionAt, headingIndex, lastHeadingIndex, ownRows, lines } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/frontier@1';
 
@@ -163,31 +168,19 @@ function finish(tracker, source, tickets, compare, { line, warnings = [] } = {})
   };
 }
 
-// Section-aware reading of a ticket body.
-function sections(text) {
-  const out = [{ heading: '', body: [] }];
-  for (const line of text.replace(/\r\n/g, '\n').split('\n')) {
-    const h = /^##\s+(.*?)\s*$/.exec(line);
-    if (h) out.push({ heading: h[1], body: [] });
-    else out[out.length - 1].body.push(line);
-  }
-  return out;
-}
-
-const ownSection = (s) => !/^comments$/i.test(s.heading) && !/^sorry-matt\b/i.test(s.heading);
-
 // `Name: v`, `**Name:** v` or `**Name**: v`.
 const field = (text, name) => {
   const m = new RegExp(`^\\s*(?:\\*\\*)?${name}(?::\\*\\*|\\*\\*:|:)\\s*(.*)$`, 'im').exec(text);
   return m ? m[1].replace(/\*\*/g, '').trim() : null;
 };
 
-// The raw blocker references of a ticket: a `## Blocked by` list, else a `Blocked by:` line.
-function blockerRefs(secs) {
-  const listed = secs.find((s) => /^blocked by$/i.test(s.heading));
-  const inline = field(secs.filter(ownSection).map((s) => s.body.join('\n')).join('\n'), 'Blocked by');
+// The raw blocker references of a ticket, from its own rows (see ownRows): a `Blocked by` heading's list, else a
+// `Blocked by:` line.
+function blockerRefs(own) {
+  const listed = section(own, (t) => /^blocked by$/i.test(t));
+  const inline = field(lines(own).join('\n'), 'Blocked by');
   const items = listed
-    ? listed.body.filter((l) => /^\s*[-*]\s+/.test(l)).map((l) => l.replace(/^\s*[-*]\s+/, ''))
+    ? lines(listed).filter((l) => /^\s*[-*]\s+/.test(l)).map((l) => l.replace(/^\s*[-*]\s+/, ''))
     : inline
       ? [inline]
       : [];
@@ -276,7 +269,7 @@ export function githubFrontier({ repo, numbers, done = [], stuck = [], line, gh 
   const tickets = raw.map(({ n, issue, native }) => {
     for (const b of native) outside.set(idFor(repoOf(b), b.number), b.state === 'closed' ? 'done' : 'open');
     const nativeIds = native.map((b) => idFor(repoOf(b), b.number));
-    const body = blockerRefs(sections(issue.body || '')).map((r) => bodyRef(r) || { id: r, missing: true });
+    const body = blockerRefs(ownRows(scan(issue.body || ''))).map((r) => bodyRef(r) || { id: r, missing: true });
     const bodyIds = body.map((r) => r.id);
     const id = `#${n}`;
     if (nativeIds.length && bodyIds.length) {
@@ -308,18 +301,20 @@ export function githubFrontier({ repo, numbers, done = [], stuck = [], line, gh 
 const pathCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 export function parseTicket(text) {
-  const secs = sections(text);
-  const ownText = secs.filter(ownSection).map((s) => s.body.join('\n')).join('\n');
-  const completion = secs.find((s) => /^sorry-matt completion$/i.test(s.heading));
-  const blockerAt = secs.findLastIndex((s) => /^sorry-matt blocker$/i.test(s.heading));
-  const unchecked = secs.filter(ownSection).some((s) => s.body.some((l) => /^\s*[-*]\s+\[ \]/.test(l)));
+  const rows = scan(text);
+  const own = ownRows(rows);
+  const ownText = lines(own);
+  const completionAt = headingIndex(rows, (t) => /^sorry-matt completion$/i.test(t));
+  const blockerAt = lastHeadingIndex(rows, (t) => /^sorry-matt blocker$/i.test(t));
+  const unchecked = ownText.some((l) => /^\s*[-*+]\s+\[ \]/.test(l));
+  const recorded = completionAt >= 0 && sectionAt(rows, completionAt).some((r) => r.line.trim());
   // A blocker after the completion record (a reverted merge) undoes it.
-  const done = Boolean(completion && completion.body.some((l) => l.trim()) && !unchecked && blockerAt < secs.indexOf(completion));
+  const done = recorded && !unchecked && blockerAt < completionAt;
   const stuck = !done && blockerAt >= 0;
   return {
     title: (/^#\s+(.*)$/m.exec(text) || [])[1]?.trim() ?? null,
-    status: field(ownText, 'Status'),
-    refs: blockerRefs(secs),
+    status: field(ownText.join('\n'), 'Status'),
+    refs: blockerRefs(own),
     state: done ? 'done' : stuck ? 'stuck' : 'open',
   };
 }
