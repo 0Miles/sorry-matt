@@ -66,8 +66,12 @@ and the diff is saved.
 
 ## 2. Finder: candidates in parallel
 
-Give each lens to its own finder subagent, all dispatched in one message. When the diff is a single file of no
-more than a few dozen lines, one finder applies every lens.
+Give each lens to its own finder subagent, all dispatched in one message. Two kinds of diff get a single finder
+that applies every lens:
+
+- A single file of no more than a few dozen lines.
+- Prose only: every changed file is documentation such as `.md` or `.txt`, with no code, tests, scripts,
+  configuration, or generated files.
 
 This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground,
 never in the background: the caller waits within its own turn until every one of them is back. `get-to-work` puts
@@ -93,17 +97,24 @@ review worktree, the fixed point, the ticket branch, the diff file path, the ful
 that lens, and the scope it must trace outward (complete new files, implementations of called functions, every
 caller, and type definitions). A finder only raises candidates and never rules; it reports what it is unsure of.
 
-Report format: `file`, `line` (new-file line number), `lens`, a one-sentence `summary`, and a `failure_scenario`
-describing an observable consequence (wrong output, a crash, data loss — not an intermediate state). At most six
-per finder; an empty list when there are none.
+Report format: `file`, `line` (new-file line number), `lens`, a one-sentence `summary`, a `failure_scenario`
+describing an observable consequence (wrong output, a crash, data loss — not an intermediate state), and
+`suspected` (suspected spec-level or pre-existing):
+
+- `spec`: the behaviour or wording the candidate points at is exactly what the ticket text or an acceptance
+  criterion specifies. Quote the text that specifies it.
+- `pre-existing`: the fixed point already does this. Give its location on the fixed point.
+- `none`: neither seems likely.
+
+At most six per finder; an empty list when there are none.
 
 Each reviewer is one set of Finders, and every candidate carries a `by` field naming its reviewer. Today there is
 only `primary`; another reviewer is just another source of candidates, and everything from section 3 on stays the
 same.
 
 Done when: every finder has reported; candidates on the same line with the same failure mechanism are deduplicated,
-keeping the one with the most concrete `failure_scenario`; every hunk has been through the line-by-line lens at
-least once.
+keeping the one with the most concrete `failure_scenario`; every candidate has a `suspected`; every hunk has been
+through the line-by-line lens at least once.
 
 ## 3. Live run and mutation
 
@@ -116,9 +127,14 @@ mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
-  baseline, so skip it this time and record why in the mutation record.
+  baseline, so skip it this time; the mutation record says `skipped: red baseline` (format in section 6).
 
 ### Mutation
+
+**No executable lines, no mutation.** When every change in this ticket's diff falls in docs, comments,
+configuration, or generated files and not one executable code line changed, do not run `mutate.mjs lines` and
+write no plan; the mutation record says `skipped: no executable lines` (format in section 6). The live run still
+runs.
 
 **Scope is limited to lines in this ticket's diff that tests cover.** In the review worktree, list the changed
 lines and their coverage (`${CLAUDE_SKILL_DIR}` is the base directory shown when this skill loads):
@@ -173,20 +189,36 @@ Outcomes: `killed` and `timeout` mean the tests caught it; `survived` is a candi
 `failure_scenario` names a concrete input on which the original and the mutant produce different observable results
 and no existing test stops it.
 
-Done when: the live-run result is recorded; mutation touched only covered lines in this ticket's diff, at most one
-per line and no more than the cap; every mutant has an outcome; `git status --porcelain` in the review worktree is
+Done when: the live-run result is recorded; with no executable lines, mutation was skipped and the record says
+`skipped: no executable lines`; mutation touched only covered lines in this ticket's diff, at most one per line and
+no more than the cap; every mutant has an outcome; `git status --porcelain` in the review worktree is
 empty; every surviving mutant has become a candidate.
 
 ## 4. Verifier: an independent ruling per candidate
 
-Give each candidate (including the live-run and mutation candidates from section 3) to its own verifier subagent,
-dispatched in parallel. Verifiers only handle candidates; none rereads the whole diff.
+Group the candidates (including the live-run and mutation candidates from section 3) by file plus failure
+mechanism: candidates in the same file with the same failure mechanism go to one verifier subagent, every other
+candidate to its own, all dispatched in parallel. The host judges the failure mechanism from `summary` and
+`failure_scenario`; when unsure, keep them apart. Grouping only cuts the number of verifiers and never merges
+candidates: a verifier rules on each candidate in its group separately, each with its own `file:line` evidence.
+Verifiers only handle candidates; none rereads the whole diff.
 
 The prompt is self-contained and holds only the absolute paths of the repo and the review worktree, the ticket
-branch, the fixed point, the candidate's fields, and the ruling rules below. Leave out the finder's reasoning to
-avoid anchoring.
+branch, the fixed point, the fields of that group's candidates, and the ruling rules below. Leave out the finder's
+reasoning to avoid anchoring; pass `suspected` and the text or location attached to it as they are — they are a
+lead to check, not a ruling.
 
-**Disprove first:** find and cite the code that would overturn the candidate. Settle uncertain technical facts by
+**A candidate marked `suspected` (`spec` or `pre-existing`) takes the short path** instead of all three gates.
+Check both:
+
+- Run the same check on the fixed point (the second gate). The fixed point has it too → rule **pre-existing**
+  directly.
+- Compare against the text of the ticket and the acceptance snapshot. The fixed point is fine, but the behaviour or
+  wording the candidate points at is exactly what the spec specifies → rule **spec-level** directly: the
+  implementation follows the spec, and what needs changing is the spec.
+- Neither holds → treat it as `none` and take the normal path below, starting from disproof.
+
+A candidate with `suspected: none` takes the normal path. **Disprove first:** find and cite the code that would overturn the candidate. Settle uncertain technical facts by
 running a throwaway program. For a surviving mutant, disproving means showing it is an equivalent mutant — no input
 makes the original and the mutant differ observably. Only when disproof fails, go through the gates in order:
 
@@ -196,15 +228,18 @@ makes the original and the mutant differ observably. Only when disproof fails, g
    a changed line of this ticket's diff, which the script guarantees, and so passes this gate.
 3. **Concrete failure scenario:** the failure path is genuinely reachable and the consequence is observable.
 
-There are three rulings, each with `file:line` evidence: **confirmed** (all three gates pass), **pre-existing**
-(fails only the second gate), and **invalid**. When a ruling's `file:line` does not match the ticket branch, have
-another verifier re-check that candidate.
+There are four rulings, each with `file:line` evidence: **confirmed** (all three gates pass), **pre-existing**
+(fails only the second gate, or the short path found it on the fixed point too), **spec-level** (from the short
+path only), and **invalid**. Every citation names its source: the ticket branch (the default), the fixed point, or
+the ticket text / acceptance snapshot. Only when a citation does not match the source it names, have another
+verifier re-check that candidate.
 
 Routing:
 
 - **Confirmed and blocking** (it changes whether this ticket should be integrated) → a finding. A confirmed
   surviving mutant always counts as blocking: the tests do not pin the behaviour this ticket changed.
 - **Confirmed but not blocking** → an observation; it triggers no fix.
+- **Spec-level** → an observation marked `(spec-level)` at the end of its sentence; it triggers no fix.
 - **Pre-existing** → handed to the host for get-to-work's filing along the way.
 - **Invalid** → dropped; for a mutation candidate, its disposition goes into the mutation record (for example
   "equivalent, invalid").
@@ -213,7 +248,8 @@ Each finding carries a one-sentence **fix direction** that states the observable
 output, an error, a test going from red to green). One that cannot state it is a style preference; withdraw it.
 For a surviving mutant, the fix direction is a test that kills it, with its input.
 
-Done when: every candidate has exactly one ruling with evidence and the result of each gate; every finding has a
+Done when: every candidate has exactly one ruling with `file:line` evidence, and either the result of each gate or
+the two checks of the short path; candidates in a group were each ruled on separately; every finding has a
 falsifiable fix direction; every mutant has a disposition in the mutation record.
 
 ## 5. Verdict
@@ -260,7 +296,16 @@ restored: yes | no
 ```
 
 An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
-`file:line`. With a second reviewer, each gets its own `reviewer:` section, and findings stay separate, never merged
+`file:line`. A spec-level observation is marked `(spec-level)` at the end of its sentence, before
+`(evidence: …)`.
+
+When a round runs no mutation, its `mutation` section is a single line with no mutant list, and `restored` is still
+written:
+
+- No executable lines: `mutation (round <n>): skipped: no executable lines`
+- Red live run: `mutation (round <n>): skipped: red baseline`
+
+With a second reviewer, each gets its own `reviewer:` section, and findings stay separate, never merged
 or reranked; `verdict` follows from every reviewer's findings.
 
 Write this block into the "verification results" field of the ticket's status record, replacing the previous
