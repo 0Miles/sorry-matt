@@ -223,17 +223,20 @@ retried or routed around.
 Claude Code cannot put a time limit on a subagent, so the host scans for one at every wake-up. An **assignment** gives
 work to a background agent: spawning an implementation, expansion or merge agent, or handing a batched fix, a
 red-light fix or a send-back record back to the original agent with SendMessage; a fix handed to an agent when a red
-maps to no ticket counts too. `prove-it`'s finders, verifiers and Fix Verifiers are dispatched in the foreground
-(`prove-it` section 2): they run to completion inside the host's own turn, and the host is not woken while it waits
-on them, so review has no time limit.
+maps to no ticket counts too. The review host agent of close-out (close-out step 2) is spawned in the foreground, and
+the finders, verifiers and Fix Verifiers under it are dispatched in the foreground too (`prove-it` section 2): the whole
+review runs to completion inside the host's own turn, and the host is not woken while it waits on it, so review has no
+time limit and no assignment record.
 
 **A spawn's `description`:** every time you spawn an agent, the Agent tool's `description` starts with that agent's
 role word, followed by the ticket's identifier (`#N` on GitHub, the ticket file name in Local Markdown), as in
 `implement #72`. The role words: `expand` (an expansion agent, followed by every ticket it covers, as in
 `expand #75 #83`), `implement` (an implementation agent, including one spawned anew after a send-back and one
 reassigned while implementing), `fix` (an agent reassigned while fixing), `ci-fix` (an agent newly spawned for a
-red-light fix; when the red maps to no ticket, followed by that line's integration branch) and `merge` (a merge
-agent); `prove-it`'s `finder`, `verifier` and `fix-verifier` are in its own rules. The plugin's hook records each
+red-light fix; when the red maps to no ticket, followed by that line's integration branch), `merge` (a merge
+agent) and `review` (the review host agent); the `finder`, `verifier` and `fix-verifier` it spawns are in `prove-it`'s
+own rules. Those second-level spawns still carry the host's session id, so the hook counts them against the run's
+spawns and blocks them at the limit all the same. The plugin's hook records each
 spawn's agent type and this `description` in `<run>.counters.json` beside the ledger, and the spawn breakdown when
 finishing (`FINISH.md`) relies on this prefix to tell which kind of work a general-purpose agent did and for which
 ticket: a spawn with a wrong prefix is counted under `general-purpose`.
@@ -468,29 +471,39 @@ integration branch, CI runs in the background, the host does not wait, and the n
 2. **Independent review:** first run the acceptance diff — re-read the ticket with `acceptance.mjs` plus
    `--against <acceptance snapshot> --sha <the sha256 in the reconciliation table>` (for Local Markdown, with
    `--ref <ticket branch>`) and save the output. Exit code 3 means the snapshot itself was edited; save the output
-   and hand it to the review all the same, with `check.changed` true. Then call the Skill tool with `prove-it` in
-   mode `initial`, passing the ticket (identifier, the original ticket text and the expansion block), the paths of
-   the acceptance snapshot and of the acceptance diff output, the fixed point (the line integration branch), the
-   ticket branch, the targeted-check results from step 1, and the line's CI coverage — `no-origin` when there is no
-   `origin`, `uncovered` when the line was ruled "CI does not cover the integration branch", `covered` otherwise; on
-   a line with CI the review runs only the affected scope and leaves the full suite to the CI run after integration.
-   The reviewer does the live run, and mutation limited
-   to this ticket's diff, and it writes a fixed-format `pass` / `fix` / `stuck` verdict and finding list into the
-   ticket's status record. `pass` goes on to integration, `fix` to the batched fix, and `stuck` is cleared using the
-   condition it states, then `prove-it` is called again per its section 5. If it cannot be cleared, mark the ticket
-   stuck (`SEND-BACK.md`). **One ticket gets this one reviewer by default**, its lenses covering standards
-   and spec conformance together. Add a specialist reviewer only where a concrete risk calls for one, naming the
-   risk and recording the rationale in the self-answer log; "another look, to be safe" is not a risk.
+   and hand it to the review all the same, with `check.changed` true. Then read the sibling
+   [`REVIEWER.md`](REVIEWER.md), fill in its placeholders, and spawn one **review host agent** **in the foreground**
+   with the filled-in text as its prompt, adding no rules; its `description` is `review` followed by the ticket's
+   identifier. The placeholders: mode `initial`, the ticket (identifier, and the file holding the original ticket text
+   and the expansion block), the paths of the acceptance snapshot and of the acceptance diff output, the fixed point
+   (the line integration branch), the ticket branch, the targeted-check results from step 1, where the ticket's
+   status record is, and the line's CI coverage — `no-origin` when there is no `origin`, `uncovered` when the line
+   was ruled "CI does not cover the integration branch", `covered` otherwise; on a line with CI the review runs only
+   the affected scope and leaves the full suite to the CI run after integration. It calls the Skill tool with
+   `prove-it`, and in its own context dispatches the finders and verifiers, does the live run and mutation limited to
+   this ticket's diff, rules, and writes the fixed-format `pass` / `fix` / `stuck` verdict and finding list into the
+   ticket's status record. The host does not load `prove-it`; it takes only the agent's final **review report**: six
+   lines at most, the first `<!-- sorry-matt:review-report -->`, holding the verdict, the counts of findings,
+   observations and pre-existing items, and where the review block is — never the findings' text. `pass` goes on to
+   integration, `fix` to the batched fix, and `stuck` is cleared using the condition the report states, then the
+   agent is spawned again in the same mode (with the previous review block set to none when the report's `completed`
+   is `none`, and to "in the status record" otherwise, so it resumes per `prove-it` section 5); when the reason is
+   `budget`, mark the ticket awaiting ruling per "Budget and breaker"; anything else that cannot be cleared —
+   `no Agent tool` (the spawn depth limit reached) included — marks the ticket stuck (`SEND-BACK.md`). **One ticket
+   gets this one reviewer by default**, its lenses covering standards and spec conformance together. Add a specialist
+   reviewer only where a concrete risk calls for one, naming the risk, recording the rationale in the self-answer log,
+   and writing it into the brief's reviewer placeholder; "another look, to be safe" is not a risk.
 
-   **The host carries out the review block.** `prove-it`'s `tier` sets how deep the review goes, and its verifiers
-   judge what is blocking; the host's job is to act on the verdict: `findings` go to the fix, `observations` and
-   `pre-existing` go into one raw ticket per "Filing along the way", and the ticket moves on by `verdict`.
-3. **Batched fix:** hand the review block's `findings` back to the original context-holding agent all at once, as
-   the `summary`, `evidence` and `fix` text of those findings; the fix's scope is closing them, in one round.
-   Afterwards re-run the targeted checks for the affected surface and the acceptance diff, then call the Skill tool
-   with `prove-it` in mode `recheck`, attaching the previous review block, the new acceptance diff output and the
-   same CI coverage: it
-   verifies only whether those findings are closed. **A ticket gets at most two correction rounds**, counted in the
+   **The host carries out the review report.** `prove-it`'s `tier` sets how deep the review goes, and its verifiers
+   judge what is blocking; the host's job is to act on the verdict: `findings` go to the fix (step 3); when the count
+   of `observations` or `pre-existing` is not 0, the host reads just those two parts of the review block and files them
+   into one raw ticket per "Filing along the way". The ticket moves on by `verdict`.
+3. **Batched fix:** hand the review block's `findings` back to the original context-holding agent all at once: give
+   it where the review block is and have it read the `summary`, `evidence` and `fix` text of each finding there; the
+   host does not restate them. The fix's scope is closing them, in one round. Afterwards re-run the targeted checks for
+   the affected surface and the acceptance diff, then spawn the review host agent in the foreground as in step 2, in
+   mode `recheck`, with the new acceptance diff output, the same CI coverage, and the previous review block set to
+   "in the status record": it verifies only whether those findings are closed. **A ticket gets at most two correction rounds**, counted in the
    ticket's verification result in the reconciliation table; a new finding raised by a recheck counts within the
    same rounds. When the second round's `recheck` is still `fix`, mark the ticket stuck (`SEND-BACK.md`), attaching
    the findings still open to the stuck record.
@@ -543,9 +556,10 @@ point, whatever cannot be answered accumulates until the next dispatch point and
 
 Done when: every ticket that reported entered close-out without waiting for other tickets; every ticket went through
 exactly one independent review (`prove-it` in `initial`; a `stuck` before the review opens does not count), each
-correction round had one `recheck`, every call came with that call's acceptance diff output against the acceptance
-snapshot, and every verdict is in the status record; what went to each fix was the text of the review block's
-`findings`, no ticket had more than two correction rounds and each count is in the reconciliation table, and every
+correction round had one `recheck`, every review was hosted by a foreground review host agent and came with that
+review's acceptance diff output against the acceptance snapshot, every verdict is in the status record, and the host
+received only review reports of six lines at most; what went to each fix was the text of the review block's
+`findings` (given by location, read by the original agent), no ticket had more than two correction rounds and each count is in the reconciliation table, and every
 ticket with observations or pre-existing items has one raw ticket; its targeted checks are back to green, and it has either a
 provider-native delivery that passed acceptance or a traceable stuck record; every ticket that gained a specialist
 reviewer names the risk; each line integrated at most one ticket at a time, and no queued ticket was integrated into

@@ -20,7 +20,8 @@
 //                branch when the red light maps to no ticket
 //     merge      the merge agent; its target is the ticket, or the line's integration branch for the merge that
 //                syncs the base when the run finishes
-//   prove-it's finder, verifier and fix-verifier are named by prove-it's own rules.
+//     review     the review host agent, spawned in the foreground at close-out to host prove-it for the ticket
+//   prove-it's finder, verifier and fix-verifier, which the review host spawns, are named by prove-it's own rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
 //   Markdown. The plugin's budget hook logs each spawn's agent type and `description` next to the run ledger, and
 //   spawns.mjs reads the role word and the first ticket back from it; a spawn whose prefix is wrong counts as
@@ -77,7 +78,7 @@ import { UsageError, failure, runIfEntry } from './cli.mjs';
 import { ticketOf } from './spawns.mjs';
 
 export const FORMAT = 'sorry-matt/brief@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge'];
+export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review'];
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 // A placeholder is `{…}` with no brace inside; it may run over several lines.
 const PLACEHOLDER = /\{[^{}]*\}/g;

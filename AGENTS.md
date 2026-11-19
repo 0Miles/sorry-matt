@@ -391,6 +391,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 合線 | join lines |
 | 索引檔 | index file |
 | 觀察(審查區塊的) | observation |
+| 審查主持 agent | review host agent |
+| 審查回報 | review report |
+| 第二層(spawn) | second level |
 | 判級指令 | tier command |
 | 裁剪(lens) | prune |
 | 併入(lens) | fold into |

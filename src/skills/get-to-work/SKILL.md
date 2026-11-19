@@ -171,14 +171,16 @@ node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" verdict <整合分支> <SHA>
 
 Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時掃描。**派送**是把工作交給一個背景 agent：spawn
 實作、展開或整併 agent，或以 SendMessage 把集中修正、紅燈修正、退回紀錄交回原 agent；紅燈對不到票時交給 agent
-做的修正也算。`prove-it` 的 finder、verifier 與 Fix Verifier 以前景派送（`prove-it` 第 2 節），在主持人自己的
-回合裡跑完才回來，主持人等的期間不會被喚醒，所以審查不設時限。
+做的修正也算。收票的審查主持 agent（收票步驟 2）以前景 spawn，它底下的 finder、verifier 與 Fix Verifier 也以前景
+派送（`prove-it` 第 2 節）：整段審查在主持人自己的回合裡跑完才回來，主持人等的期間不會被喚醒，所以審查不設時限，
+也沒有派送紀錄。
 
 **spawn 的 `description`**：每次 spawn 一個 agent，Agent tool 的 `description` 都以該 agent 的角色字開頭、後接票的
 識別碼（GitHub 是 `#N`，Local Markdown 是票檔名），如 `implement #72`。角色字：`expand`（展開 agent，後接它負責的
 每張票，如 `expand #75 #83`）、`implement`（實作 agent，含退回後新 spawn 的與實作中改派的）、`fix`（修正中改派的
-agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該線的整合分支）、`merge`（整併 agent）；`prove-it` 的
-`finder`、`verifier`、`fix-verifier` 寫在它自己的規則裡。plugin 的 hook 把每個 spawn 的 agent 類型與這個 `description`
+agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該線的整合分支）、`merge`（整併 agent）、`review`（審查主持
+agent）；它 spawn 的 `finder`、`verifier`、`fix-verifier` 寫在 `prove-it` 自己的規則裡。這些第二層的 spawn 帶的仍是
+主持人的 session id，hook 照樣計進 run 的 spawn 數、到上限照樣擋下。plugin 的 hook 把每個 spawn 的 agent 類型與這個 `description`
 記進 ledger 旁的 `<run>.counters.json`，收官的分段計量（`FINISH.md`）靠這個前綴認出通用 agent 做的是哪一種工作、
 屬於哪張票：前綴寫錯的 spawn 會算進 `general-purpose`。
 
@@ -354,22 +356,29 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    審查只收綠燈的票。
 2. **獨立審查**：先比對驗收 —— 以 `acceptance.mjs` 加 `--against <驗收快照> --sha <對帳表記的 sha256>`
    重讀該票（Local Markdown 改用 `--ref <ticket 分支>`），輸出存檔。結束代碼 3 表示快照本身被改過，
-   輸出照樣存檔交給審查，`check.changed` 為 true。再呼叫 Skill tool 帶入 `prove-it`，模式
-   `initial`，傳入票（識別碼、原票票面與展開區塊）、驗收快照與比對輸出的路徑、fixed point（該線
-   整合分支）、ticket 分支、步驟 1 的針對性檢查結果，以及這條線的 CI 覆蓋 —— 沒有 `origin` 傳 `no-origin`，已定案為
-   CI 不涵蓋整合分支傳 `uncovered`，其餘傳 `covered`；有 CI 的線審查只跑受影響範圍，全套留給整併後的 CI。它由審查方做實跑與只限
-   本票 diff 的突變，輸出 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單，並寫進該票的
-   接續紀錄。`pass` 進整併，`fix` 進集中修正，`stuck` 依它寫的解除條件排除後，照 `prove-it` 第 5 節
-   重新呼叫；排除不了就標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
-   只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單；
+   輸出照樣存檔交給審查，`check.changed` 為 true。再讀同層的 [`REVIEWER.md`](REVIEWER.md)，填好其中的佔位，以填好的
+   全文為 prompt **在前景** spawn 一個**審查主持 agent**，不另加規則；`description` 是 `review` 後接票的識別碼。佔位是：
+   模式 `initial`、票（識別碼、存放原票票面與展開區塊的檔）、驗收快照與比對輸出的路徑、fixed point（該線整合分支）、
+   ticket 分支、步驟 1 的針對性檢查結果、該票接續紀錄的位置，以及這條線的 CI 覆蓋 —— 沒有 `origin` 傳 `no-origin`，
+   已定案為 CI 不涵蓋整合分支傳 `uncovered`，其餘傳 `covered`；有 CI 的線審查只跑受影響範圍，全套留給整併後的 CI。
+   它呼叫 Skill tool 帶入 `prove-it`，在自己的 context 裡派 finder 與 verifier、做實跑與只限本票 diff 的突變、裁決，
+   把 `pass`／`fix`／`stuck` 的固定格式結論與 finding 清單寫進該票的接續紀錄。主持人不載入 `prove-it`，只收它最後
+   那段**審查回報**：至多六行，第一行 `<!-- sorry-matt:review-report -->`，含結論、finding／觀察／pre-existing 的
+   數量與審查區塊的位置，不含 finding 全文。`pass` 進整併，`fix` 進集中修正，`stuck` 依回報寫的解除條件排除後
+   以同一個模式再 spawn 一次（回報的 `completed` 是 `none` 時上一次的審查區塊填 none，否則填「在接續紀錄裡」，它照
+   `prove-it` 第 5 節續跑）；原因是 `budget` 時照「預算與斷路」把該票標待裁決；其餘排除不了的 —— 含
+   `no Agent tool`（spawn 深度已到上限）—— 標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
+   只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單，寫進交付說明的 reviewer 佔位；
    「再看一遍比較保險」不是風險。
 
-   **主持人照審查區塊執行。** 審查的深度由 `prove-it` 的 `tier` 定，blocking 由它的 verifier 判；主持人的
-   工作是把結論落地：`findings` 交修，`observations` 與 `pre-existing` 照「期間開票」合開一張 raw ticket，
-   這張票照 `verdict` 往下走。
-3. **集中修正**：把審查區塊的 `findings` 一次全部交回保有 context 的原 agent，交的就是那幾則的 `summary`、
-   `evidence` 與 `fix` 原文；修正的範圍是關上這幾則，一輪修完。修完重跑受影響範圍的針對性檢查與驗收比對，
-   再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，附上一次的審查區塊、新的比對輸出與同一個 CI 覆蓋：它只驗這幾則關上了沒有。
+   **主持人照審查回報執行。** 審查的深度由 `prove-it` 的 `tier` 定，blocking 由它的 verifier 判；主持人的
+   工作是把結論落地：`findings` 交修（步驟 3）；`observations` 或 `pre-existing` 的數量不是 0 時，只讀審查區塊的
+   這兩段，照「期間開票」合開一張 raw ticket。這張票照 `verdict` 往下走。
+
+3. **集中修正**：把審查區塊的 `findings` 一次全部交回保有 context 的原 agent：交的是審查區塊的位置，要它讀
+   `findings` 每一則的 `summary`、`evidence` 與 `fix` 原文，主持人不轉述；修正的範圍是關上這幾則，一輪修完。修完重跑
+   受影響範圍的針對性檢查與驗收比對，再照步驟 2 以前景 spawn 審查主持 agent，模式 `recheck`，附新的比對輸出與同一個
+   CI 覆蓋，上一次的審查區塊填「在接續紀錄裡」：它只驗這幾則關上了沒有。
    **一張票至多兩輪修正**，輪數記在對帳表該票的驗證結果；複驗帶出的新 finding 算進同一個輪數。第二輪的
    `recheck` 仍是 `fix` 就標卡住（`SEND-BACK.md`），卡住紀錄附還開著的 finding。
 
@@ -407,8 +416,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 下一個派票點前一次問完。
 
 完成判準：每張回報的票都沒等其他票就進了收票；每張票都恰好經過一次獨立審查（`prove-it` 的 `initial`，開審前的
-`stuck` 不算），每輪修正後各有一次 `recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；
-交修的內容都是審查區塊 `findings` 的原文，每張票的修正輪數不超過二並記在對帳表，有觀察或 pre-existing 的票
+`stuck` 不算），每輪修正後各有一次 `recheck`，每次審查都由一個前景的審查主持 agent 主持、附上當次對驗收快照的比對
+輸出，結論都寫進接續紀錄，主持人收到的只有至多六行的審查回報；交修的內容都是審查區塊 `findings` 的原文（給位置，
+由原 agent 讀），每張票的修正輪數不超過二並記在對帳表，有觀察或 pre-existing 的票
 都有一張 raw ticket；
 針對性檢查回到綠，並有通過驗收的模式原生交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；
 每條線同一時間至多一張票在整併，紅燈處置中的線沒有整併佇列裡的票被整併；每次整併都是帶 git 預設 message 的

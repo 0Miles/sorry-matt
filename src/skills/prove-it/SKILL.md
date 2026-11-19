@@ -1,14 +1,19 @@
 ---
 name: prove-it
-description: sorry-matt 流程專用的票級獨立審查：以證據鏈（Finder → Verifier → Fix Verifier）、實跑與只限本票 diff 的突變審一張票的 ticket 分支，輸出 pass／fix／stuck 的固定格式結論與 finding 清單，寫進該票的接續紀錄。由 get-to-work 收票時呼叫；不發 PR 評語、不產 suggestion。
+description: sorry-matt 流程專用的票級獨立審查：以證據鏈（Finder → Verifier → Fix Verifier）、實跑與只限本票 diff 的突變審一張票的 ticket 分支，輸出 pass／fix／stuck 的固定格式結論與 finding 清單，寫進該票的接續紀錄。由 get-to-work 收票時 spawn 的審查主持 agent 呼叫；不發 PR 評語、不產 suggestion。
 ---
 
 # prove-it：審一張票，舉證到底
 
 sorry-matt 自動流程收票時的**獨立審查**，一張票一次。證據鏈沿用 `review-pr`：Finder 找候選，
-Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者：這裡的讀者是主持人，不是 PR
+Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者：這裡的讀者是**審查主持 agent**，不是 PR
 作者 —— 不發 PR 評語、不產 `suggestion` 區塊、不對外留言，只輸出第 6 節的固定格式結論，寫進
 該票的接續紀錄。
+
+審查主持 agent 就是你：`get-to-work` 收票時以前景 spawn、照它的交付說明（`get-to-work/REVIEWER.md`）
+主持一張票的審查。本 skill 的每一步由你做，finder、verifier 與 Fix Verifier 由你 spawn，是主持人底下的第二層；
+它們的回報只進你的 context。**呼叫方**是 `get-to-work` 的主持人：它給第 1 節的輸入，只收第 6 節末的固定格式
+回報，不載入本 skill，也不讀 finding 全文。
 
 **舉證責任在你身上**：通過要有證據，不是「沒找到問題」。測試抓不抓得到缺陷由審查方以突變
 證明，實作者的說法與新增的測試行數都不算。
@@ -27,7 +32,11 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - **針對性檢查結果**：實作 agent 回報的指令與結果。只用來確認是綠的；實跑的指令由審查方自己選（第 3 節）。
 - **CI 覆蓋**：這條線的整合分支整併後有沒有 CI 跑全套 —— `covered`、`uncovered`（呼叫方已定案為 CI 不涵蓋整合
   分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。
-- **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，附上一次的審查區塊，走第 7 節）。
+- **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
+- **接續紀錄**：該票接續紀錄的位置 —— GitHub 是第一行為 `<!-- sorry-matt:status -->` 的那則留言，Local Markdown
+  是票檔。審查區塊寫在這裡（第 6 節）。
+- **上一次的審查區塊**：複驗，或審中 `stuck` 排除後續跑（第 5 節）時，就是接續紀錄裡現在那個 `sorry-matt:review`
+  區塊，由你自己讀；初審沒有。
 - **reviewer**：預設只有 `primary`，也就是本 skill 自己的 Finder 組。
 
 逐項確認，任一項不成立就不開審，以第 6 節格式輸出 `verdict: stuck` 並寫明是哪一項：
@@ -35,6 +44,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - `git rev-parse` 解得到 fixed point 與 ticket 分支，`git diff <fixed point>...<ticket 分支>` 非空。
 - 針對性檢查是綠的。紅燈是實作 agent 的事，審查只收綠燈的票。
 - 驗收快照與比對輸出都在，`id` 是這張票，快照至少有一項驗收。
+- 你有 Agent tool。spawn 深度到了上限（Claude Code 的 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`）時拿不到它；這時
+  不自己兼任 finder、verifier 或 Fix Verifier —— 證據鏈要的是各自獨立的 agent —— `stuck` 的原因寫 `no Agent tool`。
 
 **驗收被改過就不通過。** 比對輸出的 `check.changed` 為 true 時（含 `check.snapshotIntact` 為 false：快照本身被改過），直接記一則 blocking finding
 （lens `acceptance`），不經 Finder 與 Verifier：證據是比對輸出的路徑與 `removed`／`added`，修法方向
@@ -80,11 +91,13 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 `description` 是 `finder` 後接票的識別碼。`pruned` 列的 lens 已依 diff 機械裁剪，不派、不寫進任何 prompt：沒有
 刪除行不派被刪除的行為，沒有規則檔涵蓋改動檔不派 repo 慣例，簽章沒變時跨檔案契約併入逐行。
 
-本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送：呼叫方在自己的
-回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
+本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律由你以前景派送：你在自己的
+回合裡等它們全部回來才往下，而你本身也是呼叫方以前景派出的。`get-to-work` 不給審查設時限，前提就是這一條。
+spawn 被拒 —— 拿不到 Agent tool，或被 plugin 的 hook 以預算為由擋下 —— 時不重試、不換路，也不自己兼任：結論
+`stuck`，原因寫被拒的訊息，已完成的節照第 5 節留給續跑。
 
 三者的回報只有各節指定的欄位。推理過程、probe 的程式與輸出寫進 `<scratchpad>/review-<票>-notes/` 底下的檔案，
-回報給路徑：呼叫方的 context 只收裁決要用的欄位。
+回報給路徑：你的 context 只收裁決要用的欄位。
 
 三者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
 `finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
@@ -237,7 +250,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/revie
 `description` 是 `verifier` 後接票的識別碼。標了 `suspected` 的候選整批交給一個 verifier（批的 `short`），其餘依
 檔案分組（批的 `normal`），總批數不超過判級輸出的 `verifiers.max`。合批只決定 verifier 的數量，不合併候選：verifier
 對批內每個候選逐條裁決，各附 `file:line` 證據；`short` 的候選走簡化流程，兩項都不成立的由同一個 verifier 接著走
-一般流程。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由呼叫方
+一般流程。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由你
 當成觀察。
 
 Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、該組候選的欄位與
@@ -308,8 +321,8 @@ Verifier 的回報，每個候選一段，至多五行：裁決、`rule`（成�
   審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder。`stuck` 時
   審查用 worktree 照第 6 節移除，續跑時由 `open` 重建。
 
-**結論以 verifier 的裁決為準。** 呼叫方把每則裁決原樣抄進區塊：finding 就是 verifier 判為 blocking 的那幾則，
-觀察就是其餘成立的。呼叫方認為某則觀察該擋下整併時，另派一個 verifier 只重判那一則的 `rule`，以它的裁決為準。
+**結論以 verifier 的裁決為準。** 你把每則裁決原樣抄進區塊：finding 就是 verifier 判為 blocking 的那幾則，
+觀察就是其餘成立的。你認為某則觀察該擋下整併時，另派一個 verifier 只重判那一則的 `rule`，以它的裁決為準。
 
 完成判準：結論恰為三者之一，而且由第 1 節的驗收比對與第 4 節的分流推得；區塊裡每則 finding 的 `rule` 都出自
 verifier 的回報。
@@ -381,7 +394,22 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" status --path <scratchpad>/revie
 `<!-- sorry-matt:status -->` 的留言
 （`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`）；Local
 Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agent 讀的機器紀錄，不用潤稿。
-同一個區塊也回傳給呼叫方。
+
+**回傳給呼叫方的只有審查回報**，不是這個區塊：finding、觀察與 pre-existing 的全文留在接續紀錄，呼叫方要時
+自己去讀。區塊寫進接續紀錄（含開審前的 `stuck`）、要移除的審查用 worktree 也移除之後，你的最後一則訊息就是
+下面這段，至多六行，不加別的：
+
+```text
+<!-- sorry-matt:review-report -->
+ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
+verdict: pass | fix | stuck
+counts: findings=<n> observations=<n> pre-existing=<n>
+block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
+stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
+```
+
+`verdict`、`review`、`mode`、`tier` 與區塊裡的相同；`counts` 數的是區塊裡的條目，沒有寫 0。寫不進接續紀錄時
+（tracker 拒絕、檔案被鎖），`verdict` 寫 `stuck`、`block` 寫你存下的區塊檔的路徑，原因寫寫入失敗的訊息。
 
 **結論定案時移除審查用 worktree。** `verdict` 是 `pass` 或 `stuck`，或這是第二次複驗（上一個區塊是
 `mode: recheck` 的 `fix`）而結論仍是 `fix` —— 不會再有複驗 —— 時，寫完區塊後在 repo 內執行：
@@ -394,11 +422,12 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" close --path <scratchpad>/review
 
 完成判準：區塊符合上述格式；`live run` 行看得出範圍是 `full`、`affected` 還是 `findings`；`restored` 取自
 `worktree.mjs status`；接續紀錄只有一個最新的 review 區塊，而且保有歷輪的突變紀錄；沒有發出任何 PR 評語、
-review 或 `suggestion` 區塊；結論定案時審查用 worktree 已移除，其餘的 `fix` 留著它。
+review 或 `suggestion` 區塊；結論定案時審查用 worktree 已移除，其餘的 `fix` 留著它；回傳給呼叫方的只有至多
+六行的審查回報，不含 finding 全文。
 
 ## 7. 複驗
 
-集中修正之後，呼叫方以 `recheck` 模式並附上一次的審查區塊再呼叫本 skill。複驗只回答一個問題：上一次的每則
+集中修正之後，呼叫方再以前景 spawn 一個審查主持 agent，模式 `recheck`；你從接續紀錄讀上一次的審查區塊。複驗只回答一個問題：上一次的每則
 finding 關上了沒有。它的範圍是那幾則 finding 與修正 commit 的 diff（`git diff <上次 head>..<ticket 分支>`），
 所以每一輪要驗的東西只會變少。審查用 worktree 照第 1 節的 `worktree.mjs open` 沿用初審那一個、移到修正後的
 ticket 分支尖端，不另建；`tier` 沿用初審的。
@@ -415,7 +444,7 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。
       fixed point 換成上次的 head；成立的成為本輪新 finding。
 
    同一則 finding 的其他寫法、修正 diff 以外的行、沒命中 `rule` 的問題，寫成一行放在回報的 `noticed`，
-   由呼叫方當成觀察。回報每則 finding 至多四行，最後一行 `noticed`。
+   由你當成觀察。回報每則 finding 至多四行，最後一行 `noticed`。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。`live run` 行寫 `scope=findings`，`ci` 照第 1 節的
    CI 覆蓋，`source` 是這幾條指令的來源。
 3. **突變**：只重跑上次存活的 mutant，這次必須被殺掉；該行內容變了，就在取代它的那一行做同一個運算子的
