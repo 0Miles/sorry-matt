@@ -130,9 +130,10 @@ filled.
   report body.
 - Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
   `budget: rounds` scale with the ticket count:
-  - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 10 spawns —
-    expansion, implementation, the two finders of a standard-tier `prove-it`, up to three verifiers and one fix
-    round's Fix Verifier, merging — doubled as a last-resort margin, and the
+  - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 12 spawns —
+    expansion, implementation, one review host agent each for the initial review and the recheck, the two finders of a
+    standard-tier `prove-it`, up to three verifiers and one fix round's Fix Verifier, merging — and 20 per ticket
+    leaves close to double that as a last-resort margin; the
     constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
     plus 20 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
   - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
@@ -339,8 +340,10 @@ into context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
-when it needs detail, it pulls just those lines with a command. The report fields and line counts of `prove-it`'s
-finders, verifiers and Fix Verifiers are in its own rules. A task the host hands a subagent is bounded by that
+when it needs detail, it pulls just those lines with a command. Review is hosted by the review host agent spawned at
+close-out, and the host takes only its review report of six lines at most (`get-to-work/REVIEWER.md`); the reports of
+`prove-it`'s finders, verifiers and Fix Verifiers stay with the review host agent, their fields and line counts in
+`prove-it`'s own rules. A task the host hands a subagent is bounded by that
 subagent's brief: a check the brief does not name becomes a raw ticket for a later run.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say

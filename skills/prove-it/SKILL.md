@@ -1,15 +1,21 @@
 ---
 name: prove-it
-description: Ticket-level independent review for the sorry-matt workflow. Reviews one ticket branch through an evidence chain (Finder → Verifier → Fix Verifier), a live run, and mutation limited to the ticket's own diff, then writes a fixed-format pass / fix / stuck verdict and finding list into the ticket's status record. Called by get-to-work during a ticket's close-out; posts no PR comments and produces no suggestions.
+description: Ticket-level independent review for the sorry-matt workflow. Reviews one ticket branch through an evidence chain (Finder → Verifier → Fix Verifier), a live run, and mutation limited to the ticket's own diff, then writes a fixed-format pass / fix / stuck verdict and finding list into the ticket's status record. Called by the review host agent get-to-work spawns during a ticket's close-out; posts no PR comments and produces no suggestions.
 ---
 
 # prove-it: review one ticket, and prove it
 
 The **independent review** of the sorry-matt workflow, run once per ticket during its close-out. The evidence chain
 follows `review-pr`: Finders raise candidates, Verifiers rule on them independently, and after the batched fix a
-Fix Verifier rechecks. The difference is the reader: here it is the host, not a PR author — no PR comments, no
-`suggestion` blocks, nothing posted anywhere; the only output is the fixed-format verdict in section 6, written
-into the ticket's status record.
+Fix Verifier rechecks. The difference is the reader: here it is the **review host agent**, not a PR author — no PR
+comments, no `suggestion` blocks, nothing posted anywhere; the only output is the fixed-format verdict in section 6,
+written into the ticket's status record.
+
+The review host agent is you: `get-to-work` spawns you in the foreground at close-out to host one ticket's review
+under its brief (`get-to-work/REVIEWER.md`). You do every step of this skill, and you spawn the finders, verifiers and
+Fix Verifiers, one level below the host; their reports reach only your context. **The caller** is `get-to-work`'s
+host: it supplies section 1's inputs and takes only the fixed-format report at the end of section 6; it does not load
+this skill and does not read the findings' text.
 
 **The burden is on you:** a pass needs evidence, not "found nothing". Whether the tests catch defects is proved by
 the reviewer through mutation; the implementer's word and the number of new test lines count for nothing.
@@ -31,8 +37,12 @@ The caller supplies:
 - **CI coverage:** whether CI runs the full suite on the line's integration branch after integration — `covered`,
   `uncovered` (the caller ruled "CI does not cover the integration branch") or `no-origin` (there is no `origin`).
   When it is not given, section 3's scope command decides from whether `origin` exists.
-- **Mode:** `initial`, or `recheck` (the recheck after a batched fix, with the previous review block attached;
-  it follows section 7).
+- **Mode:** `initial`, or `recheck` (the recheck after a batched fix; it follows section 7).
+- **Status record:** where the ticket's status record is — on GitHub the comment whose first line is
+  `<!-- sorry-matt:status -->`, on Local Markdown the ticket file. The review block goes there (section 6).
+- **Previous review block:** a recheck always has one, and so does an initial review resuming after a mid-review
+  `stuck` is cleared (section 5): the `sorry-matt:review` block now in the status record, which you read yourself. Any
+  other initial review has none.
 - **Reviewers:** by default only `primary`, this skill's own set of Finders.
 
 Check each item; if any fails, do not open the review — output `verdict: stuck` in the section 6 format, naming
@@ -43,6 +53,9 @@ which one:
 - The targeted checks are green. A red light belongs to the implementation agent; review only takes green tickets.
 - The acceptance snapshot and the acceptance diff output are both present, their `id` is this ticket, and the
   snapshot holds at least one criterion.
+- You have the Agent tool. At Claude Code's spawn depth limit (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`) you do not get
+  it; then do not stand in as finder, verifier or Fix Verifier yourself — the evidence chain needs separate agents —
+  and the `stuck` reason is `no Agent tool`.
 
 **Changed acceptance criteria fail the review.** When the acceptance diff output's `check.changed` is true (including
 `check.snapshotIntact` false: the snapshot itself was edited), record one blocking finding (lens `acceptance`)
@@ -100,12 +113,15 @@ in `pruned` were pruned mechanically from the diff; dispatch them nowhere and pu
 means no deleted-behaviour lens, no rule file covering the changed files means no repo-conventions lens, and with no
 signature changed the cross-file lens is folded into line by line.
 
-This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched in the foreground:
-the caller waits within its own turn until every one of them is back. `get-to-work` puts no time limit on review
-because of this rule.
+This skill's finders, verifiers (section 4) and Fix Verifiers (section 7) are always dispatched by you in the
+foreground: you wait within your own turn until every one of them is back, and you were yourself dispatched in the
+foreground by the caller. `get-to-work` puts no time limit on review because of this rule. When a spawn is refused —
+no Agent tool, or the plugin's hook blocks it over the budget — do not retry, take another route, or stand in
+yourself: the verdict is `stuck`, the reason is the refusal's message, and the sections already done stay for the
+resume per section 5.
 
 All three report only the fields their section names. Reasoning, probe programs and probe output go into files under
-`<scratchpad>/review-<ticket>-notes/`, and the report gives the paths: the caller's context holds only the fields a
+`<scratchpad>/review-<ticket>-notes/`, and the report gives the paths: your context holds only the fields a
 ruling needs.
 
 For all three, the Agent tool's `description` always starts with the role word, followed by the ticket's identifier
@@ -291,7 +307,7 @@ by file (the batch's `normal`), and the batches never outnumber the tier output'
 the number of verifiers and never merges candidates: a verifier rules on each candidate in its batch separately, each
 with its own `file:line` evidence; the `short` candidates take the short path, and any for which neither check holds
 go on through the normal path with the same verifier. A verifier handles only the candidates it was given; anything else it sees
-while ruling goes, one line each, into the report's `noticed`, which the caller treats as observations.
+while ruling goes, one line each, into the report's `noticed`, which you treat as observations.
 
 The prompt is self-contained and holds only the absolute paths of the repo and the review worktree, the ticket
 branch, the fixed point, the fields of that group's candidates, and the ruling rules below. Leave out the finder's
@@ -374,9 +390,9 @@ it meets, that rule's quote and a falsifiable fix direction; every mutant has a 
   the block, and dispatches no Finders again. On `stuck`, section 6 removes the review worktree, and a resumed review
   builds it again with `open`.
 
-**The verifiers' rulings decide the verdict.** The caller copies each ruling into the block as it stands: the
-findings are the ones a verifier ruled blocking, the observations are the other confirmed ones. When the caller
-thinks an observation should block integration, it dispatches one more verifier to rule again on that one
+**The verifiers' rulings decide the verdict.** You copy each ruling into the block as it stands: the
+findings are the ones a verifier ruled blocking, the observations are the other confirmed ones. When you
+think an observation should block integration, it dispatches one more verifier to rule again on that one
 candidate's `rule`, and that ruling stands.
 
 Done when: the verdict is exactly one of the three and follows from section 1's acceptance diff and the routing in
@@ -453,11 +469,37 @@ or reranked; `verdict` follows from every reviewer's findings.
 Write this block into the "verification results" field of the ticket's status record, replacing the previous
 `sorry-matt:review` block and incrementing `round`. Every `mutation (round <n>)` section of the replaced block is
 carried into the new one verbatim, ahead of this round's, so a recheck never overwrites the initial review's full
-mutation record. Add the paths of the diff, live-run, and mutation output to the "evidence paths" field. On
-GitHub, update in place the comment whose first line is `<!-- sorry-matt:status -->`
+mutation record. Add the paths of the diff, live-run, and mutation output to the "evidence paths" field.
+
+**A recheck's `stuck` keeps the findings still to verify.** When a `mode: recheck` block's verdict is `stuck` (one
+before the review opens included), each of the replaced block's `findings` is carried into the new block verbatim
+(those a Fix Verifier has already ruled on this round get the `closed` or `open` mark before their `summary`, per
+section 7), and `head` keeps the replaced block's value — those are the findings the next recheck verifies, and the
+previous head it computes the fix diff from. The recheck after clearing therefore starts from the same findings and
+the same previous head, and never passes because the block has no findings.
+
+On GitHub, update in place the comment whose first line is `<!-- sorry-matt:status -->`
 (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`); on Local Markdown, write it
 into the ticket file's `## sorry-matt status` section. This is a machine record for the next agent, with no polish
-pass. Return the same block to the caller.
+pass.
+
+**The caller gets only the review report**, not this block: the text of findings, observations and pre-existing
+items stays in the status record, for the caller to read there when it needs it. Once the block is in the status
+record (a `stuck` before the review opens included) and a review worktree due for removal is removed, your last
+message is the following, six lines at most, with nothing added:
+
+```text
+<!-- sorry-matt:review-report -->
+ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
+verdict: pass | fix | stuck
+counts: findings=<n> observations=<n> pre-existing=<n>
+block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
+stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
+```
+
+`verdict`, `review`, `mode` and `tier` match the block; `counts` counts the block's entries, writing 0 for none. When
+the block cannot be written into the status record (the tracker refuses, the file is locked), `verdict` is `stuck`,
+`block` is the path of the block file you saved, and the reason is the write failure's message.
 
 **Remove the review worktree once the verdict is final.** When `verdict` is `pass` or `stuck`, or this is the second
 recheck (the previous block is a `mode: recheck` `fix`) and the verdict is still `fix` — no recheck follows — run this
@@ -472,11 +514,13 @@ Any other `fix` keeps it for the next recheck to reuse.
 Done when: the block follows the format above; the `live run` line shows whether the scope was `full`, `affected` or
 `findings`; `restored` comes from `worktree.mjs status`; the status record holds exactly one, current review block
 that keeps every round's mutation record; no PR comment, review, or `suggestion` block was produced; once the verdict
-is final the review worktree is removed, and any other `fix` keeps it.
+is final the review worktree is removed, and any other `fix` keeps it; the caller got only the review report of six
+lines at most, without the findings' text.
 
 ## 7. Recheck
 
-After the batched fix, the caller invokes this skill again in `recheck` mode with the previous review block. A
+After the batched fix, the caller spawns a review host agent again in the foreground, in `recheck` mode; you read the
+previous review block from the status record. A
 recheck answers one question: is each of the previous findings closed? Its scope is those findings and the diff of
 the fix commits (`git diff <previous head>..<ticket branch>`), so each round has less to verify than the one before.
 Reuse the initial review's worktree through section 1's `worktree.mjs open`, which moves it to the fixed ticket branch
@@ -498,7 +542,7 @@ tip; never build another. `tier` stays what the initial review set.
       second gate; a confirmed one becomes a new finding in this round.
 
    Other spellings of the same finding, lines outside the fix diff, and problems that meet no `rule` go, one line
-   each, into the report's `noticed`, which the caller treats as observations. The report has four lines at most
+   each, into the report's `noticed`, which you treat as observations. The report has four lines at most
    per finding, and `noticed` as its last line.
 2. **Live run:** run only the tests covering the finding lines, plus any tests the fix added. The `live run` line
    says `scope=findings`, `ci` as section 1's CI coverage, and `source` for where these commands came from.
