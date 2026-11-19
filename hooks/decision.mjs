@@ -97,8 +97,11 @@ const GUARD_TOUCH = /(^|[^\w.-])confirm(-state)?\.mjs\b|sorry-matt-guard/i;
 const INERT = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff', 'git', 'gh', 'echo', 'printf', 'write-output', 'write-host']);
 
 // The same file whatever the spelling: Git Bash `/d/x`, doubled or back slashes, case, symlinks.
-// `foldCase: false` keeps case as written, for a match that grants something on a case-sensitive file system.
-function samePath(a, b, cwd, foldCase = true) {
+// `exact` is for a match that grants something: no case-folding on any platform, so a case variant that names
+// another file (Linux, or a case-sensitive directory on Windows or macOS) is another path. The real path already
+// carries the case on disk, so the same file still matches under any spelling; only the drive letter, which has no
+// case of its own, is levelled. A path that is not there is compared as written.
+function samePath(a, b, cwd, exact = false) {
   const norm = (p) => {
     const path = resolve(cwd, process.platform === 'win32' ? p.replace(/^\/([a-z])\//i, '$1:/') : p);
     let real = path;
@@ -108,7 +111,7 @@ function samePath(a, b, cwd, foldCase = true) {
       // not there: compare the resolved spelling
     }
     const slashed = real.replace(/\\/g, '/');
-    return foldCase ? slashed.toLowerCase() : slashed;
+    return exact ? slashed.replace(/^[a-z]:/, (drive) => drive.toUpperCase()) : slashed.toLowerCase();
   };
   return norm(a) === norm(b);
 }
@@ -250,22 +253,26 @@ function park({ event, now, state, home }, reason) {
 const ENTER_TEXT = /^[ \t]*node[ \t]+(?:"[^"$`]+"|'[^']+'|[^\s"'$`()]+)[ \t]+(?:"[^"$`\\]*"|'[^']*')[ \t]*$/;
 // One line means one line: with a CR or any other line break in it, what the shell runs is not what is read here.
 const LINE_BREAK = /[\r\n\v\f\u0085\u2028\u2029]/;
+// PowerShell reads these as quotes too (U+2018–U+201B single, U+201C–U+201E double), so there a quoted word may end
+// where this pattern thinks it goes on.
+const POWERSHELL_QUOTES = /[\u2018-\u201e]/;
 
 /**
  * The reason, when a shell call is the one line the guard hands out for entering unattended mode: a single
  * `node "<root>/hooks/enter-unattended.mjs" "<reason>"`, run on its own. null for everything else — chained,
  * rewritten, another path, an empty reason — which gets no special treatment. Because a match is answered with
- * allow, the path keeps its case wherever the file system may tell two cases apart (everywhere but Windows).
+ * allow, the path has to be the script file itself, case included.
  */
-export function enterInvocation(event, root = pluginRoot(), platform = process.platform) {
+export function enterInvocation(event, root = pluginRoot()) {
   if (event.tool_name !== 'Bash' && event.tool_name !== 'PowerShell') return null;
   const command = String(event.tool_input?.command || '');
   if (LINE_BREAK.test(command) || !ENTER_TEXT.test(command)) return null;
+  if (event.tool_name === 'PowerShell' && POWERSHELL_QUOTES.test(command)) return null;
   const segments = parse(command, event.tool_name === 'PowerShell' ? 'powershell' : 'bash');
   const [seg] = segments;
   const standard = segments.length === 1 && !seg.redirects.length && !seg.heredoc && seg.argv.length === 3 &&
     commandName(seg.argv[0]) === 'node' && seg.argv[2].trim() !== '' &&
-    samePath(seg.argv[1], join(root, 'hooks', 'enter-unattended.mjs'), event.cwd || process.cwd(), platform === 'win32');
+    samePath(seg.argv[1], join(root, 'hooks', 'enter-unattended.mjs'), event.cwd || process.cwd(), true);
   return standard ? seg.argv[2].trim() : null;
 }
 
