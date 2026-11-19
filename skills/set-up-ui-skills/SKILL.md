@@ -64,10 +64,13 @@ recommended". Questions come only from the rules below; where a rule says not to
 **A. Component library.** Judged per package: in a monorepo, each frontend package is judged by its own
 dependencies and imports.
 
-- None detected → record "none"; do not ask.
-- One detected → record it as the evidence shows; do not ask.
-- Different packages each use one → do not ask; every one is active, recorded as its own entry with a "Scope" line
-  (the package path).
+- None detected in any frontend package → record the single line "none", with no "Scope" line; do not ask.
+- One detected → record it as the evidence shows; do not ask. This applies only to a single-package project, or
+  to a monorepo where every frontend package uses the same one; neither case writes a "Scope" line.
+- The frontend packages' libraries are not all the same (a package with no library counts) → do not ask; every
+  active library is recorded as its own entry with a "Scope" line (the package path), and the packages with no
+  library get one "none" entry with a "Scope" line. When several packages share the same library (or equally
+  have none), merge them into one entry whose "Scope" line lists those packages' paths.
 - Two or more detected in the same package → ask which one that package's new code uses. Recommended answer: the
   one a lint rule restricting imports or a migration note points to; otherwise the one with more imports. Record
   the others as "existing, not for new use" — that label is for this case only.
@@ -94,7 +97,10 @@ when evidence does contradict it, raise one question for it per **Existing `ui.m
 **Existing `ui.md`.** On a re-run, use it as the base for comparison: content that matches the evidence, or that
 the evidence does not speak to (usually a manual edit), stays as written and raises no question. Content the
 evidence contradicts (for example a recorded component whose file no longer exists) gets one question per spot,
-with the evidence in the recommended answer.
+with the evidence in the recommended answer. One exception: when the existing `ui.md`'s "Component library"
+section has a single entry with no "Scope" line, and the evidence shows the frontend packages' libraries are not
+all the same, raise no question; list it as a finding, add the "Scope" lines and the "none" entry to the draft
+per rule A, and show the diff against the existing version as step 3 requires.
 
 **Instructions file.** When neither `CLAUDE.md` nor `AGENTS.md` exists, ask which one to create; the recommended
 answer is the one the current runtime reads natively. When either exists, do not ask.
@@ -103,9 +109,10 @@ When there are no questions at all, say "no questions need a ruling" and show th
 message.
 
 Done when: the findings and every question go out in one message; every question has a recommended answer and its
-basis; the question list holds none that a rule says not to ask (no library or only one, different packages
-each using one library, a library question an existing `ui.md` already ruled on, no duplicated component or one an
-existing `ui.md` already ruled on, no conflicting convention or one an existing `ui.md` already ruled on, an
+basis; the question list holds none that a rule says not to ask (no library or only one, frontend packages
+whose libraries are not all the same (a package with no library counts), a library question an existing `ui.md`
+already ruled on, an existing `ui.md` library section missing its "Scope" lines, no duplicated component or one
+an existing `ui.md` already ruled on, no conflicting convention or one an existing `ui.md` already ruled on, an
 instructions file that already exists).
 
 ## 3. Confirm the draft
@@ -119,7 +126,7 @@ Using [`UI-TEMPLATE.md`](UI-TEMPLATE.md) and the user's rulings, show two drafts
 ```markdown
 ### UI
 
-<one-line summary: the component library (or "none"; with several, each with its scope) and where shared components live>. See `docs/agents/ui.md`.
+<one-line summary: the component library (or "none"; when different packages' libraries differ, "none" included, each with its scope) and where shared components live>. See `docs/agents/ui.md`.
 ```
 
 The user may edit the drafts directly; an edited version replaces the draft and is shown again, until the user
