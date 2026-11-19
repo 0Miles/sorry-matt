@@ -25,7 +25,7 @@ jobs:
           node-version: 22
 
       - name: Test the check scripts, the hooks and the skill scripts
-        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs
+        run: node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs scripts/merge-gate.test.mjs
 
       - name: src/dist structure
         run: node scripts/check-structure.mjs
