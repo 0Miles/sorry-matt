@@ -326,6 +326,15 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「適用範圍」行(`ui.md`) | `Scope` line |
 | 逐 package 判定 | judged per package |
 | 現役(元件庫) | active |
+| 外框排版(客製化第 1 階) | outer layout |
+| 本次改動碰到的不一致 | mismatch this change touches |
+| 途中發現的不一致 | mismatch found along the way |
+| 預期元件 | expected component |
+| 公開替代方式 | public alternative |
+| 迴圈停止 | loop stop |
+| 決定下一步 | decide what comes next |
+| 目標(`make-the-ui-fast` 回報項) | target |
+| 畫面確認 | UI check |
 
 ## 外部語義來源
 

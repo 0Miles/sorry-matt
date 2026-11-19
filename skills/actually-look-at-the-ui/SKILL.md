@@ -32,11 +32,28 @@ Every row of the component choice table yields two claims:
 - (b) Its own style source contains no **hard-coded value**; for how, see step 3.
 
 When no component choice table was handed over (called on its own, or called by `make-the-ui-fast`), (a) and (b)
-instead cover every UI element the diff adds or changes: the expected component comes from the diff's imports,
-or, with no import, from the `Use when` column of the `Shared components` table in `ui.md`.
+instead cover every UI element the diff adds or changes. For each element, derive the **expected component** by
+"Choose components by job" in **component reuse**: write down its job, and pick the one that fits that job from
+the four kinds of candidate — components in the `Shared components` table, component library components, native
+HTML elements, and page-local components. The expected component does not come from the diff's imports: a
+hand-rolled lookalike imports no component, and it still has the component it should have used.
+
+Take the list of component library components from the first of these sources that is available, and name in
+the report which one was used:
+
+1. The skill recorded in the `Bundled skill` field of the `Component library` section of `ui.md`.
+2. The `exports` of the package's `package.json`.
+3. The exports of the type definitions that `types` / `typings` points to.
+4. The exports of the `main` / `module` entry file.
+
+A derived expected component is used exactly like the `Component (location)` of a table row: (a) compares
+against it; (b) searches the element's own style source under **hard-coded value**; the exemption for a library
+component's root-node attributes applies only when (a) passes for that library component (see step 3).
 
 Done when: every screen the diff touches, every affected state cell, and every row of the component choice
-table maps to at least one claim.
+table maps to at least one claim; every row of the component choice table has exactly one (a) and one (b) (only
+(a) when the `Tokens` section reads "None"); with no table, every UI element the diff touches has an expected
+component, and the source of the component library list is recorded.
 
 ## 2. Get it running
 
@@ -69,8 +86,9 @@ For each claim, bring the screen into that state by actually operating it, then 
   source (the classes and inline style at the call site, the project stylesheet rules that apply to it, and, for
   a shared component, its source) for hard-coded values, taking the matching tokens from the files recorded in
   the `Location` line of the `Tokens` section of `ui.md`. It passes only when there is none; finding one is a
-  failure, with its `file:line`. For a library component already verified by (a), the attributes the library
-  puts on its root node are exempt; only the styles the project adds at the call site are checked. Do not read
+  failure, with its `file:line`. When (a) passes for that library component, the attributes the library puts on
+  its root node are exempt, and only the styles the project adds at the call site are checked; when (a) fails or
+  is unverified, nothing is exempt. Do not read
   computed style, and do not compare computed values with the tokens' resolved values. This claim is graded
   measured, with a search command or `file:line` as the evidence. When the `Tokens` section reads "None", no (b)
   claim is produced, and the report says so once.
@@ -87,8 +105,9 @@ neighboring claims the fix touched. Failures outside this change's scope go into
 with a prohibition of **component reuse** — an outside override, raised specificity or `!important`, a private
 class or private CSS variable, for example.
 
-Where the fix touches a spot on which `ui.md` and the source disagree, the source wins: correct `ui.md` in the
-same change as that fix. A mismatch the fix does not touch leaves `ui.md` alone and goes into the report.
+`ui.md` follows the two layers of "Maintain `ui.md`" in **component reuse**: where the fix touches a spot on
+which `ui.md` and the source disagree, the source wins, and `ui.md` is corrected in the same commit as that fix;
+a mismatch the fix does not touch leaves `ui.md` alone and goes into the **`ui.md` mismatches** of step 5.
 
 Done when: every failure was looked at again and passed, or is listed in the report with why it remains.
 
@@ -97,8 +116,11 @@ Done when: every failure was looked at again and passed, or is listed in the rep
 - The **evidence table** `claim | grade | evidence | result`.
 - The **eyes-on list**.
 - The viewing conditions.
+- With no component choice table handed over: the source of the component library list (which of the four
+  sources in step 1).
 - **`ui.md` mismatches**: every mismatch found along the way and not corrected in step 4, naming the `ui.md`
   section and row and the source location; "none" when there are none.
 
 Done when: the evidence table covers every claim from step 1 exactly once; every "pass" is graded measured or
-derived; the `ui.md` mismatches are listed one by one, or stated as "none".
+derived; with no table, the source of the component list is stated; the `ui.md` mismatches are listed one by
+one, or stated as "none".

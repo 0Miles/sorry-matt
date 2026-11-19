@@ -44,19 +44,34 @@ Use the measured data to point at one bottleneck, written as a hypothesis that c
 - **CLS**: which elements move, and what pushes them.
 - **Bundle**: which modules, and which import chain pulls them into the first screen.
 
+A bottleneck already recorded as a component library finding is not taken up again as a new hypothesis. When
+every remaining bottleneck hypothesis is a component library finding, follow the **loop stop** of step 5 and
+look for no next one.
+
 Done when: the hypothesis points to one piece of evidence in the measured data and states what result would
-overturn it.
+overturn it; or the **loop stop** has led on to step 6.
 
 ## 4. Change one thing
 
 Look up the approach for this bottleneck following the **precedence**, decide on a fallback under the
 **browser support policy**, then make one change.
 
+When the bottleneck involves the component library, first sort out where its cost comes from:
+
+- It comes from how the project loads or uses the library (a barrel import, loading the whole package, providers
+  or styles it does not use), and the library has a **public alternative**: this is one change inside the
+  project. Switch to that alternative, and update the `Loading` line of the `Component library` section in
+  `ui.md` in the same diff. A public alternative is a subpath listed in the `exports` of the package's
+  `package.json`, or an approach the library's documentation describes; when the package has no `exports` field,
+  only paths the documentation names count, and a deep path the documentation does not mention is an internal
+  path.
+- There is no public alternative, and the cost sits in the library's own code: record it as a component library
+  finding as the next paragraph says, and leave the diff untouched.
+
 When the bottleneck sits in the component library package's own code (the project's shared components do not
 count), record it as a component library finding and do not fork in place: no edits to `node_modules`, no
-patch, no copying a library component into the project, no importing the library's internal paths; then return
-to step 3 for the next bottleneck. Switching to another public entry point of the library counts as one change;
-in that case the `Loading` line of the `Component library` section in `ui.md` goes in the same diff as the code.
+patch, no copying a library component into the project, no importing the library's internal paths. There is
+then no change to measure: skip the measuring in step 5 and go straight to its "Decide what comes next".
 
 Done when: the diff holds one change aimed at this bottleneck, traceable to consulted guidance or to a piece of
 measured evidence; when `Loading` changed, that line of `ui.md` counts as part of the same change. When the
@@ -67,28 +82,46 @@ untouched.
 
 Measure five more times under the same measurement conditions. Keep the change when the improvement exceeds
 the noise; otherwise revert it and record the hypothesis as overturned; when the reverted change carries an
-edit to `ui.md`, revert that too. While the target is unmet, return to step 3 for the next bottleneck.
+edit to `ui.md`, revert that too.
 
-Done when: every attempted change has before-and-after medians and a verdict of "kept" or "reverted", and the
-working tree holds only the kept changes.
+Decide what comes next:
+
+- Target met: go to step 6.
+- Target unmet, with a bottleneck hypothesis left that is not a component library finding: return to step 3 for
+  the next bottleneck.
+- Target unmet, and every remaining bottleneck hypothesis is a component library finding: **loop stop**. Do not
+  return to step 3; go to step 6, and the step 7 report states that the target was not met.
+
+Done when: every attempted change has before-and-after medians and a verdict of "kept" or "reverted"; the
+working tree holds only the kept changes; what comes next was decided as one of the three above.
 
 ## 6. Confirm the UI still works
 
-Call the Skill tool with `actually-look-at-the-ui`, giving it the screens each kept change touches: deferred
-loading, splitting, and containment are the changes that most often buy blank areas, layout jumps, or dead
-interactions.
+When there are kept changes, call the Skill tool with `actually-look-at-the-ui`, giving it the screens each kept
+change touches, and covering only the kept changes: deferred loading, splitting, and containment are the changes
+that most often buy blank areas, layout jumps, or dead interactions. On a **loop stop** this runs the same way.
+When no change was kept, do not call `actually-look-at-the-ui`: with no change, there is no screen to check.
 
-Done when: every screen touched by a kept change has a result from `actually-look-at-the-ui`.
+Done when: every screen touched by a kept change has a result from `actually-look-at-the-ui`; with no kept
+change, the report states "no change was kept; `actually-look-at-the-ui` was not called".
 
 ## 7. Report
 
+- **Target**: met; or a statement that the target was not met, listing the remaining bottlenecks and the
+  component library finding each maps to.
 - **Before-and-after table**: `metric | baseline median | current median | noise range | target`.
 - **Change list**: every kept and reverted change, each with its bottleneck and its numbers.
 - **Component library findings**: `package and version | bottleneck and measured evidence | why not changed in
   the project | suggested destination`; these findings stay out of the change list. "None" when there are none.
+- **UI check**: the results from `actually-look-at-the-ui`, or "no change was kept; `actually-look-at-the-ui`
+  was not called".
 - **State of `ui.md`**: which line this run changed, or why no update was needed.
+- **`ui.md` mismatches**: every mismatch found along the way and not fixed (including those
+  `actually-look-at-the-ui` reports), naming the `ui.md` section and row and the source location; "none" when
+  there are none.
 - The measurement conditions, noting that these are lab numbers and real-user numbers come from field data.
 
 Done when: every "current" number in the table comes from the last measurement in step 5; every kept change
-maps to an improvement in the table; `ui.md` matches this change, or is explicitly recorded as needing no
-update.
+maps to an improvement in the table; an unmet target is stated, with the remaining bottlenecks and their
+component library findings listed; `ui.md` matches this change, or is explicitly recorded as needing no update;
+the `ui.md` mismatches are listed one by one, or stated as "none".

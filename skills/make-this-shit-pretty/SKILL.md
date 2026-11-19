@@ -103,8 +103,8 @@ When currently on the default branch, create a new branch first. For each step, 
 When a step migrates to a shared component (extracting one, switching to one, or changing what one is for) or
 merges duplicate implementations, the matching edit to `ui.md` goes into that step's own commit:
 `git show --name-only` lists both the code and `docs/agents/ui.md`. A mismatch between `ui.md` and the source
-found along the way and not caused by any step is fixed with the source winning, in a separate commit that
-changes only `docs/agents/ui.md`.
+found along the way and not caused by any step leaves `ui.md` alone, goes into the **`ui.md` mismatches** of
+step 5, and gets no commit of its own.
 
 When a step still fails after two fixes, revert it, record it as unfinished, and move on to the next.
 
@@ -120,8 +120,12 @@ finished step has a before/after pair and check results matching step 1.
   step 1.
 - **Before/after pairs**: one set per screen, with full screenshot paths.
 - **State of `ui.md`**: which rows this run updated and in which commit each, or why no update was needed.
+- **`ui.md` mismatches**: every mismatch found along the way, not caused by any step, and not fixed (including
+  those `actually-look-at-the-ui` reports), naming the `ui.md` section and row and the source location; "none"
+  when there are none.
 - The **eyes-on list**, and the functional defects recorded along the way.
 
 Done when: the reconciliation table covers every finding from step 2 exactly once; all six behavior-baseline
 items are marked "same"; check results match step 1; every "it looks better" in the report points to a
-before/after pair; `ui.md` matches this change, or is explicitly recorded as needing no update.
+before/after pair; `ui.md` matches this change, or is explicitly recorded as needing no update; the `ui.md`
+mismatches are listed one by one, or stated as "none".
