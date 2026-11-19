@@ -36,18 +36,19 @@ file attached (dispatch, budget and breaker, the wake-up steps, the assignment r
      on to the next ticket.
    - **A red-light fix** ([`RED-LIGHT.md`](RED-LIGHT.md), red-light handling point 4) → this stop counts as one failed fix round, not as a
      reassignment. In the first round, start the second per point 4: when it maps to a ticket, spawn a new agent per
-     `IMPLEMENTER.md` on the same worktree, with the failure summary and the timeout note from the next case attached
+     `IMPLEMENTER.md` (its `description` is `ci-fix` followed by the ticket's identifier) on the same worktree, with the failure summary and the timeout note from the next case attached
      to the ticket text; when it maps to no ticket, first clear what the stopped agent left with
      `git -C <integration worktree> reset --hard <the HEAD in the assignment record>`, then the host or a new agent
-     fixes it. In the second round, revert or find the line failed verification per points 5 and 6. Do not mark it
+     (its `description` is `ci-fix` followed by that line's integration branch) fixes it. In the second round, revert or find the line failed verification per points 5 and 6. Do not mark it
      stuck: without a revert or a failed verification, the line stays red and its queue stays paused.
    - **This stage has not been reassigned for a timeout yet** (implementing, fixing and expanding each count
      separately) → **reassign** it once: for implementing and fixing, spawn a new implementation agent per
-     `IMPLEMENTER.md` on the same worktree and branch, attaching a note to the ticket text — the previous agent was
+     `IMPLEMENTER.md` (its `description` is `implement` while implementing and `fix` while fixing, followed by the
+     ticket's identifier) on the same worktree and branch, attaching a note to the ticket text — the previous agent was
      stopped for running over its time limit, its commits and uncommitted changes are left for the new agent to
      judge whether to build on, and an existing status record is taken over and updated in place; for fixing, also
      attach that round's findings. For expanding, give the tickets it covered that still have no expansion block to a
-     new expansion agent, spawned the way step 1 of dispatch says. A reassignment is a new assignment: record it as
+     new expansion agent, spawned the way, and with the `description`, step 1 of dispatch says. A reassignment is a new assignment: record it as
      above, replace the agent id in the reconciliation table with the new one, and add one to that stage's timeout reassignment count. When the budget
      blocks the spawn, mark the ticket awaiting ruling per budget and breaker.
    - **This stage was already reassigned for a timeout** → for implementing and fixing, **mark it stuck** (`SEND-BACK.md`), giving the

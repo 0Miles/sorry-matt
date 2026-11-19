@@ -58,6 +58,10 @@ overturn it; or the **loop stop** has led on to step 6.
 Look up the approach for this bottleneck following the **precedence**, decide on a fallback under the
 **browser support policy**, then make one change.
 
+When the `Component library` entry the prerequisite of **component reuse** chooses for the file the bottleneck
+sits in is "None", there is no `Loading` line to change, and the component library finding branch below does not
+apply: handle the bottleneck as an ordinary change inside the project.
+
 When the bottleneck involves the component library, first sort out where its cost comes from:
 
 - It comes from how the project loads or uses the library (a barrel import, loading the whole package, providers

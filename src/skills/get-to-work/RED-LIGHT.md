@@ -32,10 +32,10 @@
 3. 失敗的 job 與步驟以 `gh run view <databaseId> --log-failed` 存檔，主持人只取失敗那幾行。本機驗證沒有
    run（本機驗證的線，以及有 CI 的線上 `no-verdict` 的那一次）：跑檢查時就把輸出存成 `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log`（跟 ledger 同在共用目錄），
    紅的那份就是失敗輸出，主持人只取失敗的行。
-4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，票面附上失敗
+4. **修，最多兩輪**：對到票就交回那張票的原 agent（已不在時依 `IMPLEMENTER.md` spawn 新的，Agent tool 的 `description` 是 `ci-fix` 後接票的識別碼，票面附上失敗
    摘要），在從整合分支新切的 `<run>/<NN>-<slug>-ci` 分支修：CI 失敗就是 finding，走收票步驟 3 的集中修正
    （`recheck` 附上該票上一次的審查區塊）與步驟 4–7，整併不排隊。對不到票就由主持人或做那一步的 agent 在整合
-   worktree 修，commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。修正的 agent 超時被停下也算一輪（[`TIMEOUTS.md`](TIMEOUTS.md)）。每輪修完都 push（沒有 `origin` 時
+   worktree 修（為此新 spawn agent 時，`description` 是 `ci-fix` 後接該線的整合分支），commit（subject 不帶票 ID）、push。偶發紅燈的硬護欄照用。修正的 agent 超時被停下也算一輪（[`TIMEOUTS.md`](TIMEOUTS.md)）。每輪修完都 push（沒有 `origin` 時
    略過），由下一次驗證判結果：流水線中是下一次讀 CI（本機驗證的線是那時在新 SHA 上的本機驗證），收官是 [`FINISH.md`](FINISH.md)
    步驟 3 當場再驗。
 5. **兩輪仍紅，對到票：撤回。** `git revert -m 1 <該票的 merge commit>`，並撤掉它的完成紀錄：

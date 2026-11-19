@@ -38,17 +38,25 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
    以及本 session 已知的其他 session，推出正在被別人動的檔案。檔案與之重疊的票不凍進本次
    票集，改列為**待裁決**並寫出佔用來源與解除條件。有票被排除時，對剩下的票集重跑一次腳本，
    以重跑輸出的 `line` 定線 —— 排除可能讓一條線分裂。
-4. 從目前分支尖端，為每條線建立 `<run>/<line-slug>` **整合分支**與整合 worktree；同線成果
+4. **合線**：一條線交付一支總 PR，所以會改同一份檔的票要在同一條線上。照「派票」步驟 3 為凍結票集的每張票
+   存下預計檔案，再比對不同線的票：預計檔案重疊（一個路徑涵蓋另一個）的兩條線併成一條，重複到任兩條線都
+   不重疊為止。併成的線以其中排序最前的 `line` 為識別，ledger 第 4 欄記它由腳本的哪幾個 `line` 組成；之後
+   凡是以 `line` 取整合分支的地方，這幾個 `line` 都指向同一條整合分支。
+5. 從目前分支尖端，為每條線建立 `<run>/<line-slug>` **整合分支**與整合 worktree；同線成果
    逐票累積於此。
-5. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
+6. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
    由 `have-it-all-done` 組合時，它們在裁決點前已寫定，不改。
+7. `docs/agents/commands.md` 不存在時，照 `ASKING.md` 第 0 節的產生規則產生它，在每條線的整合分支建立之後、
+   派出任何票之前 commit 到該整合分支：subject 不帶票 ID，各線內容相同。不 commit 到使用者目前的分支。ticket
+   分支從整合分支切出，實作 agent 的 worktree 因此讀得到。
 
 **硬護欄**：執行期間新發現或新開的票只作為背景，初始票集一經凍結便不再擴張。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票都有發布出處、tracker
-原生識別、所屬線與 blocker map；每條被他線佔用而排除的票都有佔用來源與解除條件；每條線
+原生識別、所屬線與 blocker map；每條被他線佔用而排除的票都有佔用來源與解除條件；每張票都有預計檔案，
+任兩條線的預計檔案都不重疊；每條線
 都有從同一基底尖端建立的整合分支及 worktree；獨立執行時 `budget: spawns` 與 `budget: rounds` 已依凍結票數
-寫定。
+寫定；每條線的整合分支上都有 `docs/agents/commands.md`，原本沒有的已在派出任何票之前產生並 commit。
 
 ## 1. 用 `/loop` 推進流水線
 
@@ -109,7 +117,10 @@ node "${CLAUDE_SKILL_DIR}/scripts/ci.mjs" verdict <整合分支> <SHA>
 
 **本機驗證**（本 skill 唯一的正本，其他地方引用這裡）：沒有 `origin`、這條線已定案為 CI 不涵蓋整合
 分支，或這個 SHA 讀不到結論（查詢失敗，或再讀一次仍沒有 run）時，改在這個 SHA 上本機跑一次 repo
-完整的自動檢查，報告寫明是哪一種。在整合 worktree、樹正是這個 SHA 時跑：收官時整併 agent 還在
+完整的自動檢查，報告寫明是哪一種。repo 完整的自動檢查，在這個 SHA 的樹有 `docs/agents/commands.md` 時就是它的
+「Full checks」，逐條照跑；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found` —— `none` 不是「沒有檢查、直接記綠」。完整驗證的報告在來源旁寫明指令取自
+`commands.md` 或自行找到（`self-found`）。在整合 worktree、樹正是這個 SHA 時跑：收官時整併 agent 還在
 解 conflict 就等它結束；流水線的派票點或喚醒遇到整合 worktree 的樹不是這個 SHA（整併進行中）時不等，這次
 不驗，這條線沿用上一次的結果 —— 不在紅燈處置中就照常派票 —— 由該次整併觸發的派票點驗那時的最新 SHA。前兩種線在流水線中就照第 1 節「讀 CI」逐 SHA 驗證，不只在收官。
 
@@ -163,10 +174,18 @@ Claude Code 不能給 subagent 設時限，所以由主持人在每次喚醒時�
 做的修正也算。`prove-it` 的 finder、verifier 與 Fix Verifier 以前景派送（`prove-it` 第 2 節），在主持人自己的
 回合裡跑完才回來，主持人等的期間不會被喚醒，所以審查不設時限。
 
+**spawn 的 `description`**：每次 spawn 一個 agent，Agent tool 的 `description` 都以該 agent 的角色字開頭、後接票的
+識別碼（GitHub 是 `#N`，Local Markdown 是票檔名），如 `implement #72`。角色字：`expand`（展開 agent，後接它負責的
+每張票，如 `expand #75 #83`）、`implement`（實作 agent，含退回後新 spawn 的與實作中改派的）、`fix`（修正中改派的
+agent）、`ci-fix`（紅燈修正新 spawn 的 agent；對不到票時後接該線的整合分支）、`merge`（整併 agent）；`prove-it` 的
+`finder`、`verifier`、`fix-verifier` 寫在它自己的規則裡。plugin 的 hook 把每個 spawn 的 agent 類型與這個 `description`
+記進 ledger 旁的 `<run>.counters.json`，收官的分段計量（`FINISH.md`）靠這個前綴認出通用 agent 做的是哪一種工作、
+屬於哪張票：前綴寫錯的 spawn 會算進 `general-purpose`。
+
 **階段時限**是 ledger 第 9 欄的四行 `budget:`，單位分鐘（`ASKING.md` 第 7 節）：`timeout-implement`（實作中）、
 `timeout-fix`（修正中，含紅燈修正）、`timeout-expand`（展開中）、`timeout-merge`（整併中的整併 agent）。
 
-**派送紀錄**：每次派送時以本 skill 的 `scripts/deadline.mjs` 算出，連同 agent id 抄進對帳表該票那一列（一個
+**派送紀錄**：每次派送時以本 skill 的 `scripts/deadline.mjs` 算出，連同 agent id 與 agent 類型抄進對帳表該票那一列（一個
 展開 agent 負責的每張票都記）：
 
 ```bash
@@ -175,6 +194,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" record --expansions '<票>=<數>
 ```
 
 - 輸出派送時間、階段時限、到期時間、延長（`no`）與**進度指紋**。時間一律 UTC，寫成 `YYYY-MM-DDTHH:MM:SSZ`。
+- agent 類型是 spawn 時 Agent tool 實際用的 `subagent_type`（展開 agent 是 `sorry-matt:expander`，退回通用 agent 時是
+  `general-purpose`）；以 SendMessage 交回原 agent 的派送沿用那個 agent 的類型。
 - 第一式的 `<worktree>` 是 agent 工作的 worktree：實作與修正是 ticket worktree（紅燈修正是 `-ci` 分支的
   worktree；對不到票的是整合 worktree），整併是整合 worktree。進度指紋是它的 HEAD 與整個工作樹（含未追蹤檔，
   不含 ignored）的 tree，算法在腳本檔頭；真正的 index 與工作樹不動。
@@ -231,7 +252,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 
 沒有在途 agent 時照 `/loop` 本來的自我調速。
 
-完成判準：每次派送都在對帳表留下派送紀錄（agent id、派送時間、階段時限、到期時間與進度指紋）；每次喚醒都在
+完成判準：每次派送都在對帳表留下派送紀錄（agent id、agent 類型、派送時間、階段時限、到期時間與進度指紋）；每次 spawn 的
+`description` 都以角色字開頭、後接票的識別碼；每次喚醒都在
 處理回報之後掃描了每個在途 agent，含展開與紅燈修正的；舊 agent 的回報沒有被收；每次喚醒結束時還有在途 agent 就排了 fallback 喚醒，背景 `sleep` 同一時間至多一個。
 
 ### 派票
@@ -248,14 +270,16 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 - **GitHub**：已整併進線整合分支的票在 GitHub 上仍是 open（關票等總 PR 合併），取 ledger 對帳表
   中已整併的票以 `--done <n,...>` 傳入；卡住的票以 `--stuck <n,...>` 傳入。
 - **Local Markdown**：每條線各跑一次，傳整個凍結票集，加 `--ref <該線整合分支>` 與
-  `--line <該線的 line>`（凍結時輸出的值）；frontier 是各線輸出 `frontier` 的聯集。完成與
+  `--line <該線的 line>`（凍結時輸出的值；合線併成的線，對它包含的每個 `line` 各跑一次，`--ref` 都是那條
+  整合分支）；frontier 是各次輸出 `frontier` 的聯集。完成與
   卡住由該分支票檔上的 `sorry-matt completion`／`sorry-matt blocker` 判定，`ready-for-human`
   不算完成。
 
 `stalled` 不為 null 的票（`cycle`、`missing`、`blocked-external`、`blocked-upstream`）在本 run
 內不會變成可開工，列為**待裁決**並寫出原因與相關 blocker。`warnings` 記進 ledger，不改變結果。
 
-**候選**是 frontier 中階段為候選的票，照 frontier 的順序；展開中、在途與到了終局的票都不是。驗證未過的線上
+**候選**是 frontier 中階段為候選的票；展開中、在途與到了終局的票都不是。順序：凍結票集中以它為 blocker 的
+票越多越前，同數照 frontier 的順序 —— 檔案重疊時先做的是解鎖最多票的那一張。驗證未過的線上
 的候選標待裁決（`RED-LIGHT.md` 紅燈處置第 6 點），不往下派。補驗收項的不能是要通過它的人，所以實作 agent 只讀
 驗收項、不寫也不改。對每張候選票依序：
 
@@ -270,7 +294,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    才完整展開的票）交給**展開 agent**：讀同層的 [`EXPANDER.md`](EXPANDER.md)，把這個派票點所有這類票
    填進佔位，以填好的全文在背景 spawn 一個展開 agent，不另加規則。Agent tool 的 `subagent_type` 是
    `sorry-matt:expander` —— plugin 的 agent 定義檔 `agents/expander.md`，展開 agent 的模型與可用工具由它定，主持人
-   不另外指定。這個 agent 類型不在可用清單時改用通用 agent、不指定模型，prompt 相同。它在 tracker 寫下標明 `by`、`run`、
+   不另外指定；`description` 是 `expand` 後接這批每張票的識別碼（「時限」）。這個 agent 類型不在可用清單時改用通用
+   agent、不指定模型，prompt 與 `description` 相同，並在這批每張票的派送紀錄把 agent 類型記為 `general-purpose`：這時用的
+   是主持人的模型與全部工具，不是定義檔指定的，對帳表與計量要看得出來。它在 tracker 寫下標明 `by`、`run`、
    `round` 的展開區塊，`round` 是這個派票點的次數（第 9 欄）。這些票的階段改為展開中，這個派票點不再往下
    走，所以下一個派票點不會再為它們 spawn 展開。展開 agent 回報觸發派票點，這些票回到候選，從本步驟重跑
    腳本；仍為 true 或被回報為待裁決的票列為**待裁決**，本 run 不再派，之後的派票點從 frontier 剔除。
@@ -278,16 +304,18 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    （`<ticket>` 是票號或票檔名；與 ledger 同在共用目錄，沒有 ledger 時存在 scratchpad），存了就不再覆寫。它是收票比對驗收
    有沒有被改過的基準。輸出的 `sha256` 同時記進 ledger 對帳表該票那一列：快照路徑推得出來，比對時以
    這個值驗快照本身沒被改過。退回後重派的票沿用原快照，不重新展開。
-3. **預計檔案**：主持人在整合 worktree 預測這張票會動的檔，存成 `sorry-matt/runs/<run>/files/<ticket>.txt`：
-   一行一個 repo 相對路徑，涵蓋該路徑本身與底下的一切，`/` 表示整個 repo。來源依序：
+3. **預計檔案**：這張票會動的檔，存在 `sorry-matt/runs/<run>/files/<ticket>.txt`：一行一個 repo 相對路徑，
+   涵蓋該路徑本身與底下的一切，`/` 表示整個 repo。凍結時（第 0 節「合線」）主持人在整合 worktree 已為每張票
+   存好；這個派票點才展開的票，把展開區塊點名而清單沒涵蓋的路徑補進去。來源依序：
    - 票面、展開區塊與驗收項點名的路徑；
    - 票面點名的模組、skill、指令、設定鍵或識別字，以 `git grep -l` 與 `git ls-files` 找到的定義與主要
      使用處；
-   - repo 規則檔（`AGENTS.md`、`CLAUDE.md` 這類）要求一起改的檔，例如翻譯版、索引表、CI 設定。
+   - repo 規則檔（`AGENTS.md`、`CLAUDE.md` 這類）要求一起改的檔，例如翻譯版。
 
-   寧寬勿窄：寫寬只少一點並行，寫窄會在整併時撞上、退回重做。什麼都推不出來就寫 `/`。不叫實作 agent
-   開工前回報：那要多一次 spawn 與往返，它沒讀 code 之前的猜測也不比主持人準。存了就不改，只在退回重做時
-   加寬（`SEND-BACK.md`）。
+   **寫到檔案**：目錄只在票面點名整個目錄時寫；什麼都推不出來才寫 `/`。**索引檔留在清單外**：每張票各加
+   一行的檔 —— 詞彙表、索引表、CI 的測試清單、README 的表格、manifest 裡的陣列 —— 幾乎每張票都會碰，
+   列進去會讓所有票互斥；兩張票各加一行的衝突，由整併 agent 兩邊都保留（「收票」步驟 4）。清單只加不減：
+   展開時補，退回重做時加寬（`SEND-BACK.md`）。預測由主持人做，實作 agent 開工前不回報。
 4. **檔案重疊**：每個 repo 寫一份計畫檔 `sorry-matt/runs/<run>/overlap/<n>.plan.json`（`<n>` 是派票點次數；
    多 repo 時檔名前加 `<repo>-`），涵蓋這個 repo 的每一條線：`running` 是在途的票、它們的預計檔案、ticket
    worktree，以及所屬線的整合分支作為 `base`；`candidates` 是候選票與預計檔案。執行本 skill 的
@@ -298,16 +326,16 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    ```
 
    輸出格式寫在腳本檔頭。在途的票除了預計檔案，也佔住它的 worktree 已經動到的檔。`start` 的票這個派票點
-   全部派出，同一條線、檔案不重疊的票因此同時開工；`wait` 的票留在候選，下個派票點再判。跨線也判：兩條線
-   同時改同一個檔，兩支總 PR 之間會衝突，延後派出讓同一處的改動不並行。跨線的票整併進各自的整合分支後就
-   不再佔檔，總 PR 之間仍有的衝突由第 2 節的併入基底與人合併處理。
+   全部派出，同一條線、檔案不重疊的票因此同時開工；`wait` 的票留在候選，下個派票點再判。跨線也判：合線
+   之後兩條線的預計檔案不重疊，會撞上的是在途的票實際動到、預測沒涵蓋的檔，延後派出讓同一處的改動不並行。
 5. 從所屬線整合分支的最新尖端建立 `<run>/<NN>-<slug>` ticket 分支與 worktree。Local Markdown 的展開區塊
    已 commit 在整合分支上，ticket 分支從它之後切出。
 6. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
-   在背景 spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
-   的展開區塊在留言裡，票面全文裡沒有。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
+   在背景 spawn 一個實作 agent，不另加規則；`description` 是 `implement` 後接票的識別碼（「時限」）。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
+   的展開區塊在留言裡，票面全文裡沒有。專案指令契約的佔位填 ticket worktree 裡 `docs/agents/commands.md` 的絕對
+   路徑，那裡沒有這份檔就填 none。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
    退回後重派的票：原 agent 還在就以 SendMessage 交給它退回紀錄與重建的 worktree，不新 spawn；不在了才照
-   `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
+   `IMPLEMENTER.md` 新 spawn（`description` 同樣是 `implement` 後接票的識別碼），退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
    派送紀錄。
 
 完成判準：每個派票點都先照「預算與斷路」判過上限、再照「讀 CI」讀過該讀的線，才往下派；每張派出的票在 spawn
@@ -334,10 +362,15 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    重新呼叫；排除不了就標卡住（`SEND-BACK.md`）。**一張票預設只有這一位 reviewer**，規範與需求符合性由它的 lens 同時涵蓋。
    只有具體風險需要時才加專項 reviewer，而且要指名是哪個風險、理由記進自答清單；
    「再看一遍比較保險」不是風險。
-3. **集中修正**：本票的 finding 一次全部交回保有 context 的原 agent，一輪修完，不逐則來回。
-   修完重跑受影響範圍的針對性檢查與驗收比對，再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，
-   附上一次的審查區塊與新的比對輸出：它只對 finding 涉及的行重跑實跑與突變，不是第二次審查。最多兩輪修正；
-   兩輪後仍未通過就標卡住（`SEND-BACK.md`）。
+
+   **主持人照審查區塊執行。** 審查的深度由 `prove-it` 的 `tier` 定，blocking 由它的 verifier 判；主持人的
+   工作是把結論落地：`findings` 交修，`observations` 與 `pre-existing` 照「期間開票」合開一張 raw ticket，
+   這張票照 `verdict` 往下走。
+3. **集中修正**：把審查區塊的 `findings` 一次全部交回保有 context 的原 agent，交的就是那幾則的 `summary`、
+   `evidence` 與 `fix` 原文；修正的範圍是關上這幾則，一輪修完。修完重跑受影響範圍的針對性檢查與驗收比對，
+   再呼叫 Skill tool 帶入 `prove-it`，模式 `recheck`，附上一次的審查區塊與新的比對輸出：它只驗這幾則關上了沒有。
+   **一張票至多兩輪修正**，輪數記在對帳表該票的驗證結果；複驗帶出的新 finding 算進同一個輪數。第二輪的
+   `recheck` 仍是 `fix` 就標卡住（`SEND-BACK.md`），卡住紀錄附還開著的 finding。
 
    **硬護欄 —— 偶發紅燈一律查到根因。** 測試在同一個 commit 上時紅時綠，當真實失敗
    處理：查出根因，落在測試寫法就修測試，落在產品就修產品或登記缺陷票。重跑、放寬等待、
@@ -348,9 +381,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
    （`git rev-parse HEAD`）記進 ledger 對帳表該票的 merge SHA，紅燈修正的 `-ci` merge 也記：紅燈對票與收官（`FINISH.md`）的
    **逐票導覽**都以它為準，subject 只是沒記 SHA 時的退路。這個 merge 的第二親代範圍 `<merge>^1..<merge>^2` 就是
    這張票的 commit。
-   有 conflict 時交給一個**整併 agent** 逐塊解：給它整合 worktree、兩邊的票面與 commit message，
+   有 conflict 時交給一個**整併 agent** 逐塊解（Agent tool 的 `description` 是 `merge` 後接票的識別碼，「時限」）：給它整合 worktree、兩邊的票面與 commit message，
    以及這條判準 —— 判的是兩個意圖而不是兩段文字，先追兩邊的 primary source（票面與 commit
-   message），相容就都保留，不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。解法只留在
+   message），相容就都保留（索引檔裡兩邊各加的行都留），不相容就取合乎本次合併目標的那邊，落地的行為限於某一邊實際寫過的。解法只留在
    這個 merge commit 裡（`git commit --no-edit` 收尾），不改寫 ticket 分支；本機的
    `git show --remerge-diff <merge>`（git 2.36 以上）只顯示解法那部分，GitHub 網頁看不到。它逐塊回報取捨摘要，主持人把取捨記進自答清單。解完執行受影響範圍的針對性檢查；還要再改
    就在整合分支另做一個 commit，subject 不帶票 ID。整併 agent 回報無法安全解決時 `git merge --abort`，
@@ -374,6 +407,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/deadline.mjs" scan <plan.json>
 
 完成判準：每張回報的票都沒等其他票就進了收票；每張票都恰好經過一次獨立審查（`prove-it` 的 `initial`，開審前的
 `stuck` 不算），每輪修正後各有一次 `recheck`，每次呼叫都附上當次對驗收快照的比對輸出，結論都寫進接續紀錄；
+交修的內容都是審查區塊 `findings` 的原文，每張票的修正輪數不超過二並記在對帳表，有觀察或 pre-existing 的票
+都有一張 raw ticket；
 針對性檢查回到綠，並有通過驗收的模式原生交付，或有可追溯的卡住紀錄；加了專項 reviewer 的票都指名了風險；
 每條線同一時間至多一張票在整併，紅燈處置中的線沒有整併佇列裡的票被整併；每次整併都是帶 git 預設 message 的
 `--no-ff` merge commit，SHA 記進了對帳表，衝突解法只在 merge commit 裡，ticket 分支沒有被改寫；每次整併之後都做了派票點；
@@ -388,6 +423,9 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
 - **GitHub**：用 `gh issue create`，不加 `ready-for-agent`；body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：依 tracker 慣例建立下一個未使用編號的 ticket 檔，將 `Status` 設為
   `needs-triage`，並 commit 到發現它的線整合分支。
+
+`prove-it` 審查區塊的 `observations` 與 `pre-existing`：一張票合開一張 raw ticket，逐則列出位置、一句話與
+證據路徑，連回該票的接續紀錄。複驗帶出新的觀察時，補進同一張。
 
 這些 raw tickets 留在初始票集與本次 frontier 之外。
 

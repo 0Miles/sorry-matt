@@ -17,7 +17,8 @@ Every line passes **three line-level gates** first, in this order:
    into the integration branch: with an `origin`, `git fetch origin <base branch>` then
    `git merge origin/<base branch>`; in Local Markdown mode with no remote, merge the local `<base branch>`; either
    way with `--no-edit`. Record the merged base SHA in ledger field 4. Conflicts go to the **merge agent** from
-   section 1, close-out step 4, under the same criterion and the same rule that the resolution lives only in this
+   section 1, close-out step 4 (this merge belongs to no ticket, so the Agent tool's `description` is `merge`
+   followed by the line's integration branch), under the same criterion and the same rule that the resolution lives only in this
    merge commit: one side is the line (its tickets' text and commit messages), the other is the base
    (`git log --format=%B <merge-base>..<merged base ref>`), and the goal of this merge is the line's intent landing
    on the latest base. The host records the tradeoffs in the self-answer log. When the merge agent reports a
@@ -33,7 +34,8 @@ Every line passes **three line-level gates** first, in this order:
    **Local verification:** its conditions, how to run it and the per-SHA record format follow "local verification"
    in reading CI in [`SKILL.md`](SKILL.md), the one source of truth for it.
 
-   The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
+   The report gives the verified SHA, its source (CI, or local with the reason; when local, also whether the
+   commands came from `commands.md` or were `self-found`) and the merged base SHA; an unsynced
    line is verified all the same, on its unsynced tree, and the report gives the base SHA it tried and "unsynced".
    The only green that counts is the result for that last SHA.
 
@@ -157,9 +159,24 @@ repository's default branch; find that branch with `gh repo view --json defaultB
 Report each line's aggregate PR or integration branch, its merged base SHA (or marked unsynced), and the full
 verification's SHA and source (CI, or local with the reason); the **reconciliation table** covering the entire initial
 set (with each ticket's send-back count); this run's **run metrics and budget** (`ASKING.md` section 7, field 9, with
-the stop reason when it stopped); the authorization outcomes (ledger field 5); and every raw ticket filed along the
+the stop reason when it stopped, and with the spawn breakdown of the next paragraph); the authorization outcomes (ledger field 5); and every raw ticket filed along the
 way, asking the user to run `/triage`. Running standalone, change the ledger's first line to `<!-- sorry-matt:run
 ended -->` after this output; when `have-it-all-done` composes this skill, leave it for that skill's handoff.
+
+**Spawn breakdown:** this run's run metrics and budget come with the spawns summed up by kind of agent and by ticket.
+Run this skill's `scripts/spawns.mjs` on `<run>.counters.json`, the file the hook writes beside the ledger; the
+output format is in the script's header:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/spawns.mjs" <the ledger's directory>/<run>.counters.json
+```
+
+Attach its `byType` (the spawns of each kind of agent, adding up to `spawns`) and its `byTicket` (each ticket's
+spawns by kind) as they are. A kind is a named agent type (such as `sorry-matt:expander`); for a general-purpose
+agent it is the role word its `description` starts with (`SKILL.md` section 1, time limits), so an expansion that
+fell back to a general-purpose agent is listed under `expand`, not `sorry-matt:expander`; `unknown` is spawns
+counted before the hook started logging each one. With no counters file (the hook is not loaded), or when the script
+exits non-zero, state that this run has no spawn breakdown and why; do not estimate one.
 
 Done when: every line went through one line-level simplify, one base sync and one full verification, ending green
 or marked as failed verification and left for a human to merge; the simplify pass and the base sync are each their
@@ -177,5 +194,6 @@ reported; every completed ticket of a merged aggregate PR is closed, and where a
 and the keyword does not apply, the human-work list carries the close commands; the reconciliation table covers
 the frozen set exactly once, every row pointing at that ticket's status record; every ticket worktree and local
 ticket branch is removed; Local Markdown integration worktrees are removed while their integration branches remain;
-the output lists the authorization outcomes and this run's metrics and budget; running standalone, the ledger's
+the output lists the authorization outcomes and this run's metrics and budget, the metrics carrying `byType` and
+`byTicket` from `spawns.mjs` or stating that there is no spawn breakdown and why; running standalone, the ledger's
 first line is the ended marker.

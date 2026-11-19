@@ -21,8 +21,9 @@ step 1: create no branch, produce no findings, and ask the user to run `/set-up-
 and validation rules, the requests sent, event tracking, and keyboard operation; they are the same before and
 after. "Keyboard operation" means every action is triggered by the same keys before and after the rework, and
 triggered only once. There is one exception: when a step replaces a hand-rolled lookalike or a pattern that
-bypasses the component library with a library component or a shared component, a key the target component brings
-with it and the original did not have is recorded as "same (component adds <key>)", and counts as "same". A key
+bypasses the component library with a library component or a shared component, or replaces a hand-rolled
+interactive element (`div onClick`, for example) with a native element (`<button>`, for example), a key the
+target component or native element brings with it and the original did not have is recorded as "same (component adds <key>)", and counts as "same". A key
 that used to trigger the action and no longer does after the replacement, or one key firing more than once, is
 still not the same. What may
 change is structure, hierarchy, semantic markup, styling, and the filling-in of missing states. A functional defect found along the way is recorded as a finding and handed back in the report
@@ -120,7 +121,7 @@ finished step has a before/after pair and check results matching step 1.
 - **Findings reconciliation table**: one row per finding, with a result of fixed, not addressed, or out of
   scope, each with its commit or reason.
 - **Behavior baseline recheck**: the six items compared before and after, one by one, with the "keyboard
-  operation" row giving each action's keys and fire count before and after; every key a target component added
+  operation" row giving each action's keys and fire count before and after; every key a target component or native element added
   in a migration is listed in that row one by one, each recorded as "same (component adds <key>)". Check results
   are set beside those from step 1.
 - **Before/after pairs**: one set per screen, with full screenshot paths.

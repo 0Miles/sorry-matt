@@ -367,10 +367,29 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
 | 逐檔選(「元件庫」段多條時) | choose per file |
 | import 掃描 | import scan |
+| 使用檔 | using file |
+| 使用檔數 | using-file count |
+| 跨 package 的共用元件沒有落點 | cross-package shared component has no home |
+| 每 package 寫法 | per-package form |
+| 單行寫法(`ui.md`) | single-line form |
+| 用途(字面值的) | purpose |
+| 「新共用元件：無」(`ui.md`) | `New shared components: None` |
+| 角色字 | role word |
+| agent 類型 | agent type |
+| 分段計量 | spawn breakdown |
+| 類別(分段計量的) | kind |
+| 專案指令契約 | project command contract |
+| 讀取點(專案指令契約的) | reader |
+| 缺檔時 | when the file is missing |
+| 產生規則 | generation rules |
 | agent 定義檔 | agent definition file |
 | 通用 agent | general-purpose agent |
 | 指令輸出 | command output |
 | 結尾摘要 | closing summary |
+| 審查分級 | review tier |
+| 合線 | join lines |
+| 索引檔 | index file |
+| 觀察(審查區塊的) | observation |
 
 ## 外部語義來源
 
@@ -432,3 +451,7 @@ The five default roles, each label string equal to its role name (`needs-triage`
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Commands
+
+The project command contract: full checks, targeted checks, coverage, failures-only output and sensitive paths. See `docs/agents/commands.md`; its fields are defined in `src/skills/have-it-all-done/ASKING.md` section 0.

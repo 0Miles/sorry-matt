@@ -7,11 +7,43 @@ human in one go.**
 
 ## 0. Opening
 
-After this file, read two more, in order:
+After this file, read three more, in order:
 
 1. `docs/agents/issue-tracker.md`: the provider and its conventions. If it is missing, ask the user to run
    `/setup-matt-pocock-skills`, and continue once it is set up.
 2. `docs/agents/environment.md`, for the environment facts already on record. Skip it when missing.
+3. `docs/agents/commands.md`: the **project command contract**, defined below. When it is missing, follow "When the
+   file is missing" below.
+
+The **project command contract** is the repo's own check commands, written once, so that implementation, review and
+local verification all read the same file instead of each digging them out of the manifest and the CI
+configuration. It is Markdown with five fixed English `##` headings in a fixed order; the headings are the keys
+skills match on, so they are never translated or renamed. The prose under each heading is in the project's own
+language; commands sit in fenced code or backticks and run as written from the repo root. A field with nothing to
+say reads `none`.
+
+| Heading | What goes in it |
+| --- | --- |
+| `Full checks` | The repo's complete automated checks: test, typecheck, lint and whatever else CI runs, one command per line. Green means every command exits 0. |
+| `Targeted checks` | How to narrow the checks to a single file or a single package: the command form, and which checks go with which changed files. |
+| `Coverage` | The command that produces lcov, and where the lcov file lands. |
+| `Failures only` | This project's way to print only the failing lines and the closing summary. Pass or fail is still the check command's own exit code, taken before any filtering. |
+| `Sensitive paths` | The sensitive paths review grading uses, one repo-relative path per line, directories ending in `/`: places where a change affects permissions, guards, CI, releases or deploys. |
+
+**When the file is missing.** The `get-to-work` host generates it before freezing the ticket set (`get-to-work`
+section 0); no other skill generates it. The readers — the implementation agent's targeted checks, the `prove-it`
+live run, and `get-to-work`'s local verification — find the commands themselves from the manifest and the CI
+configuration, as they did before, when the file is not there. When the file exists but the field a reader needs
+reads `none`, that field is treated like a missing file: the reader finds the commands itself and reports
+`self-found`; `none` never means there is nothing to run. Every reader states in its report which one it
+used: `commands.md` or `self-found`.
+
+**Generation rules.** The content is read out of the repo and nowhere else: the manifest's scripts, the run steps
+in the CI configuration, any coverage setup already present; the sensitive paths are the paths that actually exist
+in the repo for CI configuration, hooks and guards, release and deploy configuration, permission settings and
+database migrations. Every field cites its source file paths. A field that cannot be read reads `none`: do not ask
+the user, and do not write a command you did not see in the repo. Record the generation in the run-level
+self-answer log (section 3).
 
 ## 1. Pre-ask check
 
@@ -98,10 +130,11 @@ filled.
   report body.
 - Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
   `budget: rounds` scale with the ticket count:
-  - `spawns` = max(`30 × tickets + 50`, spawns used + `30 × tickets`). A ticket typically takes about 15 spawns —
-    implementation, expansion, `prove-it`'s finders and verifiers, merging — doubled as a last-resort margin, and the
+  - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 10 spawns —
+    expansion, implementation, the two finders of a standard-tier `prove-it`, up to three verifiers and one fix
+    round's Fix Verifier, merging — doubled as a last-resort margin, and the
     constant 50 covers planning and finishing the run; when planning has already used more than 50, the spawns used
-    plus 30 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
+    plus 20 per ticket keep planning from eating into the tickets' share. Spawns used come from field 9's usage.
   - `rounds` = `3 × tickets + 1`: each ticket brings at most three dispatch points (its own integration, one
     send-back, one stuck / revert / red-to-green), plus the first one.
 
@@ -244,7 +277,7 @@ is exactly the active marker, with no blank line before it. Ten fields:
 7. The human-work list.
 8. **Reconciliation table:** one row per ticket — ticket ID, stage, deliverable, verification result, where that
    ticket's status record lives, the `sha256` of its acceptance snapshot (recorded by `get-to-work` at dispatch),
-   its responsible agent's id, its **assignment record** (assigned time, stage time limit, deadline, whether it was
+   its responsible agent's id, its **assignment record** (agent type, assigned time, stage time limit, deadline, whether it was
    extended, progress fingerprint; `get-to-work` section 1, time limits, recorded at every assignment), its timeout
    reassignment count per stage, its send-back count, and its merge SHAs (recorded by `get-to-work` at integration, red-light fix merges included).
    The stage is candidate, expanding, implementing, in review, fixing, queued or integrating, or one of the end
@@ -271,7 +304,9 @@ is exactly the active marker, with no blank line before it. Ten fields:
      pushes does not count), send-backs for a redo, timeout extensions, timeout stops, compactions and handovers, and the task id of
      the background `sleep` still running (the fallback wake-up in `get-to-work` section 1, time limits; "none" when
      there is none). Spawns come from `spawns` in
-     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. No
+     `<run>.counters.json`, which the hook writes next to the ledger; the host reads it and never writes it. The file
+     also holds a `log`, one entry per spawn with its agent type, the Agent call's `description` and the time; the
+     host only reads that too, and `get-to-work` reports the spawn breakdown from it when finishing. No
      such file means the hook is not loaded, and the host keeps the count itself. Token counts are unknown unless
      the runtime itself reports them; never estimate them from duration or agent count. For when to update usage, see
      `get-to-work` section 1, budget and breaker.
@@ -296,7 +331,9 @@ into context; the rule applies whether or not that reminder appears.
 
 **The host's context has a budget.** Diffs, test logs, agent reports, and full ticket bodies stay in the subagents
 and files that hold them; the host takes fixed-format summaries (fifteen lines at most) and evidence paths, and
-when it needs detail, it pulls just those lines with a command.
+when it needs detail, it pulls just those lines with a command. The report fields and line counts of `prove-it`'s
+finders, verifiers and Fix Verifiers are in its own rules. A task the host hands a subagent is bounded by that
+subagent's brief: a check the brief does not name becomes a raw ticket for a later run.
 
 Done when: the ledger's first line is the marker matching the run's state, all ten fields hold content or say
 "none", field 9 has the four `budget:` limits, the four stage time limits and current usage, and field 10 has listed the rule files' absolute
