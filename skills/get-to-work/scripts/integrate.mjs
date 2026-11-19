@@ -8,6 +8,20 @@
 //   node integrate.mjs ticket-init <state> <ticket> --branch <ticket branch> --worktree <path> [--repo <dir>]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> [--branch <ticket branch>]
 //                                  [--local <ticket file> [--checks <text>]] [--push]
+//   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> --ci [--push]
+//   node integrate.mjs ci-init     <state> <ticket> --worktree <path> [--repo <dir>]
+//   node integrate.mjs revert      <state> <ticket> --worktree <integration worktree> --reason <text>
+//                                  [--local <ticket file>] [--dependent <ticket>[=<ticket file>]]... [--push]
+//   node integrate.mjs send-back   <state> <ticket> [--conflicts <file>,<file>] [--predicted <file>,<file>]
+//                                  [--repo <dir>]
+//   node integrate.mjs stuck       <state> <ticket> --reason <text> [--worktree <integration worktree>
+//                                  [--local <ticket file> [--attempts <text>]]] [--review-worktree <path>] [--push]
+//                                  [--repo <dir>]
+//
+// Every command decides nothing: which ticket a red light belongs to, which tickets depend on it, whether to send
+// a ticket back or mark it stuck, are the host's calls. The commands run the git sequence after that call. A
+// ticket's kept refs are `refs/sorry-matt/<run>/<NN>-<slug>/<leaf>`: the ticket branch `<run>/<NN>-<slug>` with
+// its run prefix dropped (a branch without it is used whole), under the state's `run`.
 //
 // `--repo` is any worktree of the repository (default: the current directory). Paths are compared through their
 // real paths, so a Windows short name and its long name are one worktree.
@@ -82,12 +96,109 @@
 //                        "delivery": "committed" | "already" | "none", "tip": "<sha>",
 //                        "push": { "status": "pushed" | "not-requested" | "no-origin" | "host", "command"? },
 //                        "cleanup": { "worktree": "removed" | "absent", "branch": "deleted" | "absent" } }
+//              With `--ci` (a red-light fix; no `--branch`, `--local` or `--checks`): the ticket is delivered, and
+//              the branch merged is its red-light fix branch `<ticket branch>-ci` (see ci-init). Step 1 finds the
+//              merge as above, except that with the fix branch gone, the latest merge recorded on the ticket whose
+//              subject is git's default `Merge branch '<ticket branch>-ci'` is the one (a rerun after the cleanup);
+//              a fix branch with no commits of its own is refused. Step 2 records the merge SHA alone (the ticket
+//              stays delivered: state.mjs takes a `-ci` merge in delivered); there is no delivery; steps 4–6 as
+//              above, the cleanup removing the fix branch's worktree and branch. Output as above, with
+//              "ci": true and "delivery": "none".
+// ci-init      Cuts the red-light fix branch `<ticket branch>-ci` from the current tip of the ticket's line, with a
+//              worktree at `--worktree` (RED-LIGHT.md step 4). The ticket must be delivered with its ticket branch
+//              recorded; the fix branch is not recorded in the state (it is always that name). An existing fix
+//              branch is reused as it is. The fix branch is refused when it is an integration branch of the run, a
+//              protected branch, or another ticket's ticket branch or fix branch.
+//              Output: { "format", "command": "ci-init", "ticket", "line", "branch", "worktree", "head",
+//                        "from": "<line tip>" | null, "created": { "branch", "worktree" } }
+// revert       The red-light revert of a ticket (RED-LIGHT.md step 5), in the integration worktree, which must have
+//              the ticket's line checked out. The ticket is delivered (or stuck from an earlier run of this
+//              command: some merge of it is already reverted; a ticket stuck another way is refused). Each step
+//              checks whether it is done first, so a rerun after an interruption finishes the rest:
+//                1. revert    Every merge recorded on the ticket (the `-ci` merges included; each must be on the
+//                             line), newest first: `git revert -m 1 --no-edit <merge>` (no `-m` for a commit with
+//                             one parent). A merge is already reverted when a commit on the line's first-parent
+//                             history after it says `This reverts commit <merge>` (git's default message). Needs a
+//                             clean worktree. A conflict: `git revert --abort`, exit 4 with { "result":
+//                             "conflict", "merge", "files" }; the reverts before it stay committed. Resolve it with
+//                             git's message kept (`git revert -m 1 <merge>`, resolve, `git revert --continue`),
+//                             then rerun.
+//                2. record    Local Markdown (`--local <ticket file>`): the completion record commit (the latest
+//                             `<ticket>: sorry-matt completion` commit touching the file) is reverted the same
+//                             way, when the file at HEAD is still delivered; then a `## sorry-matt blocker` section
+//                             is appended (reason, each merge and its revert, the integration branch, the run) and
+//                             `Status:` set to `ready-for-human`, committed alone as `<ticket>: sorry-matt
+//                             blocker`. Done when the file's last blocker after its last completion names the
+//                             ticket's first merge SHA. A working-tree copy that differs from both HEAD and that
+//                             result is refused. GitHub: nothing here; the host files the raw issue (SEND-BACK.md
+//                             "mark stuck") and moves the ticket from `--done` to `--stuck` ("record": "host").
+//                3. state     The ticket → stuck, the reason `<--reason>; reverted <merge> by <revert>, …`.
+//                4. dependents  Each `--dependent` (the host's list of tickets that depend on it; same line, not
+//                             the ticket itself):
+//                               integrated  delivered, or with a merge recorded: its merge stays. Local Markdown:
+//                                           a blocker naming the upstream ticket, its merge and revert (the file
+//                                           after `=` is required; done when the last blocker after the last
+//                                           completion names the upstream's first merge SHA). Then → stuck, the
+//                                           reason `upstream reverted: <ticket> (<revert>, …)`.
+//                               in flight   any other stage not at an end state: → awaiting-ruling with that
+//                                           reason; then, when it has a ticket branch, the branch tip is kept at
+//                                           `…/upstream-reverted` (`git update-ref`), its worktree removed (never
+//                                           forced) and the branch deleted (`git branch -D`; the ref keeps it).
+//                                           While its assignment still has a deadline (an agent in flight) the
+//                                           branch and worktree are left ("cleanup": "agent-in-flight"): release it
+//                                           when the agent reports or is stopped, then rerun.
+//                               otherwise   stuck or awaiting-ruling already: nothing ("none").
+//                             The ticket branch rule (see ticket-init) holds for every branch removed here.
+//                5. tip and push  As merge's steps 4 (the line's tip only) and 5.
+//              Output: { "format", "command": "revert", "ticket", "line", "result": "reverted",
+//                        "reverts": [{ "merge", "revert": "<sha>", "found": "reverted" | "git" }],
+//                        "completion": "reverted" | "absent" | "not-found" | "none",
+//                        "record": "committed" | "already" | "host", "stage": "stuck",
+//                        "dependents": [{ "ticket", "treatment": "integrated" | "in-flight" | "none", "stage",
+//                                         "record": "committed" | "already" | "none",
+//                                         "kept": { "ref", "sha" } | null, "agent": "<id>" | null,
+//                                         "cleanup": { "worktree", "branch" } | "agent-in-flight" | null }],
+//                        "tip", "push" }
+//              `completion` "not-found": the file at HEAD is delivered but no completion commit was found; the
+//              blocker after it still makes frontier.mjs read the ticket as stuck.
+// send-back    The git part of a send back for a redo (SEND-BACK.md steps 1 and 3), for a ticket queued or
+//              integrating that has no merge recorded (a candidate already sent back, for a rerun). Refused when the
+//              ticket was sent back once already (mark it stuck). The steps:
+//                1. keep    `git update-ref refs/sorry-matt/<run>/<NN>-<slug>/sent-back-<k> <ticket branch>` (create
+//                           only; `<k>` is the ticket's `sendBacks` + 1). Done when the ref is there and the branch is
+//                           at it or gone; a branch at another commit (a new attempt) is refused.
+//                2. state   queued → integrating → candidate (`sendBacks` + 1, state.mjs's guard).
+//                3. clean   Removes the ticket's worktree (never forced) and deletes the branch (`git branch -D`;
+//                           the ref keeps it).
+//              Output: { "format", "command": "send-back", "ticket", "branch", "ref", "sha", "k", "line",
+//                        "lineTip", "conflicts": [file], "touched": [file], "uncovered": [file] | null,
+//                        "predicted": [file] | null, "stage": "candidate", "cleanup" }
+//              `touched` is what the old attempt changed (`git diff --name-only <line>...<ref>`); with
+//              `--predicted`, `uncovered` is touched minus predicted and `predicted` the widened list (predicted,
+//              then the conflicts and touched files not in it): the send-back record and step 2 of SEND-BACK.md.
+// stuck        The git part of "mark stuck" (SEND-BACK.md), for a ticket at any stage but delivered (use revert),
+//              awaiting-ruling or an end state other than stuck (a rerun):
+//                1. record  Local Markdown (`--local`, with `--worktree` the integration worktree on the ticket's
+//                           line): a `## sorry-matt blocker` section (reason, `--attempts`, the ticket branch and its
+//                           kept ref, the integration branch, the run) and `Status: ready-for-human`, committed as
+//                           `<ticket>: sorry-matt blocker`. Done when the last blocker after the last completion
+//                           names this run. GitHub: the host files the raw issue ("record": "host").
+//                2. keep    When the ticket branch exists: its tip kept at `…/stuck` (create only), then its worktree
+//                           removed (never forced) and the branch deleted (`git branch -D`).
+//                3. review  `--review-worktree`: prove-it's review worktree, removed with `git worktree remove
+//                           --force` when registered. A worktree there with a branch checked out is refused (a
+//                           review worktree is always detached).
+//                4. state   → stuck with `--reason`.
+//                5. push    As merge's step 5 (the line of `--worktree`; without it "not-requested").
+//              Output: { "format", "command": "stuck", "ticket", "line", "record": "committed" | "already" |
+//                        "host", "kept": { "ref", "sha" } | null, "cleanup", "review": "removed" | "absent" |
+//                        "not-requested", "stage": "stuck", "push" }
 //
 // Output is JSON on stdout, format "sorry-matt/integrate@1" (fields are only ever added, never renamed).
 // Exit codes: 0 done; 1 git or the state could not be read or written (the message says which step); 2 bad
 // arguments; 3 refused: well-formed, but the state or the repository does not allow it (the message says what
-// is missing; steps finished before it stay finished); 4 merge conflict (JSON on stdout, nothing changed). On 1,
-// 2 and 3 nothing is written to stdout.
+// is missing; steps finished before it stay finished); 4 merge or revert conflict (JSON on stdout; the step that
+// conflicted changed nothing). On 1, 2 and 3 nothing is written to stdout.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
@@ -261,6 +372,17 @@ function ticketInit(ctx, rest, flags) {
   };
 }
 
+/** The merges on the line's first-parent history, oldest first: [{ sha, parents, subject }]. */
+function firstParentMerges(wt, line) {
+  return git(wt, 'log', '--first-parent', '--merges', '--reverse', '--format=%H%x09%P%x09%s', `refs/heads/${line}`)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((l) => {
+      const [sha, parents, ...s] = l.split('\t');
+      return { sha, parents: parents.split(' ').filter(Boolean), subject: s.join('\t') };
+    });
+}
+
 /** The ticket's merge on the line: { sha, found } or null when it is not merged yet (see step 1). */
 function findMerge(wt, line, id, t, branch) {
   if (t.merges.length) {
@@ -271,14 +393,7 @@ function findMerge(wt, line, id, t, branch) {
   }
   const tip = branchTip(wt, branch);
   if (tip !== null && !isAncestor(wt, tip, `refs/heads/${line}`)) return null;
-  const log = git(wt, 'log', '--first-parent', '--merges', '--reverse', '--format=%H%x09%P%x09%s', `refs/heads/${line}`);
-  const commits = log
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((l) => {
-      const [sha, parents, ...s] = l.split('\t');
-      return { sha, parents: parents.split(' ').filter(Boolean), subject: s.join('\t') };
-    });
+  const commits = firstParentMerges(wt, line);
   const exact = tip === null ? undefined : commits.find((c) => c.parents[1] === tip);
   if (exact) return { sha: exact.sha, found: 'git' };
   const { owners } = ticketOwners([{ id, branch, merges: [] }], (ref) => git(wt, 'rev-parse', '--verify', `${ref}^{commit}`));
@@ -288,7 +403,37 @@ function findMerge(wt, line, id, t, branch) {
   throw new Refusal(`${id}: ${branch} does not exist and no merge of ${id} is on ${line}`);
 }
 
-// ---- Local Markdown delivery ---------------------------------------------------------------------------------------
+/** The red-light fix's merge on the line: { sha, found } or null when it is not merged yet (see merge --ci). */
+function findCiMerge(wt, line, id, t, branch) {
+  const recorded = t.merges.map((m) => commitOf(wt, m.sha)).filter(Boolean);
+  const tip = branchTip(wt, branch);
+  if (tip === null) {
+    const subject = `Merge branch '${branch}'`;
+    const sha = [...recorded].reverse().find((r) => git(wt, 'log', '-1', '--format=%s', r).startsWith(subject));
+    if (sha && isAncestor(wt, sha, `refs/heads/${line}`)) return { sha, found: 'state' };
+    throw new Refusal(`${id}: ${branch} does not exist and no merge of it is recorded (ci-init first)`);
+  }
+  if (!isAncestor(wt, tip, `refs/heads/${line}`)) return null;
+  const exact = firstParentMerges(wt, line).find((c) => c.parents[1] === tip);
+  if (exact) return { sha: exact.sha, found: recorded.includes(exact.sha) ? 'state' : 'git' };
+  throw new Refusal(`${id}: ${branch} is already contained in ${line}, but no merge of it is there (does it have commits of its own?)`);
+}
+
+/** `git merge --no-ff --no-edit <branch>`: { sha }, or { files } after aborting a conflict. */
+function mergeBranch(wt, branch) {
+  if (git(wt, 'status', '--porcelain', '--untracked-files=no')) throw new Refusal(`${wt} has uncommitted changes; the merge needs a clean worktree`);
+  try {
+    git(wt, 'merge', '--no-ff', '--no-edit', branch);
+  } catch (error) {
+    if (!mergeInProgress(wt)) throw error;
+    const files = git(wt, 'diff', '--name-only', '--diff-filter=U').split(/\r?\n/).filter(Boolean);
+    git(wt, 'merge', '--abort');
+    return { files };
+  }
+  return { sha: git(wt, 'rev-parse', 'HEAD') };
+}
+
+// ---- Local Markdown records ----------------------------------------------------------------------------------------
 
 const UNCHECKED = /^(\s*[-*+]\s+)\[ \]/;
 const STATUS = /^[ \t]*(?:\*\*)?Status(?::\*\*|\*\*:|:)[ \t]*(.*)$/i;
@@ -300,6 +445,34 @@ export function delivered(text) {
   const rows = scan(text);
   const at = lastRecordIndex(rows, COMPLETION);
   return at >= 0 && lastRecordIndex(rows, BLOCKER) < at && sectionAt(rows, at).some((r) => r.line.trim());
+}
+
+/** True when the file's last blocker comes after its last completion and names `marker`. */
+export function blocked(text, marker) {
+  const rows = scan(text);
+  const at = lastRecordIndex(rows, BLOCKER);
+  return at >= 0 && lastRecordIndex(rows, COMPLETION) < at && sectionAt(rows, at).some((r) => r.line.includes(marker));
+}
+
+/** The ticket's own `Status:` set to ready-for-human in `out` (rows' lines); a line is added under the title when none. */
+function setReady(rows, out) {
+  const own = ownRows(rows);
+  const status = own.findIndex((r) => r.line && !r.level && STATUS.test(r.line));
+  if (status >= 0) {
+    const value = STATUS.exec(out[status])[1];
+    out[status] = `${out[status].slice(0, out[status].length - value.length)}ready-for-human`;
+    return;
+  }
+  const title = rows.findIndex((r) => r.level === 1);
+  if (title >= 0) out.splice(title + 1, 0, '', 'Status: ready-for-human');
+  else out.unshift('Status: ready-for-human', '');
+}
+
+/** `out` with its trailing blank lines dropped, then `## <title>`, `items` and a final newline. */
+function appendSection(out, title, items, eol) {
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  out.push('', `## ${title}`, '', ...items, '');
+  return out.join(eol);
 }
 
 /** The ticket file with its boxes ticked, Status ready-for-human and a completion section appended. */
@@ -316,52 +489,154 @@ export function deliver(text, { merge, line, commits, checks }) {
     if (!r.level || !/^sorry-matt expansion$/i.test(r.title)) return;
     sectionAt(rows, i).forEach((row, k) => !row.fenced && tick(i + 1 + k));
   });
-  const status = own.findIndex((r) => r.line && !r.level && STATUS.test(r.line));
-  if (status >= 0) {
-    const value = STATUS.exec(out[status])[1];
-    out[status] = `${out[status].slice(0, out[status].length - value.length)}ready-for-human`;
-  } else {
-    const title = rows.findIndex((r) => r.level === 1);
-    if (title >= 0) out.splice(title + 1, 0, '', 'Status: ready-for-human');
-    else out.unshift('Status: ready-for-human', '');
-  }
-  while (out.length && !out[out.length - 1].trim()) out.pop();
-  out.push(
-    '',
-    '## sorry-matt completion',
-    '',
+  setReady(rows, out);
+  return appendSection(out, 'sorry-matt completion', [
     `- Merge: ${merge}`,
     `- Integration branch: ${line}`,
     '- Implementation commits:',
     ...(commits.length ? commits.map((c) => `  - ${c}`) : ['  - (none)']),
     `- Checks passed: ${checks}`,
-    '',
-  );
-  return out.join(eol);
+  ], eol);
 }
 
-function deliverLocal(wt, file, info, id) {
+/** The ticket file with Status ready-for-human and a blocker section listing `items` appended. */
+export function block(text, items) {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const rows = scan(text);
+  const out = rows.map((r) => r.line);
+  setReady(rows, out);
+  return appendSection(out, 'sorry-matt blocker', items.map((i) => `- ${i}`), eol);
+}
+
+/** The ticket file inside the integration worktree: { abs, rel, head } with its text as committed at HEAD. */
+function localFile(wt, file, line) {
   const abs = resolve(wt, file);
   const rel = relative(canonical(wt), canonical(abs)).split(sep).join('/');
   if (rel.startsWith('..') || isAbsolute(rel)) throw new Refusal(`--local ${file} is outside the integration worktree ${wt}`);
-  let head;
   try {
-    head = run('git', ['show', `HEAD:${rel}`], wt);
+    return { abs, rel, head: run('git', ['show', `HEAD:${rel}`], wt) };
   } catch {
-    throw new Refusal(`--local ${rel} is not committed on ${info.line}`);
+    throw new Refusal(`--local ${rel} is not committed on ${line}`);
   }
-  if (delivered(head)) return 'already';
+}
+
+/**
+ * Commit the ticket file as `make(text)` alone. The working copy must equal HEAD (or be missing) or already be
+ * that result: anything else is someone's uncommitted edit, refused.
+ */
+function commitLocal(wt, { abs, rel, head }, make, message) {
   // Compared with line endings normalized: a checkout may turn the committed LF into CRLF.
   const lf = (x) => x.replace(/\r\n/g, '\n');
   const now = existsSync(abs) ? readFileSync(abs, 'utf8') : null;
   let body;
-  if (now === null || lf(now) === lf(head)) body = deliver(now ?? head, info);
-  else if (lf(now) === lf(deliver(head, info))) body = now;
+  if (now === null || lf(now) === lf(head)) body = make(now ?? head);
+  else if (lf(now) === lf(make(head))) body = now;
   else throw new Refusal(`${rel} has uncommitted changes in ${wt}; commit or discard them, then rerun`);
   writeFileSync(abs, body);
   git(wt, 'add', '--', rel);
-  git(wt, 'commit', '-q', '-m', `${id}: sorry-matt completion`, '--', rel);
+  git(wt, 'commit', '-q', '-m', message, '--', rel);
   return 'committed';
+}
+
+function deliverLocal(wt, file, info, id) {
+  const f = localFile(wt, file, info.line);
+  if (delivered(f.head)) return 'already';
+  return commitLocal(wt, f, (text) => deliver(text, info), `${id}: sorry-matt completion`);
+}
+
+/** Append a blocker naming `marker` to the ticket file, unless its last blocker already does. */
+function blockLocal(wt, file, line, id, marker, items) {
+  const f = localFile(wt, file, line);
+  if (blocked(f.head, marker)) return 'already';
+  return commitLocal(wt, f, (text) => block(text, items), `${id}: sorry-matt blocker`);
+}
+
+// ---- shared steps --------------------------------------------------------------------------------------------------
+
+/** Step 5 of merge: push the line, or leave a push to a protected branch to the host. */
+function pushLine(wt, line, requested) {
+  if (!requested) return { status: 'not-requested' };
+  if (tryGit(wt, 'remote', 'get-url', 'origin') === null) return { status: 'no-origin' };
+  if (isProtected(wt, line)) return { status: 'host', command: `git -C "${wt}" push -u origin ${line}` };
+  git(wt, 'push', '-q', '-u', 'origin', line);
+  return { status: 'pushed' };
+}
+
+/**
+ * Remove the worktree holding `branch` (never forced), then delete the branch (`-d`, or `-D` when `force`: its tip
+ * is kept elsewhere). `done` opens the refusal: what stays done when this cannot finish.
+ */
+function cleanBranch(cwd, branch, done, force = false) {
+  const cleanup = { worktree: 'absent', branch: 'absent' };
+  const holder = worktrees(cwd).find((w) => w.branch === branch);
+  if (holder) {
+    try {
+      git(cwd, 'worktree', 'remove', holder.path);
+    } catch (error) {
+      throw new Refusal(`${done}, but its worktree ${holder.path} could not be removed (${String(error.stderr ?? error.message).trim()}); clean it, then rerun`);
+    }
+    cleanup.worktree = 'removed';
+  }
+  if (branchTip(cwd, branch) !== null) {
+    try {
+      git(cwd, 'branch', '-q', force ? '-D' : '-d', branch);
+    } catch (error) {
+      throw new Refusal(`${done}, but ${branch} could not be deleted (${String(error.stderr ?? error.message).trim()})`);
+    }
+    cleanup.branch = 'deleted';
+  }
+  return cleanup;
+}
+
+/** `refs/sorry-matt/<run>/<branch without its run prefix>/<leaf>`. */
+const keptRef = (run, branch, leaf) => `refs/sorry-matt/${run}/${branch.startsWith(`${run}/`) ? branch.slice(run.length + 1) : branch}/${leaf}`;
+
+/**
+ * Keep the branch's tip at `ref` (created only when missing). { ref, sha }, or null when neither the branch nor the
+ * ref exists. A ref at another commit than a branch that still exists is refused: that is a new attempt.
+ */
+function keepTip(cwd, branch, ref) {
+  const tip = branchTip(cwd, branch);
+  const kept = commitOf(cwd, ref);
+  if (tip === null) return kept === null ? null : { ref, sha: kept };
+  if (kept === null) {
+    git(cwd, 'update-ref', ref, tip, '');
+    return { ref, sha: tip };
+  }
+  if (kept !== tip) throw new Refusal(`${ref} already keeps ${kept}, but ${branch} is at ${tip} (a new attempt?); nothing was removed`);
+  return { ref, sha: tip };
+}
+
+const revertInProgress = (cwd) => tryGit(cwd, 'rev-parse', '--verify', '-q', 'REVERT_HEAD') !== null;
+const dirty = (cwd) => git(cwd, 'status', '--porcelain', '--untracked-files=no') !== '';
+const list = (text) => (text === undefined ? [] : text.split(',').map((x) => x.trim()).filter(Boolean));
+
+/** The commit on the line's first-parent history after `sha` that reverts it (git's default message), or null. */
+function revertOf(wt, sha, line) {
+  const out = git(wt, 'log', '--first-parent', '--format=%H', '--fixed-strings', `--grep=This reverts commit ${sha}`, `${sha}..refs/heads/${line}`);
+  return out.split(/\r?\n/).filter(Boolean).pop() ?? null;
+}
+
+/** `git revert --no-edit` (with `-m 1` for a merge): { sha }, or { files } after aborting a conflict. */
+function revertCommit(wt, sha) {
+  const parents = git(wt, 'rev-list', '--parents', '-n', '1', sha).split(' ').length - 1;
+  try {
+    git(wt, 'revert', '--no-edit', ...(parents > 1 ? ['-m', '1'] : []), sha);
+  } catch (error) {
+    if (!revertInProgress(wt)) throw error;
+    const files = git(wt, 'diff', '--name-only', '--diff-filter=U').split(/\r?\n/).filter(Boolean);
+    git(wt, 'revert', '--abort');
+    return { files };
+  }
+  return { sha: git(wt, 'rev-parse', 'HEAD') };
+}
+
+/** The integration worktree checks every command run in it shares. */
+function onLine(wt, line, id) {
+  const on = currentBranch(wt);
+  if (on !== line) throw new Refusal(`${wt} has ${on ?? 'no branch'} checked out, not ${id}'s integration branch ${line}`);
+  if (mergeInProgress(wt)) throw new Refusal(`a merge is in progress in ${wt}: finish it (git commit --no-edit) or abort it (git merge --abort), then rerun`);
+  if (revertInProgress(wt)) throw new Refusal(`a revert is in progress in ${wt}: finish it (git revert --continue) or abort it (git revert --abort), then rerun`);
 }
 
 // ---- merge -------------------------------------------------------------------------------------------------------
@@ -370,10 +645,12 @@ function merge(ctx, rest, flags) {
   if (rest.length !== 1) throw new UsageError('merge takes exactly one ticket');
   if (!flags.worktree) throw new UsageError('merge needs --worktree (the integration worktree)');
   if (flags.checks !== undefined && flags.local === undefined) throw new UsageError('--checks goes with --local');
+  if (flags.ci && (flags.branch !== undefined || flags.local !== undefined)) throw new UsageError('--ci merges the ticket\'s <branch>-ci: no --branch, --local or --checks');
   const [id] = rest;
   const wt = ctx.path(flags.worktree);
   let s = load(ctx.state);
   let t = ticketOf(s, id);
+  if (flags.ci) return ciMerge(ctx, id, s, wt, flags);
   if (!['queued', 'integrating', 'delivered'].includes(t.stage)) {
     throw new Refusal(`${id} is ${t.stage}; merge takes a ticket that is queued, integrating, or delivered (a rerun)`);
   }
@@ -381,25 +658,16 @@ function merge(ctx, rest, flags) {
   if (!branch) throw new Refusal(`${id} has no ticket branch recorded: pass --branch, or create it with ticket-init`);
   checkTicketBranch(s, id, t, branch, wt);
   const line = t.line;
-  const on = currentBranch(wt);
-  if (on !== line) throw new Refusal(`${wt} has ${on ?? 'no branch'} checked out, not ${id}'s integration branch ${line}`);
   const checks = flags.checks ?? t.verification;
+  onLine(wt, line, id);
   if (flags.local !== undefined && !checks) throw new Refusal(`${id}: the delivery record needs the checks passed: pass --checks, or set --verification in the state`);
-  if (mergeInProgress(wt)) throw new Refusal(`a merge is in progress in ${wt}: finish it (git commit --no-edit) or abort it (git merge --abort), then rerun`);
 
   // 1. merge
   let found = findMerge(wt, line, id, t, branch);
   if (!found) {
-    if (git(wt, 'status', '--porcelain', '--untracked-files=no')) throw new Refusal(`${wt} has uncommitted changes; the merge needs a clean worktree`);
-    try {
-      git(wt, 'merge', '--no-ff', '--no-edit', branch);
-    } catch (error) {
-      if (!mergeInProgress(wt)) throw error;
-      const files = git(wt, 'diff', '--name-only', '--diff-filter=U').split(/\r?\n/).filter(Boolean);
-      git(wt, 'merge', '--abort');
-      return { code: CONFLICT, out: { command: 'merge', ticket: id, line, branch, result: 'conflict', files } };
-    }
-    found = { sha: git(wt, 'rev-parse', 'HEAD'), found: 'merged' };
+    const m = mergeBranch(wt, branch);
+    if (m.files) return { code: CONFLICT, out: { command: 'merge', ticket: id, line, branch, result: 'conflict', files: m.files } };
+    found = { sha: m.sha, found: 'merged' };
   }
 
   // 2. record
@@ -420,36 +688,9 @@ function merge(ctx, rest, flags) {
   const tip = git(wt, 'rev-parse', 'HEAD');
   if (s.lines[line]?.tip !== tip) state(ctx, 'line', line, '--tip', tip);
 
-  // 5. push
-  let push;
-  if (!flags.push) push = { status: 'not-requested' };
-  else if (tryGit(wt, 'remote', 'get-url', 'origin') === null) push = { status: 'no-origin' };
-  else if (isProtected(wt, line)) push = { status: 'host', command: `git -C "${wt}" push -u origin ${line}` };
-  else {
-    git(wt, 'push', '-q', '-u', 'origin', line);
-    push = { status: 'pushed' };
-  }
-
-  // 6. clean
-  const cleanup = { worktree: 'absent', branch: 'absent' };
-  const holder = worktrees(wt).find((w) => w.branch === branch);
-  if (holder) {
-    try {
-      git(wt, 'worktree', 'remove', holder.path);
-    } catch (error) {
-      throw new Refusal(`${id} is merged and recorded, but its worktree ${holder.path} could not be removed (${String(error.stderr ?? error.message).trim()}); clean it, then rerun`);
-    }
-    cleanup.worktree = 'removed';
-  }
-  if (branchTip(wt, branch) !== null) {
-    try {
-      git(wt, 'branch', '-q', '-d', branch);
-    } catch (error) {
-      throw new Refusal(`${id} is merged and recorded, but ${branch} could not be deleted (${String(error.stderr ?? error.message).trim()})`);
-    }
-    cleanup.branch = 'deleted';
-  }
-
+  // 5. push and 6. clean
+  const push = pushLine(wt, line, flags.push);
+  const cleanup = cleanBranch(wt, branch, `${id} is merged and recorded`);
   return {
     out: {
       command: 'merge',
@@ -468,12 +709,358 @@ function merge(ctx, rest, flags) {
   };
 }
 
+// ---- red-light fix -------------------------------------------------------------------------------------------------
+
+/** The fix branch rule: never a line, a protected branch, or another ticket's ticket or fix branch. */
+function checkCiBranch(s, id, branch, repo) {
+  if (branch in s.lines) throw new Refusal(`${branch} is an integration branch of this run, not a red-light fix branch`);
+  if (isProtected(repo, branch)) throw new Refusal(`${branch} is a protected branch, not a red-light fix branch`);
+  const other = Object.entries(s.tickets).find(([k, o]) => o.branch && (o.branch === branch || (k !== id && `${o.branch}-ci` === branch)));
+  if (other) throw new Refusal(`${branch} is ${other[0]}'s branch`);
+}
+
+/** The delivered ticket and its fix branch name, refused when it has none. */
+function ciTicket(s, id) {
+  const t = ticketOf(s, id);
+  if (t.stage !== 'delivered') throw new Refusal(`${id} is ${t.stage}; a red-light fix is for a delivered ticket`);
+  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded; its fix branch is <ticket branch>-ci`);
+  return { t, branch: `${t.branch}-ci` };
+}
+
+function ciInit(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('ci-init takes exactly one ticket');
+  if (!flags.worktree) throw new UsageError('ci-init needs --worktree');
+  const [id] = rest;
+  const repo = ctx.repo;
+  const s = load(ctx.state);
+  const { t, branch } = ciTicket(s, id);
+  const lineTip = branchTip(repo, t.line);
+  if (lineTip === null) throw new Refusal(`${id}'s integration branch ${t.line} does not exist`);
+  checkCiBranch(s, id, branch, repo);
+  const made = ensureWorktree(repo, branch, ctx.path(flags.worktree), lineTip);
+  return {
+    out: {
+      command: 'ci-init',
+      ticket: id,
+      line: t.line,
+      branch,
+      worktree: made.path,
+      head: branchTip(repo, branch),
+      from: made.branch ? lineTip : null,
+      created: { branch: made.branch, worktree: made.worktree },
+    },
+  };
+}
+
+function ciMerge(ctx, id, s, wt, flags) {
+  const { t, branch } = ciTicket(s, id);
+  checkCiBranch(s, id, branch, wt);
+  const line = t.line;
+  onLine(wt, line, id);
+  let found = findCiMerge(wt, line, id, t, branch);
+  if (!found) {
+    const m = mergeBranch(wt, branch);
+    if (m.files) return { code: CONFLICT, out: { command: 'merge', ci: true, ticket: id, line, branch, result: 'conflict', files: m.files } };
+    found = { sha: m.sha, found: 'merged' };
+  }
+  if (!t.merges.some((m) => commitOf(wt, m.sha) === found.sha)) state(ctx, 'merge', id, found.sha);
+  const tip = git(wt, 'rev-parse', 'HEAD');
+  if (load(ctx.state).lines[line]?.tip !== tip) state(ctx, 'line', line, '--tip', tip);
+  const push = pushLine(wt, line, flags.push);
+  const cleanup = cleanBranch(wt, branch, `${id}'s red-light fix is merged and recorded`);
+  return {
+    out: {
+      command: 'merge',
+      ci: true,
+      ticket: id,
+      line,
+      branch,
+      result: 'merged',
+      merge: found.sha,
+      found: found.found,
+      stage: load(ctx.state).tickets[id].stage,
+      delivery: 'none',
+      tip,
+      push,
+      cleanup,
+    },
+  };
+}
+
+// ---- revert --------------------------------------------------------------------------------------------------------
+
+/** A dependent whose merge is on the line: it stays, and the dependent becomes stuck. */
+const INTEGRATED = (t) => t.merges.length > 0 && t.stage !== 'awaiting-ruling';
+
+function revert(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('revert takes exactly one ticket');
+  if (!flags.worktree) throw new UsageError('revert needs --worktree (the integration worktree)');
+  if (!flags.reason) throw new UsageError('revert needs --reason');
+  const local = flags.local !== undefined;
+  const deps = (flags.dependent ?? []).map((d) => {
+    const at = d.indexOf('=');
+    const dep = at < 0 ? { id: d, file: null } : { id: d.slice(0, at), file: d.slice(at + 1) };
+    if (dep.file !== null && !local) throw new UsageError(`--dependent ${d}: a ticket file goes with --local`);
+    return dep;
+  });
+  const [id] = rest;
+  const wt = ctx.path(flags.worktree);
+  let s = load(ctx.state);
+  const t = ticketOf(s, id);
+  if (!['delivered', 'stuck'].includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket`);
+  if (!t.merges.length) throw new Refusal(`${id} has no merge recorded; there is nothing to revert`);
+  const line = t.line;
+  onLine(wt, line, id);
+  const seen = new Set([id]);
+  for (const dep of deps) {
+    const d = ticketOf(s, dep.id);
+    if (seen.has(dep.id)) throw new UsageError(`--dependent ${dep.id} is given twice, or is the reverted ticket`);
+    seen.add(dep.id);
+    if (d.line !== line) throw new Refusal(`${dep.id} is on ${d.line}, not on ${id}'s line ${line}`);
+    if (local && INTEGRATED(d) && dep.file === null) throw new Refusal(`${dep.id} is integrated: pass its ticket file (--dependent ${dep.id}=<file>) for its blocker`);
+    if (d.branch && !INTEGRATED(d)) checkTicketBranch(s, dep.id, d, d.branch, wt);
+    if (dep.file !== null) localFile(wt, dep.file, line);
+  }
+  if (local) localFile(wt, flags.local, line);
+  const merges = [...new Set(t.merges.map((m) => {
+    const sha = commitOf(wt, m.sha);
+    if (sha === null) throw new Refusal(`${id}: the recorded merge ${m.sha} is not a commit in this repository`);
+    if (!isAncestor(wt, sha, `refs/heads/${line}`)) throw new Refusal(`${id}: the recorded merge ${sha} is not on ${line}; the state and git disagree`);
+    return sha;
+  }))];
+  const already = new Map(merges.map((m) => [m, revertOf(wt, m, line)]));
+  if (t.stage === 'stuck' && merges.every((m) => already.get(m) === null)) {
+    throw new Refusal(`${id} is stuck, but none of its merges is reverted on ${line}: it was marked stuck another way`);
+  }
+
+  // 1. revert, newest first
+  const reverts = [];
+  for (const m of [...merges].reverse()) {
+    if (already.get(m)) {
+      reverts.push({ merge: m, revert: already.get(m), found: 'git' });
+      continue;
+    }
+    if (dirty(wt)) throw new Refusal(`${wt} has uncommitted changes; the revert needs a clean worktree`);
+    const r = revertCommit(wt, m);
+    if (r.files) return { code: CONFLICT, out: { command: 'revert', ticket: id, line, result: 'conflict', merge: m, files: r.files } };
+    reverts.push({ merge: m, revert: r.sha, found: 'reverted' });
+  }
+  reverts.reverse();
+  const pairs = reverts.map((r) => `${r.merge} by ${r.revert}`).join(', ');
+  const revertShas = reverts.map((r) => r.revert).join(', ');
+
+  // 2. record
+  let completion = 'none';
+  let record = 'host';
+  if (local) {
+    const f = localFile(wt, flags.local, line);
+    const subject = `${id}: sorry-matt completion`;
+    const c = git(wt, 'log', '--first-parent', '--format=%H%x09%s', `refs/heads/${line}`, '--', f.rel)
+      .split(/\r?\n/)
+      .map((l) => l.split('\t'))
+      .find(([, sub]) => sub === subject)?.[0];
+    if (!c) completion = delivered(f.head) ? 'not-found' : 'absent';
+    else if (revertOf(wt, c, line)) completion = 'reverted';
+    else if (!delivered(f.head)) completion = 'absent';
+    else {
+      if (dirty(wt)) throw new Refusal(`${wt} has uncommitted changes; the revert needs a clean worktree`);
+      const r = revertCommit(wt, c);
+      if (r.files) return { code: CONFLICT, out: { command: 'revert', ticket: id, line, result: 'conflict', merge: c, files: r.files } };
+      completion = 'reverted';
+    }
+    record = blockLocal(wt, flags.local, line, id, merges[0], [
+      `Reason: ${flags.reason}`,
+      ...reverts.map((r) => `Reverted: ${r.merge} by ${r.revert}`),
+      `Integration branch: ${line}`,
+      `Run: ${s.run}`,
+    ]);
+  }
+
+  // 3. state
+  if (t.stage === 'delivered') state(ctx, 'stage', 'stuck', id, '--reason', `${flags.reason}; reverted ${pairs}`);
+
+  // 4. dependents
+  const upstream = `upstream reverted: ${id} (${revertShas})`;
+  const dependents = [];
+  for (const dep of deps) {
+    s = load(ctx.state);
+    const d = s.tickets[dep.id];
+    const row = { ticket: dep.id, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
+    if (INTEGRATED(d)) {
+      row.treatment = 'integrated';
+      if (local) {
+        row.record = blockLocal(wt, dep.file, line, dep.id, merges[0], [
+          `Reason: ${upstream}`,
+          ...reverts.map((r) => `Upstream merge: ${r.merge} reverted by ${r.revert}`),
+          `Integration branch: ${line}`,
+          `Run: ${s.run}`,
+        ]);
+      }
+      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep.id, '--reason', upstream);
+    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
+      row.treatment = 'in-flight';
+      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep.id, '--reason', upstream);
+      if (d.assignment?.deadline) {
+        row.agent = d.assignment.agentId ?? null;
+        row.cleanup = 'agent-in-flight';
+      } else if (d.branch) {
+        row.kept = keepTip(wt, d.branch, keptRef(s.run, d.branch, 'upstream-reverted'));
+        row.cleanup = cleanBranch(wt, d.branch, `${dep.id} is awaiting a ruling`, true);
+      }
+    }
+    row.stage = load(ctx.state).tickets[dep.id].stage;
+    dependents.push(row);
+  }
+
+  // 5. tip and push
+  const tip = git(wt, 'rev-parse', 'HEAD');
+  if (load(ctx.state).lines[line]?.tip !== tip) state(ctx, 'line', line, '--tip', tip);
+  const push = pushLine(wt, line, flags.push);
+  return {
+    out: {
+      command: 'revert',
+      ticket: id,
+      line,
+      result: 'reverted',
+      reverts,
+      completion,
+      record,
+      stage: load(ctx.state).tickets[id].stage,
+      dependents,
+      tip,
+      push,
+    },
+  };
+}
+
+// ---- send back and stuck -------------------------------------------------------------------------------------------
+
+function sendBack(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('send-back takes exactly one ticket');
+  const [id] = rest;
+  const repo = ctx.repo;
+  const s = load(ctx.state);
+  const t = ticketOf(s, id);
+  const rerun = t.stage === 'candidate' && t.sendBacks >= 1;
+  if (!rerun && !['queued', 'integrating'].includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; send-back takes a ticket that is queued or integrating`);
+  if (!rerun && t.sendBacks >= 1) throw new Refusal(`${id} was already sent back once; a second send back is not allowed, mark it stuck`);
+  if (t.merges.length) throw new Refusal(`${id} has a merge recorded; it is integrated, not sent back`);
+  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded`);
+  const branch = t.branch;
+  checkTicketBranch(s, id, t, branch, repo);
+  const lineTip = branchTip(repo, t.line);
+  if (lineTip === null) throw new Refusal(`${id}'s integration branch ${t.line} does not exist`);
+  const k = rerun ? t.sendBacks : t.sendBacks + 1;
+
+  // 1. keep
+  const kept = keepTip(repo, branch, keptRef(s.run, branch, `sent-back-${k}`));
+  if (kept === null) throw new Refusal(`${branch} does not exist and nothing is kept for it; there is no attempt to send back`);
+  const touched = git(repo, 'diff', '--name-only', `refs/heads/${t.line}...${kept.sha}`).split(/\r?\n/).filter(Boolean);
+  const conflicts = list(flags.conflicts);
+  let predicted = null;
+  let uncovered = null;
+  if (flags.predicted !== undefined) {
+    const p = list(flags.predicted);
+    uncovered = touched.filter((f) => !p.includes(f));
+    predicted = [...new Set([...p, ...conflicts, ...touched])];
+  }
+
+  // 2. state
+  if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id, '--reason', 'integration conflict');
+  if (!rerun) state(ctx, 'stage', 'candidate', id, '--reason', `sent back for a redo${conflicts.length ? `: conflict in ${conflicts.join(', ')}` : ''}`);
+
+  // 3. clean
+  const cleanup = cleanBranch(repo, branch, `${id} is sent back and its attempt kept at ${kept.ref}`, true);
+  return {
+    out: {
+      command: 'send-back',
+      ticket: id,
+      branch,
+      ref: kept.ref,
+      sha: kept.sha,
+      k,
+      line: t.line,
+      lineTip,
+      conflicts,
+      touched,
+      uncovered,
+      predicted,
+      stage: load(ctx.state).tickets[id].stage,
+      cleanup,
+    },
+  };
+}
+
+function stuck(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('stuck takes exactly one ticket');
+  if (!flags.reason) throw new UsageError('stuck needs --reason');
+  if (flags.local !== undefined && flags.worktree === undefined) throw new UsageError('--local needs --worktree (the integration worktree)');
+  if (flags.attempts !== undefined && flags.local === undefined) throw new UsageError('--attempts goes with --local');
+  const [id] = rest;
+  const wt = flags.worktree === undefined ? null : ctx.path(flags.worktree);
+  const repo = wt ?? ctx.repo;
+  const s = load(ctx.state);
+  const t = ticketOf(s, id);
+  if (t.stage === 'delivered') throw new Refusal(`${id} is delivered; a delivered ticket is marked stuck by revert`);
+  if (t.stage === 'awaiting-ruling') throw new Refusal(`${id} is awaiting a ruling, an end state`);
+  if (t.branch) checkTicketBranch(s, id, t, t.branch, repo);
+  if (wt) onLine(wt, t.line, id);
+  let review = 'not-requested';
+  let reviewPath = null;
+  if (flags['review-worktree'] !== undefined) {
+    reviewPath = ctx.path(flags['review-worktree']);
+    const w = worktrees(repo).find((x) => samePath(x.path, reviewPath));
+    if (w?.branch) throw new Refusal(`${reviewPath} has ${w.branch} checked out; a review worktree is always detached`);
+    review = w ? 'present' : 'absent';
+    if (w) reviewPath = w.path;
+  }
+  const ref = t.branch ? keptRef(s.run, t.branch, 'stuck') : null;
+  const keeps = t.branch && (branchTip(repo, t.branch) !== null || commitOf(repo, ref) !== null);
+
+  // 1. record
+  let record = 'host';
+  if (flags.local !== undefined) {
+    record = blockLocal(wt, flags.local, t.line, id, `Run: ${s.run}`, [
+      `Reason: ${flags.reason}`,
+      ...(flags.attempts ? [`Attempts: ${flags.attempts}`] : []),
+      ...(keeps ? [`Ticket branch: ${t.branch} (kept at ${ref})`] : []),
+      `Integration branch: ${t.line}`,
+      `Run: ${s.run}`,
+    ]);
+  }
+
+  // 2. keep and clean
+  let kept = null;
+  let cleanup = null;
+  if (t.branch) {
+    kept = keepTip(repo, t.branch, ref);
+    cleanup = cleanBranch(repo, t.branch, `${id}'s attempt is kept at ${ref}`, true);
+  }
+
+  // 3. review worktree
+  if (review === 'present') {
+    git(repo, 'worktree', 'remove', '--force', reviewPath);
+    review = 'removed';
+  }
+
+  // 4. state and 5. push
+  if (t.stage !== 'stuck') state(ctx, 'stage', 'stuck', id, '--reason', flags.reason);
+  const push = wt ? pushLine(wt, t.line, flags.push) : { status: 'not-requested' };
+  return {
+    out: { command: 'stuck', ticket: id, line: t.line, record, kept, cleanup, review, stage: 'stuck', push },
+  };
+}
+
 // ---- entry -------------------------------------------------------------------------------------------------------
 
 const COMMANDS = {
   'line-init': [lineInit, { branch: 'one', worktree: 'one', from: 'one', repo: 'one', now: 'one' }],
   'ticket-init': [ticketInit, { branch: 'one', worktree: 'one', repo: 'one', now: 'one' }],
-  merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', now: 'one' }],
+  merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
+  'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
+  revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', now: 'one' }],
+  'send-back': [sendBack, { conflicts: 'one', predicted: 'one', repo: 'one', now: 'one' }],
+  stuck: [stuck, { reason: 'one', worktree: 'one', local: 'one', attempts: 'one', 'review-worktree': 'one', push: 'bool', repo: 'one', now: 'one' }],
 };
 
 function parseArgs(argv, spec) {
@@ -487,13 +1074,15 @@ function parseArgs(argv, spec) {
     }
     const name = a.slice(2);
     if (!(name in spec)) throw new UsageError(`unknown flag ${a}`);
-    if (name in flags) throw new UsageError(`${a} is given twice`);
+    if (name in flags && spec[name] !== 'many') throw new UsageError(`${a} is given twice`);
     if (spec[name] === 'bool') {
       flags[name] = true;
       continue;
     }
     if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
-    flags[name] = argv[(i += 1)];
+    const value = argv[(i += 1)];
+    if (spec[name] === 'many') (flags[name] ??= []).push(value);
+    else flags[name] = value;
   }
   return { flags, rest };
 }
