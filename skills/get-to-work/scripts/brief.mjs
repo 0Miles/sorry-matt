@@ -21,7 +21,8 @@
 //     merge      the merge agent; its target is the ticket, or the line's integration branch for the merge that
 //                syncs the base when the run finishes
 //     review     the review host agent, spawned in the foreground at close-out to host prove-it for the ticket
-//   prove-it's finder, verifier and fix-verifier, which the review host spawns, are named by prove-it's own rules.
+//   prove-it's finder, architect, verifier and fix-verifier, which the review host spawns, are named by prove-it's own
+//   rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
 //   Markdown. The plugin's budget hook logs each spawn's agent type and `description` next to the run ledger, and
 //   spawns.mjs reads the role word and the first ticket back from it; a spawn whose prefix is wrong counts as

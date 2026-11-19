@@ -223,6 +223,35 @@ test('finders: light is one finder, standard two, full the three unpruned groups
   assert.deepEqual(large.pruned, []);
 });
 
+// #105 (#82 proposal 4): the architecture specialist reviewer runs only on the high-risk tier, full, whichever
+// condition made it full; every other tier has the primary Finders alone.
+test('reviewers: full adds architecture, by sensitive path or by line count; light and standard are primary only', (t) => {
+  const docs = judge(repo(t, {}, { 'docs/guide.md': lines(500, 'line ') }));
+  assert.equal(docs.tier, 'light');
+  assert.deepEqual(docs.reviewers, ['primary']);
+
+  const small = judge(repo(t, {}, { 'src/a.js': lines(50) }));
+  assert.equal(small.tier, 'light');
+  assert.deepEqual(small.reviewers, ['primary']);
+
+  const medium = judge(repo(t, {}, { 'src/a.js': lines(400) }));
+  assert.equal(medium.tier, 'standard');
+  assert.deepEqual(medium.reviewers, ['primary']);
+
+  const large = judge(repo(t, {}, { 'src/a.js': lines(401) }));
+  assert.deepEqual(large.reasons, ['over-lines']);
+  assert.deepEqual(large.reviewers, ['primary', 'architecture']);
+
+  const sensitive = judge(repo(t, {}, { 'hooks/guard.mjs': 'a();\n' }));
+  assert.equal(sensitive.tier, 'full');
+  assert.deepEqual(sensitive.reasons, ['sensitive']);
+  assert.deepEqual(sensitive.reviewers, ['primary', 'architecture']);
+
+  const raised = judge(repo(t, {}, { 'src/a.js': lines(60) }), '--full-over-lines', '59');
+  assert.equal(raised.tier, 'full');
+  assert.deepEqual(raised.reviewers, ['primary', 'architecture'], 'a tier made full by a threshold flag adds it too');
+});
+
 test('errors: not a repository or an unknown base exit 1; usage mistakes exit 2; nothing on stdout', (t) => {
   const plain = tempDir(t);
   const notRepo = main(['judge', '--base', 'main'], defaultDeps(plain));

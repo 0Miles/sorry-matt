@@ -234,7 +234,7 @@ role word, followed by the ticket's identifier (`#N` on GitHub, the ticket file 
 `expand #75 #83`), `implement` (an implementation agent, including one spawned anew after a send-back and one
 reassigned while implementing), `fix` (an agent reassigned while fixing), `ci-fix` (an agent newly spawned for a
 red-light fix; when the red maps to no ticket, followed by that line's integration branch), `merge` (a merge
-agent) and `review` (the review host agent); the `finder`, `verifier` and `fix-verifier` it spawns are in `prove-it`'s
+agent) and `review` (the review host agent); the `finder`, `architect`, `verifier` and `fix-verifier` it spawns are in `prove-it`'s
 own rules. Those second-level spawns still carry the host's session id, so the hook counts them against the run's
 spawns and blocks them at the limit all the same. The plugin's hook records each
 spawn's agent type and this `description` in `<run>.counters.json` beside the ledger, and the spawn breakdown when
@@ -493,7 +493,9 @@ integration branch, CI runs in the background, the host does not wait, and the n
    `no Agent tool` (the spawn depth limit reached) included — marks the ticket stuck (`SEND-BACK.md`). **One ticket
    gets this one reviewer by default**, its lenses covering standards and spec conformance together. Add a specialist
    reviewer only where a concrete risk calls for one, naming the risk, recording the rationale in the self-answer log,
-   and writing it into the brief's reviewer placeholder; "another look, to be safe" is not a risk.
+   and writing it into the brief's reviewer placeholder; "another look, to be safe" is not a risk. On a `full`-tier
+   ticket `prove-it` adds the `architecture` specialist reviewer itself from its tier output; it goes into no
+   placeholder and no self-answer log.
 
    **The host carries out the review report.** `prove-it`'s `tier` sets how deep the review goes, and its verifiers
    judge what is blocking; the host's job is to act on the verdict: `findings` go to the fix (step 3); when the count

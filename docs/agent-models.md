@@ -7,6 +7,7 @@
 | --- | --- | --- | --- |
 | 展開 agent | `agents/expander.md`（`sorry-matt:expander`） | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell, Write, Edit |
 | `prove-it` 的 Finder | `agents/finder.md`（`sorry-matt:finder`），原稿 `src/agents/finder.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
+| `prove-it` 的 architecture 專項 reviewer（只在 `full` 級） | `agents/architect.md`（`sorry-matt:architect`），原稿 `src/agents/architect.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 | `prove-it` 的 Verifier | `agents/verifier.md`（`sorry-matt:verifier`），原稿 `src/agents/verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 | `prove-it` 的 Fix Verifier | `agents/fix-verifier.md`（`sorry-matt:fix-verifier`），原稿 `src/agents/fix-verifier.md` | 繼承主持人的模型 | Read, Glob, Grep, Bash, PowerShell |
 
@@ -16,8 +17,10 @@
 
 `scripts/agent-tools.live.mjs` 在 Claude Code 2.1.328（2026-11-20，Windows 11）實測，結果寫在它的檔頭：
 
-- 定義檔的 `tools:` 就是 agent 的全部工具。三個審查類定義檔沒有 Edit 與 Write：以 `--agent` 跑的 session 解析出的工具
+- 定義檔的 `tools:` 就是 agent 的全部工具。審查類定義檔沒有 Edit 與 Write：以 `--agent` 跑的 session 解析出的工具
   沒有這兩個，spawn 出來的同一行 `tools:` 的 agent 也呼叫不到（對照組有就呼叫得到）。
+- `agents/architect.md`（#105）在這次實測之後才加入，`tools:` 與另外三個逐字相同。spawn 的檢查用的是 `tools:` 那一行的
+  副本、不是本文，所以上面的結論涵蓋它；以 `--agent` 解析它本身的那幾項，下次重跑才會有。
 - 它們留著 shell，因為審查要跑測試與 `git`，而 shell 寫得了檔。所以能證明的只是「沒有 Edit 與 Write 工具」，不是唯讀；
   「審查不改這張票的 diff」仍靠定義檔的文字規則，加上 `prove-it` 的 `git status --porcelain` 檢查來發現。真正唯讀
   要靠沒有寫入權限的執行環境，超出 plugin 的範圍。

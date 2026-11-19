@@ -47,7 +47,7 @@ test('a fallback to the general-purpose agent shows as its role, apart from the 
 });
 
 test('every role word is a category; the word is matched whole, first, in any case', (t) => {
-  const roles = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'finder', 'verifier', 'fix-verifier'];
+  const roles = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'finder', 'architect', 'verifier', 'fix-verifier'];
   const r = summarize(
     t,
     counters([
@@ -70,13 +70,14 @@ test('every role word is a category; the word is matched whole, first, in any ca
     merge: 2,
     review: 1,
     finder: 1,
+    architect: 1,
     verifier: 1,
     'fix-verifier': 1,
     'general-purpose': 5,
     Explore: 1,
   });
-  assert.equal(total(r.json.byType), 17);
-  assert.equal(r.json.spawns, 17);
+  assert.equal(total(r.json.byType), 18);
+  assert.equal(r.json.spawns, 18);
 });
 
 test('tickets: the first #N or NN-slug.md marker; a spawn without one is in no ticket', (t) => {

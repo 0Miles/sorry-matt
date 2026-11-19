@@ -42,6 +42,8 @@
 //        Verifiers: `verifiers.max` is 1 (light), --standard-max-verifiers (standard, 3) or null (full: one per file);
 //        `fixVerifiers` is "one" (light, standard) or "per-file" (full). `mutationCap` is --light-cap (3),
 //        --standard-cap (5) or --full-cap (10), each at most mutate.mjs's DEFAULT_CAP; null for docsOnly.
+//        Reviewers: `reviewers` lists the sets of reviewers the review runs. Always "primary" (the Finders above);
+//        full adds "architecture", the specialist reviewer of the high-risk tier (agents/architect.md, #105).
 // batch  Splits candidates (stage verify) or findings (stage fix) into one batch per subagent.
 //          verify  Candidates whose `suspected` is spec or pre-existing form one batch of their own (the short path);
 //                  the rest group by `file`. light puts everything into one batch. When the batches exceed
@@ -58,7 +60,8 @@
 //            "thresholds": { "lightMaxLines", "fullOverLines", "standardMaxVerifiers", "lightCap", "standardCap",
 //                            "fullCap" },
 //            "finders": [[lens, ...], ...], "pruned": [{ "lens", "reason" }],
-//            "verifiers": { "max": <n> | null }, "fixVerifiers": "one" | "per-file", "mutationCap": <n> | null }
+//            "verifiers": { "max": <n> | null }, "fixVerifiers": "one" | "per-file", "mutationCap": <n> | null,
+//            "reviewers": ["primary"] | ["primary", "architecture"] }
 //   batch: { "format": "sorry-matt/tier-batch@1", "tier", "stage",
 //            "batches": [{ "files": [...], "short": [ids], "normal": [ids] }] }   // fix: { "files", "ids" }
 //
@@ -81,6 +84,11 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   lightCap: 3,
   standardCap: 5,
   fullCap: 10,
+});
+export const REVIEWERS = Object.freeze({
+  light: ['primary'],
+  standard: ['primary'],
+  full: ['primary', 'architecture'],
 });
 export const DOC_EXTENSIONS = ['.md', '.markdown', '.mdx', '.txt', '.rst', '.adoc', '.asciidoc', '.org'];
 export const RULE_FILES = ['CLAUDE.md', 'AGENTS.md', 'CONTRIBUTING.md', 'CODING_STANDARDS.md'];
@@ -267,6 +275,7 @@ export function judgeTier(signals, thresholds = DEFAULT_THRESHOLDS) {
     verifiers: { max: tier === 'light' ? 1 : tier === 'standard' ? t.standardMaxVerifiers : null },
     fixVerifiers: tier === 'full' ? 'per-file' : 'one',
     mutationCap: signals.docsOnly ? null : t[`${tier}Cap`],
+    reviewers: [...REVIEWERS[tier]],
   };
 }
 
