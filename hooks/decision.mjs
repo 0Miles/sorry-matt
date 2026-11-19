@@ -97,7 +97,8 @@ const GUARD_TOUCH = /(^|[^\w.-])confirm(-state)?\.mjs\b|sorry-matt-guard/i;
 const INERT = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff', 'git', 'gh', 'echo', 'printf', 'write-output', 'write-host']);
 
 // The same file whatever the spelling: Git Bash `/d/x`, doubled or back slashes, case, symlinks.
-function samePath(a, b, cwd) {
+// `foldCase: false` keeps case as written, for a match that grants something on a case-sensitive file system.
+function samePath(a, b, cwd, foldCase = true) {
   const norm = (p) => {
     const path = resolve(cwd, process.platform === 'win32' ? p.replace(/^\/([a-z])\//i, '$1:/') : p);
     let real = path;
@@ -106,7 +107,8 @@ function samePath(a, b, cwd) {
     } catch {
       // not there: compare the resolved spelling
     }
-    return real.replace(/\\/g, '/').toLowerCase();
+    const slashed = real.replace(/\\/g, '/');
+    return foldCase ? slashed.toLowerCase() : slashed;
   };
   return norm(a) === norm(b);
 }
@@ -245,22 +247,25 @@ function park({ event, now, state, home }, reason) {
 }
 
 // The entry line as text: `node <script> "<reason>"` or '<reason>', and nothing a shell would expand or run.
-const ENTER_TEXT = /^\s*node\s+(?:"[^"$`]+"|'[^']+'|[^\s"'$`()]+)\s+(?:"[^"$`\\]*"|'[^']*')\s*$/;
+const ENTER_TEXT = /^[ \t]*node[ \t]+(?:"[^"$`]+"|'[^']+'|[^\s"'$`()]+)[ \t]+(?:"[^"$`\\]*"|'[^']*')[ \t]*$/;
+// One line means one line: with a CR or any other line break in it, what the shell runs is not what is read here.
+const LINE_BREAK = /[\r\n\v\f\u0085\u2028\u2029]/;
 
 /**
  * The reason, when a shell call is the one line the guard hands out for entering unattended mode: a single
  * `node "<root>/hooks/enter-unattended.mjs" "<reason>"`, run on its own. null for everything else — chained,
- * rewritten, another path, an empty reason — which gets no special treatment.
+ * rewritten, another path, an empty reason — which gets no special treatment. Because a match is answered with
+ * allow, the path keeps its case wherever the file system may tell two cases apart (everywhere but Windows).
  */
-export function enterInvocation(event, root = pluginRoot()) {
+export function enterInvocation(event, root = pluginRoot(), platform = process.platform) {
   if (event.tool_name !== 'Bash' && event.tool_name !== 'PowerShell') return null;
   const command = String(event.tool_input?.command || '');
-  if (!ENTER_TEXT.test(command)) return null;
+  if (LINE_BREAK.test(command) || !ENTER_TEXT.test(command)) return null;
   const segments = parse(command, event.tool_name === 'PowerShell' ? 'powershell' : 'bash');
   const [seg] = segments;
   const standard = segments.length === 1 && !seg.redirects.length && !seg.heredoc && seg.argv.length === 3 &&
     commandName(seg.argv[0]) === 'node' && seg.argv[2].trim() !== '' &&
-    samePath(seg.argv[1], join(root, 'hooks', 'enter-unattended.mjs'), event.cwd || process.cwd());
+    samePath(seg.argv[1], join(root, 'hooks', 'enter-unattended.mjs'), event.cwd || process.cwd(), platform === 'win32');
   return standard ? seg.argv[2].trim() : null;
 }
 

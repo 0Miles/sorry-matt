@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide as decideWith, confirmCommand, enterCommand, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
 import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
 import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
@@ -980,4 +980,71 @@ test('hook processes writing the state at the same time lose nothing and leave n
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('a state file that cannot be read is never written over: the entry and the list survive', () => {
+  withDir((home) => {
+    const state = autoState(home);
+    state.enter(ENTERED);
+    state.record({ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' });
+    state.record({ session: 's2', at: 20, subject: 'rm -rf ~', reason: 'r2' });
+    const before = readFileSync(autoStateFile(home), 'utf8');
+    for (const code of ['EIO', 'EBUSY']) {
+      const unreadable = autoState(home, { read: () => { throw Object.assign(new Error(code), { code }); } });
+      assert.throws(() => unreadable.record({ session: 's3', at: 30, subject: 'npm publish', reason: 'r3' }), { code });
+      assert.throws(() => unreadable.enter({ at: 40, reason: 'later', by: 'agent', session: 's3' }), { code });
+      // Reading still never throws, and the hook still denies under the user's switch.
+      assert.equal(unreadable.active(), false);
+      assert.deepEqual(unreadable.read(), { entered: null, blocked: [] });
+      assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, { state: unreadable, store: memoryStore(), now: 50, home })), 'deny', code);
+      assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, code);
+    }
+    assert.deepEqual(savedState(home).entered, ENTERED);
+    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['npm publish', 'rm -rf ~']);
+  });
+});
+
+test('the entry line keeps its case where the file system tells cases apart', () => {
+  const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+  const call = (path) => ({ tool_name: 'Bash', tool_input: { command: `node "${path}" "away"` }, cwd: CWD });
+  const variants = [script.replace('enter-unattended.mjs', 'Enter-Unattended.mjs'), script.replace('enter-unattended.mjs', 'ENTER-UNATTENDED.MJS'), script.replace('/hooks/', '/Hooks/')];
+  for (const platform of ['linux', 'darwin']) {
+    assert.equal(enterInvocation(call(script), PLUGIN, platform), 'away', platform);
+    for (const path of variants) assert.equal(enterInvocation(call(path), PLUGIN, platform), null, `${platform} ${path}`);
+  }
+  // Windows has one file under every case.
+  for (const path of variants) assert.equal(enterInvocation(call(path), PLUGIN, 'win32'), 'away', path);
+  if (process.platform !== 'win32') {
+    withDir((home) => {
+      for (const path of variants) {
+        assert.notEqual(decisionOf(decideWith(event(`node "${path}" "away"`), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow', path);
+      }
+      assert.equal(existsSync(autoStateFile(home)), false);
+    });
+  }
+});
+
+test('a command with a line break in it is not the entry line, in either shell', () => {
+  withDir((home) => {
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of [
+        `node "${script}"\r"away"`,
+        `node "${script}"\n"away"`,
+        `node\r"${script}" "away"`,
+        `node "${script}" "away"\r`,
+        `node "${script}" "away"\n`,
+        `\rnode "${script}" "away"`,
+        `node "${script}" "a\rway"`,
+        `node "${script}" 'a\nway'`,
+        `node "${script}" "a\u2028way"`,
+        `node "${script}"\f"away"`,
+      ]) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, JSON.stringify(command));
+        assert.notEqual(decisionOf(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow', JSON.stringify(command));
+      }
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+    assert.equal(autoState(home).active(), false);
+  });
 });
