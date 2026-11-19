@@ -490,8 +490,11 @@ push 了一次，每次喚醒結束時 `origin/<整合分支>` 與本地整合�
   2. **逐票導覽**：每張完成票一節，照 `tickets` 的 `order` —— 阻擋邊的拓撲序，被依賴的票先讀。每節寫：
      - 標題：順序、票號與票名；
      - commit 範圍：每個 merge 的 `compare` 連結，附 commit 數與 `stat`；紅燈修正的 `-ci` merge 另列一段；
-     - 改了什麼：主持人彙整該票整併進線的全部 commit message，含集中修正的 commit：
-       `git log --format=%B -E --grep='#N([^0-9]|$)' <基底分支>..<線整合分支>`；
+     - 改了什麼：主持人彙整該票整併進線的全部 commit message。取法是對該票 `merges` 的每個 `range`
+       （`<merge>^1..<merge>^2`）各跑一次 `git log --format=%B <range>`，紅燈修正的 `-ci` merge 也算在內；
+       不以票號搜尋 commit —— 別票 commit body 提到的票號（如 `Refs #8`）會被一併抓進來。集中修正在
+       ticket 分支上、整併前完成，已在該票的 merge 範圍內，不需另外撈。`missing` 裡的票照上面「commit
+       範圍對不到」的寫法處理，不提供任何替代的取法；
      - 驗收證據：接續紀錄的連結；
      - `resolved` 為 true 的 merge 寫明含衝突解法並附它的 `remergeDiff` 指令，註明只能在本機
        （git 2.36 以上）看、GitHub 網頁看不到；退回重做過的票註明退回次數；
