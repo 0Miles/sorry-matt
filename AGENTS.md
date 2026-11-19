@@ -224,6 +224,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 基準(實跑) | baseline |
 | 上限(突變) | cap |
 | 成立/不成立(裁決) | confirmed / invalid |
+| 疑似 spec 層級或既有 | suspected spec-level or pre-existing |
+| spec 層級(裁決) | spec-level |
+| 簡化流程(裁決) | short path |
+| 失效機制 | failure mechanism |
 | 展開 agent | expansion agent |
 | 展開區塊 | expansion block |
 | 驗收快照 | acceptance snapshot |
