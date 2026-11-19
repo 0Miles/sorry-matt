@@ -79,7 +79,7 @@
 import { readFileSync, copyFileSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/deadline@1';
 const LIMITS = ['rounds', 'spawns', 'hours', 'no-progress'];
@@ -182,7 +182,7 @@ function record(argv, deps) {
 function readPlan(path, read) {
   let plan;
   try {
-    plan = JSON.parse(read(path));
+    plan = parseJson(read(path));
   } catch (e) {
     if (e instanceof SyntaxError) throw new UsageError(`${path}: not JSON (${e.message})`);
     throw e;

@@ -71,7 +71,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { subjectIds, ticketOwners } from './merges.mjs';
 
 export { subjectIds };
@@ -84,7 +84,7 @@ const strings = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' 
 export function readPlan(path, read) {
   let plan;
   try {
-    plan = JSON.parse(read(path));
+    plan = parseJson(read(path));
   } catch (e) {
     throw new UsageError(`${path}: ${e.message}`);
   }

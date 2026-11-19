@@ -28,7 +28,11 @@ the fix leave it red, map the red back to the original ticket by mistake.
    earlier green, the merge base of the integration branch and the base branch (`kind` is `merge-base`), on a line
    with CI as well. A local verification record counts as that SHA's verdict and is judged together with the other
    SHAs' CI verdicts. When the output's `ci` is `query-failed`, only the local verification records were judged
-   this time; record `error` as reading CI does for a failed query. When `earliestRed` is `null` (no SHA has a
+   this time; record `error` as reading CI does for a failed query. When `truncated` is `true`, the run list was cut
+   at its limit: the `boundary` SHA and the SHAs whose `verdicts[]` entry has `partial` set to `true` may be missing
+   runs, and the script takes only their red as a verdict; do not judge them yourself or re-query by hand. The
+   true earliest red may then be older than `earliestRed`; the stretch still reaches down to `lowerBound`, so
+   `tickets` already covers it. When `earliestRed` is `null` (no SHA has a
    verdict, or the newest SHA with one is green), map nothing this time: in the pipeline, read the line again per
    reading CI at the next wake-up; finishing the run ([`FINISH.md`](FINISH.md) step 3) has no next wake-up, so run
    `earliest-red` again on the spot, and if it is still `null`, treat the red as **mapping to no ticket** and go
@@ -40,8 +44,9 @@ the fix leave it red, map the red back to the original ticket by mistake.
    way — are not merges, so landing in between changes nothing. With several tickets (the pushes between them have
    no verdict), start from the earliest, which is the first one. When `unmatched` is `true` — the red came from a
    host commit, the simplify pass or the base sync — it **maps to no ticket**.
-3. Save the failing jobs and steps with `gh run view <databaseId> --log-failed`; the host takes only the failing
-   lines. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
+3. Save the failing jobs and steps with `gh run view <id> --log-failed`; the host takes only the failing
+   lines. Each `<id>` is one listed in `failed` on the `verdicts[]` entry for `earliestRed` in the same
+   `earliest-red` output; do not run `gh run list` again. A local verification has no run (on a line on local verification, and the `no-verdict` one on a line with
    CI): while running the checks, save their output to
    `sorry-matt/runs/<run>/verify/<line-slug>-<SHA>.log` (in the shared directory, next to the ledger); the red one
    is the failure output, and the host takes only the failing lines.

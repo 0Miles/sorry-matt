@@ -271,3 +271,12 @@ test('bad plans exit 2; an unknown ref exits 1', (t) => {
   assert.equal(r.code, 1);
   assert.match(r.err, /^review-guide: /);
 });
+
+test('a plan file that starts with a UTF-8 BOM is read like one without', () => {
+  const { dir, repo } = shared;
+  const file = join(dir, 'bom.plan.json');
+  writeFileSync(file, `\uFEFF${JSON.stringify(plan(repo))}`);
+  const r = main([file]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(r.out), run(dir, plan(repo)).json);
+});

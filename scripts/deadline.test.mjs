@@ -651,3 +651,12 @@ test('progress: bad plans exit 2', (t) => {
   assert.equal(main(['progress']).code, 2);
   assert.equal(main(['progress', plan(dir, base()), '--now', NOW]).code, 2);
 });
+
+test('scan: a plan file that starts with a UTF-8 BOM is read', (t) => {
+  const dir = scratch(t);
+  const path = join(dir, 'plan.json');
+  writeFileSync(path, `\uFEFF${JSON.stringify({ agents: [expander('late', '2026-03-10T11:59:59Z', { '#1': 0 }, { '#1': 0 })] })}`);
+  const r = call(['scan', path, '--now', NOW]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.agents.map((a) => [a.id, a.overdue, a.action]), [['late', true, 'stop']]);
+});
