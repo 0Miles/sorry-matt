@@ -35,10 +35,14 @@ each frontend package separately.
 - **Barrel exports**: which components the shared directories' `index.ts` or `index.js` re-export.
 - **Import counts**: scan the whole repo's imports once, keeping one result of "file → the modules and names it
   imports"; compute every candidate's count from that same result — how many distinct files import it, spread
-  over how many pages or features — and do not scan again per candidate. The scan covers four spellings: static
-  `import` (side-effect-only and type-only ones included), `export … from`, `require()`, and dynamic
-  `import()`. An import that goes through a barrel re-export counts toward the candidate component the barrel
-  exports; the barrel file itself is not counted among the files using it.
+  over how many pages or features — and do not scan again per candidate. The scan excludes
+  `node_modules`, build output (such as `dist/`, `build/`, `.next/`, `out/`), and paths version control ignores
+  (whatever `.gitignore` covers). It covers four spellings: static `import` (side-effect-only and type-only ones
+  included), `export … from`, `require()`, and dynamic `import()`. A barrel is a file that holds only
+  re-exports (`export … from`, `export *`) and no declarations of its own, whether or not it sits in a shared
+  directory: it is not counted among the using files, and an import that goes through it counts toward the
+  candidate component it exports. A cross-package import counts toward the imported component from that same
+  whole-repo scan result, and the using-file count is not split by package.
 - **Duplicate implementations**: components with the same name or purpose in two or more places (for example two
   `Button`s).
 - **Storybook**: whether `.storybook/` exists, and which components have `*.stories.*`.
@@ -67,10 +71,11 @@ dependencies and imports.
 - None detected in any frontend package → record the single line "none", with no "Scope" line; do not ask.
 - One detected → record it as the evidence shows; do not ask. This applies only to a single-package project, or
   to a monorepo where every frontend package uses the same one; neither case writes a "Scope" line.
-- The frontend packages' libraries are not all the same (a package with no library counts) → do not ask; every
-  active library is recorded as its own entry with a "Scope" line (the package path), and the packages with no
-  library get one "none" entry with a "Scope" line. Which packages merge into one entry follows the merge
-  rule for the "Component library" section in `UI-TEMPLATE.md`.
+- The frontend packages' libraries are not all the same (a package with no library counts) → do not ask; the
+  entries follow the merge rule for the "Component library" section in `UI-TEMPLATE.md`, each with a "Scope"
+  line (the package paths): packages with the same active library and the same "existing, not for new use"
+  label merge into one entry, and when the labels differ, one active library can have two entries. The packages
+  with no library get one "none" entry with a "Scope" line.
 - Two or more detected in the same package → ask which one that package's new code uses. Recommended answer: the
   one a lint rule restricting imports or a migration note points to; otherwise the one with more imports. Record
   the others as "existing, not for new use" — that label is for this case only.
@@ -84,9 +89,12 @@ evidence still matches it. Recommended answer: the one with more imports; when t
 a shared directory, with a story, or with a barrel export.
 
 **C. Conventions.** Wrapper convention, where new shared components go, what they must come with (barrel export,
-types, story), and the mechanical check commands: where there is evidence, write what it shows and do not ask. Ask
-only when the evidence disagrees with itself (for example two shared directories both gaining new components, or
-half the components with stories and half without); the recommended answer is the practice recent commits follow.
+types, story), and the mechanical check commands: where there is evidence, write what it shows and do not ask. Values
+that differ between packages (two packages each with its own shared directory, for example) are not evidence
+disagreeing with itself; do not ask: write one line each in the per-package form of `UI-TEMPLATE.md`, with a
+"Scope" line, and give a package with no shared directory one "New shared components: none" line. Ask only when
+the evidence disagrees with itself inside one package (for example two shared directories in the same package
+both gaining new components, or half the components with stories and half without); the recommended answer is the practice recent commits follow.
 When an existing `ui.md` already records the ruling on this question and the evidence still matches it, do not
 ask.
 
@@ -97,10 +105,21 @@ when evidence does contradict it, raise one question for it per **Existing `ui.m
 **Existing `ui.md`.** On a re-run, use it as the base for comparison: content that matches the evidence, or that
 the evidence does not speak to (usually a manual edit), stays as written and raises no question. Content the
 evidence contradicts (for example a recorded component whose file no longer exists) gets one question per spot,
-with the evidence in the recommended answer. One exception: when the existing `ui.md`'s "Component library"
-section has a single entry with no "Scope" line, and the evidence shows the frontend packages' libraries are not
-all the same, raise no question; list it as a finding, add the "Scope" lines and the "none" entry to the draft
-per rule A, and show the diff against the existing version as step 3 requires.
+with the evidence in the recommended answer. Three exceptions raise no question: list each as a finding, complete the
+draft as below, and show the diff against the existing version as step 3 requires.
+
+- The existing `ui.md`'s "Component library" section has a single entry with no "Scope" line, and the evidence
+  shows the frontend packages' libraries are not all the same: add the "Scope" lines and the "none" entry to the
+  draft per rule A; when another package uses a different library, add an entry for that library with a "Scope"
+  line. This holds only while the package the existing entry records still matches the evidence. When that
+  package is no longer a dependency, the exception does not apply: raise one question as content the evidence
+  contradicts, with the recommended answer being to delete that entry and record again per rule A.
+- The existing `ui.md`'s "Component library" section has several entries, each with a "Scope" line, but the
+  packages with no library have no entry: add the "none" entry with a "Scope" line to the draft.
+- The existing `ui.md`'s "Tokens" section, or the "New shared components" line of "Conventions", is in the
+  single-line form (no "Scope"), and the evidence shows the values differ between packages: the draft upgrades it
+  to the per-package form of `UI-TEMPLATE.md`. The "Shared components" table and the "Mechanical checks" section
+  are outside this exception and follow the general rule above.
 
 **Instructions file.** When neither `CLAUDE.md` nor `AGENTS.md` exists, ask which one to create; the recommended
 answer is the one the current runtime reads natively. When either exists, do not ask.
@@ -111,8 +130,10 @@ message.
 Done when: the findings and every question go out in one message; every question has a recommended answer and its
 basis; the question list holds none that a rule says not to ask (no library or only one, frontend packages
 whose libraries are not all the same (a package with no library counts), a library question an existing `ui.md`
-already ruled on, an existing `ui.md` library section missing its "Scope" lines, no duplicated component or one
-an existing `ui.md` already ruled on, no conflicting convention or one an existing `ui.md` already ruled on, an
+already ruled on, an existing `ui.md` library section missing its "Scope" lines or its "none" entry, an existing
+`ui.md` "Tokens" section or "New shared components" line in the single-line form while the values differ between
+packages, no duplicated component or one an existing `ui.md` already ruled on, a convention whose values differ
+between packages, no conflicting convention inside one package or one an existing `ui.md` already ruled on, an
 instructions file that already exists).
 
 ## 3. Confirm the draft
