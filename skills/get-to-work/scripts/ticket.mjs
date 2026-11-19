@@ -13,8 +13,9 @@
 //     section's heading, before the section ends) is not a record: it is quoted history. The title is never nested.
 //   - A list item is a `-`, `*` or `+` bullet, or a number followed by `.` or `)`, then whitespace and at least one
 //     non-blank character. A bullet or number with nothing after it is not a list item.
-//   - The opening segment is what follows the title down to the next heading, or, without a title, what comes
-//     before the first heading.
+//   - The opening segment is what comes before the first heading, plus, when that first heading is level 1 (the
+//     title leads the ticket), what follows it down to the next heading. A level-1 heading further down does
+//     not move it.
 
 const FENCE = /^\s*(`{3,}(?!.*`)|~{3,})/;
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -81,11 +82,16 @@ export function lastRecordIndex(rows, test) {
   return rows.findLastIndex((r, i) => r.level && !nested[i] && test(r.title));
 }
 
-/** The rows of the opening segment: after the title down to the next heading, or before the first heading. */
+/**
+ * The rows of the opening segment: those before the first heading, plus, when that heading is level 1 (the
+ * title), those after it down to the next heading.
+ */
 export function openingRows(rows) {
-  const rest = rows.slice(rows.findIndex((r) => r.level === 1) + 1);
-  const end = rest.findIndex((r) => r.level);
-  return end < 0 ? rest : rest.slice(0, end);
+  const first = rows.findIndex((r) => r.level);
+  if (first < 0) return rows;
+  if (rows[first].level !== 1) return rows.slice(0, first);
+  const next = rows.findIndex((r, i) => i > first && r.level);
+  return [...rows.slice(0, first), ...rows.slice(first + 1, next < 0 ? rows.length : next)];
 }
 
 // Per row: is it inside a `Comments` / `sorry-matt …` section? The heading that starts a section counts as

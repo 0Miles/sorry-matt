@@ -780,3 +780,18 @@ test('github: the issue body follows the same Blocked by rules', () => {
   assert.deepEqual(out.tickets[2].blockedBy, [{ id: '#6', state: 'open', inSet: true }]);
   assert.deepEqual(out.tickets[3].blockedBy, []);
 });
+
+test('the opening segment ends at the first heading unless that heading is the title', () => {
+  // A level-1 heading further down is not the title: the line above the first heading is still read.
+  assert.deepEqual(parseTicket('Blocked by: #5\n\n## Context\n\ntext\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n').refs, ['#5']);
+  assert.deepEqual(parseTicket('Blocked by: #5\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n').refs, ['#5']);
+  assert.deepEqual(parseTicket('Blocked by: 01\n\n# 02: x\n\n## Blocked by\n\nsee\n').refs, ['01']);
+  assert.deepEqual(parseTicket('## Blocked by\n\nSee below.\n\n# Notes\n\nBlocked by: the vendor, not a ticket\n').refs, []);
+  const issues = {
+    5: { state: 'open', title: 'Five', blockedBy: [] },
+    6: { state: 'open', title: 'Six', body: 'Blocked by: #5\n\n# Summary\n\ntext\n\n## Blocked by\n\nSee parent.\n', blockedBy: [] },
+  };
+  const out = githubFrontier({ repo: REPO, numbers: ['5', '6'], gh: fakeGh(issues).gh });
+  assert.deepEqual(out.tickets[1].blockedBy, [{ id: '#5', state: 'open', inSet: true }]);
+  assert.deepEqual(out.frontier, ['#5']);
+});

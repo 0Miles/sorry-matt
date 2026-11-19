@@ -20,8 +20,9 @@
 //         comma-separated; "None ..." means no blockers (`- None` is still a list item, so the line is not
 //         read). The line's value is what follows the colon on the same line. With no heading, the line is
 //         looked for in all of the ticket's own text. Under a heading without list items it is read only from
-//         the opening segment (after the title down to the next heading; in a body without a title, before the
-//         first heading), and not at all when the first non-blank line under the heading starts with the word
+//         the opening segment (what comes before the first heading, plus, when that first heading is the
+//         level-1 title, what follows it down to the next heading), and not at all when the first non-blank
+//         line under the heading starts with the word
 //         `None`: that ticket has no blockers.
 //         A ticket is done when its last `sorry-matt completion` section is non-empty,
 //         it has no unchecked `- [ ]` (`*` and `+` bullets too) outside the `Comments` and `sorry-matt ...`
