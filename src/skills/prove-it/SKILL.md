@@ -50,19 +50,38 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 `pnpm install --frozen-lockfile` 這類凍結寫法）。不加相依、不下載新工具 —— 審查不改這張票的
 diff 與 repo 相依。新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
+**審查分級**在這裡由 diff 判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 與 verifier 的
+數量和突變上限。改動行是 `git diff --numstat <fixed point>...<ticket 分支>` 新增與刪除的合計；敏感路徑取審查用
+worktree 裡 `docs/agents/commands.md` 的「Sensitive paths」，沒有這份檔或該欄是 `none` 時，取 CI 設定、hook 與
+guard、發布與部署設定、權限設定與資料庫 migration 的路徑。由上往下，第一個符合的就是：
+
+| `tier` | 條件 | finder | verifier | 突變上限 |
+| --- | --- | --- | --- | --- |
+| `light` | 只動說明文字：每個改動檔都是 `.md`、`.txt` 這類文件，不含程式、測試、腳本、設定或產生檔 | 1 | 1 | — |
+| `full` | diff 碰到敏感路徑，或改動行超過 400 | 3 | 一個檔案一個 | 10 |
+| `light` | 改動行不超過 50 | 1 | 1 | 3 |
+| `standard` | 其餘 | 2 | 一個檔案一個，至多 3 | 5 |
+
 完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
-審查用 worktree 位於 ticket 分支尖端，diff 已存檔。
+審查用 worktree 位於 ticket 分支尖端，diff 已存檔；`tier` 已依上表判定。
 
 ## 2. Finder：平行找候選
 
-每個 lens 交給一個獨立的 finder subagent，同一則訊息一次派出。以下兩種 diff 只派一個 finder，
-由它套用全部 lens：
+Finder 的數量照 `tier`，同一則訊息一次派出，Agent tool 的 `description` 是 `finder` 後接票的識別碼。lens 這樣分：
 
-- 只有一個檔案，而且不超過數十行。
-- 只動說明文字：每個改動檔都是 `.md`、`.txt` 這類文件，不含程式、測試、腳本、設定或產生檔。
+- `light`：一個 finder 套用全部 lens。
+- `standard`：兩個 —— 正確性（逐行、被刪除的行為、跨檔案契約）與符合性（驗收對照、repo 慣例）。
+- `full`：三個 —— 逐行與被刪除的行為、跨檔案契約、符合性。
 
-本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送，不在背景跑：呼叫方在自己的
+本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
+
+三者的回報只有各節指定的欄位。推理過程、probe 的程式與輸出寫進 `<scratchpad>/review-<票>-notes/` 底下的檔案，
+回報給路徑：呼叫方的 context 只收裁決要用的欄位。
+
+三者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
+`finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
+這個前綴把 spawn 依角色與票分段計量；寫錯的會算成不明用途的通用 agent。
 
 - **逐行**：對每個 hunk 的每一行追問，哪些輸入、狀態、時序或平台會讓它失效？特別檢查條件
   反轉、off-by-one、falsy zero、遺漏 `await`、copy-paste 錯變數與 catch 吞錯。
@@ -88,7 +107,7 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
 - `pre-existing`：fixed point 上就已經這樣。附上 fixed point 上的位置。
 - `none`：兩者都不像。
 
-每個 finder 最多六則，沒有就回傳空清單。
+每個 finder 最多六則，依 `failure_scenario` 的後果由重到輕排，沒有就回傳空清單。
 
 每位 reviewer 是一組 Finder，候選帶 `by` 欄標明來自哪位。目前只有 `primary`；多一位 reviewer
 只是多一個候選來源，第 3 節以後的步驟不變。
@@ -102,7 +121,9 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
 
 ### 實跑
 
-在審查用 worktree 跑專案定義的 test、typecheck、lint，各一次。這是突變的基準：
+在審查用 worktree 跑專案定義的 test、typecheck、lint，各一次。審查用 worktree 有 `docs/agents/commands.md`
+時，指令取它的「Full checks」；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found`。這是突變的基準：
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，
@@ -124,6 +145,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" lines --base <fixed point> [--lcov
 輸出格式寫在腳本檔頭。覆蓋資料來自 repo 已安裝的覆蓋工具（c8、nyc、jest／vitest 的
 coverage、coverage.py）或執行環境內建的（Node 22 的
 `node --test --experimental-test-coverage --test-reporter=lcov`），產出 lcov 傳入 `--lcov`。
+有 `docs/agents/commands.md` 而且它的「Coverage」不是 `none` 時，用它的指令產出 lcov。
 兩者都沒有時 `covered` 為 `null`：由審查方從測試沿呼叫鏈追到該行才算覆蓋，紀錄標
 `coverage=inferred`。
 
@@ -132,7 +154,7 @@ coverage、coverage.py）或執行環境內建的（Node 22 的
 1. 只取有覆蓋、可執行的程式行；測試檔本身、註解、文件、設定與產生檔不突變。未覆蓋的行不
    突變，行數寫進紀錄。本票改了可執行程式行卻沒有一行有覆蓋時，這件事本身是一則候選
    （lens `mutation`）。
-2. **每行至多一個 mutant，每張票上限 10 個。** 超過上限時依序取：Finder 候選指到的行 → 驗收項
+2. **每行至多一個 mutant，每張票的上限照 `tier`**（第 1 節的表；以 `--cap` 傳給腳本）。超過上限時依序取：Finder 候選指到的行 → 驗收項
    直接依賴的行 → 條件、邊界與回傳值 → 其他敘述；同一優先級分散到不同 hunk。
 3. 每行挑一個最可能被測試漏掉的運算子：條件反轉、邊界移位（`<` ↔ `<=`）、回傳值換成常數或
    空值、刪除敘述（呼叫、賦值、`await`）。mutant 必須改變某個可觀察行為。
@@ -167,10 +189,11 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 
 ## 4. Verifier：逐項獨立裁決
 
-候選（含第 3 節的實跑與突變候選）依「檔案＋失效機制」分組：同一個檔案、同一種失效機制的候選
-交給同一個 verifier subagent，其餘各自一個，全部並行派出。失效機制由主持人依 `summary` 與
-`failure_scenario` 判斷，拿不準就分開。分組只減少 verifier 的數量，不合併候選：verifier 對組內
-每個候選逐條裁決，各附 `file:line` 證據。Verifier 只處理候選，不重讀整份 diff。
+候選（含第 3 節的實跑與突變候選）依檔案分組，一組交給一個 verifier subagent，全部並行派出，`description` 是
+`verifier` 後接票的識別碼。組數照 `tier`：`light` 全部候選一組；`standard` 一個檔案一組，超過三組時把候選最少的
+幾組併成一組；`full` 一個檔案一組。分組只決定 verifier 的數量：verifier 對組內每個候選逐條裁決，各附
+`file:line` 證據。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由呼叫方
+當成觀察。
 
 Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、該組候選的欄位與
 以下裁決規則。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給，那是待查的
@@ -199,20 +222,37 @@ Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分�
 ticket 分支（預設）、fixed point，或票面／驗收快照。引用與它標明的來源對不上時，才換一個
 verifier 重驗。
 
+**blocking 由 verifier 判，判準只有五條。** 成立的候選命中其中一條才是 blocking；verifier 在裁決寫出命中的
+`rule`，並引用它依據的原文或輸出：
+
+| `rule` | 命中條件 | 引用 |
+| --- | --- | --- |
+| `acceptance` | 驗收快照的某一項在 ticket 分支上不成立 | 該驗收項原文 |
+| `regression` | fixed point 上成立、票面與驗收項都沒要求改的行為，在 ticket 分支上壞了 | fixed point 與 ticket 分支各自的輸出 |
+| `red` | 實跑紅燈 | 實跑輸出的路徑 |
+| `safety` | 資料遺失、憑證或權限外洩，或敏感路徑上的檢查失效 | 觸發它的輸入與結果 |
+| `unpinned` | 存活 mutant 成立：測試沒釘住本票改的行為 | 突變輸出的路徑 |
+
+五條都沒命中的成立候選是觀察：邊界輸入的強化、訊息措辭、驗收項沒涵蓋的情境、其他寫法也該一併檢查，都屬這一類。
+
 分流：
 
-- **成立且 blocking**（會改變這張票該不該整併的決定）→ finding。測試沒釘住本票改的行為，所以
-  成立的存活 mutant 一律算 blocking。
-- **成立但不 blocking** → 觀察，不觸發修正。
-- **spec 層級** → 觀察，句末標 `(spec-level)`，不觸發修正。
-- **pre-existing** → 交主持人依 get-to-work 的期間開票處理。
+- **成立且 blocking** → finding，帶 `rule`。
+- **成立但不 blocking** → 觀察。
+- **spec 層級** → 觀察，句末標 `(spec-level)`。
+- **pre-existing** → 列進 `pre-existing`。
 - **不成立** → 丟棄；突變候選的處置寫進突變紀錄（例如「等價 mutant，不成立」）。
 
-每則 finding 附一句**修法方向**，說出修前修後可觀察的差異（輸出、錯誤、某個測試由紅轉綠）。
-說不出來的是風格偏好，撤掉。存活 mutant 的修法方向是補一個殺得掉它的測試，寫出輸入。
+觸發修正的只有 finding。觀察與 pre-existing 由呼叫方依 get-to-work 的期間開票處理，這張票照結論往下走。
+
+每則 finding 附一句**修法方向**，說出修前修後可觀察的差異（輸出、錯誤、某個測試由紅轉綠），範圍就是關上
+這則 finding 引用的那個情境。說不出來的是風格偏好，撤掉。存活 mutant 的修法方向是補一個殺得掉它的測試，寫出輸入。
+
+Verifier 的回報，每個候選一段，至多五行：裁決、`rule`（成立時；沒命中寫 `none`）、`file:line` 證據、三關結果或
+簡化流程查過的兩項、修法方向（finding 才有）。最後一行 `noticed`，沒有寫 `none`。
 
 完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同組的
-候選也逐條裁決；每則 finding 都有可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
+候選也逐條裁決；每則 finding 都有命中的 `rule`、它的引用與可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
 
 ## 5. 結論
 
@@ -222,7 +262,11 @@ verifier 重驗。
   解除條件，以及已完成到哪一節。開審前的 `stuck`（第 1 節）不算一次審查，排除後重跑 `initial`；
   審中的 `stuck` 排除後只續跑未完成的節，沿用區塊裡已有的候選、裁決與突變紀錄，不重派 Finder。
 
-完成判準：結論恰為三者之一，而且由第 1 節的驗收比對與第 4 節的分流推得，不是自評。
+**結論以 verifier 的裁決為準。** 呼叫方把每則裁決原樣抄進區塊：finding 就是 verifier 判為 blocking 的那幾則，
+觀察就是其餘成立的。呼叫方認為某則觀察該擋下整併時，另派一個 verifier 只重判那一則的 `rule`，以它的裁決為準。
+
+完成判準：結論恰為三者之一，而且由第 1 節的驗收比對與第 4 節的分流推得；區塊裡每則 finding 的 `rule` 都出自
+verifier 的回報。
 
 ## 6. 輸出與接續紀錄
 
@@ -230,7 +274,7 @@ verifier 重驗。
 
 ```text
 <!-- sorry-matt:review -->
-review: <round>  mode: initial | recheck
+review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
 base: <fixed point>@<sha>  head: <ticket branch>@<sha>
 stuck: <reason and how to clear it, or none>
@@ -238,7 +282,7 @@ acceptance: unchanged | changed (<acceptance diff path>)  original=<n> expansion
 
 reviewer: primary
 findings:
-- F1 blocking <file>:<line> [<lens>]
+- F1 blocking <file>:<line> [<lens>] rule=<acceptance | regression | red | safety | unpinned>
   summary: <one sentence>
   evidence: <file:line the verifier opened; path of the live-run or mutation output>
   fix: <fix direction, with the observable before/after difference>
@@ -247,13 +291,13 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: <command> -> green | red (<log path>)
-mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
+live run: <command> -> green | red (<log path>) source=<commands.md | self-found>
+mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
-沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
+`live run` 的 `source` 是指令的來源：取自 `docs/agents/commands.md` 寫 `commands.md`，自己找的寫 `self-found`。沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
 觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
 
 該輪沒有跑突變時，`mutation` 那段只寫一行、不列 mutant：
@@ -281,30 +325,33 @@ review 或 `suggestion` 區塊；審查用 worktree 已移除。
 
 ## 7. 複驗
 
-集中修正之後，呼叫方以 `recheck` 模式並附上一次的審查區塊再呼叫本 skill。這不是第二次審查：
-不派 Finder，只對上一次的 finding 涉及的行重做驗證。審查用 worktree 依第 1 節以修正後的
-ticket 分支尖端重建。
+集中修正之後，呼叫方以 `recheck` 模式並附上一次的審查區塊再呼叫本 skill。複驗只回答一個問題：上一次的每則
+finding 關上了沒有。它的範圍是那幾則 finding 與修正 commit 的 diff（`git diff <上次 head>..<ticket 分支>`），
+所以每一輪要驗的東西只會變少。審查用 worktree 依第 1 節以修正後的 ticket 分支尖端重建，`tier` 沿用初審的。
 
-1. **Fix Verifier**：每則 finding（`acceptance` 除外，見第 4 步）各交給一個獨立的 subagent，並行派出。Prompt 自足，含審查用
-   worktree 路徑、finding 的 `summary`、`evidence` 與 `fix`，以及修正 commit 的 diff
-   （`git diff <上次 head>..<ticket 分支>`）；省略實作者的說明。先嘗試反駁修法，四題逐一作答並附
-   `file:line`：
-   1. finding 的每一個失效窗口都關上了嗎？
-   2. 修正有沒有開出新的窗口？
-   3. 修前修後可觀察的差異是什麼？說不出來就是沒修到。
-   4. 其他呼叫端會不會壞？
+1. **Fix Verifier**：`light` 與 `standard` 一張票一個 subagent，收全部 finding；`full` 一則 finding 一個，並行
+   派出。`acceptance` finding 不交給它（第 4 步）。`description` 是 `fix-verifier` 後接票的識別碼。Prompt 自足，
+   含審查用 worktree 路徑、每則 finding 的 `summary`、`evidence`、`rule` 與 `fix`，以及修正 commit 的 diff；
+   省略實作者的說明。它對每則 finding 重跑 `evidence` 記的那個情境，兩題作答並附 `file:line`：
+   1. 那個情境現在的可觀察結果是什麼？和 `fix` 寫的修後結果一致就是**已關閉**，否則**未關閉**。
+   2. 修正 diff 的改動行裡，有沒有命中第 4 節五條 `rule` 之一的缺陷？有就照第 4 節的三關裁決，第二關的
+      fixed point 換成上次的 head；成立的成為本輪新 finding。
 
-   裁決兩種：**已關閉**，或**未關閉**。第二題找到的新窗口照第 4 節的三關裁決，成立且 blocking
-   的成為本輪新 finding。
+   同一則 finding 的其他寫法、修正 diff 以外的行、沒命中 `rule` 的問題，寫成一行放在回報的 `noticed`，
+   由呼叫方當成觀察。回報每則 finding 至多四行，最後一行 `noticed`。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。
-3. **突變**：只突變 finding 涉及的行，規則同第 3 節（每行至多一個、上限 10），用本輪新的
-   ledger。上次存活的 mutant 若該行內容未變，重跑同一個 mutant，這次必須被殺掉。
+3. **突變**：只重跑上次存活的 mutant，這次必須被殺掉；該行內容變了，就在取代它的那一行做同一個運算子的
+   mutant。用本輪新的 ledger。修正新增的行由第 1 步第 2 題把關。
 4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
    關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
-結論：每則 finding 都已關閉、實跑全綠、finding 行上的 mutant 全被殺掉、驗收比對沒有變，而且沒有
-新的 blocking finding → `pass`；否則 `fix`。修正輪數由呼叫方控管。輸出照第 6 節，`mode: recheck`，每則舊
-finding 的 `summary` 前標 `closed` 或 `open`。
+結論：每則 finding 都已關閉、實跑全綠、上次存活的 mutant 全被殺掉、驗收比對沒有變，而且沒有
+新的 finding → `pass`；否則 `fix`。輸出照第 6 節，`mode: recheck`，每則舊 finding 的 `summary` 前標 `closed` 或
+`open`；`noticed` 的每一行進 `observations`。
 
-完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑與突變只碰 finding 涉及的行；
+**一張票至多兩次 `recheck`。** 第二次的結論仍是 `fix` 時，區塊照寫，呼叫方依 get-to-work 的規則把這張票標
+卡住；本輪新 finding 與舊 finding 算在同一個輪數裡。
+
+完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑只碰
+finding 涉及的行，突變只重跑上次存活的 mutant；本輪新 finding 都落在修正 diff 的改動行上並帶 `rule`；
 結論與區塊已依第 6 節寫進接續紀錄。

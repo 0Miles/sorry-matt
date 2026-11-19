@@ -205,10 +205,12 @@ While a run is in progress, two more hooks share one entry (`hooks/hooks.json` �
 - **SubagentStart** counts each new subagent in `<run>.counters.json` next to the run ledger (a resumed subagent keeps
   its `agent_id` and is not counted again). Only the hook writes that file, under an exclusive lock file and through
   a temporary file and a rename, so it never races with the host writing the ledger. SubagentStart cannot block a
-  spawn; it only counts.
+  spawn; it only counts. Each counted spawn is also logged there with its agent type, the `description` of the Agent
+  call that caused it (paired by agent type, oldest first, since the two events share no id) and the time;
+  `get-to-work`'s `scripts/spawns.mjs` sums that log by kind of agent and by ticket when a run finishes.
 - **PreToolUse** on `Agent` denies the spawn once the count reaches the ledger's `budget: spawns <N>` line (field 9:
-  200 when the ledger is created, rewritten to `30 × tickets + 50` once the ticket count is known, or to the spawns
-  already used plus `30 × tickets` when that is higher). It is a last
+  200 when the ledger is created, rewritten to `20 × tickets + 50` once the ticket count is known, or to the spawns
+  already used plus `20 × tickets` when that is higher). It is a last
   resort; a single stuck agent is caught by `get-to-work`'s stage time limits first. The limit is re-read on every
   call, so editing that line takes effect immediately.
 
@@ -288,7 +290,7 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,
-  `scripts/acceptance.test.mjs`, `scripts/overlap.test.mjs`, `scripts/review-guide.test.mjs`) run in the same CI run.
+  `scripts/acceptance.test.mjs`, `scripts/overlap.test.mjs`, `scripts/review-guide.test.mjs`, `scripts/ci.test.mjs`) run in the same CI run.
 - `.claude-plugin/` remains the Claude Code marketplace and plugin distribution manifest.
 
 Edit skills in `src/skills/`, then rewrite the corresponding English version in `skills/`. Do not edit the
