@@ -14,7 +14,9 @@
 //     commands-contract  every integration branch's tip has docs/agents/commands.md.
 //   ci         [<branch>...]   CI was read for every line that reads it (default: every line).
 //     ci-latest          a line that reads CI (profile ci: read, an `origin` remote, not settled as CI not covering
-//                        it) has a CI verdict recorded for its local tip.
+//                        it) has a CI verdict recorded for its local tip. A line `origin` does not have yet (never
+//                        pushed: the first push is at close-out step 6) is not read and passes; an unreadable origin
+//                        fails.
 //     local-record       a line on local verification (no `origin`, or settled as CI not covering it) has a per-SHA
 //                        local verification record for its local tip.
 //   dispatch                   A dispatch point is done.
@@ -50,7 +52,8 @@
 //     pushed             with an `origin` remote, `origin`'s branch is the line's local tip (`git ls-remote`).
 //     cleaned            the ticket branch is gone locally and no worktree is on it or at its recorded worktree.
 //   wake-end                   A wake-up is done.
-//     pushed             (as in integrated, for every line)
+//     pushed             (as in integrated, for every line with a recorded merge or already on `origin`: a line
+//                        is first pushed at its first integration)
 //     assignment         (as in dispatch)
 //     fallback-wake      while any assignment is in flight, a background sleep task is recorded (`usage
 //                        --sleep-task`).
@@ -320,8 +323,10 @@ const gates = {
       }
       if (!g.hasOrigin() || l.ciNotCovering !== null) {
         if (!l.local.some((x) => x.sha === head)) failLocal(branch, `no local verification record for its tip ${head} (record it with local)`);
-      } else if (profile.ci === 'read' && !(l.ci && shaMatches(head, l.ci.sha))) {
-        failCi(branch, `no CI verdict recorded for its tip ${head}${l.ci ? ` (the latest is for ${l.ci.sha})` : ''} (read it with ci.mjs, record it with ci)`);
+      } else if (profile.ci === 'read') {
+        const remote = g.originHead(branch);
+        if (remote.error) failCi(branch, `could not read origin (${remote.error})`);
+        else if (remote.sha !== null && !(l.ci && shaMatches(head, l.ci.sha))) failCi(branch, `no CI verdict recorded for its tip ${head}${l.ci ? ` (the latest is for ${l.ci.sha})` : ''} (read it with ci.mjs, record it with ci)`);
       }
     }
   },
@@ -398,7 +403,8 @@ const gates = {
   },
 
   'wake-end'(state, r, g) {
-    pushed(r, g, Object.keys(state.lines));
+    const merged = (branch) => ticketsOn(state, branch).some(([, t]) => t.merges.length > 0);
+    pushed(r, g, Object.keys(state.lines).filter((branch) => merged(branch) || (g.hasOrigin() && g.originHead(branch).sha)));
     assignments(r, state);
     const fail = r.check('fallback-wake');
     const inFlight = Object.entries(state.tickets).filter(([, t]) => t.assignment && t.assignment.deadline !== null).map(([id]) => id);

@@ -262,6 +262,7 @@ const verdict = (w, sha, v = 'green') =>
 test('ci passes when the verdict recorded is for the local tip', (t) => {
   const w = world(t, { origin: true });
   const wt = line(w);
+  w.git('push', '-q', 'origin', LINE);
   w.ok('ci', LINE, '--from', verdict(w, git(wt, 'rev-parse', 'HEAD')));
   const r = w.check('ci');
   passes(r, ['ci-latest', 'local-record']);
@@ -271,15 +272,26 @@ test('ci passes when the verdict recorded is for the local tip', (t) => {
 test('ci fails on ci-latest: the tip moved after the verdict, or nothing was read', (t) => {
   const w = world(t, { origin: true });
   const wt = line(w);
+  w.git('push', '-q', 'origin', LINE);
   failsOnly(w.check('ci'), 'ci-latest', /no CI verdict recorded/);
   w.ok('ci', LINE, '--from', verdict(w, git(wt, 'rev-parse', 'HEAD')));
   commit(wt, 'next.txt');
   failsOnly(w.check('ci'), 'ci-latest', /the latest is for/);
+  w.git('remote', 'set-url', 'origin', join(w.dir, 'missing.git'));
+  failsOnly(w.check('ci'), 'ci-latest', /could not read origin/);
+});
+
+test('ci passes on a line origin does not have yet: it is first pushed at its first integration, not read before', (t) => {
+  const w = world(t, { origin: true });
+  line(w);
+  w.ok('add', '#1', '--line', LINE);
+  passes(w.check('ci'), ['ci-latest']);
 });
 
 test('ci under profile ci: skip does not ask for a verdict', (t) => {
   const w = world(t, { origin: true });
   line(w);
+  w.git('push', '-q', 'origin', LINE);
   w.ok('profile', '--ci', 'skip');
   const r = w.check('ci');
   assert.equal(r.code, 0, r.err);
@@ -629,10 +641,18 @@ test('wake-end fails on fallback-wake: an agent is in flight and no background s
   failsOnly(w.check('wake-end'), 'fallback-wake', /agents are in flight \(#1\)/);
 });
 
-test('wake-end fails on pushed: a line was never pushed', (t) => {
+test('wake-end fails on pushed: a line with a merge was never pushed', (t) => {
+  const w = world(t, { origin: true });
+  const lwt = line(w);
+  ticket(w, lwt, '#1', 'integrating');
+  failsOnly(w.check('wake-end'), 'pushed', /origin has no/);
+});
+
+test('wake-end passes on a line never pushed and never merged into: its first push comes with its first integration', (t) => {
   const w = world(t, { origin: true });
   line(w);
-  failsOnly(w.check('wake-end'), 'pushed', /origin has no/);
+  w.ok('add', '#1', '--line', LINE);
+  passes(w.check('wake-end'), ['pushed']);
 });
 
 // ---- stopped -------------------------------------------------------------------------------------------------------
