@@ -367,6 +367,10 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 「讀過」/「被改過」(`ui.md` 的前置) | "read" / "changed" |
 | 逐檔選(「元件庫」段多條時) | choose per file |
 | import 掃描 | import scan |
+| 專案指令契約 | project command contract |
+| 讀取點(專案指令契約的) | reader |
+| 缺檔時 | when the file is missing |
+| 產生規則 | generation rules |
 | agent 定義檔 | agent definition file |
 | 通用 agent | general-purpose agent |
 | 指令輸出 | command output |
@@ -432,3 +436,7 @@ The five default roles, each label string equal to its role name (`needs-triage`
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Commands
+
+The project command contract: full checks, targeted checks, coverage, failures-only output and sensitive paths. See `docs/agents/commands.md`; its fields are defined in `src/skills/have-it-all-done/ASKING.md` section 0.

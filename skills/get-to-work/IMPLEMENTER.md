@@ -20,6 +20,7 @@ all the rules you follow, and none of them points at a file or section you canno
 - Integration branch: {integration branch}
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
+- Project command contract: {the absolute path of `docs/agents/commands.md` in the ticket worktree, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
   time, and the files the old attempt touched that the predicted files did not cover, or none}
 
@@ -52,9 +53,13 @@ all the rules you follow, and none of them points at a file or section you canno
   independent source (a known-good literal, the spec, a worked example), never recomputed the way the code does.
 - One slice at a time: write one failing test, then just enough code to pass it, and repeat.
 - Run only the **targeted checks** for the affected surface: typecheck, the test files this ticket touches, the
-  relevant lint. The full suite is CI's job once the host integrates the ticket.
+  relevant lint. The full suite is CI's job once the host integrates the ticket. When the project command
+  contract is not none, read that file, narrow the checks per its "Targeted checks" and read output per its
+  "Failures only"; when it is none, or the file's "Targeted checks" reads `none`, find the commands yourself from
+  the manifest and the CI configuration and report the source as `self-found`.
 - **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
-  the closing summary into context; when everything is green, keep only the summary line. To keep the full output,
+  the closing summary into context; when everything is green, keep only the summary line. When the contract has
+  a "Failures only", use its form. To keep the full output,
   redirect it to a file that sits outside the ticket worktree or is never committed, and give only its path in the
   report and the status record. When the failing lines alone do not show the cause, you may read the lines around
   that failure, never the whole output. Pass or fail is the command's own exit status, taken before any
@@ -115,7 +120,7 @@ Fifteen lines at most. No diffs or full test logs — give paths:
 ```
 ticket: <identifier>
 commit: <sha> (branch <branch>)
-targeted checks: <command> → <result>, …
+targeted checks: source=<commands.md | self-found>; <command> → <result>, …
 status record: <location>
 acceptance: <per criterion ✅ / ❌ / awaiting ruling, briefly>
 run-level self-answers: <answers whose cost to reverse crosses tickets, or none>

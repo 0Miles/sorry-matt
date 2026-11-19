@@ -33,7 +33,8 @@ Every line passes **three line-level gates** first, in this order:
    **Local verification:** its conditions, how to run it and the per-SHA record format follow "local verification"
    in reading CI in [`SKILL.md`](SKILL.md), the one source of truth for it.
 
-   The report gives the verified SHA, its source (CI, or local with the reason) and the merged base SHA; an unsynced
+   The report gives the verified SHA, its source (CI, or local with the reason; when local, also whether the
+   commands came from `commands.md` or were `self-found`) and the merged base SHA; an unsynced
    line is verified all the same, on its unsynced tree, and the report gives the base SHA it tried and "unsynced".
    The only green that counts is the result for that last SHA.
 

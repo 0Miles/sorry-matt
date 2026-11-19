@@ -102,7 +102,9 @@ ticket 分支、diff 檔路徑、票面全文、該 lens 全文，以及必須�
 
 ### 實跑
 
-在審查用 worktree 跑專案定義的 test、typecheck、lint，各一次。這是突變的基準：
+在審查用 worktree 跑專案定義的 test、typecheck、lint，各一次。審查用 worktree 有 `docs/agents/commands.md`
+時，指令取它的「Full checks」；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found`。這是突變的基準：
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，
@@ -124,6 +126,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" lines --base <fixed point> [--lcov
 輸出格式寫在腳本檔頭。覆蓋資料來自 repo 已安裝的覆蓋工具（c8、nyc、jest／vitest 的
 coverage、coverage.py）或執行環境內建的（Node 22 的
 `node --test --experimental-test-coverage --test-reporter=lcov`），產出 lcov 傳入 `--lcov`。
+有 `docs/agents/commands.md` 而且它的「Coverage」不是 `none` 時，用它的指令產出 lcov。
 兩者都沒有時 `covered` 為 `null`：由審查方從測試沿呼叫鏈追到該行才算覆蓋，紀錄標
 `coverage=inferred`。
 
@@ -247,13 +250,13 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: <command> -> green | red (<log path>)
+live run: <command> -> green | red (<log path>) source=<commands.md | self-found>
 mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
-沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
+`live run` 的 `source` 是指令的來源：取自 `docs/agents/commands.md` 寫 `commands.md`，自己找的寫 `self-found`。沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫 `file:line`。spec 層級的
 觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
 
 該輪沒有跑突變時，`mutation` 那段只寫一行、不列 mutant：

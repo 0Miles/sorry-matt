@@ -122,8 +122,10 @@ The reviewer does this step; it is never handed to the implementer.
 
 ### Live run
 
-In the review worktree, run the project's test, typecheck, and lint scripts once each. This is the baseline for
-mutation:
+In the review worktree, run the project's test, typecheck, and lint scripts once each. When the review worktree
+has `docs/agents/commands.md`, take the commands from its "Full checks"; without the file, or when its "Full checks"
+reads `none`, find them yourself from the manifest and the CI configuration, as before, and give the source as
+`self-found`. This is the baseline for mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
@@ -145,7 +147,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" lines --base <fixed point> [--lcov
 
 The output format is in the script header. Coverage comes from a coverage tool the repo already has installed (c8,
 nyc, jest / vitest coverage, coverage.py) or one built into the runtime (Node 22's
-`node --test --experimental-test-coverage --test-reporter=lcov`); pass the lcov it produces as `--lcov`. With
+`node --test --experimental-test-coverage --test-reporter=lcov`); pass the lcov it produces as `--lcov`. When
+`docs/agents/commands.md` exists and its "Coverage" is not `none`, produce the lcov with its command. With
 neither, `covered` is `null`: a line counts as covered only when the reviewer traces a call chain from a test to it,
 and the record says `coverage=inferred`.
 
@@ -289,13 +292,14 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: <command> -> green | red (<log path>)
+live run: <command> -> green | red (<log path>) source=<commands.md | self-found>
 mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=10 mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived: <disposition: F2 | equivalent, invalid | ...>
 restored: yes | no
 ```
 
-An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
+`source` on the `live run` line is where the commands came from: `commands.md` when taken from
+`docs/agents/commands.md`, `self-found` when the reviewer found them. An empty list is written `none`. An `acceptance` finding's location is the acceptance diff output's path, not a
 `file:line`. A spec-level observation is marked `(spec-level)` at the end of its sentence, before
 `(evidence: …)`.
 

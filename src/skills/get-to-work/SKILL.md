@@ -42,13 +42,16 @@ Markdown 模式不要求 remote 或 `gh`。兩種模式的交付物見第 2 節�
    逐票累積於此。
 5. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
    由 `have-it-all-done` 組合時，它們在裁決點前已寫定，不改。
+6. `docs/agents/commands.md` 不存在時，照 `ASKING.md` 第 0 節的產生規則產生它，在每條線的整合分支建立之後、
+   派出任何票之前 commit 到該整合分支：subject 不帶票 ID，各線內容相同。不 commit 到使用者目前的分支。ticket
+   分支從整合分支切出，實作 agent 的 worktree 因此讀得到。
 
 **硬護欄**：執行期間新發現或新開的票只作為背景，初始票集一經凍結便不再擴張。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票都有發布出處、tracker
 原生識別、所屬線與 blocker map；每條被他線佔用而排除的票都有佔用來源與解除條件；每條線
 都有從同一基底尖端建立的整合分支及 worktree；獨立執行時 `budget: spawns` 與 `budget: rounds` 已依凍結票數
-寫定。
+寫定；每條線的整合分支上都有 `docs/agents/commands.md`，原本沒有的已在派出任何票之前產生並 commit。
 
 ## 1. 用 `/loop` 推進流水線
 
@@ -107,7 +110,10 @@ gh run list --branch <整合分支> --commit <SHA> --limit 100 --json databaseId
 
 **本機驗證**（本 skill 唯一的正本，其他地方引用這裡）：沒有 `origin`、這條線已定案為 CI 不涵蓋整合
 分支，或這個 SHA 讀不到結論（查詢失敗，或再讀一次仍沒有 run）時，改在這個 SHA 上本機跑一次 repo
-完整的自動檢查，報告寫明是哪一種。在整合 worktree、樹正是這個 SHA 時跑：收官時整併 agent 還在
+完整的自動檢查，報告寫明是哪一種。repo 完整的自動檢查，在這個 SHA 的樹有 `docs/agents/commands.md` 時就是它的
+「Full checks」，逐條照跑；沒有這份檔，或它的「Full checks」是 `none` 時，照現況自己從 manifest 與 CI 設定找，
+來源寫 `self-found` —— `none` 不是「沒有檢查、直接記綠」。完整驗證的報告在來源旁寫明指令取自
+`commands.md` 或自行找到（`self-found`）。在整合 worktree、樹正是這個 SHA 時跑：收官時整併 agent 還在
 解 conflict 就等它結束；流水線的派票點或喚醒遇到整合 worktree 的樹不是這個 SHA（整併進行中）時不等，這次
 不驗，這條線沿用上一次的結果 —— 不在紅燈處置中就照常派票 —— 由該次整併觸發的派票點驗那時的最新 SHA。前兩種線在流水線中就照第 1 節「讀 CI」逐 SHA 驗證，不只在收官。
 
@@ -273,7 +279,8 @@ agent 回報或被停下後，那一列的到期時間改為 `—`。**在途 ag
    已 commit 在整合分支上，ticket 分支從它之後切出。
 6. 讀同層的 [`IMPLEMENTER.md`](IMPLEMENTER.md)，填好其中的佔位，以填好的全文為 prompt
    在背景 spawn 一個實作 agent，不另加規則。展開區塊的佔位取自該票驗收快照的 `expansions[].text`：GitHub
-   的展開區塊在留言裡，票面全文裡沒有。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
+   的展開區塊在留言裡，票面全文裡沒有。專案指令契約的佔位填 ticket worktree 裡 `docs/agents/commands.md` 的絕對
+   路徑，那裡沒有這份檔就填 none。它定義的**接續紀錄**是該票的唯一正本，其他位置只引用它。
    退回後重派的票：原 agent 還在就以 SendMessage 交給它退回紀錄與重建的 worktree，不新 spawn；不在了才照
    `IMPLEMENTER.md` 新 spawn，退回紀錄填進它的佔位。對帳表記下每張票的階段與負責 agent 的 id，以及「時限」的
    派送紀錄。
