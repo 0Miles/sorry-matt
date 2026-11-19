@@ -50,6 +50,7 @@ claude plugin validate .
   | `src/skills/prove-it/scripts/scope.mjs` | `scripts/scope.test.mjs` |
   | `src/skills/prove-it/scripts/worktree.mjs` | `scripts/worktree.test.mjs` |
   | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |
+  | `agents/*.md`、`src/agents/*.md`（沒有測試檔；`check-structure.mjs` 對帳兩版。改了 `tools:` 另以 `node scripts/agent-tools.live.mjs` 手動實測，會花少量額度、不進 CI） | `node scripts/check-structure.mjs` |
 
   新增的 skill 腳本沒有列在表裡時，跑 import 它的測試檔（`scripts/*.test.mjs` 的 import，或 import 它的腳本
   的測試檔）。`skills/<skill>/scripts/` 是 src 逐位元組的副本，沒有自己的測試：改到它就跑
@@ -97,6 +98,8 @@ node --test --test-reporter=tap <測試檔…> > <log 檔> 2>&1; status=$?; grep
 
 ```text
 hooks/
+agents/
+src/agents/
 .github/workflows/
 .claude-plugin/
 src/skills/get-to-work/scripts/
@@ -107,7 +110,7 @@ scripts/check-structure.mjs
 scripts/check-vendored.mjs
 ```
 
-`hooks/` 是需要確認的動作的 PreToolUse guard；`.github/workflows/` 是 CI；`.claude-plugin/` 是 plugin 的 manifest；
+`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿 `src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI；`.claude-plugin/` 是 plugin 的 manifest；
 兩支 skill 的 `scripts/` 是 skill 在使用者 repo 裡執行的腳本；兩支 `check-*.mjs` 是 CI 的檢查本身。
 
-來源：`AGENTS.md`「結構」、`hooks/hooks.json`、`.github/workflows/check.yml`、`.claude-plugin/plugin.json`。
+來源：`AGENTS.md`「結構」、`hooks/hooks.json`、`agents/*.md`、`.github/workflows/check.yml`、`.claude-plugin/plugin.json`。

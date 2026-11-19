@@ -83,8 +83,17 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 本 skill 的 finder、verifier（第 4 節）與 Fix Verifier（第 7 節）一律以前景派送：呼叫方在自己的
 回合裡等它們全部回來才往下。`get-to-work` 不給審查設時限，前提就是這一條。
 
-三者的回報只有各節指定的欄位。推理過程、probe 的程式與輸出寫進 `<scratchpad>/review-<票>-notes/` 底下的檔案，
-回報給路徑：呼叫方的 context 只收裁決要用的欄位。
+**三者是 plugin 的 agent 定義檔。** Agent tool 的 `subagent_type` 依序是 `sorry-matt:finder`、`sorry-matt:verifier`、
+`sorry-matt:fix-verifier`；定義檔在 plugin 根目錄的 `agents/`，即本 skill base directory 往上兩層的
+`../../agents/finder.md`、`../../agents/verifier.md`、`../../agents/fix-verifier.md`。工具與固定規則（工作規則、裁決規則、
+回報格式）都在定義檔：派工只傳各節列的值（路徑、lens、候選或 finding），不重述規則，也不指定模型。定義檔的
+`tools:` 不給 Edit 與 Write，但留著 shell —— 審查要跑測試與 `git` —— 而 shell 寫得了檔，所以這不是唯讀保證：
+「審查不改這張票的 diff」仍靠定義檔的文字規則，加上第 6 節 `worktree.mjs status` 的 `git status --porcelain`
+檢查來發現。這些 agent 類型不在可用清單時改派通用 agent、不指定模型：prompt 是定義檔 frontmatter 以下的本文
+（其中的 `${CLAUDE_PLUGIN_ROOT}` 換成 plugin 根目錄的絕對路徑）接上同樣的派工內容，`description` 相同。
+
+三者的回報只有定義檔指定的欄位。推理過程、probe 的程式與輸出寫進筆記目錄 `<scratchpad>/review-<票>-notes/`
+底下的檔案（派工時給這個路徑），回報給路徑：呼叫方的 context 只收裁決要用的欄位。
 
 三者的 Agent tool `description` 一律以角色字開頭、後接票的識別碼（GitHub 是 `#N`，Local Markdown 是票檔名）：
 `finder #72`、`verifier #72`、`fix-verifier #72`。plugin 的 hook 把它記進 run 的 counters 檔，`get-to-work` 收官時靠
@@ -103,19 +112,11 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 - **repo 慣例**（`conventions`）：套用判級輸出 `signals.ruleFiles` 列的規則檔（涵蓋變更檔的 `CLAUDE.md`、
   `AGENTS.md`、`CONTRIBUTING.md`、`CODING_STANDARDS.md`）。只有能引用規則原文的才列；工具已經強制的不列。
 
-Finder 看不到目前對話，prompt 要自足：repo 與審查用 worktree 的絕對路徑、fixed point、
-ticket 分支、diff 檔路徑、票面全文、它套用的每個 lens 的全文，以及必須向外追查的範圍（完整的新檔內容、
-被呼叫函式的實作、所有呼叫端與型別定義）。Finder 只找候選、不裁決；尚未確定的也回報。
-
-回報格式：`file`、`line`（新檔行號）、`lens`、一句 `summary`、描述使用者可見後果的
-`failure_scenario`（錯誤輸出、crash、資料遺失，而非中間狀態），以及 `suspected`（疑似 spec 層級
-或既有）：
-
-- `spec`：候選指的行為或措辭，正是票面或驗收項指定的。附上被指定的原文。
-- `pre-existing`：fixed point 上就已經這樣。附上 fixed point 上的位置。
-- `none`：兩者都不像。
-
-每個 finder 最多六則，依 `failure_scenario` 的後果由重到輕排，沒有就回傳空清單。
+Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktree 的絕對路徑、fixed point、ticket 分支、diff 檔路徑、
+票面全文、筆記目錄，以及它套用的每個 lens 的全文（上列）。向外追查的範圍、只找不裁決、回報欄位與每個 finder
+至多六則都寫在定義檔。回報的每則候選有 `file`、`line`（新檔行號）、`lens`、`summary`、`failure_scenario` 與
+`suspected`（疑似 spec 層級或既有）；`suspected` 是 `spec`（附被指定的原文）、`pre-existing`（附 fixed point 上的
+位置）或 `none`。
 
 每位 reviewer 是一組 Finder，候選帶 `by` 欄標明來自哪位。目前只有 `primary`；多一位 reviewer
 只是多一個候選來源，第 3 節以後的步驟不變。
@@ -233,52 +234,19 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/review-<票>-tier.json --items <scratchpad>/review-<票>-candidates.json
 ```
 
-判級指令失敗時以 `--tier full` 取代 `--tier-file`。輸出的 `batches` 每批交給一個 verifier subagent，全部並行派出，
-`description` 是 `verifier` 後接票的識別碼。標了 `suspected` 的候選整批交給一個 verifier（批的 `short`），其餘依
-檔案分組（批的 `normal`），總批數不超過判級輸出的 `verifiers.max`。合批只決定 verifier 的數量，不合併候選：verifier
-對批內每個候選逐條裁決，各附 `file:line` 證據；`short` 的候選走簡化流程，兩項都不成立的由同一個 verifier 接著走
-一般流程。Verifier 只處理交給它的候選；裁決途中看到的其他問題，寫成一行放在回報的 `noticed`，由呼叫方
-當成觀察。
+判級指令失敗時以 `--tier full` 取代 `--tier-file`。輸出的 `batches` 每批交給一個 verifier（`sorry-matt:verifier`），
+全部並行派出，`description` 是 `verifier` 後接票的識別碼。標了 `suspected` 的候選整批交給一個 verifier（批的
+`short`），其餘依檔案分組（批的 `normal`），總批數不超過判級輸出的 `verifiers.max`。合批只決定 verifier 的數量，
+不合併候選。
 
-Prompt 自足，只含 repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、該組候選的欄位與
-以下裁決規則。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給，那是待查的
-線索，不是裁決。
+派工內容只有值：repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、票面與驗收快照（或兩者的檔案路徑）、
+筆記目錄，以及該批候選的欄位。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給。裁決規則
+—— 簡化流程、反駁優先與三關、四種裁決、五條 blocking 判準、修法方向與回報格式 —— 都在定義檔，派工不重述。
 
-**標了 `suspected`（`spec` 或 `pre-existing`）的候選走簡化流程**，不走完三關。兩項都查：
-
-- 在 fixed point 上做同一項檢查（第二關）。fixed point 也有 → 直接裁決 **pre-existing**。
-- 對照票面與驗收快照的原文。fixed point 正常，但候選指的行為或措辭正是 spec 指定的 → 直接裁決
-  **spec 層級**：實作照 spec 做，要改的是 spec。
-- 兩項都不成立 → 當成 `none`，照下面的一般流程從反駁開始。
-
-`suspected: none` 的候選走一般流程。先嘗試**反駁**：找出能推翻候選的程式碼並引用。不確定的
-技術事實用一次性的程式實跑查證。
-存活 mutant 的反駁是證明它是等價 mutant —— 沒有任何輸入能讓原碼與 mutant 的可觀察結果不同。
-反駁失敗後逐關檢查：
-
-1. **Traced**：引用 verifier 實際開啟過的 `file:line`。
-2. **由本票引入**：在 fixed point 上做同一項檢查；只有 fixed point 正常、ticket 分支失效才通過。
-   突變候選（存活 mutant、改動行沒有覆蓋）落在本票 diff 的改動行上，腳本已保證這點，視為
-   通過這一關。
-3. **具體失效情境**：失效路徑真實可達，後果可觀察。
-
-裁決四種，都附 `file:line` 證據：**成立**（三關全過）、**pre-existing**（只在第二關失敗，或簡化
-流程查到 fixed point 也有）、**spec 層級**（只出自簡化流程）、**不成立**。每則引用標明出自哪裡：
-ticket 分支（預設）、fixed point，或票面／驗收快照。引用與它標明的來源對不上時，才換一個
-verifier 重驗。
-
-**blocking 由 verifier 判，判準只有五條。** 成立的候選命中其中一條才是 blocking；verifier 在裁決寫出命中的
-`rule`，並引用它依據的原文或輸出：
-
-| `rule` | 命中條件 | 引用 |
-| --- | --- | --- |
-| `acceptance` | 驗收快照的某一項在 ticket 分支上不成立 | 該驗收項原文 |
-| `regression` | fixed point 上成立、票面與驗收項都沒要求改的行為，在 ticket 分支上壞了 | fixed point 與 ticket 分支各自的輸出 |
-| `red` | 實跑紅燈 | 實跑輸出的路徑 |
-| `safety` | 資料遺失、憑證或權限外洩，或敏感路徑上的檢查失效 | 觸發它的輸入與結果 |
-| `unpinned` | 存活 mutant 成立：測試沒釘住本票改的行為 | 突變輸出的路徑 |
-
-五條都沒命中的成立候選是觀察：邊界輸入的強化、訊息措辭、驗收項沒涵蓋的情境、其他寫法也該一併檢查，都屬這一類。
+Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**、**spec 層級**或**不成立**，附 `file:line` 證據；
+成立的寫出命中的 `rule`（`acceptance`、`regression`、`red`、`safety`、`unpinned` 之一，沒命中寫 `none`），命中的
+就是 blocking，附修法方向；最後一行 `noticed` 是它裁決途中看到的其他問題，由呼叫方當成觀察。引用與它標明的
+來源對不上時，才換一個 verifier 重驗。
 
 分流：
 
@@ -289,12 +257,6 @@ verifier 重驗。
 - **不成立** → 丟棄；突變候選的處置寫進突變紀錄（例如「等價 mutant，不成立」）。
 
 觸發修正的只有 finding。觀察與 pre-existing 由呼叫方依 get-to-work 的期間開票處理，這張票照結論往下走。
-
-每則 finding 附一句**修法方向**，說出修前修後可觀察的差異（輸出、錯誤、某個測試由紅轉綠），範圍就是關上
-這則 finding 引用的那個情境。說不出來的是風格偏好，撤掉。存活 mutant 的修法方向是補一個殺得掉它的測試，寫出輸入。
-
-Verifier 的回報，每個候選一段，至多五行：裁決、`rule`（成立時；沒命中寫 `none`）、`file:line` 證據、三關結果或
-簡化流程查過的兩項、修法方向（finding 才有）。最後一行 `noticed`，沒有寫 `none`。
 
 完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同批的
 候選也逐條裁決；每則 finding 都有命中的 `rule`、它的引用與可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
@@ -406,16 +368,16 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。
 1. **Fix Verifier**：把 finding（`acceptance` finding 除外，它走第 4 步）的 `id`、`file` 寫成 JSON 陣列，以
    `node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier <沿用的 tier> --stage fix --items <scratchpad>/review-<票>-r<round>-findings.json`
    合批：`light` 與 `standard` 一張票一批，`full`
-   一個檔案一批。每批一個 subagent，並行派出；同批的每則 finding 各自作答、各得一項裁決。`description` 是
-   `fix-verifier` 後接票的識別碼。Prompt 自足，
-   含審查用 worktree 路徑、每則 finding 的 `summary`、`evidence`、`rule` 與 `fix`，以及修正 commit 的 diff；
-   省略實作者的說明。它對每則 finding 重跑 `evidence` 記的那個情境，兩題作答並附 `file:line`：
-   1. 那個情境現在的可觀察結果是什麼？和 `fix` 寫的修後結果一致就是**已關閉**，否則**未關閉**。
-   2. 修正 diff 的改動行裡，有沒有命中第 4 節五條 `rule` 之一的缺陷？有就照第 4 節的三關裁決，第二關的
-      fixed point 換成上次的 head；成立的成為本輪新 finding。
+   一個檔案一批。每批一個 Fix Verifier（`sorry-matt:fix-verifier`），並行派出；同批的每則 finding 各自作答、各得
+   一項裁決。`description` 是 `fix-verifier` 後接票的識別碼。修正 commit 的 diff 存成
+   `<scratchpad>/review-<票>-r<round>-fix.diff`。派工內容只有值：repo 與審查用 worktree 的絕對路徑、ticket 分支、
+   上次的 head、修正 diff 的路徑、筆記目錄，以及每則 finding 的 `summary`、`evidence`、`rule` 與 `fix`；省略實作者的
+   說明。作答規則 —— 重跑 `evidence` 記的情境、兩題、第二題照 verifier 的三關與五條 blocking 判準且第二關的
+   fixed point 換成上次的 head —— 在定義檔，派工不重述。
 
-   同一則 finding 的其他寫法、修正 diff 以外的行、沒命中 `rule` 的問題，寫成一行放在回報的 `noticed`，
-   由呼叫方當成觀察。回報每則 finding 至多四行，最後一行 `noticed`。
+   它對每則 finding 回報**已關閉**或**未關閉**，附 `file:line`，以及修正 diff 的改動行裡命中判準、成立的本輪新
+   finding（附 `rule` 與修法方向）。回報最後一行 `noticed`：同一則 finding 的其他寫法、修正 diff 以外的行、沒命中
+   判準的問題，由呼叫方當成觀察。
 2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。`live run` 行寫 `scope=findings`，`ci` 照第 1 節的
    CI 覆蓋，`source` 是這幾條指令的來源。
 3. **突變**：只重跑上次存活的 mutant，這次必須被殺掉；該行內容變了，就在取代它的那一行做同一個運算子的
