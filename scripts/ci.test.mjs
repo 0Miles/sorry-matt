@@ -139,9 +139,52 @@ test('verdict: output that is not a run list is a failed query too', () => {
   assert.ok(r.json.error);
 });
 
+// --- base ------------------------------------------------------------------------------------------------------
+
+// Runs `base` against a gh that answers `api` with `api` (a SHA, or a function) and `run list` with `rows`.
+function baseOf(argv, { api = `${SHA}\n`, rows = [] } = {}) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'api') return typeof api === 'function' ? api() : api;
+    return typeof rows === 'function' ? rows() : JSON.stringify(rows);
+  };
+  const r = main(['base', ...argv], { ...defaultDeps(), gh });
+  return { ...r, json: r.out ? JSON.parse(r.out) : null, calls };
+}
+
+test('base: reads the latest SHA of the base branch, then judges its runs like verdict', () => {
+  const rows = [done('failure'), done('success')];
+  const r = baseOf(['--repo', 'acme/app', 'origin/main'], { rows });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.calls, [
+    ['api', 'repos/acme/app/commits/main', '--jq', '.sha'],
+    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/app'],
+  ]);
+  assert.deepEqual([r.json.command, r.json.branch, r.json.sha, r.json.verdict, r.json.failed], ['base', 'main', SHA, 'red', [rows[0].databaseId]]);
+});
+
+test('base: without --repo gh resolves the repository of the current directory', () => {
+  const r = baseOf(['main'], { rows: [done('success')] });
+  assert.equal(r.calls[0][1], 'repos/{owner}/{repo}/commits/main');
+  assert.deepEqual([r.json.verdict, r.json.failed], ['green', []]);
+});
+
+test('base: a failed SHA lookup is query-failed with no SHA, exits 0, and reads no runs', () => {
+  for (const api of [ghFailure('HTTP 404: Branch not found\n'), () => 'not a sha\n']) {
+    const r = baseOf(['main'], { api });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual([r.json.sha, r.json.verdict], [null, 'query-failed']);
+    assert.ok(r.json.error);
+    assert.equal(r.calls.length, 1);
+  }
+  const runsFail = baseOf(['main'], { rows: ghFailure('HTTP 502\n') });
+  assert.deepEqual([runsFail.json.sha, runsFail.json.verdict, runsFail.json.error], [SHA, 'query-failed', 'HTTP 502']);
+});
+
 test('bad arguments exit 2', () => {
   const deps = { ...defaultDeps(), gh: () => assert.fail('gh must not be called') };
-  for (const argv of [[], ['nope'], ['verdict'], ['verdict', 'line'], ['verdict', 'line', SHA, 'extra'], ['verdict', '--bogus', 'line', SHA], ['verdict', 'line', SHA, '--repo'], ['earliest-red'], ['earliest-red', 'a.json', 'b.json']]) {
+  for (const argv of [[], ['nope'], ['verdict'], ['verdict', 'line'], ['verdict', 'line', SHA, 'extra'], ['verdict', '--bogus', 'line', SHA], ['verdict', 'line', SHA, '--repo'], ['base'], ['base', 'main', 'extra'], ['base', 'main', '--repo'], ['earliest-red'], ['earliest-red', 'a.json', 'b.json']]) {
     const r = main(argv, deps);
     assert.equal(r.code, 2, JSON.stringify(argv));
     assert.match(r.err, /^ci: .*\nusage: see the header of ci\.mjs\n$/);

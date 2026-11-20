@@ -49,9 +49,17 @@ function frontierOf(spec, { tracker = 'github', source = 'acme/widgets' } = {}) 
   return { format: 'sorry-matt/frontier@1', tracker, source, tickets: full, lines: [], frontier: full.filter((t) => t.ready).map((t) => t.id), warnings: [] };
 }
 
-const ghOk = (prs = []) => (args) => {
+const BASE_SHA = 'b'.repeat(40);
+const ghRun = (id, conclusion, status = 'completed') => ({ databaseId: id, workflowName: 'check', status, conclusion });
+
+// gh with a logged-in account, the given open PRs, and the base branch's latest SHA whose runs are `baseRuns`.
+// `calls` collects every gh argument list.
+const ghOk = (prs = [], { baseRuns = [ghRun(1, 'success')], calls = [] } = {}) => (args) => {
+  calls.push(args);
   if (args[0] === 'auth') return 'Logged in\n';
   if (args[0] === 'pr') return JSON.stringify(prs);
+  if (args[0] === 'api') return `${BASE_SHA}\n`;
+  if (args[0] === 'run') return JSON.stringify(baseRuns);
   throw new Error(`unexpected gh ${args.join(' ')}`);
 };
 
@@ -63,7 +71,7 @@ function run(dir, { repo, frontier, files = {}, extra = {}, gh = ghOk(), git: gi
     map[id] = `list${i}.txt`;
   });
   writeFileSync(join(dir, 'frontier.json'), JSON.stringify(frontier));
-  writeFileSync(join(dir, 'plan.json'), JSON.stringify({ repo, frontier: 'frontier.json', files: map, ...extra }));
+  writeFileSync(join(dir, 'plan.json'), JSON.stringify({ repo, frontier: 'frontier.json', files: map, base: 'main', ...extra }));
   const r = main([join(dir, 'plan.json')], { gh, ...(gitDep ? { git: gitDep } : {}) });
   return { ...r, json: r.code === 0 ? JSON.parse(r.out) : null };
 }
@@ -231,8 +239,94 @@ test('preflight passes on a clean repository whose remote is the frontier source
   const repo = repoIn(dir, { remote: 'git@github.com:Acme/Widgets.git' });
   const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' } });
   assert.equal(r.code, 0, r.err);
-  assert.deepEqual(r.json.preflight.checks.map((c) => [c.name, c.ok]), [['git-repo', true], ['clean', true], ['gh-auth', true], ['repo-match', true]]);
+  assert.deepEqual(r.json.preflight.checks.map((c) => [c.name, c.ok]), [
+    ['git-repo', true],
+    ['clean', true],
+    ['gh-auth', true],
+    ['repo-match', true],
+    ['base-ci', true],
+  ]);
   assert.equal(r.json.preflight.ok, true);
+});
+
+// ---------- base CI ----------
+
+test('base-ci: a green base latest SHA passes without a warning, read from the frontier source', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const calls = [];
+  const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh: ghOk([], { calls }) });
+  assert.equal(r.code, 0, r.err);
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.sha, base.ci.verdict], [true, false, 'main', BASE_SHA, 'green']);
+  assert.equal(r.json.preflight.ok, true);
+  assert.deepEqual(calls.find((a) => a[0] === 'api'), ['api', 'repos/acme/widgets/commits/main', '--jq', '.sha']);
+  assert.deepEqual(calls.find((a) => a[0] === 'run'), [
+    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/widgets',
+  ]);
+});
+
+test('base-ci: a red base is a warning that does not block the freeze', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const gh = ghOk([], { baseRuns: [ghRun(7, 'failure'), ghRun(8, 'success')] });
+  const r = run(dir, { repo, frontier: frontierOf([['#1'], ['#2']]), files: { '#1': 'a\n', '#2': 'b\n' }, extra: { base: 'origin/main' }, gh });
+  assert.equal(r.code, 0, r.err);
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.verdict, base.ci.failed], [true, true, 'main', 'red', [7]]);
+  assert.match(base.detail, /main .*red/);
+  assert.equal(r.json.preflight.ok, true);
+  assert.deepEqual(r.json.lines.map((l) => l.id), ['#1', '#2']);
+  assert.deepEqual(r.json.candidates.map((c) => c.id), ['#1', '#2']);
+});
+
+test('base-ci: a failed query is a warning that does not block the freeze, with gh\'s message', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const ok = ghOk();
+  const gh = (args) => {
+    if (args[0] === 'api') {
+      const e = new Error('Command failed: gh api');
+      e.stderr = 'HTTP 502: Bad Gateway';
+      throw e;
+    }
+    return ok(args);
+  };
+  const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh });
+  assert.equal(r.code, 0, r.err);
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci.sha, base.ci.verdict], [true, true, null, 'query-failed']);
+  assert.match(base.detail, /HTTP 502/);
+  assert.equal(r.json.preflight.ok, true);
+  assert.deepEqual(r.json.candidates.map((c) => c.id), ['#1']);
+});
+
+test('base-ci: a base still running or with no run is neither blocking nor a warning', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const [baseRuns, verdict] of [[[ghRun(3, '', 'in_progress')], 'running'], [[], 'no-run']]) {
+    const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh: ghOk([], { baseRuns }) });
+    assert.equal(r.code, 0, r.err);
+    const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+    assert.deepEqual([base.ok, base.warning, base.ci.verdict], [true, false, verdict]);
+  }
+});
+
+test('base-ci: a github plan needs base; a local tracker reads no base CI', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir, { remote: null });
+  const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { base: undefined } });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /base/);
+  const local = run(dir, {
+    repo,
+    frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }),
+    files: { '#1': 'a\n' },
+    extra: { base: undefined },
+    gh: () => assert.fail('gh must not be called for a local tracker'),
+  });
+  assert.equal(local.code, 0, local.err);
+  assert.deepEqual(local.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean']);
 });
 
 test('preflight fails outside a git repository; the rest is null and gh is still checked', (t) => {
@@ -242,7 +336,7 @@ test('preflight fails outside a git repository; the rest is null and gh is still
   const r = run(dir, { repo: plain, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' } });
   assert.equal(r.code, 0, r.err);
   assert.equal(r.json.preflight.ok, false);
-  assert.deepEqual(r.json.preflight.checks.map((c) => [c.name, c.ok]), [['git-repo', false], ['gh-auth', true]]);
+  assert.deepEqual(r.json.preflight.checks.map((c) => [c.name, c.ok]), [['git-repo', false], ['gh-auth', true], ['base-ci', true]]);
   assert.equal(r.json.repo, null);
   for (const key of ['held', 'excluded', 'stalled', 'lines', 'candidates']) assert.equal(r.json[key], null, key);
 });
