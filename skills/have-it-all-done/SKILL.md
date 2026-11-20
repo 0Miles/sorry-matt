@@ -105,9 +105,21 @@ next action instead of re-running what is already published.
 
 After the kickoff agent delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4.
 
+**Base CI**: when the tracker is GitHub, before the ruling point read the CI of the base's latest SHA with
+`node <base directory>/../get-to-work/scripts/ci.mjs base --repo <owner>/<repo> <base branch>` (its output fields are in
+that script's header). When `verdict` is `red`, list one question at the ruling point, "continue, or fix the base
+first", with the branch, the SHA and the run ids in `failed`; it falls under section 2(a), so recommend "continue",
+stating that every line's CI will carry this red and that red-light handling judges a red the base brought in as
+mapping to no ticket. On `query-failed` run it once more; if it still fails, list no question, answer "continue" on
+the user's behalf and log it, with the error message, in the self-answer log. Any other verdict lists no question.
+Record the question's outcome (branch, SHA, choice) in ledger field 2; `get-to-work` follows it at the freeze. On
+"fix the base first", do not go on to step 3: the base's red goes on the human-work list, every ticket is awaiting
+ruling, released when the base turns green, and the run goes straight to the handoff.
+
 Done when: tickets are published to the configured tracker and every blocker edge is explicit; the kickoff
 agent's requirements context points to the same grilling result selected in step 1; the ruling point ran exactly
-once.
+once; when the base is red, the ruling point has the question "continue, or fix the base first" and its outcome is
+recorded in ledger field 2.
 
 ## 3. Clear the tickets
 

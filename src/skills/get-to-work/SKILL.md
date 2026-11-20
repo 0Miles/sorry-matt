@@ -28,7 +28,14 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 3. 為每張票寫預計檔案（第 2 節「預計檔案」）。
 4. 寫計畫檔跑 `scripts/freeze.mjs`：前置檢查、他線佔用、排除、**合線**與候選順序都由它算。`preflight.ok` 是
    false 就照 `checks` 修好重跑；腳本看不到的佔用（本 session 已知的其他 session）寫進計畫檔的 `held`。
-   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。
+   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（GitHub 時必填）。
+   **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結；`warning` 是 true（基底紅，或 CI 讀不到）時：
+   - 由 `have-it-all-done` 組合時照 ledger 第 2 欄裁決點的選擇走；第 2 欄沒有這題（裁決點時基底不紅）就代答
+     「繼續」，記進自答清單。
+   - 獨立執行時，紅就在這裡問使用者「繼續，或先修基底」（`ASKING.md` 第 2 節 (a)，建議「繼續」，寫明每條線的
+     CI 都會帶著這個紅），答案記進 ledger 第 2 欄；讀不到就代答「繼續」，連同錯誤訊息記進自答清單。
+   - 「先修基底」：不凍結。基底的紅燈（分支、SHA、`ci.failed` 的 run id）進人工作業清單，初始票全數標待裁決，
+     解除條件是基底轉綠。「繼續」：基底帶進來的紅由紅燈處置判為對不到票（[`RED-LIGHT.md`](RED-LIGHT.md) 第 2 點）。
 5. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
    沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，再對每條線跑
    `scripts/integrate.mjs line-init`。
@@ -41,7 +48,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 **硬護欄**：初始票集一經凍結便不再擴張；執行期間新發現或新開的票只作為背景。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票有發布出處、tracker 原生識別與 blocker map；被排除的票都有
-佔用來源與解除條件；`check freeze` 通過；獨立執行時兩行 `budget:` 已依凍結票數寫定。
+佔用來源與解除條件；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`check freeze` 通過；獨立執行時
+兩行 `budget:` 已依凍結票數寫定。
 
 ## 1. 用 tick 推進流水線
 
