@@ -306,6 +306,25 @@ test('review minimal: a minimal review passes; no review still blocks; the defau
   r.ok('stage', 'queued', '#1');
 });
 
+test('#142: review records the observations and pre-existing counts; without them both are 0', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--findings', 'F1', '--observations', '2', '--pre-existing', '1');
+  r.ok('stage', 'fixing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass');
+  const counts = r.state().tickets['#1'].reviews.map((x) => [x.mode, x.observations, x.preExisting]);
+  assert.deepEqual(counts, [['initial', 2, 1], ['recheck', 0, 0]]);
+  for (const bad of ['-1', 'two', '1.5']) {
+    const out = r.cmd('review', '#1', '--mode', 'recheck', '--verdict', 'pass', '--observations', bad);
+    assert.equal(out.code, 2, `--observations ${bad}`);
+    assert.match(out.err, /--observations: expected a whole number/);
+  }
+  const out = r.cmd('review', '#1', '--mode', 'recheck', '--verdict', 'pass', '--pre-existing', 'x');
+  assert.equal(out.code, 2);
+  assert.match(out.err, /--pre-existing: expected a whole number/);
+});
+
 test('fixRounds 1: one fix round passes; a second is refused', (t) => {
   const r = run(t);
   r.ok('profile', '--fixRounds', '1');
