@@ -227,9 +227,18 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
     }
     h.reportsNext.push(agent);
   };
+  /** A ci-fix agent on a line that maps to no ticket: a commit in the integration worktree, then its report (#144). */
+  h.ciFixSilent = false;
+  h.fixLine = (agent) => {
+    if (h.ciFixSilent) return;
+    write(join(h.intWt, 'fix.txt'), `${agent}\n`);
+    git(h.intWt, 'add', '-A');
+    git(h.intWt, 'commit', '-q', '-m', 'fix the red light');
+    h.reportsNext.push(agent);
+  };
 
   const DEFAULTS = {
-    collect: (a) => ({ implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved' })[a.meta.stage] ?? 'logged',
+    collect: (a) => ({ implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved', 'ci-fix': 'fixed' })[a.meta.stage] ?? 'logged',
     review: () => 'pass',
     'review-stuck': () => 'stuck',
     predict: () => 'written',
@@ -299,7 +308,8 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
               (h.comments[tid] ??= []).push({ author: { login: 'x' }, body: block, createdAt: h.iso() });
             }
             h.reportsNext.push(r.agent);
-          } else if (r.agent) h.work(r.agent, a.tickets[0]);
+          } else if (r.agent && h.agentOf[r.agent].role === 'ci-fix') h.fixLine(r.agent);
+          else if (r.agent) h.work(r.agent, a.tickets[0]);
         }
       } else {
         h.record(a.id, ...h.judge(a));
@@ -497,6 +507,119 @@ test('a red line is read every wake-up; its result comes a wake-up late; green r
   const a3 = h.actions(w3);
   assert.ok(w3.some((o) => o.dispatch?.reasons.includes('a red line turned green')));
   assert.deepEqual(distinct(a3).filter((a) => a.kind === 'spawn').map((a) => a.tickets[0]).sort(), ['#1', '#2']);
+});
+
+/** A red light at the line's first SHA that the host finds maps to no ticket: it writes the failing lines, records unmatched (#144). */
+function unmatchedRed(h) {
+  const red = git(h.intWt, 'rev-parse', 'HEAD');
+  h.ci = (branch, sha) => (sha === red ? 'red' : 'green');
+  h.redJudges = [];
+  h.policy['red-light'] = (a) => {
+    h.redJudges.push(a);
+    if (!a.outcomes.includes('unmatched')) return 'failed'; // the two fix rounds are used
+    write(a.meta.failure, `check: test x failed at ${red}\n`);
+    return 'unmatched';
+  };
+  return red;
+}
+const ciFixSpawns = (h) => distinct(h.log).filter((a) => a.kind === 'spawn' && a.spawn.description.startsWith('ci-fix'));
+
+test('#144: a red light that maps to no ticket: tick spawns ci-fix on the integration branch, with the assignment on the line', (t) => {
+  const h = world(t);
+  const red = unmatchedRed(h);
+  const w1 = h.wake();
+  const [spawn] = ciFixSpawns(h);
+  assert.ok(spawn, 'tick hands out the ci-fix spawn');
+  assert.equal(h.redJudges[0].step, 'red-light');
+  assert.equal(spawn.spawn.description, `ci-fix ${LINE}`);
+  assert.equal(spawn.spawn.subagent_type, 'general-purpose');
+  assert.ok(spawn.spawn.background);
+  assert.deepEqual([spawn.line, spawn.tickets], [LINE, []]);
+  // the brief names the integration worktree, the branch and the failing lines; tick pushes, the agent does not
+  const brief = readFileSync(briefOf(spawn), 'utf8');
+  assert.ok(brief.includes(resolve(h.intWt)), 'the integration worktree');
+  assert.ok(brief.includes(h.redJudges[0].meta.failure), 'the failure output');
+  assert.ok(brief.includes(red), 'the red SHA');
+  assert.match(brief, /do not push/i);
+  assert.match(brief, /no ticket id/i);
+  // the assignment record is the line's: its worktree, the fix time limit, the agent that was spawned
+  const st = h.state();
+  const a = st.lines[LINE].assignment;
+  const agent = Object.keys(h.agentOf).find((x) => h.agentOf[x].role === 'ci-fix');
+  assert.deepEqual([a.agentId, a.type, a.limit, a.extended], [agent, 'general-purpose', 20, 'no']);
+  assert.equal(resolve(a.worktree), resolve(h.intWt));
+  assert.equal(a.fingerprint.head, red);
+  assert.equal(Date.parse(a.deadline) - Date.parse(a.assigned), 20 * 60_000);
+  assert.ok(Object.values(st.tickets).every((x) => x.assignment === null), 'no ticket holds it');
+  assert.ok(!h.actions(w1).some((x) => x.kind === 'spawn' && x.spawn.description.startsWith('implement')), 'no new ticket on a red line');
+  assert.ok(w1.at(-1).fallback, 'an agent in flight: a fallback wake-up');
+  assert.equal(w1.at(-1).fallback.deadline, a.deadline);
+
+  // its report is taken, the line released; tick pushes the fix and reads CI at it; green reopens dispatching
+  const w2 = h.wake();
+  const a2 = h.actions(w2);
+  const collect = a2.find((x) => x.step === 'collect' && x.meta?.agent === agent);
+  assert.ok(collect && collect.line === LINE && collect.meta.stage === 'ci-fix');
+  assert.equal(h.state().lines[LINE].assignment.deadline, null);
+  const fixed = git(h.intWt, 'rev-parse', 'HEAD');
+  assert.notEqual(fixed, red);
+  assert.equal(git(h.repo, 'rev-parse', `origin/${LINE}`), fixed);
+  assert.ok(a2.some((x) => x.step === 'ci-read' && x.argv.at(-1) === fixed));
+  assert.ok(w2.some((o) => o.dispatch?.reasons.includes('a red line turned green')));
+  assert.equal(ciFixSpawns(h).length, 1);
+});
+
+test('#144: a ci-fix agent past its time limit goes through the timeout handling; each stop is a fix round, two fail the line', (t) => {
+  const h = world(t);
+  const red = unmatchedRed(h);
+  h.ciFixSilent = true;
+  h.policy.timeout = (a) => {
+    assert.deepEqual([a.line, a.tickets, a.meta.stage], [LINE, [], 'ci-fix']);
+    assert.ok(a.outcomes.includes('stopped'));
+    return 'stopped';
+  };
+  h.wake();
+  assert.equal(ciFixSpawns(h).length, 1);
+  // not overdue yet: no stop, no second round
+  const w2 = h.wake({ minutes: 10 });
+  assert.ok(!h.actions(w2).some((x) => x.step === 'timeout'));
+  assert.equal(w2.at(-1).fallback.deadline, h.state().lines[LINE].assignment.deadline);
+  // overdue with no progress: stopped, the round counted, and the next red-light judge opens round 2
+  const w3 = h.wake({ minutes: 11 });
+  const a3 = h.actions(w3);
+  assert.ok(a3.some((x) => x.step === 'timeout' && x.line === LINE));
+  assert.equal(h.state().usage.timeoutStops, 1);
+  assert.equal(h.redJudges.length, 2, 'the stopped round is judged again');
+  assert.equal(h.redJudges[1].meta.round, 2);
+  assert.equal(ciFixSpawns(h).length, 2);
+  assert.equal(git(h.intWt, 'rev-parse', 'HEAD'), red);
+  // round 2 overdue too: the line fails verification, unmatched is no longer an outcome
+  h.wake({ minutes: 21 });
+  assert.equal(h.state().usage.timeoutStops, 2);
+  assert.equal(h.redJudges.length, 3);
+  assert.ok(!h.redJudges[2].outcomes.includes('unmatched'), 'two rounds used: no third');
+  assert.ok(h.state().tick.failed[LINE], 'the line failed verification');
+  assert.equal(ciFixSpawns(h).length, 2);
+  assert.equal(stage(h, '#1'), 'awaiting-ruling');
+  assert.equal(stage(h, '#2'), 'awaiting-ruling');
+});
+
+test('#144: record unmatched is refused (3) until the failure output is written where the judge says', (t) => {
+  const h = world(t);
+  const red = git(h.intWt, 'rev-parse', 'HEAD');
+  h.ci = (branch, sha) => (sha === red ? 'red' : 'green');
+  let judged = null;
+  h.policy['red-light'] = (a) => {
+    judged = a;
+    const r = h.tick('record', h.path, a.id, '--outcome', 'unmatched');
+    assert.equal(r.code, 3, r.err);
+    assert.match(r.err, /failure/);
+    write(a.meta.failure, 'check: test x failed\n');
+    return 'unmatched';
+  };
+  h.wake();
+  assert.ok(judged);
+  assert.equal(ciFixSpawns(h).length, 1);
 });
 
 test('merged but not recorded: the resumed host follows git and does not merge again', (t) => {
