@@ -1135,3 +1135,50 @@ test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 e
   assert.equal(r2.out, '');
   assert.equal(h.state().tick.done[first].exit, 0, `${first} stays recorded`);
 });
+
+test('#129: without --now, run reads the clock again for each list and each record', (t) => {
+  const h = world(t);
+  h.now += 5 * 60_000;
+  const start = h.iso();
+  // each exec takes a minute: the clock moves while run runs
+  const deps = {
+    ...defaultDeps(),
+    clock: () => h.now,
+    execute: (a) => {
+      h.now += 60_000;
+      return { code: h.exec(a) };
+    },
+  };
+  const r = tick(['run', h.path], deps);
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  assert.ok(out.ran.length > 2, 'execs over more than one list');
+  const minute = (k) => new Date(Date.parse(start) + k * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const done = h.state().tick.done;
+  out.ran.forEach((x, k) => assert.equal(done[x.id].at, minute(k + 1), `${x.id} recorded at the time it ended`));
+  assert.equal(out.now, minute(out.ran.length), 'the last list is made at the time after the last exec');
+  assert.notEqual(out.now, start);
+});
+
+test('#129: --reported goes to the first next of run only', (t) => {
+  const h = world(t);
+  h.wake(); // a1 and a2 implement
+  h.reportsNext = [];
+  // a1's report comes: the host runs next, one list at a time, until a1's collect is recorded
+  h.now += 5 * 60_000;
+  const collected = () => h.log.some((a) => a.step === 'collect' && a.tickets.includes('#1'));
+  for (let i = 0; i < 40 && !collected(); i += 1) {
+    const r = h.tick('next', h.path, ...(i === 0 ? ['--reported', 'a1'] : []));
+    assert.equal(r.code, 0, r.err);
+    const out = JSON.parse(r.out);
+    if (i === 0) assert.deepEqual(out.reports.map((x) => [x.agent, x.why]), [['a1', 'current']]);
+    h.run(out.actions);
+  }
+  assert.ok(collected(), "a1's collect is recorded");
+  // the same report again: the first next of run takes it as a duplicate, the later lists never see it
+  const out = runOut(h, '--reported', 'a1');
+  // two lists: the acceptance check ran in the first; the review it leads to is listed by the next after it
+  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1']);
+  assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
+  assert.deepEqual(out.reports, [], 'the last list was not handed the report');
+});

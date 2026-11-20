@@ -121,9 +121,10 @@
 // run
 //   `next`, then the exec actions at batch 1 of its list, in list order, each through deps.execute (`bash -c
 //   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
-//   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. It stops
-//   after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then` is "end" or "done": the
-//   host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
+//   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
+//   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
+//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
 //   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
 //   list carries its `failed` judge, which stops run; nothing is retried.
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
@@ -1996,11 +1997,12 @@ const RUN_LISTS = 500;
 /**
  * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
  * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
- * `then` is "tick". The output is the last list less the execs run, plus `ran`.
+ * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
+ * and record: the clock moves while the execs run.
  */
 export function run(path, reported, now, deps) {
   const ran = [];
-  let out = next(path, reported, now, deps);
+  let out = next(path, reported, now(), deps);
   for (let i = 0; ; i += 1) {
     const first = out.actions.filter((a) => a.batch === 1);
     const todo = first.filter(runnable);
@@ -2008,7 +2010,7 @@ export function run(path, reported, now, deps) {
       const log = runLog(path, out.run, a.id);
       deps.mkdir(dirname(log));
       const { code } = deps.execute(a, log);
-      record(path, a.id, { exit: String(code), log }, now, deps);
+      record(path, a.id, { exit: String(code), log }, now(), deps);
       ran.push({ id: a.id, exit: code, log });
     }
     if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
@@ -2016,7 +2018,7 @@ export function run(path, reported, now, deps) {
       return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran };
     }
     if (i >= RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-    out = next(path, [], now, deps);
+    out = next(path, [], now(), deps);
   }
 }
 
@@ -2145,7 +2147,8 @@ export function main(argv, deps = defaultDeps()) {
     if (!rest.length) throw new UsageError(`${command} needs the state file first`);
     const path = resolve(rest[0]);
     if (flags.now !== undefined && (!TIME.test(flags.now) || Number.isNaN(Date.parse(flags.now)))) throw new UsageError(`--now: expected a UTC time like 2026-01-31T23:59:59Z`);
-    const now = flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const clock = () => flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const now = clock();
     let out;
     if (command === 'setup') {
       if (rest.length !== 1) throw new UsageError('setup takes the state file and flags');
@@ -2155,7 +2158,7 @@ export function main(argv, deps = defaultDeps()) {
       out = next(path, flags.reported ?? [], now, deps);
     } else if (command === 'run') {
       if (rest.length !== 1) throw new UsageError('run takes the state file and flags');
-      out = run(path, flags.reported ?? [], now, deps);
+      out = run(path, flags.reported ?? [], clock, deps); // each list and record at its own time
     } else {
       if (rest.length !== 2) throw new UsageError('record takes the state file and one action id');
       out = record(path, rest[1], flags, now, deps);
