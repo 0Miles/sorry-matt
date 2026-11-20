@@ -1,7 +1,7 @@
 // node --test scripts/scope.test.mjs
-// Real git repositories in temp dirs. Expected scopes come from proposal 7 of issue #80 (full suite when CI does not
-// cover the line's integration branch or there is no origin; affected scope otherwise); expected commands and test
-// candidates come from the contract text and the test files each fixture writes.
+// Real git repositories in temp dirs. Expected scopes come from #141 (the affected scope whatever the CI coverage: a
+// line without CI runs its full suite once, at the finish); expected commands and test candidates come from the
+// contract text and the test files each fixture writes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -71,24 +71,25 @@ const CONTRACT = [
   '',
 ].join('\n');
 
-test('a line CI does not cover runs the full suite, with the commands of the contract', (t) => {
+test('#141: a line CI does not cover runs the affected scope, not the full suite: the finish runs that once', (t) => {
   const r = repo(t, { 'docs/agents/commands.md': CONTRACT, 'src/a.js': 'a\n' }, { 'src/a.js': 'b\n' });
   const out = scope(r, '--ci', 'uncovered');
   assert.equal(out.format, 'sorry-matt/live-scope@1');
   assert.equal(out.ci, 'uncovered');
   assert.equal(out.ciSource, 'caller');
-  assert.equal(out.scope, 'full');
+  assert.equal(out.scope, 'affected');
   assert.equal(out.source, 'commands.md');
-  assert.deepEqual(out.commands, ['npm test', 'npm run lint']);
-  assert.equal(out.targeted, null);
+  assert.equal(out.commands, null);
+  assert.equal(out.targeted, '- one file: `npx vitest run <file>`');
 });
 
-test('a line without origin and without a contract runs the full suite, self-found', (t) => {
+test('#141: a line without origin and without a contract runs the affected scope, self-found', (t) => {
   const r = repo(t, { 'src/a.js': 'a\n' }, { 'src/a.js': 'b\n' });
   const out = scope(r, '--ci', 'no-origin');
-  assert.equal(out.scope, 'full');
+  assert.equal(out.scope, 'affected');
   assert.equal(out.source, 'self-found');
   assert.equal(out.commands, null);
+  assert.equal(out.targeted, null);
 });
 
 test('a line CI covers runs the affected scope, from the Targeted checks of the contract', (t) => {
@@ -114,7 +115,7 @@ test('Targeted checks that are none, or no contract, leave the affected scope to
 
 test('the contract is read on head: a ticket that adds it is read with it', (t) => {
   const r = repo(t, { 'src/a.js': 'a\n' }, { 'docs/agents/commands.md': CONTRACT });
-  assert.deepEqual(scope(r, '--ci', 'uncovered').commands, ['npm test', 'npm run lint']);
+  assert.equal(scope(r, '--ci', 'uncovered').targeted, '- one file: `npx vitest run <file>`');
 });
 
 test('without --ci, a repository without origin is no-origin and one with origin is covered', (t) => {
@@ -122,7 +123,7 @@ test('without --ci, a repository without origin is no-origin and one with origin
   const without = scope(r);
   assert.equal(without.ci, 'no-origin');
   assert.equal(without.ciSource, 'origin-check');
-  assert.equal(without.scope, 'full');
+  assert.equal(without.scope, 'affected');
   r.git('remote', 'add', 'origin', 'https://example.invalid/repo.git');
   const withOrigin = scope(r);
   assert.equal(withOrigin.ci, 'covered');
@@ -164,5 +165,5 @@ test('usage errors exit 2, an unresolvable ref exits 1, and the command line pri
   assert.equal(main(['--base', 'no-such-ref'], defaultDeps(r.dir)).code, 1);
   const res = spawnSync(process.execPath, [SCRIPT, '--base', 'main', '--ci', 'uncovered'], { cwd: r.dir, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stderr);
-  assert.equal(JSON.parse(res.stdout).scope, 'full');
+  assert.equal(JSON.parse(res.stdout).scope, 'affected');
 });

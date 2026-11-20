@@ -18,6 +18,7 @@ import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
+import { main as ciMain, defaultDeps as ciDeps } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
 
@@ -49,9 +50,9 @@ const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id}.\n\n#
 
 /**
  * A run with two tickets on one line, set up as the freeze leaves it: #1 and #2 on GitHub, or (`tracker: 'local'`)
- * two ticket files under TICKETS_DIR. `h.ids` holds the two ids.
+ * two ticket files under TICKETS_DIR. `h.ids` holds the two ids. `check` is the contract's Full checks.
  */
-function world(t, { profile = null, tracker = 'github' } = {}) {
+function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"' } = {}) {
   const local = tracker === 'local';
   const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-tick-'));
@@ -66,7 +67,7 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
   git(repo, 'config', 'user.name', 't'); // integrate.mjs commits with the repository's identity
   git(repo, 'config', 'user.email', 't@t');
   write(join(repo, 'README.md'), 'hello\n');
-  write(join(repo, 'docs', 'agents', 'commands.md'), '# Commands\n\n## Full checks\n\n```bash\nnode -e "process.exit(0)"\n```\n');
+  write(join(repo, 'docs', 'agents', 'commands.md'), `# Commands\n\n## Full checks\n\n\`\`\`bash\n${check}\n\`\`\`\n`);
   if (local) {
     write(join(repo, TICKETS_DIR, ID1), localTicket(ID1, 'First thing'));
     write(join(repo, TICKETS_DIR, ID2), localTicket(ID2, 'Second thing'));
@@ -986,7 +987,7 @@ test('#130: minimal record review is refused (3) when the report says another ve
   assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
 });
 
-test('#130: minimal record review is refused (3) when the report was written before the review spawn was last issued', (t) => {
+test("#130: minimal record review is refused (3) when the report was written before the round's review spawn was first issued", (t) => {
   const { h, seen } = minimalReview(t, (a, h) => {
     const issued = h.state().tick.issued[a.id].at;
     assert.equal(issued, h.iso(), 'tick keeps when it issued the review spawn');
@@ -1014,6 +1015,72 @@ test('#130: minimal record review accepts the report this round wrote with the v
   assert.equal(seen.length, 1);
   assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
   assert.equal(h.state().tickets['#1'].reviews.at(-1).verdict, 'pass', 'the recheck passes');
+});
+
+/** The host runs `next` once more before it records the review spawn `a`: the list hands the same spawn out again. */
+const nextAgain = (h, a) => {
+  const r = h.tick('next', h.path);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(JSON.parse(r.out).actions.some((x) => x.id === a.id), `${a.id} is handed out again, not recorded yet`);
+};
+
+test('#145: a report written before one more `next` is accepted: issuing the same round again keeps its issue time', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    const first = h.state().tick.issued[a.id].at;
+    assert.equal(first, h.iso(), 'the round was first issued now');
+    h.now += 60_000;
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    h.now += 60_000;
+    nextAgain(h, a);
+    assert.equal(h.state().tick.issued[a.id].at, first, "the issue time is still the round's first");
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1']; // h.record asserts exit 0
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the report written before the extra next is taken');
+});
+
+test('#145: a report from before the round was first issued is still refused after one more `next`', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    const first = h.state().tick.issued[a.id].at;
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n', Date.parse(first) - 60_000);
+    h.now += 60_000;
+    nextAgain(h, a);
+    const r = recordReview(h, a, 'fix');
+    assert.equal(r.code, 3, "an older round's report: refused");
+    assert.match(r.err, /before/);
+    assert.ok(r.err.includes(first), r.err);
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the report this round wrote is taken');
+});
+
+test('#145: the initial review and each recheck are rounds of their own, each with the time it was first issued', (t) => {
+  const h = world(t, { profile: { review: 'minimal', fixRounds: 2 } });
+  const spawn = h.spawn;
+  const rounds = [];
+  h.spawn = (a) => {
+    if (a.step !== 'review' || a.tickets[0] !== '#1') return spawn(a);
+    const first = h.state().tick.issued[a.id].at;
+    rounds.push({ id: a.id, mode: a.meta.mode, first, now: h.iso() });
+    h.now += 60_000;
+    nextAgain(h, a); // the same round issued again: its time stays
+    assert.equal(h.state().tick.issued[a.id].at, first, `${a.id}: the round's first issue time`);
+    const outcome = rounds.length < 3 ? 'fix' : 'pass';
+    h.writeReport(reportOf(a), `verdict: ${outcome}\n${outcome === 'fix' ? 'F1: a.txt:1 wrong (evidence)\n' : ''}`);
+    return ['--agent', `rv${rounds.length}`, '--outcome', outcome, ...(outcome === 'fix' ? ['--findings', 'F1'] : [])];
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.deepEqual(
+    rounds.map((r) => r.mode),
+    ['initial', 'recheck', 'recheck'],
+  );
+  assert.equal(new Set(rounds.map((r) => r.id)).size, 3, 'each round is its own action');
+  for (const r of rounds) assert.equal(r.first, r.now, `${r.id}: written when the round was first issued`);
+  assert.ok(rounds.every((r, k) => k === 0 || Date.parse(r.first) > Date.parse(rounds[k - 1].first)), 'each round a new, later time');
 });
 
 test('#130: with onUnfixed: stuck the mark-stuck judge names the report file (minimal) or the review block (full)', (t) => {
@@ -1228,19 +1295,108 @@ test('#128 D4: under review: minimal a fix agent reassigned after a timeout is p
   assert.doesNotMatch(brief, /review block/);
 });
 
-test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
-  const h = world(t);
+/** Seeds the line as settled "CI does not cover the integration branch" (state.mjs ci sets it after two empty reads). */
+const settleNotCovering = (h) => {
+  const st = h.state();
+  st.lines[LINE].ciNotCovering = { sha: st.lines[LINE].tip, at: h.iso() };
+  writeFileSync(h.path, `${JSON.stringify(st, null, 2)}\n`);
+};
+
+for (const [name, reason, setup] of [
+  ['no origin', 'no-origin', (h) => git(h.repo, 'remote', 'remove', 'origin')],
+  ['CI not covering the line', 'ci-not-covering', settleNotCovering],
+]) {
+  test(`#141: ${name}: no local verification at the dispatch points; a green finish verifies the latest SHA once`, (t) => {
+    const h = world(t);
+    setup(h);
+    assert.equal(h.untilDone().then, 'done');
+    const tip = git(h.intWt, 'rev-parse', 'HEAD');
+    const verifies = h.log.filter((a) => a.step === 'verify-local');
+    assert.deepEqual(
+      verifies.map((a) => [a.argv[a.argv.indexOf('--sha') + 1], a.argv[a.argv.indexOf('--reason') + 1]]),
+      [[tip, reason]],
+      'one verification, at the finish, of the latest SHA',
+    );
+    assert.ok(!h.log.some((a) => a.step === 'red-light'), 'green: no red-light handling');
+    const L = h.state().lines[LINE];
+    assert.deepEqual(L.local.map((x) => [x.sha, x.result]), [[tip, 'green']], 'one per-SHA record: the latest SHA');
+    assert.ok(!h.log.some((a) => a.step === 'ci-read'), 'nothing reads CI');
+    assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  });
+}
+
+for (const [culprit, file] of [
+  ['#1', 'a.txt'],
+  ['#2', 'b.txt'],
+]) {
+  test(`#141: no origin: a red finish verifies the integration SHAs from the oldest; the first red, ${culprit}'s merge, is the earliest red`, (t) => {
+    // the Full checks fail once the culprit's file is in the tree: from its merge on
+    const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('${file}') ? 1 : 0)"` });
+    git(h.repo, 'remote', 'remove', 'origin');
+    let handed = null;
+    h.policy['red-light'] = (a) => {
+      // RED-LIGHT.md step 1: ci.mjs earliest-red on the state's per-SHA records, `ci` false on a line on local verification
+      const st = h.state();
+      const plan = join(h.W, 'ci', 'line-1.plan.json');
+      write(
+        plan,
+        JSON.stringify({
+          worktree: h.intWt,
+          line: LINE,
+          base: 'main',
+          ci: false,
+          local: st.lines[LINE].local.map((x) => `local: ${LINE} ${x.sha} ${x.result} ${x.reason}`),
+          tickets: Object.entries(st.tickets).map(([id, x]) => ({ id, merges: x.merges.map((m) => m.sha) })),
+        }),
+      );
+      const r = ciMain(['earliest-red', plan], ciDeps());
+      assert.equal(r.code, 0, r.err);
+      handed = { action: a, logged: h.log.length, earliest: JSON.parse(r.out) };
+      return 'failed'; // the line failed verification: on to the delivery
+    };
+    assert.equal(h.untilDone().then, 'done');
+    const st = h.state();
+    const tip = git(h.intWt, 'rev-parse', 'HEAD');
+    const merges = git(h.intWt, 'rev-list', '--first-parent', '--merges', '--reverse', `main..${LINE}`).split('\n'); // oldest first
+    const earliest = st.tickets[culprit].merges[0].sha;
+    const scanned = merges.slice(0, merges.indexOf(earliest) + 1).filter((x) => x !== tip);
+    const verified = h.log.filter((a) => a.step === 'verify-local').map((a) => a.argv[a.argv.indexOf('--sha') + 1]);
+    assert.deepEqual(verified, [tip, ...scanned], 'the finish verifies the tip once; then each integration SHA from the oldest, up to the first red');
+    assert.deepEqual(
+      st.lines[LINE].local.map((x) => [x.sha, x.result]),
+      [[tip, 'red'], ...scanned.map((x) => [x, x === earliest ? 'red' : 'green'])],
+    );
+    assert.ok(handed, 'the red goes to red-light handling');
+    assert.equal(h.log.filter((a) => a.step === 'red-light').length, 1);
+    assert.equal(handed.action.meta.earliestRed, earliest);
+    assert.match(handed.action.do, new RegExp(`earliest red SHA ${earliest}`));
+    assert.ok(h.log.slice(handed.logged).every((a) => a.step !== 'verify-local'), 'every verification came before it');
+    assert.equal(handed.earliest.earliestRed, earliest, 'ci.mjs earliest-red on those records finds the same SHA');
+    assert.deepEqual(handed.earliest.tickets, [culprit]);
+    const trees = git(h.repo, 'worktree', 'list', '--porcelain');
+    assert.ok(!scanned.some((x) => trees.includes(x.slice(0, 12))), 'the worktrees of the scan are removed');
+    assert.equal(git(h.intWt, 'rev-parse', 'HEAD'), tip, 'the integration worktree stays at the tip');
+  });
+}
+
+test('#141: no origin: after a fix round the new tip is verified once; green ends the red-light handling', (t) => {
+  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.txt') ? 1 : 0)"` });
   git(h.repo, 'remote', 'remove', 'origin');
+  h.policy['red-light'] = () => {
+    git(h.intWt, 'rm', '-q', 'b.txt');
+    git(h.intWt, 'commit', '-q', '-m', 'fix the red light');
+    return 'handled';
+  };
   assert.equal(h.untilDone().then, 'done');
-  const verifies = h.log.filter((a) => a.step === 'verify-local');
-  assert.ok(verifies.length >= 2, 'the first dispatch point and the one after the integrations');
-  assert.ok(verifies.every((a) => a.kind === 'exec' && a.argv[a.argv.indexOf('--reason') + 1] === 'no-origin'));
-  const tip = git(h.intWt, 'rev-parse', 'HEAD');
-  const L = h.state().lines[LINE];
-  assert.ok(L.local.some((x) => x.sha === tip && x.result === 'green'), 'the latest SHA has its per-SHA record');
-  assert.equal(new Set(L.local.map((x) => x.sha)).size, L.local.length, 'one record per SHA');
-  assert.ok(!h.log.some((a) => ['ci-read', 'push'].includes(a.step)), 'nothing reads CI or pushes');
-  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  const st = h.state();
+  const [m1, m2] = [st.tickets['#1'].merges[0].sha, st.tickets['#2'].merges[0].sha];
+  const fixed = git(h.intWt, 'rev-parse', 'HEAD');
+  const verified = h.log.filter((a) => a.step === 'verify-local').map((a) => a.argv[a.argv.indexOf('--sha') + 1]);
+  assert.deepEqual(verified, [m2, m1, fixed], 'the red tip, the scan, then the fixed tip: each once');
+  assert.equal(st.lines[LINE].local.find((x) => x.sha === fixed).result, 'green');
+  assert.equal(h.log.filter((a) => a.step === 'red-light').length, 1);
+  assert.ok(h.log.some((a) => a.step === 'deliver-line'), 'the line is delivered');
+  assert.equal(st.tick.red[LINE], undefined);
 });
 
 test('a failed command comes back as a judge; retry issues it again', (t) => {

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// scope: what prove-it's live run covers for one ticket — the affected scope, or the full suite when nothing else will
-// run it before the line finishes. No dependencies: runs on a bare Node 20+. Run it at the root of the review worktree.
+// scope: what prove-it's live run covers for one ticket — the affected scope, whatever the CI coverage. The full suite
+// is never the review's: CI runs it after each integration, and a line without CI runs it once, at the finish
+// (get-to-work's local verification). No dependencies: runs on a bare Node 20+. Run it at the root of the review
+// worktree.
 //
 // Usage
 //   node scope.mjs --base <fixed-point> [--head <ref>] [--ci covered|uncovered|no-origin]
@@ -9,16 +11,14 @@
 //          covered     it does (a get-to-work line that has `origin` and was not ruled otherwise)
 //          uncovered   get-to-work ruled "CI does not cover the integration branch" for this line
 //          no-origin   the repository has no `origin`, so nothing is pushed and no CI runs
-//        Omitted: no-origin when `git remote get-url origin` fails, else covered (`ciSource` says which).
-// scope  full when --ci is uncovered or no-origin: no one else runs the full suite before the line finishes.
-//        affected otherwise: typecheck, the tests that cover the changed files, the lint of the changed files.
-// source Read from docs/agents/commands.md on head (the project command contract):
-//          full      its `## Full checks` commands (the lines of the section's first fenced block, `#` comments left
-//                    out); source commands.md. No contract, no such section, or `none`: commands is null, source
-//                    self-found — the reviewer finds them in the manifest and the CI config.
-//          affected  its `## Targeted checks` section, verbatim in `targeted`; source commands.md. No contract, no
-//                    such section, or `none`: targeted is null, source self-found — the reviewer derives the
-//                    narrowed commands itself. Either way the reviewer picks the commands; `tests` only helps.
+//        Omitted: no-origin when `git remote get-url origin` fails, else covered (`ciSource` says which). It goes
+//        into the live run line; it does not change the scope (#141).
+// scope  affected, always: typecheck, the tests that cover the changed files, the lint of the changed files. A line
+//        CI does not cover, or one without origin, is verified in full once at the finish, not in each review.
+// source Read from docs/agents/commands.md on head (the project command contract): its `## Targeted checks`
+//        section, verbatim in `targeted`; source commands.md. No contract, no such section, or `none`: targeted is
+//        null, source self-found — the reviewer derives the narrowed commands itself. Either way the reviewer picks
+//        the commands; `tests` only helps.
 // tests  Test files on head that a narrowed run should include (candidates, not a verdict): every changed test file
 //        (reason changed), and every test file whose text names a changed non-test, non-doc file (reason references,
 //        `via` lists those files): the file name with its extension, a quoted module path ending in its stem
@@ -28,7 +28,8 @@
 //
 // Output (stdout, JSON; fields are only ever added, never renamed)
 //   { "format": "sorry-matt/live-scope@1", "base", "head", "ci", "ciSource": "caller" | "origin-check",
-//     "scope": "affected" | "full", "source": "commands.md" | "self-found", "commands": [lines] | null,
+//     "scope": "affected", "source": "commands.md" | "self-found",
+//     "commands": null,                // was the full scope's commands; there is no full scope since #141
 //     "targeted": "<section text>" | null, "changed": [paths], "tests": [{ "path", "reason", "via": [paths] }] }
 //
 // Exit codes: 0 done, 1 git failed (not a repository, a ref that does not resolve), 2 usage (a missing or unknown
@@ -76,20 +77,6 @@ export function section(text, title) {
   }
   const trimmed = body.join('\n').trim();
   return trimmed === '' || /^none\.?$/i.test(trimmed) ? null : trimmed;
-}
-
-// A `## Full checks` body -> the command lines of its first fenced block, or null.
-export function fullCommands(body) {
-  if (body == null) return null;
-  const lines = body.split('\n');
-  const open = lines.findIndex((l) => /^\s*```/.test(l));
-  if (open < 0) return null;
-  const close = lines.findIndex((l, i) => i > open && /^\s*```/.test(l));
-  const commands = lines
-    .slice(open + 1, close < 0 ? undefined : close)
-    .map((l) => l.trim())
-    .filter((l) => l !== '' && !l.startsWith('#'));
-  return commands.length && !(commands.length === 1 && /^none\.?$/i.test(commands[0])) ? commands : null;
 }
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -196,12 +183,10 @@ export function main(argv, deps = defaultDeps()) {
         ci = 'no-origin';
       }
     }
-    const scope = ci === 'covered' ? 'affected' : 'full';
     const listed = deps.git(['ls-tree', '--full-tree', '--name-only', head, '--', CONTRACT]).trim();
     const contract = listed === '' ? null : deps.git(['show', `${head}:${CONTRACT}`]);
-    const commands = scope === 'full' ? fullCommands(section(contract, 'Full checks')) : null;
-    const targeted = scope === 'affected' ? section(contract, 'Targeted checks') : null;
-    const source = (scope === 'full' ? commands : targeted) ? 'commands.md' : 'self-found';
+    const targeted = section(contract, 'Targeted checks');
+    const source = targeted ? 'commands.md' : 'self-found';
     const changed = deps
       .git(['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', '--no-renames', `${args.base}...${head}`])
       .split('\0')
@@ -217,9 +202,9 @@ export function main(argv, deps = defaultDeps()) {
       head,
       ci,
       ciSource,
-      scope,
+      scope: 'affected',
       source,
-      commands,
+      commands: null,
       targeted,
       changed,
       tests: testCandidates(changed, testFiles),
