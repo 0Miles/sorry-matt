@@ -65,8 +65,26 @@ Each wake-up:
    completion notice arrived. Whether its report is taken is tick's call. `run` runs `next` again and again: it runs
    each list's batch-1 execs (`push` aside) in bash, in order, and records them, until batch 1 still holds a spawn, a
    judge, an ask or a `push`, or `then` is `end` or `done`. Its output is the list that is left, with `ran` naming the
-   execs it ran (id, exit code, the log file of their error output). When `run` exits 1 saying bash cannot be used,
-   run `next` instead this wake-up and run the execs' `command` yourself.
+   execs it ran (id, exit code, the log file of their error output) and `lists` giving, in order, each list it made:
+   its `reports`, `reconcile`, `dispatch`, `wrote` and the execs run from it. Read the reports taken, the
+   reconciliations and the files written by earlier lists there, not only the last one. When `run` exits 1 saying
+   bash cannot be used, run `next` instead this wake-up and run the execs' `command` yourself.
+
+   When the Bash tool moves `run` to the background, wait for it to end and read its output before acting on the
+   list. **Never start another `run` before a backgrounded one has ended**, and run no `next` or `record` meanwhile:
+   both would write the same state file.
+
+   When `run` exits non-zero, stdout is still JSON: `ran` and `lists` are what it ran and recorded before it stopped,
+   and `blocked` is the exec it stopped at (null when it stopped in `next`). With `blocked.at` `execute`, that exec
+   did not finish running and nothing of it is recorded; with `record`, it ran (its exit code is `blocked.exit` and
+   its side effects happened) and recording it failed. `run` exiting **3** means `blocked`'s record was refused:
+   - Do not run `run` again yet — it would run `blocked` a second time — and do not edit the state by hand.
+   - Settle what `error` says, as for a refused `record`: never force it another way.
+   - Once settled, record it with `blocked.record`'s command and `--exit <blocked.exit>` (not when `error` says it is
+     already recorded), then run `run` again.
+   - A refusal you cannot settle is a ruling point: ask, per section 3.
+
+   The output's `do` carries the same handling.
 2. Do the `actions`, but send only the ones at `batch` 1 of each list, all in one turn. After each action, run the
    command in its `record` field. Leave the later batches this time: once the actions before them are recorded, they
    are handed out again in a later list (tick counts only a batch-1 background spawn as handed out). Record nothing
@@ -90,8 +108,8 @@ Each wake-up:
 `record` exiting 3 is a refusal: the result fails the state's guards. Act on the message; never force it another way.
 
 Done when: every wake-up ran `run` (`next` when bash could not be used) to `end` or `done`; each list had only its
-batch-1 actions sent; every action `run` left and you did was written back by its `record`; nobody edited the state
-file by hand.
+batch-1 actions sent; every action `run` left and you did was written back by its `record`; only one `run` ran at a
+time; no `run` followed an exit 3 directly; nobody edited the state file by hand.
 
 ## 2. What tick leaves to you
 

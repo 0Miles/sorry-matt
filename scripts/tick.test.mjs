@@ -1397,7 +1397,7 @@ test('#130: bashUsable is the one judgement of a usable bash; its why names what
   assert.equal(BASH, bashUsable().ok);
 });
 
-test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 ends run with exit 1; what was recorded stays', (t) => {
+test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 ends run with exit 1; what was recorded stays, and stdout says so (#147)', (t) => {
   const h = world(t);
   const log = join(h.dir, 'x.log');
   const wsl = bashExecutor({ spawn: () => ({ status: 0, stdout: 'Linux\n' }), platform: 'win32' });
@@ -1411,8 +1411,15 @@ test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 e
   h.execute = wsl;
   const r = h.runTick();
   assert.equal(r.code, 1);
-  assert.equal(r.out, '');
   assert.match(r.err, /WSL/);
+  // #147: stdout says what ran (nothing) and the exec run stopped at, before it ran
+  const o = JSON.parse(r.out);
+  assert.deepEqual([o.command, o.exit, o.ran], ['run', 1, []]);
+  assert.match(o.error, /WSL/);
+  assert.equal(o.blocked.at, 'execute');
+  assert.equal(o.blocked.exit, null);
+  assert.equal(h.state().tick.done[o.blocked.id], undefined, 'nothing recorded for it');
+  assert.equal(o.do, undefined, 'the exit-3 handling is for exit 3 only');
   // the first exec runs and is recorded, then bash goes missing
   let first = null;
   h.execute = (a, file) => {
@@ -1422,8 +1429,12 @@ test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 e
   };
   const r2 = h.runTick();
   assert.equal(r2.code, 1);
-  assert.equal(r2.out, '');
   assert.equal(h.state().tick.done[first].exit, 0, `${first} stays recorded`);
+  const o2 = JSON.parse(r2.out);
+  assert.deepEqual(o2.ran.map((x) => [x.id, x.exit]), [[first, 0]]);
+  assert.equal(o2.blocked.at, 'execute');
+  assert.notEqual(o2.blocked.id, first);
+  assert.equal(h.state().tick.done[o2.blocked.id], undefined);
 });
 
 test('#129: without --now, run reads the clock again for each list and each record', (t) => {
@@ -1471,4 +1482,80 @@ test('#129: --reported goes to the first next of run only', (t) => {
   assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1']);
   assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
   assert.deepEqual(out.reports, [], 'the last list was not handed the report');
+  // #147: the first list's take of it is still in the output, beside what that list ran
+  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], []]);
+  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1'], []]);
+});
+
+// ---- #147: run's output and use -----------------------------------------------------------------------------------------
+
+test('#147: a flag is never taken as the value of the flag before it; --reported with no value is a usage error', (t) => {
+  const h = world(t);
+  const before = readFileSync(h.path, 'utf8');
+  for (const command of ['run', 'next']) {
+    for (const args of [['--reported', '--now', h.iso()], ['--reported'], ['--now', '--reported', 'a1']]) {
+      const r = tick([command, h.path, ...args], { ...defaultDeps(), execute: () => assert.fail('nothing runs') });
+      assert.equal(r.code, 2, `${command} ${args.join(' ')}: ${r.err}`);
+      assert.equal(r.out, '');
+      assert.match(r.err, new RegExp(`^tick: ${args[0]} needs a value\n`), `${command} ${args.join(' ')}: the missing value is named`);
+    }
+  }
+  const rec = tick(['record', h.path, 'x', '--exit', '--now', h.iso()], defaultDeps());
+  assert.equal(rec.code, 2);
+  assert.match(rec.err, /^tick: --exit needs a value\n/);
+  // a value that only starts with one dash is a value
+  const neg = tick(['record', h.path, 'x', '--exit', '-1'], defaultDeps());
+  assert.doesNotMatch(neg.err, /needs a value/);
+  assert.equal(readFileSync(h.path, 'utf8'), before, 'nothing was written');
+});
+
+test('#147: run lists the reports, reconcile, dispatch and wrote of every list it made, not only the last', (t) => {
+  const h = world(t);
+  // the first run of the run: the dispatch point's list comes before the lists of its execs' results
+  const first = runOut(h);
+  assert.ok(Array.isArray(first.lists) && first.lists.length > 1, 'more than one list');
+  for (const l of first.lists) for (const k of ['now', 'reports', 'reconcile', 'dispatch', 'wrote', 'ran']) assert.ok(k in l, `${k} is in each list`);
+  const last = first.lists.at(-1);
+  for (const k of ['now', 'reports', 'reconcile', 'dispatch', 'wrote']) assert.deepEqual(last[k], first[k], `the last list's ${k} is the output's`);
+  assert.deepEqual(first.lists.flatMap((l) => l.ran), first.ran.map((x) => x.id), 'each exec run under the list that listed it, in order');
+  assert.deepEqual(last.ran, [], 'the last list ran nothing: run stopped at it');
+  const opened = first.lists.findIndex((l) => l.dispatch?.round === 1);
+  assert.ok(opened >= 0 && opened < first.lists.length - 1, 'the dispatch point opened in a list before the last');
+  const wrote = first.lists.slice(0, -1).flatMap((l) => l.wrote);
+  assert.ok(wrote.length, 'an earlier list wrote files');
+  assert.ok(wrote.some((f) => !first.wrote.includes(f)), 'a file only an earlier list wrote is still in the output');
+
+});
+
+test('#147: a refused record ends run with exit 3; stdout lists what ran and the exec it was blocked at, with what to do', (t) => {
+  const h = world(t);
+  // the host's own record of the second exec lands while run runs it: run's record of it is refused
+  let n = 0;
+  let second = null;
+  h.execute = (a) => {
+    const code = h.exec(a);
+    if ((n += 1) === 2) {
+      second = a;
+      h.record(a.id, '--exit', '7');
+    }
+    return { code };
+  };
+  const r = h.runTick();
+  assert.equal(r.code, 3, r.err);
+  assert.match(r.err, /^tick: refused: .*already recorded/);
+  const out = JSON.parse(r.out);
+  assert.equal(out.format, 'sorry-matt/tick@1');
+  assert.equal(out.command, 'run');
+  assert.equal(out.exit, 3);
+  assert.match(out.error, /already recorded/);
+  assert.equal(out.ran.length, 1, 'the exec before it ran and was recorded');
+  assert.equal(h.state().tick.done[out.ran[0].id].exit, 0);
+  const { log, ...blocked } = out.blocked;
+  assert.deepEqual(blocked, { id: second.id, step: second.step, at: 'record', exit: 0, record: second.record }, 'it ran, exit 0; its record was refused');
+  assert.equal(dirname(log), join(h.W, 'tick', 'run'));
+  assert.notEqual(log, out.ran[0].log);
+  assert.match(out.do, /ran/);
+  assert.match(out.do, /do not run `run` again/i);
+  assert.match(out.do, /blocked\.exit/);
+  assert.deepEqual(out.lists.flatMap((l) => l.ran), [out.ran[0].id]);
 });
