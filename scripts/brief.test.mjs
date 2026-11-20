@@ -57,6 +57,7 @@ function implementValues(dir, overrides = {}) {
     integration: 'r1/line-a',
     bodyFile: put(dir, 'body.md', '﻿Widgets body\r\n## Scope\r\nmake it\r\n'),
     sendBackFile: null,
+    acceptance: 'criteria',
     ...overrides,
   };
 }
@@ -119,6 +120,7 @@ test('implement fills every IMPLEMENTER.md placeholder and prints the brief path
     '- 展開區塊：<!-- sorry-matt:expansion -->\n  by: expansion-agent\n  run: r1\n  round: 2\n\n  acceptance:\n  - [ ] prints ok\n',
     '- 專案指令契約：none\n',
     '- 退回紀錄：none\n',
+    '- 驗收來源：驗收項與展開區塊\n',
   ];
   for (const line of values) assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
   // #126: the fixed rules are in the agent definition, not in the spawn file; the fallback carries both
@@ -183,8 +185,23 @@ test('the dist copy fills the English IMPLEMENTER.md the same way', (t) => {
     '- Ticket text: Widgets body\n  ## Scope\n  make it\n',
     '- Project command contract: none\n',
     '- Send-back record: none\n',
+    '- Acceptance source: the acceptance criteria and the expansion block\n',
   ])
     assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+});
+
+test('#128 D3: acceptance ticket-text writes that the ticket text is the acceptance, in the spawn file and its fallback', (t) => {
+  for (const [entry, textLine, criteriaLine] of [
+    [main, '- 驗收來源：票面文字就是驗收\n', '- 驗收來源：驗收項與展開區塊\n'],
+    [distMain, '- Acceptance source: the ticket text is the acceptance\n', '- Acceptance source: the acceptance criteria and the expansion block\n'],
+  ]) {
+    const r = runImplement(t, { acceptance: 'ticket-text' }, entry);
+    assert.equal(r.code, 0, r.err);
+    const c = runImplement(t, { acceptance: 'criteria' }, entry);
+    assert.equal(c.code, 0, c.err);
+    for (const text of [r.brief, r.fallback]) assert.ok(text.includes(textLine) && !text.includes(criteriaLine), `ticket-text: ${JSON.stringify(textLine)}`);
+    for (const text of [c.brief, c.fallback]) assert.ok(text.includes(criteriaLine) && !text.includes(textLine), `criteria: ${JSON.stringify(criteriaLine)}`);
+  }
 });
 
 test('expand fills every EXPANDER.md placeholder with each line and each ticket', (t) => {
@@ -224,7 +241,7 @@ test('the dist copy fills the English EXPANDER.md; a Local Markdown run names th
 });
 
 test('a missing required value exits 2 and writes nothing', (t) => {
-  for (const key of ['out', 'snapshot', 'worktree', 'branch', 'integration', 'bodyFile', 'sendBackFile']) {
+  for (const key of ['out', 'snapshot', 'worktree', 'branch', 'integration', 'bodyFile', 'sendBackFile', 'acceptance']) {
     const dir = scratch(t);
     const values = implementValues(dir);
     delete values[key];
@@ -254,6 +271,8 @@ test('malformed values exit 2', (t) => {
     ['implement', { worktree: 'relative/wt' }],
     ['implement', { role: 'merge' }],
     ['implement', { branch: '  ' }],
+    ['implement', { acceptance: 'none' }],
+    ['implement', { acceptance: null }],
     ['expand', { round: 0 }],
     ['expand', { round: '3' }],
     ['expand', { tracker: 'jira' }],

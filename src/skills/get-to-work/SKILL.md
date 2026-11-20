@@ -54,26 +54,32 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 
 每次喚醒：
 
-1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" next <state>`，每個送來完成通知的 agent 加一個
-   `--reported <agent id>`。收不收它的回報由 tick 判。
-2. 照 `actions` 做，依 `batch` 由小到大，同一批在同一回合一起送出。每做完一個就跑它 `record` 欄的指令；沒做的
-   不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
-   - **exec**：在 bash（Windows 是 Git Bash）照抄 `command`，以結束代碼 record。不在 `okExit` 的結束代碼會在
-     下一份清單變成要你處理的 `judge`。
+1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`，每個送來完成通知的 agent 加一個
+   `--reported <agent id>`。收不收它的回報由 tick 判。`run` 反覆跑 `next`，把每份清單 batch 1 的 exec（`push`
+   除外）依序在 bash 跑完並 record，直到 batch 1 還剩 spawn、judge、ask 或 `push`，或 `then` 是 `end`／`done`。
+   輸出是剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔）。`run` 以 1 結束、訊息說 bash
+   不能用時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
+2. 照 `actions` 做，但一份清單只送出 `batch` 為 1 的動作，在同一回合一起送出。每做完一個就跑它 `record` 欄的
+   指令。較後的 batch 這次不做：前面的動作 record 後，它們會在之後的清單再發下來（tick 只把 batch 1 的背景 spawn
+   當成已發出）。沒做的不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
+   - **exec**：`run` 已代跑。留在清單裡的 exec 是 `push`，留給你推，guard hook 才看得到：在 bash（Windows 是
+     Git Bash）照抄 `command`，以結束代碼 record。不在 `okExit` 的結束代碼會在下一份清單變成要你處理的 `failed`
+     judge，`run` 跑的 exec 由它的 `do` 指名 log 檔。
    - **spawn**：Agent tool 照 `spawn` 欄原樣送出，不另加規則：實作與展開 agent 的固定規則在 plugin 的 agent 定義檔
      （`sorry-matt:implementer`、`sorry-matt:expander`），派工檔的值已由 `scripts/brief.mjs` 填好，`description` 的
      規則在它的檔頭。`subagent_type` 不在可用清單時改送 `fallback` 欄的通用 agent 與 prompt（定義檔本文接上同樣的
      值），不指定模型，`description` 不變，record 加 `--type general-purpose`。
    - **judge**：要你判斷的事。讀 `reference`，做 `do` 寫的事，以 `outcomes` 之一 record。
    - **ask**：只有人能裁的事，照第 3 節。
-3. 再跑 `next`，直到 `then` 是 `end` 或 `done`。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，
+3. batch 1 的動作逐一 record 完，就再跑 `run`，直到 `then` 是 `end` 或 `done`。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，
    還有在途 agent 就排 **fallback 喚醒** —— 有 `ScheduleWakeup` 就用它，否則以 Bash 在背景跑 `sleep`，task id
    記進 record；兩者都不能用時，以 interval 模式重新進入同一個 `/loop`，間隔取最短的階段時限。`done` 是 run
    已收官。
 
 `record` 以 3 結束是拒絕：結果不合 state 的守門，照訊息處理，不換一種寫法硬寫。
 
-完成判準：每次喚醒都跑 `next` 到 `end` 或 `done`；每個做了的動作都照它的 `record` 回寫；state 檔沒有被手改。
+完成判準：每次喚醒都跑 `run`（bash 不能用時是 `next`）到 `end` 或 `done`；每份清單只送出 batch 1 的動作；
+`run` 留下的每個做了的動作都照它的 `record` 回寫；state 檔沒有被手改。
 
 ## 2. tick 留給你的判斷
 

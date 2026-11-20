@@ -3,15 +3,17 @@
 // files of the run directory, and says what the host does now: which agent reports to take and which to ignore,
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
-// The host runs the actions and writes each result back with `tick.mjs record`. tick spawns nothing, stops no
-// agent, runs no network call and changes no branch: those are the host's actions. No dependencies: runs on a bare
-// Node 20+ with git on PATH.
+// The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
+// exec actions but pushes. tick spawns nothing and stops no agent. `next` and `record` run no network call and change
+// no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh) and merge branches (integrate.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
 //                        [--repo <owner>/<repo>] [--ledger <ledger.md>] [--tickets-dir <repo-relative dir>]
 //                        [--worktrees <dir>] [--spec <identifier or path>]
 //   node tick.mjs next   <state> [--reported <agent id>]... [--now <UTC>]
+//   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //                        [--now <UTC>]
@@ -39,19 +41,25 @@
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
 //   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
 //                    instead of the review host's `judge`, with a brief tick writes: blocking findings only,
-//                    `verdict: pass | fix`
+//                    `verdict: pass | fix`, the full report written to `tick/review/<ticket key>-<tag>.report.md`
+//                    beside the brief and also returned. `record … --outcome fix` is refused (3) while that file is
+//                    missing or empty: the host writes the returned report there verbatim when the reviewer did not.
+//                    The fix round (send, the note of a new agent) and file-issue name that file as the findings'
+//                    source, not the status record
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
 //   onUnfixed: file-issue  findings still open → a `judge` to file a raw issue; queued only once its id is recorded
-//   expand: skip     no expansion; a ticket with no criteria goes on with its own text
+//   expand: skip     no expansion; a ticket with no criteria goes on with its own text (brief.mjs is given
+//                    `acceptance: ticket-text`, so the spawn file says the ticket text is the acceptance)
 //   ci: skip         no CI read and no local verification, in the pipeline or at the finish
 //   simplify: false  no simplify pass at the finish
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
 //
 // A wake-up
-//   The host runs `next` (with `--reported` for each agent whose completion notice arrived), runs the actions,
-//   records each, and runs `next` again, until `then` is "end": the last action is then the wake-up's closing one
-//   (ledger narrative and the fallback wake-up), and recording it starts the next wake-up. `then` "done" means the
-//   run is over (the finish's wrap-up was recorded).
+//   The host runs `run` (with `--reported` for each agent whose completion notice arrived; `next` when bash cannot be
+//   used), sends only the actions at batch 1 of the list, records each, and runs `run` again; the later batches are handed out again by the lists
+//   after it, once what they wait for is recorded (#128). It goes on until `then` is "end": the last action is then
+//   the wake-up's closing one (ledger narrative and the fallback wake-up), and recording it starts the next wake-up.
+//   `then` "done" means the run is over (the finish's wrap-up was recorded).
 //   Order within a wake-up: reports; red lines (CI read, red-light handling); the deadline scan; each ticket by its
 //   stage (in-review, fixing, implementing, expanding, then the integration queue per target); the dispatch point,
 //   only when nothing else is left to do and at most once per wake-up; the finish once every ticket is at an end
@@ -77,7 +85,7 @@
 //     "then":      "tick" | "end" | "done" }
 //   An action:
 //   { "id": "<stable id>", "kind": "exec" | "spawn" | "judge" | "ask", "step": "<registry name>",
-//     "batch": <n>,                       // all actions of one batch go out in the same turn; batch n+1 after n
+//     "batch": <n>,                       // the host sends batch 1, all in one turn; n > 1 comes again in a later list
 //     "after": ["<action id>"],           // the ones it waits for (this list only)
 //     "tickets": [<ticket>], "line": "<integration branch>" | null,
 //     "reference": [{ "path": "<file>", "part": "<where in it>" } | { "skill": "<name>", "part": "…" }],
@@ -91,11 +99,14 @@
 //            brief.mjs) with the same description, and records the spawn with `--type general-purpose`
 //     judge, ask: "do": "<what to settle>", "outcomes": ["<word>"] }
 //   The same id is never issued for a different thing; an action the host already recorded is not issued again.
-//   A background spawn handed out before, runnable then (everything it waited for done) and still not recorded
-//   means the host was interrupted between the spawn and its record: it comes back as a `judge` (step
-//   "spawn-check": is that agent running? `spawned` with `--agent`, or `none` to have the spawn issued again),
-//   never as a second spawn. A foreground spawn (the minimal reviewer) ends with the host's turn, so it is issued
-//   again as it is.
+//   Every exec's `stdout` directory exists when `next` returns, later batches' included, so the redirect of its
+//   `command` does not fail (deps.mkdir).
+//   A background spawn handed out before at batch 1 (the state keeps each action's batch), runnable then
+//   (everything it waited for done) and still not recorded means the host was interrupted between the spawn and its
+//   record: it comes back as a `judge` (step "spawn-check": is that agent running? `spawned` with `--agent`, or
+//   `none` to have the spawn issued again), never as a second spawn. One listed at a later batch was never handed
+//   out, and is issued again as the same spawn. A foreground spawn (the minimal reviewer) ends with the host's turn,
+//   so it is issued again as it is.
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
@@ -107,10 +118,26 @@
 //   hold; recording the same result twice changes nothing, a different result for a recorded action is refused.
 //   Output: { "format", "command": "record", "id", "applied": ["<state.mjs command run>"], "wakeup" }
 //
+// run
+//   `next`, then the exec actions at batch 1 of its list, in list order, each through deps.execute (`bash -c
+//   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
+//   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
+//   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
+//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
+//   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
+//   list carries its `failed` judge, which stops run; nothing is retried.
+//   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
+//   name>.log`, which the `failed` judge names.
+//   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
+//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run.
+//   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
+//   it is not, run exits 1 with nothing on stdout; what it recorded before stays.
+//
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
 //   "agents": { "<id>": { "tickets", "role", "type", "status": "current" | "collected" | "stopped", "at" } },
-//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"? } },
+//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
 //   "flags": { "<ticket>": {…} }, "red": { "<line>": { "sha", "at" } }, "failed": { "<line>": "<UTC>" },
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
@@ -128,11 +155,12 @@
 // Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
 // names them); tick's own plans and outputs go under its `tick/`.
 //
-// Exit codes: 0 output written; 1 the state, the ledger or git could not be read, or a state write failed;
-// 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs refusal).
+// Exit codes: 0 output written; 1 the state, the ledger or git could not be read, a state write failed, or (run) bash
+// could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
+// refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
@@ -198,6 +226,9 @@ const list = (text, where) => {
 /** One POSIX shell word. */
 const q = (s) => (/^[A-Za-z0-9_/.:=@%+,-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, `'\\''`)}'`);
 const commandLine = (argv, stdout, cwd) => `${cwd ? `cd ${q(cwd)} && ` : ''}${argv.map(q).join(' ')}${stdout ? ` > ${q(stdout)}` : ''}`;
+
+/** The run directory `<state dir>/<run>/`; tick's own files are under its `tick/`. */
+const runDir = (path, run) => join(dirname(path), run);
 
 function readJsonFile(deps, path) {
   try {
@@ -357,7 +388,7 @@ function context(path, state, now, deps) {
   const book = structuredClone(state.tick);
   const cfg = book.config;
   const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
-  const W = join(dirname(path), state.run);
+  const W = runDir(path, state.run);
   const limits = { ...LIMIT_DEFAULTS };
   if (cfg.ledger) {
     let text;
@@ -421,16 +452,19 @@ function context(path, state, now, deps) {
     if (s === 'failed') {
       const fid = `failed:${a.id}`;
       if (c.done(fid)) return null; // settled by the host
+      const log = book.done[a.id].log;
       action = judge(
         fid,
         'failed',
-        `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
+        `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error${log ? ` (tick.mjs run wrote it to ${log})` : ''}, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
         ['retry', 'settled'],
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
       );
-    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (a.after ?? []).every((x) => !x || c.done(x))) {
-      // Handed out before, runnable then, never recorded: the host was interrupted between spawn and record.
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
+      // Handed out before in batch 1, runnable then, never recorded: the host was interrupted between spawn and
+      // record. A spawn listed at a later batch was not handed out: the host sends batch 1 only (#128). An entry from
+      // before batches were kept counts as handed out.
       const k = book.spawnChecks?.[a.id] ?? 0;
       action = judge(
         `spawn-check:${a.id}:${k}`,
@@ -738,6 +772,13 @@ const WHY = {
   fix: "the review's findings, verbatim (summary, evidence, fix) from the status record: close them all in this one round (close-out step 3)",
   'send-back': 'the send-back record and the rebuilt worktree: redo the ticket from the latest integration branch (SEND-BACK.md)',
 };
+/** review: minimal leaves its findings in the reviewer's report file (the ticket's flag `report`), not in a review block. */
+const reportAt = (flag) => (flag.report ? `${flag.report} (the reviewer's report)` : null);
+/** Why an agent gets the work: WHY's text for `why`, or the reviewer's report for a minimal review's fix round. */
+const whyText = (flag, why) =>
+  why === 'fix' && reportAt(flag)
+    ? `the review's findings, verbatim, in ${reportAt(flag)}: close them all in this one round (close-out step 3)`
+    : (WHY[why] ?? why);
 
 /** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
 function agentTail(c, id, t, p, after) {
@@ -747,7 +788,7 @@ function agentTail(c, id, t, p, after) {
       judge(
         `send:${id}:${p.n}`,
         'send',
-        `SendMessage ${p.prevAgent} (it keeps its context) for ${id}: ${WHY[p.why] ?? p.why}. sent: it has the work again; gone: it no longer exists (a new agent is spawned instead).`,
+        `SendMessage ${p.prevAgent} (it keeps its context) for ${id}: ${whyText(c.flag(id), p.why)}. sent: it has the work again; gone: it no longer exists (a new agent is spawned instead).`,
         ['sent', 'gone'],
         [doc('SKILL.md', p.why === 'red' ? 'section 2, Close-out checks and review' : p.why === 'fix' ? 'section 2, Batched fix' : 'section 1 (the loop)'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
         { tickets: [id], line: t.line, after },
@@ -791,6 +832,7 @@ function agentTail(c, id, t, p, after) {
         integration: c.target(t.line),
         bodyFile: bodyPath,
         sendBackFile: c.deps.exists(c.sendBack(id)) ? c.sendBack(id) : null,
+        acceptance: c.profile.expand === 'skip' ? 'ticket-text' : 'criteria', // expand: skip — the ticket text is the acceptance
       },
       null,
       2,
@@ -840,11 +882,12 @@ const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
 function unfixed(c, id, t, what) {
   if (c.profile.onUnfixed === 'file-issue') {
     if (t.unfixedIssue) return stageTo(c, id, t, 'queued');
+    const report = c.flag(id).report; // review: minimal: the findings are in the reviewer's report
     return c.emit(
       judge(
         `file-issue:${id}:h${hist(t)}`,
         'file-issue',
-        `${id}: ${what}. File one raw issue listing the open findings (location, one sentence, evidence path) linked to the status record, polished by ASKING section 6. Record filed with --value <issue id>; the ticket is then integrated.`,
+        `${id}: ${what}. File one raw issue listing the open findings${report ? ` (they are in ${report}, the reviewer's report)` : ''} (location, one sentence, evidence path) linked to the status record, polished by ASKING section 6. Record filed with --value <issue id>; the ticket is then integrated.`,
         ['filed'],
         [doc('SKILL.md', 'section 2, Filing along the way'), doc('ASKING.md', 'section 6')],
         { tickets: [id], line: t.line, needs: { value: 'the issue id' } },
@@ -900,6 +943,7 @@ function stepInReview(c, id, t) {
   );
   if (c.profile.review === 'minimal') {
     const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
+    const report = c.tick('review', `${keyOf(id)}-${tag}.report.md`); // the fix round's findings come from here
     c.write(
       brief,
       [
@@ -912,6 +956,7 @@ function stepInReview(c, id, t) {
         `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
         '',
         'Report in at most 15 lines: `verdict: pass | fix`, then one line per finding: `<id>: <file:line> <what is wrong> <evidence>`.',
+        `Write your full report to ${report}, and also return it as your reply. The fix round reads its findings from that file.`,
         '',
       ].join('\n'),
     );
@@ -925,7 +970,7 @@ function stepInReview(c, id, t) {
       spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
-      meta: { mode, kind: 'minimal' },
+      meta: { mode, kind: 'minimal', report },
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
     });
   }
@@ -968,8 +1013,12 @@ function stepFixing(c, id, t) {
 }
 
 function reassignNote(c, id, t, r) {
-  if (!r?.reassign) return `The fix round of ${id}: the findings are in the latest review block of its status record${t.statusRecord ? ` (${t.statusRecord})` : ''}; close them all.`;
-  return `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them. Update the existing status record in place${t.statusRecord ? ` (${t.statusRecord})` : ''}.${t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : ''}`;
+  const link = t.statusRecord ? ` (${t.statusRecord})` : '';
+  const at = t.stage === 'fixing' ? reportAt(c.flag(id)) : null;
+  if (!r?.reassign) return `The fix round of ${id}: the findings are in ${at ?? `the latest review block of its status record${link}`}; close them all.`;
+  const head = `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them.`;
+  const findings = at ? ` The findings of this fix round are in ${at}.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
+  return `${head} Update ${at ? "this ticket's existing record" : 'the existing status record'} in place${link}.${findings}`;
 }
 
 function stepImplementing(c, id, t) {
@@ -990,7 +1039,7 @@ function stepImplementing(c, id, t) {
     reassign: !!r.reassign,
     prevAgent: prev,
     why: r.why ?? 'red',
-    note: mode === 'spawn' ? (r.reassign ? reassignNote(c, id, t, r) : `Taking over from an agent that is gone: ${WHY[r.why ?? 'red']}.`) : null,
+    note: mode === 'spawn' ? (r.reassign ? reassignNote(c, id, t, r) : `Taking over from an agent that is gone: ${whyText(c.flag(id), r.why ?? 'red')}.`) : null,
   });
 }
 
@@ -1671,8 +1720,10 @@ function finish(c, then) {
   for (const a of c.actions) {
     a.reference ??= a.argv?.[0] === 'node' ? [{ path: a.argv[1], part: 'header' }] : [EXEC_REFERENCE[a.step] ?? doc('SKILL.md', 'section 1 (the loop)')];
     a.record = recordLine(c, a);
-    book.issued[a.id] = { kind: a.kind, step: a.step, tickets: a.tickets, line: a.line, ...(a.okExit ? { okExit: a.okExit } : {}), ...(a.outcomes ? { outcomes: a.outcomes } : {}), ...(a.meta ? { meta: a.meta } : {}) };
+    book.issued[a.id] = { kind: a.kind, step: a.step, batch: a.batch, tickets: a.tickets, line: a.line, ...(a.okExit ? { okExit: a.okExit } : {}), ...(a.outcomes ? { outcomes: a.outcomes } : {}), ...(a.meta ? { meta: a.meta } : {}) };
   }
+  // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
+  for (const dir of new Set(c.actions.filter((a) => a.kind === 'exec' && a.stdout).map((a) => dirname(a.stdout)))) c.deps.mkdir(dir);
   update(c.path, c.now, (s) => {
     s.tick = book;
     return {};
@@ -1716,6 +1767,7 @@ export function record(path, id, flags, now, deps) {
   }
   if (flags.value !== undefined) entry.value = flags.value;
   if (flags.agent !== undefined) entry.agent = flags.agent;
+  if (flags.log !== undefined) entry.log = flags.log; // tick.mjs run only: where the exec's error output went
   const seen = book.done[id];
   if (seen) {
     const same = seen.exit === entry.exit && seen.outcome === entry.outcome && seen.agent === entry.agent;
@@ -1816,7 +1868,7 @@ export function record(path, id, flags, now, deps) {
         register(pending.prevAgent, pending.role, book.agents[pending.prevAgent]?.type ?? 'general-purpose');
       } else {
         flag(tid).redispatch = { ...(flag(tid).redispatch ?? {}), mode: 'spawn' };
-        flag(tid).pending = { ...pending, mode: 'spawn', note: `Taking over from an agent that is gone: ${WHY[pending.why] ?? pending.why}.` };
+        flag(tid).pending = { ...pending, mode: 'spawn', note: `Taking over from an agent that is gone: ${whyText(flag(tid), pending.why)}.` };
       }
       break;
     }
@@ -1839,6 +1891,17 @@ export function record(path, id, flags, now, deps) {
     case 'review': {
       const [tid] = tickets;
       const t = ticket(tid);
+      if (meta.report && outcome === 'fix') {
+        // review: minimal: the fix round reads the findings from the reviewer's report file
+        let held = '';
+        try {
+          if (deps.exists(meta.report)) held = deps.read(meta.report);
+        } catch {}
+        if (!held.trim())
+          throw new Refused(`${meta.report} holds no report: the reviewer writes its full report there; when it did not, write the report it returned there, verbatim, and record fix again`);
+      }
+      if (meta.report) flag(tid).report = meta.report;
+      else delete flag(tid).report;
       if (issued.kind === 'spawn') {
         if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
@@ -1919,6 +1982,68 @@ export function record(path, id, flags, now, deps) {
   return { format: FORMAT, command: 'record', id, applied, wakeup: book.wakeup };
 }
 
+// ---- run --------------------------------------------------------------------------------------------------------------
+
+/** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
+const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
+// An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
+const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
+const RUN_LISTS = 500;
+
+/**
+ * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
+ * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
+ * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
+ * and record: the clock moves while the execs run.
+ */
+export function run(path, reported, now, deps) {
+  const ran = [];
+  let out = next(path, reported, now(), deps);
+  for (let i = 0; ; i += 1) {
+    const first = out.actions.filter((a) => a.batch === 1);
+    const todo = first.filter(runnable);
+    for (const a of todo) {
+      const log = runLog(path, out.run, a.id);
+      deps.mkdir(dirname(log));
+      const { code } = deps.execute(a, log);
+      record(path, a.id, { exit: String(code), log }, now(), deps);
+      ran.push({ id: a.id, exit: code, log });
+    }
+    if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
+      const done = new Set(todo.map((a) => a.id));
+      return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran };
+    }
+    if (i >= RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
+    out = next(path, [], now(), deps);
+  }
+}
+
+/**
+ * The default exec seam of `run`: `bash -c <command>` with stderr (and stdout, which a `stdout` exec redirects in its
+ * command) written to `log`. bash must start, and on win32 be Git Bash, MSYS or Cygwin: WSL's bash flattens Windows
+ * paths. A bash that is not usable throws (exit 1) before anything runs.
+ */
+export function bashExecutor({ spawn = spawnSync, platform = process.platform } = {}) {
+  let checked = false;
+  return (a, log) => {
+    if (!checked) {
+      const p = spawn('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+      if (p.error || p.status !== 0) throw new Error(`bash could not be started (${p.error?.message ?? `uname -s exited ${p.status}`}): run the execs by hand`);
+      if (platform === 'win32' && !/MINGW|MSYS|CYGWIN/i.test(p.stdout ?? ''))
+        throw new Error(`the bash on PATH is not Git Bash, MSYS or Cygwin (uname -s: ${String(p.stdout ?? '').trim() || 'nothing'}), likely WSL's, which flattens Windows paths: put Git Bash first on PATH`);
+      checked = true;
+    }
+    const fd = openSync(log, 'w');
+    try {
+      const p = spawn('bash', ['-c', a.command], { stdio: ['ignore', fd, fd] });
+      if (p.error) throw new Error(`bash could not run ${a.id} (${p.error.message})`);
+      return { code: p.status ?? 1 };
+    } finally {
+      closeSync(fd);
+    }
+  };
+}
+
 // ---- setup ----------------------------------------------------------------------------------------------------------
 
 export function setup(path, flags, now) {
@@ -1989,6 +2114,7 @@ export function defaultDeps() {
   return {
     read: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
+    mkdir: (p) => mkdirSync(p, { recursive: true }),
     write: (p, text) => {
       mkdirSync(dirname(p), { recursive: true });
       writeFileSync(p, text);
@@ -1997,12 +2123,14 @@ export function defaultDeps() {
       execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
     stateMain,
     clock: () => Date.now(),
+    execute: bashExecutor(), // run: (action, log file) => { code }
   };
 }
 
 const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
+  run: { reported: 'many', now: 'one' },
   record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', now: 'one' },
 };
 
@@ -2010,12 +2138,13 @@ const SPECS = {
 export function main(argv, deps = defaultDeps()) {
   try {
     const command = argv[0];
-    if (!(command in SPECS)) throw new UsageError('expected setup, next or record');
+    if (!(command in SPECS)) throw new UsageError('expected setup, next, run or record');
     const { flags, rest } = parseArgs(argv.slice(1), SPECS[command]);
     if (!rest.length) throw new UsageError(`${command} needs the state file first`);
     const path = resolve(rest[0]);
     if (flags.now !== undefined && (!TIME.test(flags.now) || Number.isNaN(Date.parse(flags.now)))) throw new UsageError(`--now: expected a UTC time like 2026-01-31T23:59:59Z`);
-    const now = flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const clock = () => flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const now = clock();
     let out;
     if (command === 'setup') {
       if (rest.length !== 1) throw new UsageError('setup takes the state file and flags');
@@ -2023,6 +2152,9 @@ export function main(argv, deps = defaultDeps()) {
     } else if (command === 'next') {
       if (rest.length !== 1) throw new UsageError('next takes the state file and flags');
       out = next(path, flags.reported ?? [], now, deps);
+    } else if (command === 'run') {
+      if (rest.length !== 1) throw new UsageError('run takes the state file and flags');
+      out = run(path, flags.reported ?? [], clock, deps); // each list and record at its own time
     } else {
       if (rest.length !== 2) throw new UsageError('record takes the state file and one action id');
       out = record(path, rest[1], flags, now, deps);

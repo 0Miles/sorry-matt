@@ -8,7 +8,8 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main, defaultDeps } from '../src/skills/prove-it/scripts/worktree.mjs';
+import { main, defaultDeps, dirKey } from '../src/skills/prove-it/scripts/worktree.mjs';
+import { shortPath } from './lib.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../src/skills/prove-it/scripts/worktree.mjs', import.meta.url));
 
@@ -149,6 +150,21 @@ test('a registration whose directory was deleted is pruned and the worktree crea
   const out = run(r, 'open', '--path', r.review, '--ref', 'ticket');
   assert.equal(out.action, 'created');
   assert.equal(registered(r), 2);
+});
+
+test('a deleted review worktree named by its Windows 8.3 short name is the registered one: pruned and created again', (t) => {
+  const r = repo(t);
+  const short = shortPath(r.root);
+  if (!short) return t.skip('no 8.3 short path here (not Windows, or 8.3 names disabled)');
+  commitOnTicket(r, { 'a.js': 'a2\n' });
+  run(r, 'open', '--path', r.review, '--ref', 'ticket');
+  rmSync(r.review, { recursive: true, force: true });
+  const alias = join(short, 'review-72');
+  assert.equal(dirKey(alias), dirKey(r.review), 'one key for a missing directory under either spelling');
+  assert.equal(run(r, 'status', '--path', alias).restored, 'n/a');
+  assert.equal(run(r, 'open', '--path', alias, '--ref', 'ticket').action, 'created');
+  assert.equal(registered(r), 2);
+  assert.equal(run(r, 'close', '--path', r.review).action, 'removed');
 });
 
 test('the main worktree, a foreign directory and an unknown ref are refused, and nothing is touched', (t) => {
