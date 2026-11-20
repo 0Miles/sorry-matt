@@ -137,10 +137,13 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
   [`REVIEWER.md`](REVIEWER.md) 的固定規則接上這次的值（repo、tracker、票面檔、接續紀錄、驗收快照、比對輸出、
   固定點、ticket 分支、targeted checks、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
   發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
-  記下結論。
-- **照回報落地**：`findings` 交集中修正；`observations` 或 `pre-existing` 不是 0 時只讀審查區塊的這兩段，合開
-  一張 raw ticket（「期間開票」）。派工檔的 reviewer 是 `primary`；專項 reviewer 由 `prove-it` 依審查分級自己加
-  （`full` 級的 `architecture`）。
+  記下結論，並照回報的 `counts:` 行帶 `--observations <n> --pre-existing <n>`（兩個都要帶，沒有就寫 0；少一個
+  record 以 2 拒絕）。minimal 審查只回報擋下整併的 finding，不帶這兩個計數。
+- **照回報落地**：`findings` 交集中修正。`observations` 或 `pre-existing` 不是 0 時，tick 發下一個 `observations`
+  judge，要你只讀審查區塊的這兩段，開一張 raw ticket（「期間開票」），以 `--value <issue id>` 記下；同一張票之後
+  的審查（複驗、retry）再帶出的，tick 發下的 judge 指名那張 raw ticket，新項目補進去，不另開，記別的 id 會被拒絕
+  （3）。這個 judge 不擋這張票：審查的結論照常往下走。派工檔的 reviewer 是 `primary`；專項 reviewer 由
+  `prove-it` 依審查分級自己加（`full` 級的 `architecture`）。
 
 ### 集中修正
 
@@ -164,8 +167,9 @@ merge commit 裡，不改寫 ticket 分支。它逐塊回報取捨，你記進�
 
 ### 期間開票
 
-範圍外的 bug、前置重構、技術債、根因落在範圍外的偶發紅燈，以及審查的 `observations` 與 `pre-existing`（一張票合開
-一張，逐則列出位置、一句話與證據路徑，複驗帶出的補進同一張），只建立 raw ticket，連回來源：
+範圍外的 bug、前置重構、技術債、根因落在範圍外的偶發紅燈，以及審查的 `observations` 與 `pre-existing`（tick 的
+`observations` judge 發下時才做：一張票合開一張，逐則列出位置、一句話與證據路徑，複驗帶出的補進同一張），只建立
+raw ticket，連回來源：
 
 - **GitHub**：`gh issue create`，不加 `ready-for-agent`；body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：依 tracker 慣例建下一個未使用編號的 ticket 檔，`Status` 設為 `needs-triage`，commit 到

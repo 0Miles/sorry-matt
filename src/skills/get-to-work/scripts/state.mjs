@@ -24,7 +24,7 @@
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full]
-//                           [--findings <id>,<id>]
+//                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //   node state.mjs merge    <state> <ticket> <merge sha>
 //   node state.mjs assign   <state> <ticket>... --record <record.json> --type <agent type> [--worktree <path>] [--reassign]
@@ -75,7 +75,8 @@
 //         "sendBacks": <n>, "fixRounds": <n>,
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
 //                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
-//                       "findings": ["<finding id>"] | null, "at", "after": <history length when recorded> }],
+//                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
+//                       "after": <history length when recorded> }],   // the counts of the review report (#142)
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
 //                                                          // implementer's per-finding report (recheck: false)
 //         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
@@ -174,8 +175,9 @@
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
 //             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
-//             tier the review was chosen by (none without it); `--findings` (with `fix`) lists the finding ids. Adds
-//             one to usage `reviewRounds`.
+//             tier the review was chosen by (none without it); `--findings` (with `fix`) lists the finding ids;
+//             `--observations` and `--pre-existing` are the report's counts of those two sections (default 0; a
+//             review recorded before #142 has neither). Adds one to usage `reviewRounds`.
 //   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
 //             the latest (fix) review exactly once.
 //   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
@@ -426,9 +428,10 @@ function check(state, bad) {
       need(
         isObject(r) && ['initial', 'recheck'].includes(r.mode) && ['pass', 'fix', 'stuck'].includes(r.verdict) && ['full', 'minimal'].includes(r.kind) &&
           (r.tier == null || TIERS.includes(r.tier)) &&
-          isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))),
+          isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))) &&
+          [r.observations, r.preExisting].every((n) => n === undefined || isCount(n)),
         `${w}.reviews[${i}]`,
-        'is not { mode, verdict, kind, tier, findings, after }',
+        'is not { mode, verdict, kind, tier, findings, observations, preExisting, after }',
       ),
     );
     need(
@@ -937,11 +940,13 @@ function review(path, rest, flags, ctx) {
   const tier = flags.tier === undefined ? null : oneOf(flags.tier, TIERS, '--tier');
   const findings = flags.findings === undefined ? null : ids(flags.findings, '--findings');
   if (findings !== null && verdict !== 'fix') throw new UsageError('--findings goes with --verdict fix');
+  const observations = count(flags.observations ?? 0, '--observations');
+  const preExisting = count(flags['pre-existing'] ?? 0, '--pre-existing');
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
     if (t.stage !== 'in-review') throw new Refusal(`${id}: a review is recorded only in in-review; it is ${t.stage}`);
-    t.reviews.push({ mode, verdict, kind, tier, findings, at: ctx.now, after: t.history.length });
+    t.reviews.push({ mode, verdict, kind, tier, findings, observations, preExisting, at: ctx.now, after: t.history.length });
     state.usage.reviewRounds += 1;
     return { tickets: view(state, [id]) };
   });
@@ -1251,7 +1256,7 @@ const COMMANDS = {
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
   set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
-  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', findings: 'one', ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
   assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],
