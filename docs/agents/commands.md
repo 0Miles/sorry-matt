@@ -44,7 +44,7 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/integrate.test.mjs` |
   | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs` |
   | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`） |
-  | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs` |
+  | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs run` 以 `hooks/classify.mjs` 判斷哪些 exec 留給主持人） |
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs`、`scripts/tick.test.mjs`、`scripts/integrate.test.mjs`（`tick.mjs` import 它） |
   | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`（`verify.mjs` import 它） |
