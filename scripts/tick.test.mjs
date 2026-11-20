@@ -6,12 +6,12 @@
 // as SKILL.md states them, written here by hand.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main as tick, defaultDeps, bashExecutor } from '../src/skills/get-to-work/scripts/tick.mjs';
+import { main as tick, defaultDeps, bashExecutor, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
@@ -34,12 +34,13 @@ const numOf = (id) => String(id).replace(/^#/, '');
 
 class Crash extends Error {}
 
-/** A bash that runs tick's commands as the host's does: any on POSIX, Git Bash / MSYS / Cygwin on win32 (not WSL). */
-const BASH = (() => {
-  const p = spawnSync('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
-  if (p.status !== 0) return false;
-  return process.platform !== 'win32' || /MINGW|MSYS|CYGWIN/i.test(p.stdout);
-})();
+/**
+ * A bash that runs tick's commands as the host's does: any on POSIX, Git Bash / MSYS / Cygwin on win32 (not WSL). The
+ * judgement is tick.mjs's own, the one bashExecutor makes (#130); when it says no, `NO_BASH` is why, `uname -s` in it.
+ */
+const BASH_CHECK = bashUsable();
+const BASH = BASH_CHECK.ok;
+const NO_BASH = BASH ? null : `no bash that runs tick's commands: ${BASH_CHECK.why}`;
 
 /** A run with tickets #1 and #2 on one line, set up as the freeze leaves it. */
 function world(t, { profile = null } = {}) {
@@ -89,6 +90,11 @@ function world(t, { profile = null } = {}) {
     policy: {},
   };
   h.iso = () => new Date(h.now).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  /** A reviewer's report written on the run's clock: its mtime is the test's `now` (or `at`), not the wall clock's. */
+  h.writeReport = (file, text, at = h.now) => {
+    write(file, text);
+    utimesSync(file, at / 1000, at / 1000);
+  };
   h.S = (...args) => {
     const r = stateMain([args[0], path, ...args.slice(1), '--now', h.iso()]);
     assert.equal(r.code, 0, r.err);
@@ -235,7 +241,7 @@ function world(t, { profile = null } = {}) {
       const r = (h.policy.review ?? DEFAULTS.review)(a);
       const v = typeof r === 'string' ? { outcome: r } : r;
       // the minimal reviewer writes its report to the file its brief names (#128)
-      write(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
+      h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : [])];
     }
     return { agent, flags: ['--agent', agent] };
@@ -595,6 +601,8 @@ test('#128 D1: next makes the directory of every exec stdout before it returns; 
   // It runs from the test's temporary directory, and only in a bash that reads Windows paths (Git Bash, MSYS, Cygwin)
   // on win32: WSL's bash would flatten them and write the files into the working directory.
   const STUBS = `node() { echo 'stub'; }; gh() { echo 'stub'; }; `;
+  // Without such a bash only the directories are checked here; the output says so and why (#130).
+  if (!BASH) t.diagnostic(`#128 D1: the bash runs and redirect checks are skipped (${NO_BASH})`);
   const run = h.run;
   const seen = [];
   h.run = (actions) => {
@@ -655,6 +663,25 @@ test('#128 D3: under expand: skip the spawn file says the ticket text is the acc
   }
 });
 
+test('#130: under expand: skip a ticket whose snapshot has criteria (a previous run expanded it) gets criteria, not ticket-text', (t) => {
+  const EXPANDED = '<!-- sorry-matt:expansion -->\nby: expansion-agent\nrun: r0\nround: 1\n\nacceptance:\n- [ ] it works';
+  for (const [spec, acceptance, line, expansion] of [
+    [{ items: [{ from: 'expansion', by: 'expansion-agent', run: 'r0', round: '1', text: 'it works' }], expansions: [{ by: 'expansion-agent', run: 'r0', round: '1', at: 'u', text: EXPANDED }] }, 'criteria', '- 驗收來源：驗收項與展開區塊\n', `- 展開區塊：${EXPANDED.replace(/\n(?=.)/g, '\n  ')}\n`],
+    [{ items: [{ from: 'original', text: 'criterion of #1' }], expansions: [] }, 'criteria', '- 驗收來源：驗收項與展開區塊\n', '- 展開區塊：none\n'],
+    [{ items: [], expansions: [] }, 'ticket-text', '- 驗收來源：票面文字就是驗收\n', '- 展開區塊：none\n'],
+  ]) {
+    const h = world(t, { profile: { expand: 'skip' } });
+    h.acceptance['#1'] = spec;
+    const spawn = h.actions(h.wake()).find((a) => a.kind === 'spawn' && a.tickets[0] === '#1');
+    assert.ok(spawn, `#1 is dispatched with ${spec.items.length} criteria`);
+    const values = JSON.parse(readFileSync(join(h.W, 'tick', 'brief', '1-1.values.json'), 'utf8'));
+    assert.equal(values.acceptance, acceptance, `${spec.items.length} criteria: acceptance ${acceptance}`);
+    const brief = readFileSync(briefOf(spawn), 'utf8');
+    assert.ok(brief.includes(line), `${JSON.stringify(line)} in\n${brief}`);
+    assert.ok(brief.includes(expansion), `${JSON.stringify(expansion)} in\n${brief}`);
+  }
+});
+
 test('#128 D4: the minimal reviewer writes its report to a file; record fix is refused until the file holds it', (t) => {
   const h = world(t, { profile: { review: 'minimal' } });
   const spawn = h.spawn;
@@ -672,7 +699,7 @@ test('#128 D4: the minimal reviewer writes its report to a file; record fix is r
     assert.equal(fix().code, 3, 'no report file: refused');
     write(report, '  \n');
     assert.equal(fix().code, 3, 'an empty report file: refused');
-    write(report, 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    h.writeReport(report, 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
     refused += 1;
     return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
   };
@@ -683,7 +710,145 @@ test('#128 D4: the minimal reviewer writes its report to a file; record fix is r
   const send = h.log.find((a) => a.step === 'send' && a.tickets[0] === '#1');
   assert.ok(send.do.includes(join(h.W, 'tick', 'review', '1-1.report.md')), send.do);
   assert.doesNotMatch(send.do, /status record/);
+  // #130: the batched fix the send points to says that under review: minimal the report file is what is handed over
+  const ref = send.reference.find((r) => r.path.endsWith('SKILL.md') && r.part === 'section 2, Batched fix');
+  assert.ok(ref, 'the send points to SKILL.md section 2, Batched fix');
+  for (const [skill, heading, line] of [
+    [ref.path, '### 集中修正', /`review: minimal` 時.*交回原 agent 的是 reviewer 報告檔.*的路徑，不是審查區塊的位置/],
+    [join(root, 'skills', 'get-to-work', 'SKILL.md'), '### Batched fix', /Under `review: minimal`.*hand the original agent the path of the reviewer's report file.*not a review block's location/],
+  ]) {
+    const text = readFileSync(skill, 'utf8').replace(/\r\n/g, '\n');
+    const section = text.slice(text.indexOf(heading), text.indexOf('\n### ', text.indexOf(heading) + 1));
+    assert.match(section.replace(/\n/g, ' '), line, `${skill}: ${heading}`);
+  }
   assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+});
+
+/** A minimal review of #1 at its initial review, played by `play(a)` (the reviewer's flags for its record). */
+function minimalReview(t, play, profile = {}) {
+  const h = world(t, { profile: { review: 'minimal', ...profile } });
+  const spawn = h.spawn;
+  const seen = [];
+  h.spawn = (a) => {
+    if (a.step !== 'review' || a.tickets[0] !== '#1' || a.meta.mode !== 'initial') return spawn(a);
+    seen.push(a);
+    return play(a, h);
+  };
+  return { h, seen };
+}
+const recordReview = (h, a, outcome) => h.tick('record', h.path, a.id, '--agent', 'rv1', '--outcome', outcome, ...(outcome === 'fix' ? ['--findings', 'F1'] : []));
+
+test('#130: minimal record review is refused (3) when the report says another verdict: fix recorded on a pass report', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    h.writeReport(reportOf(a), 'verdict: pass\n');
+    const r = recordReview(h, a, 'fix');
+    assert.equal(r.code, 3, 'fix on a report that says pass');
+    assert.match(r.err, /verdict/);
+    return ['--agent', 'rv1', '--outcome', 'pass'];
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'pass', 'the verdict the report holds is taken');
+});
+
+test('#130: minimal record review is refused (3) when the report says another verdict: pass recorded on a fix report', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    const r = recordReview(h, a, 'pass');
+    assert.equal(r.code, 3, 'pass on a report that says fix');
+    assert.match(r.err, /verdict/);
+    h.writeReport(reportOf(a), 'F1: a.txt:1 wrong (evidence)\n');
+    assert.equal(recordReview(h, a, 'fix').code, 3, 'a report with no verdict line');
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
+});
+
+test('#130: minimal record review is refused (3) when the report was written before the review spawn was last issued', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    const issued = h.state().tick.issued[a.id].at;
+    assert.equal(issued, h.iso(), 'tick keeps when it issued the review spawn');
+    // an interrupted round left this report behind: written a minute before the spawn was issued again
+    for (const outcome of ['fix', 'pass']) {
+      h.writeReport(reportOf(a), `verdict: ${outcome}\n`, Date.parse(issued) - 60_000);
+      const r = recordReview(h, a, outcome);
+      assert.equal(r.code, 3, `an old report: ${outcome} refused`);
+      assert.match(r.err, /before/);
+    }
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the report this round wrote is taken');
+});
+
+test('#130: minimal record review accepts the report this round wrote with the verdict it records', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1']; // h.record asserts exit 0
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
+  assert.equal(h.state().tickets['#1'].reviews.at(-1).verdict, 'pass', 'the recheck passes');
+});
+
+test('#130: with onUnfixed: stuck the mark-stuck judge names the report file (minimal) or the review block (full)', (t) => {
+  for (const profile of [{ review: 'minimal' }, null]) {
+    const h = world(t, { profile });
+    h.policy.review = (a) => (a.tickets[0] === '#1' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+    h.policy['mark-stuck'] = (a) => {
+      // as SEND-BACK.md has it: the ticket's worktree and branch are removed
+      const branch = h.state().tickets[a.tickets[0]].branch;
+      const blocks = git(h.repo, 'worktree', 'list', '--porcelain').split(/\n\s*\n/);
+      const wt = blocks.find((b) => b.includes(`branch refs/heads/${branch}`))?.match(/^worktree (.+)$/m)?.[1];
+      if (wt) git(h.repo, 'worktree', 'remove', '--force', wt);
+      git(h.repo, 'branch', '-D', branch);
+      return { outcome: 'stuck', value: 'findings still open' };
+    };
+    assert.equal(h.untilDone().then, 'done', `the run under ${profile ? 'minimal' : 'full'} finished`);
+    assert.equal(stage(h, '#1'), 'stuck');
+    const mark = h.log.find((a) => a.step === 'mark-stuck' && a.tickets[0] === '#1');
+    assert.ok(mark, 'a mark-stuck judge');
+    if (profile) {
+      const last = h.log.filter((a) => a.step === 'review' && a.tickets[0] === '#1').at(-1);
+      assert.ok(mark.do.includes(`the open findings are in ${reportOf(last)}, the reviewer's report`), mark.do);
+      assert.doesNotMatch(mark.do, /review block/);
+    } else {
+      assert.match(mark.do, /the open findings are in the latest review block of its status record/);
+      assert.ok(!mark.do.includes('.report.md'), mark.do);
+    }
+  }
+});
+
+test('#130: the minimal reviewer brief names the ticket text file and the acceptance source; its spawn waits for the text', (t) => {
+  for (const [profile, items, source] of [
+    [{}, null, (h) => `- Acceptance: the \`items\` of the acceptance snapshot ${join(h.W, 'acceptance', '1.json')}.`],
+    [{ expand: 'skip' }, [], () => '- Acceptance: the ticket text is the acceptance (expand: skip, and the snapshot has no criteria).'],
+  ]) {
+    const { h, seen } = minimalReview(
+      t,
+      (a, h) => {
+        h.writeReport(reportOf(a), 'verdict: pass\n');
+        return ['--agent', 'rv1', '--outcome', 'pass'];
+      },
+      profile,
+    );
+    if (items) h.acceptance['#1'] = { items, expansions: [] };
+    assert.equal(h.untilDone().then, 'done');
+    assert.equal(seen.length, 1);
+    const brief = readFileSync(briefOf(seen[0]), 'utf8');
+    const body = resolve(join(h.W, 'tick', 'body', '1.md'));
+    assert.ok(brief.includes(`- Ticket text: ${body} (the full ticket text).`), brief);
+    assert.ok(brief.includes(source(h)), `${JSON.stringify(source(h))} in\n${brief}`);
+    assert.match(readFileSync(body, 'utf8'), /The ticket text of #1\./);
+    const first = h.wakes.flat().flatMap((o) => o.actions).find((a) => a.id === seen[0].id);
+    assert.ok(first.after.includes(`body:#1:review:1`), `the review spawn waits for the ticket text: ${first.after}`);
+  }
 });
 
 test('#128 D4: a fix round given to a new agent names the findings source: the report file (minimal) or the status record (full)', (t) => {
@@ -724,8 +889,11 @@ test('#128 D4: under review: minimal a fix agent reassigned after a timeout is p
   assert.ok(respawn, 'a new fix agent');
   const brief = readFileSync(briefOf(respawn), 'utf8');
   assert.match(brief, /timed out and was stopped/);
-  assert.ok(brief.includes(join(h.W, 'tick', 'review', '1-1.report.md')), 'the findings are in the reviewer report');
-  assert.doesNotMatch(brief, /status record|review block/);
+  // #130: the record it updates is the status record; the findings of this round are in the reviewer's report
+  assert.match(brief, /Update the existing status record in place/);
+  assert.ok(brief.includes(`The findings of this fix round are in ${join(h.W, 'tick', 'review', '1-1.report.md')}`), 'the findings are in the reviewer report');
+  assert.doesNotMatch(brief, /this ticket's existing record/);
+  assert.doesNotMatch(brief, /review block/);
 });
 
 test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
@@ -1066,7 +1234,7 @@ test('#129: run leaves a push to the host: integrate: direct lists push:main as 
   assert.equal(h.state().tick.done[push.id], undefined);
 });
 
-test('#129: run executes through bash, writing each redirect and each log', { skip: !BASH && 'no Git Bash / MSYS / Cygwin bash' }, (t) => {
+test('#129: run executes through bash, writing each redirect and each log', { skip: NO_BASH ?? false }, (t) => {
   const h = world(t);
   // The programs are stubbed as shell functions; the command line itself, its cd and its redirect, run as written.
   const STUBS = `node() { echo stub; echo stub-err >&2; }; gh() { echo stub; }; `;
@@ -1091,6 +1259,19 @@ test('#129: run executes through bash, writing each redirect and each log', { sk
     assert.equal(readFileSync(done[a.id].log, 'utf8'), 'stub-err\n', `${a.id}: its stderr is in the log`);
   }
   for (const a of without) assert.equal(readFileSync(done[a.id].log, 'utf8'), 'stub\nstub-err\n', `${a.id}: stdout and stderr in the log`);
+});
+
+test('#130: bashUsable is the one judgement of a usable bash; its why names what uname -s said', () => {
+  const wsl = bashUsable({ spawn: () => ({ status: 0, stdout: 'Linux\n' }), platform: 'win32' });
+  assert.deepEqual([wsl.ok, wsl.uname], [false, 'Linux']);
+  assert.match(wsl.why, /uname -s: Linux/);
+  assert.deepEqual(bashUsable({ spawn: () => ({ status: 0, stdout: 'MINGW64_NT-10.0-26300\n' }), platform: 'win32' }), { ok: true, uname: 'MINGW64_NT-10.0-26300', why: null });
+  assert.equal(bashUsable({ spawn: () => ({ status: 0, stdout: 'Linux\n' }), platform: 'linux' }).ok, true);
+  const missing = bashUsable({ spawn: () => ({ error: new Error('spawnSync bash ENOENT'), status: null }) });
+  assert.equal(missing.ok, false);
+  assert.match(missing.why, /bash could not be started \(spawnSync bash ENOENT\)/);
+  // the test file's own BASH is this judgement of the bash on PATH
+  assert.equal(BASH, bashUsable().ok);
 });
 
 test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 ends run with exit 1; what was recorded stays', (t) => {

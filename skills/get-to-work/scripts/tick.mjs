@@ -40,16 +40,21 @@
 //
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
 //   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
-//                    instead of the review host's `judge`, with a brief tick writes: blocking findings only,
-//                    `verdict: pass | fix`, the full report written to `tick/review/<ticket key>-<tag>.report.md`
-//                    beside the brief and also returned. `record … --outcome fix` is refused (3) while that file is
-//                    missing or empty: the host writes the returned report there verbatim when the reviewer did not.
-//                    The fix round (send, the note of a new agent) and file-issue name that file as the findings'
-//                    source, not the status record
+//                    instead of the review host's `judge`, with a brief tick writes: the ticket text's file (fetched
+//                    again first on GitHub; the spawn waits for it), the acceptance source (the snapshot's `items`, or
+//                    the ticket text as expand: skip has it below), blocking findings only, `verdict: pass | fix`, the
+//                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
+//                    returned. `record review:…` is refused (3) when that file is missing or empty with
+//                    `--outcome fix`, or, when it is there, its `verdict:` line is missing or not the outcome, or it
+//                    was written before the review spawn was last issued (`issued.<id>.at`; an interrupted round's
+//                    file): the host writes the report returned this round there verbatim. The fix round (send, the
+//                    note of a new agent), file-issue and mark-stuck name that file as the findings' source, not the
+//                    status record's review block
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
 //   onUnfixed: file-issue  findings still open → a `judge` to file a raw issue; queued only once its id is recorded
-//   expand: skip     no expansion; a ticket with no criteria goes on with its own text (brief.mjs is given
-//                    `acceptance: ticket-text`, so the spawn file says the ticket text is the acceptance)
+//   expand: skip     no expansion; a ticket whose snapshot has no criteria goes on with its own text (brief.mjs is
+//                    given `acceptance: ticket-text`, so the spawn file says the ticket text is the acceptance); one
+//                    with criteria (the ticket's own, or a previous run's expansion block) keeps them: `criteria`
 //   ci: skip         no CI read and no local verification, in the pipeline or at the finish
 //   simplify: false  no simplify pass at the finish
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
@@ -159,7 +164,7 @@
 // could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
 // refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -734,11 +739,28 @@ function implementerOf(c, id) {
   return last && last.status !== 'stopped' ? last[0] : null;
 }
 
-function bodyFile(c, id, t, after) {
+/**
+ * The file holding a ticket's full text, and the exec that fetches it (null when there is none to wait for): the
+ * ticket file in Local Markdown; on GitHub `tick/body/<n>.md`, fetched once, or once more under the id suffix `again`
+ * (a review reads the ticket as it is then).
+ */
+function bodyFile(c, id, t, after, again = null) {
   if (c.cfg.tracker === 'local') return { file: join(c.git.wtOf(c.target(t.line)) ?? c.cfg.root, c.ticketPath(id)), id: null };
   const file = c.tick('body', `${keyOf(id)}.md`);
-  if (c.deps.exists(file) && c.done(`body:${id}`)) return { file, id: null };
-  return { file, id: c.emit(exec(`body:${id}`, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
+  const eid = again ? `body:${id}:${again}` : `body:${id}`;
+  if (c.done(eid) && c.deps.exists(file)) return { file, id: null };
+  return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
+}
+
+/**
+ * Where a ticket's acceptance is (brief.mjs's `acceptance`): its snapshot's criteria, or the ticket text under
+ * expand: skip when the snapshot has none. Criteria a previous run's expansion block or the ticket itself wrote are
+ * someone else's acceptance and stay so under skip.
+ */
+function acceptanceSource(c, id) {
+  if (c.profile.expand !== 'skip') return 'criteria';
+  const snap = readJsonFile(c.deps, c.snapshot(id)); // null when missing or unreadable
+  return Array.isArray(snap?.items) && snap.items.length ? 'criteria' : 'ticket-text';
 }
 
 /**
@@ -832,7 +854,7 @@ function agentTail(c, id, t, p, after) {
         integration: c.target(t.line),
         bodyFile: bodyPath,
         sendBackFile: c.deps.exists(c.sendBack(id)) ? c.sendBack(id) : null,
-        acceptance: c.profile.expand === 'skip' ? 'ticket-text' : 'criteria', // expand: skip — the ticket text is the acceptance
+        acceptance: acceptanceSource(c, id), // expand: skip with no criteria — the ticket text is the acceptance
       },
       null,
       2,
@@ -880,9 +902,10 @@ const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
 
 /** Findings still open with no fix round left: a raw issue (onUnfixed: file-issue) or stuck. */
 function unfixed(c, id, t, what) {
+  if (c.profile.onUnfixed === 'file-issue' && t.unfixedIssue) return stageTo(c, id, t, 'queued');
+  // review: minimal: the open findings are in the reviewer's report; a full review's are in the status record's review block
+  const report = c.flag(id).report;
   if (c.profile.onUnfixed === 'file-issue') {
-    if (t.unfixedIssue) return stageTo(c, id, t, 'queued');
-    const report = c.flag(id).report; // review: minimal: the findings are in the reviewer's report
     return c.emit(
       judge(
         `file-issue:${id}:h${hist(t)}`,
@@ -894,11 +917,12 @@ function unfixed(c, id, t, what) {
       ),
     );
   }
+  const source = report ? `${report}, the reviewer's report` : 'the latest review block of its status record';
   return c.emit(
     judge(
       `stuck:${id}:h${hist(t)}`,
       'mark-stuck',
-      `${id}: ${what}. Mark it stuck as SEND-BACK.md says (the stuck record with the open findings, worktree and branch removed). Record stuck with --value <reason>.`,
+      `${id}: ${what}. Mark it stuck as SEND-BACK.md says (the stuck record with the open findings, worktree and branch removed); the open findings are in ${source}. Record stuck with --value <reason>.`,
       ['stuck'],
       [doc('SEND-BACK.md', 'Mark stuck')],
       { tickets: [id], line: t.line },
@@ -944,6 +968,11 @@ function stepInReview(c, id, t) {
   if (c.profile.review === 'minimal') {
     const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
     const report = c.tick('review', `${keyOf(id)}-${tag}.report.md`); // the fix round's findings come from here
+    const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+    const acceptance =
+      acceptanceSource(c, id) === 'ticket-text'
+        ? '- Acceptance: the ticket text is the acceptance (expand: skip, and the snapshot has no criteria).'
+        : `- Acceptance: the \`items\` of the acceptance snapshot ${resolve(c.snapshot(id))}.`;
     c.write(
       brief,
       [
@@ -951,6 +980,8 @@ function stepInReview(c, id, t) {
         '',
         `You review one ticket's change and report blocking findings only. You cannot ask anyone; this is all of your brief.`,
         '',
+        `- Ticket text: ${resolve(body.file)} (${c.cfg.tracker === 'local' ? 'the ticket file' : 'the full ticket text'}).`,
+        acceptance,
         `- Ticket branch: ${t.branch}; compare it with ${c.target(t.line)} (\`git diff ${c.target(t.line)}...${t.branch}\`).`,
         `- Acceptance snapshot: ${c.snapshot(id)}; the comparison with the ticket now: ${against}.`,
         `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
@@ -966,7 +997,7 @@ function stepInReview(c, id, t) {
       step: 'review',
       tickets: [id],
       line: t.line,
-      after: [ag],
+      after: [ag, body.id],
       spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
@@ -1017,8 +1048,9 @@ function reassignNote(c, id, t, r) {
   const at = t.stage === 'fixing' ? reportAt(c.flag(id)) : null;
   if (!r?.reassign) return `The fix round of ${id}: the findings are in ${at ?? `the latest review block of its status record${link}`}; close them all.`;
   const head = `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them.`;
-  const findings = at ? ` The findings of this fix round are in ${at}.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
-  return `${head} Update ${at ? "this ticket's existing record" : 'the existing status record'} in place${link}.${findings}`;
+  // The record it updates is always the status record; under review: minimal the findings are in the report file.
+  const findings = at ? ` The findings of this fix round are in ${at}, not in the status record.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
+  return `${head} Update the existing status record in place${link}.${findings}`;
 }
 
 function stepImplementing(c, id, t) {
@@ -1720,7 +1752,18 @@ function finish(c, then) {
   for (const a of c.actions) {
     a.reference ??= a.argv?.[0] === 'node' ? [{ path: a.argv[1], part: 'header' }] : [EXEC_REFERENCE[a.step] ?? doc('SKILL.md', 'section 1 (the loop)')];
     a.record = recordLine(c, a);
-    book.issued[a.id] = { kind: a.kind, step: a.step, batch: a.batch, tickets: a.tickets, line: a.line, ...(a.okExit ? { okExit: a.okExit } : {}), ...(a.outcomes ? { outcomes: a.outcomes } : {}), ...(a.meta ? { meta: a.meta } : {}) };
+    book.issued[a.id] = {
+      kind: a.kind,
+      step: a.step,
+      batch: a.batch,
+      tickets: a.tickets,
+      line: a.line,
+      ...(a.okExit ? { okExit: a.okExit } : {}),
+      ...(a.outcomes ? { outcomes: a.outcomes } : {}),
+      ...(a.meta ? { meta: a.meta } : {}),
+      // a minimal reviewer's spawn: when it was last issued, so record can tell this round's report from an older one
+      ...(a.meta?.report ? { at: c.now } : {}),
+    };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
   for (const dir of new Set(c.actions.filter((a) => a.kind === 'exec' && a.stdout).map((a) => dirname(a.stdout)))) c.deps.mkdir(dir);
@@ -1746,6 +1789,29 @@ function finish(c, then) {
 }
 
 // ---- record -----------------------------------------------------------------------------------------------------------
+
+/**
+ * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than the review
+ * spawn was last issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the file, since the
+ * fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
+ */
+function checkReport(file, outcome, issuedAt, deps) {
+  let held = '';
+  try {
+    if (deps.exists(file)) held = deps.read(file);
+  } catch {}
+  const redo = `write the report the reviewer returned this round there, verbatim, and record ${outcome} again`;
+  if (!held.trim()) {
+    if (outcome === 'fix') throw new Refused(`${file} holds no report: the reviewer writes its full report there; when it did not, ${redo}`);
+    return;
+  }
+  const verdict = /^[\s>*`-]*verdict[\s*`]*:[\s*`]*(pass|fix)\b/im.exec(held)?.[1]?.toLowerCase() ?? null;
+  if (!verdict) throw new Refused(`${file} has no \`verdict: pass|fix\` line: ${redo}`);
+  if (verdict !== outcome) throw new Refused(`${file} says verdict: ${verdict}, not ${outcome}: record the verdict the report holds, or ${redo}`);
+  const mtime = issuedAt ? deps.stat(file).mtimeMs : null; // an entry from before tick kept the time has none
+  if (mtime !== null && mtime < Date.parse(issuedAt))
+    throw new Refused(`${file} was written ${formatTime(mtime)}, before this review spawn was last issued (${issuedAt}): it is an older round's report; ${redo}`);
+}
 
 export function record(path, id, flags, now, deps) {
   const state = load(path);
@@ -1891,17 +1957,10 @@ export function record(path, id, flags, now, deps) {
     case 'review': {
       const [tid] = tickets;
       const t = ticket(tid);
-      if (meta.report && outcome === 'fix') {
-        // review: minimal: the fix round reads the findings from the reviewer's report file
-        let held = '';
-        try {
-          if (deps.exists(meta.report)) held = deps.read(meta.report);
-        } catch {}
-        if (!held.trim())
-          throw new Refused(`${meta.report} holds no report: the reviewer writes its full report there; when it did not, write the report it returned there, verbatim, and record fix again`);
-      }
-      if (meta.report) flag(tid).report = meta.report;
-      else delete flag(tid).report;
+      if (meta.report) {
+        checkReport(meta.report, outcome, issued.at, deps); // review: minimal
+        flag(tid).report = meta.report;
+      } else delete flag(tid).report;
       if (issued.kind === 'spawn') {
         if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
@@ -2019,18 +2078,29 @@ export function run(path, reported, now, deps) {
 }
 
 /**
+ * Whether the bash on PATH can run tick's commands: it starts, and on win32 it is Git Bash, MSYS or Cygwin (`uname -s`),
+ * not WSL's, which flattens Windows paths. { ok, uname: what `uname -s` printed | null, why: null | the reason it is not }.
+ * The one judgement of it: bashExecutor uses it, and so do the tests that run commands in bash.
+ */
+export function bashUsable({ spawn = spawnSync, platform = process.platform } = {}) {
+  const p = spawn('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+  if (p.error || p.status !== 0) return { ok: false, uname: null, why: `bash could not be started (${p.error?.message ?? `uname -s exited ${p.status}`}): run the execs by hand` };
+  const uname = String(p.stdout ?? '').trim();
+  if (platform === 'win32' && !/MINGW|MSYS|CYGWIN/i.test(uname))
+    return { ok: false, uname, why: `the bash on PATH is not Git Bash, MSYS or Cygwin (uname -s: ${uname || 'nothing'}), likely WSL's, which flattens Windows paths: put Git Bash first on PATH` };
+  return { ok: true, uname, why: null };
+}
+
+/**
  * The default exec seam of `run`: `bash -c <command>` with stderr (and stdout, which a `stdout` exec redirects in its
- * command) written to `log`. bash must start, and on win32 be Git Bash, MSYS or Cygwin: WSL's bash flattens Windows
- * paths. A bash that is not usable throws (exit 1) before anything runs.
+ * command) written to `log`. A bash that is not usable (bashUsable) throws (exit 1) before anything runs.
  */
 export function bashExecutor({ spawn = spawnSync, platform = process.platform } = {}) {
   let checked = false;
   return (a, log) => {
     if (!checked) {
-      const p = spawn('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
-      if (p.error || p.status !== 0) throw new Error(`bash could not be started (${p.error?.message ?? `uname -s exited ${p.status}`}): run the execs by hand`);
-      if (platform === 'win32' && !/MINGW|MSYS|CYGWIN/i.test(p.stdout ?? ''))
-        throw new Error(`the bash on PATH is not Git Bash, MSYS or Cygwin (uname -s: ${String(p.stdout ?? '').trim() || 'nothing'}), likely WSL's, which flattens Windows paths: put Git Bash first on PATH`);
+      const usable = bashUsable({ spawn, platform });
+      if (!usable.ok) throw new Error(usable.why);
       checked = true;
     }
     const fd = openSync(log, 'w');
@@ -2114,6 +2184,7 @@ export function defaultDeps() {
   return {
     read: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
+    stat: (p) => ({ mtimeMs: statSync(p).mtimeMs }), // record: when a minimal reviewer's report was written
     mkdir: (p) => mkdirSync(p, { recursive: true }),
     write: (p, text) => {
       mkdirSync(dirname(p), { recursive: true });

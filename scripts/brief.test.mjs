@@ -11,7 +11,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { main } from '../src/skills/get-to-work/scripts/brief.mjs';
+import { main, choose } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as distMain } from '../skills/get-to-work/scripts/brief.mjs';
 import { category, ticketOf, main as spawnsMain } from '../src/skills/get-to-work/scripts/spawns.mjs';
 
@@ -201,6 +201,52 @@ test('#128 D3: acceptance ticket-text writes that the ticket text is the accepta
     assert.equal(c.code, 0, c.err);
     for (const text of [r.brief, r.fallback]) assert.ok(text.includes(textLine) && !text.includes(criteriaLine), `ticket-text: ${JSON.stringify(textLine)}`);
     for (const text of [c.brief, c.fallback]) assert.ok(text.includes(criteriaLine) && !text.includes(textLine), `criteria: ${JSON.stringify(criteriaLine)}`);
+  }
+});
+
+test('#130: a ci-fix spawn for a ticket whose snapshot has no criteria, with acceptance ticket-text, says the ticket text is the acceptance', (t) => {
+  for (const [entry, textLine] of [
+    [main, '- 驗收來源：票面文字就是驗收\n'],
+    [distMain, '- Acceptance source: the ticket text is the acceptance\n'],
+  ]) {
+    const dir = scratch(t);
+    const bare = { ...githubSnapshot, items: [], expansions: [], needsExpansion: true };
+    const values = implementValues(dir, {
+      role: 'ci-fix',
+      snapshot: put(dir, 'bare-snap.json', bare),
+      branch: 'r1/72-widgets-ci',
+      bodyFile: put(dir, 'body-ci.md', 'Widgets body\n\nCI failure: test x failed'),
+      sendBackFile: null,
+      acceptance: 'ticket-text',
+    });
+    const r = parse(entry(['implement', put(dir, 'values.json', values)]));
+    assert.equal(r.code, 0, r.err);
+    assert.equal(r.json.description, 'ci-fix #72');
+    const { brief, fallback } = written(r);
+    for (const text of [brief, fallback]) {
+      assert.ok(text.includes(textLine), `${JSON.stringify(textLine)} in\n${text}`);
+      assert.ok(text.includes('CI failure: test x failed'), 'the failure summary is in the ticket text');
+    }
+    assert.ok(brief.includes(entry === main ? '- 展開區塊：none\n' : '- Expansion block: none\n'));
+  }
+});
+
+test('#130: the sentence section 1 point 3 of each implementer definition quotes is the ticket-text= text of its IMPLEMENTER.md', () => {
+  for (const [definition, template, quote] of [
+    ['agents/implementer.md', 'skills/get-to-work/IMPLEMENTER.md', /"([^"]+)"/],
+    ['src/agents/implementer.md', 'src/skills/get-to-work/IMPLEMENTER.md', /「([^」]+)」/],
+  ]) {
+    const def = readFileSync(join(root, definition), 'utf8').replace(/\r\n/g, '\n');
+    const section = def.slice(def.indexOf('\n## 1. '), def.indexOf('\n## 2. '));
+    const point = section.slice(section.indexOf('\n3. '), section.indexOf('\n4. '));
+    assert.ok(point.length > 4, `${definition} has section 1 point 3`);
+    const quoted = quote.exec(point)?.[1];
+    assert.ok(quoted, `${definition} section 1 point 3 quotes a sentence`);
+    const path = join(root, template);
+    const tpl = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+    const placeholder = tpl.slice(tpl.search(/^---$/m)).match(/\{[^{}]*ticket-text=[^{}]*\}/)?.[0];
+    assert.ok(placeholder, `${template} has the acceptance choice placeholder`);
+    assert.equal(quoted, choose('ticket-text')(placeholder, path), `${definition} quotes what ${template} writes for ticket-text`);
   }
 });
 

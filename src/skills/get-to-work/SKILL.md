@@ -105,7 +105,9 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 ### 集中修正
 
 把審查區塊的位置交回保有 context 的原 agent，要它讀每則 finding 的 `summary`、`evidence` 與 `fix` 原文，一輪
-關上全部；主持人不轉述。輪數上限由 state 守。
+關上全部；主持人不轉述。`review: minimal` 時沒有審查區塊：交回原 agent 的是 reviewer 報告檔
+（`tick/review/<ticket key>-<tag>.report.md`）的路徑，不是審查區塊的位置，它讀報告裡每則 finding 的原文。輪數上限由
+state 守。
 
 **硬護欄 —— 偶發紅燈一律查到根因。** 同一個 commit 上時紅時綠的測試當真實失敗處理：根因在測試寫法就修測試，
 在產品就修產品或登記缺陷票。重跑、放寬等待、加 retry、調大 timeout 都不算修好；修正輪內查不出根因就標卡住。
