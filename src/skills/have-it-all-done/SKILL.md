@@ -86,8 +86,16 @@ disable-model-invocation: true
 
 開局 agent 交付之後、進入步驟 3 之前，執行 `ASKING.md` 第 4 節的**唯一裁決點**。
 
+**基底 CI**：tracker 是 GitHub 時，裁決點前以 `node <base directory>/../get-to-work/scripts/ci.mjs base --repo <owner>/<repo> <基底分支>`
+讀基底最新 SHA 的 CI（輸出欄位在該腳本檔頭）。`verdict` 是 `red` 就在裁決點列一題「繼續，或先修基底」，附分支、
+SHA 與 `failed` 的 run id；這題屬第 2 節 (a)，建議「繼續」，寫明每條線的 CI 都會帶著這個紅，基底帶進來的紅由
+紅燈處置判為對不到票。`query-failed` 時重跑一次，仍失敗就不列題，代答「繼續」並連同錯誤訊息記進自答清單；
+其他結果不列題。題目的結果（分支、SHA、選擇）記進 ledger 第 2 欄，`get-to-work` 凍結時照它走。選「先修基底」
+時不進步驟 3：基底的紅燈進人工作業清單，票全數標待裁決，解除條件是基底轉綠，直接交棒。
+
 完成判準：tickets 已發布到已設定的 tracker，且每個阻塞邊都已明載；開局 agent 的需求脈絡
-指向步驟 1 選定的同一份 grilling 成果；裁決點恰好執行一次。
+指向步驟 1 選定的同一份 grilling 成果；裁決點恰好執行一次；基底紅時裁決點有「繼續，或先修基底」這題，
+結果已記進 ledger 第 2 欄。
 
 ## 3. 清票
 
