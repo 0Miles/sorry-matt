@@ -10,9 +10,11 @@
    `null` 就當作**對不到票**，照第 3–6 點走。`truncated` 是 `true` 時腳本已把範圍延伸到 `lowerBound`，不自己補判、
    不手動重查。
 2. **對到票**：輸出的 `tickets` 由舊到新，從最早的開始，就是第一張（對票規則在 `scripts/review-guide.mjs` 檔頭）。
-   `unmatched` 是 `true` —— 紅燈來自主持人 commit、精簡或併入基底 —— 就**對不到票**。
+   `unmatched` 是 `true` —— 紅燈來自主持人 commit、精簡或併入基底，或線上沒有綠而基底在 merge-base 本來就紅
+   （`baseCi.verdict` 是 `red`）—— 就**對不到票**。
 3. **失敗輸出**：有 CI 的線以 `gh run view <id> --log-failed` 存檔，`<id>` 是同一份輸出裡 `earliestRed` 那筆
-   `failed` 的每個 id；本機驗證的紅取 `verify.mjs` 輸出的 `log`。主持人只取失敗那幾行。
+   `failed` 的每個 id，`baseCi` 是紅時另存它 `failed` 的每個 id；本機驗證的紅取 `verify.mjs` 輸出的 `log`。
+   主持人只取失敗那幾行。
 4. **修，最多兩輪**：
    - 對到票：`integrate.mjs ci-init` 從整合分支切 `<ticket 分支>-ci` 與 worktree，交回那張票的原 agent；不在了就照
      `IMPLEMENTER.md` 以 `brief.mjs` 的角色字 `ci-fix` 新 spawn（agent 類型與退回通用 agent 照 `SKILL.md` 第 1 節的
