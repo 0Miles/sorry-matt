@@ -82,6 +82,15 @@
 //   record is the host's `state.mjs set --status-record` when there is one, else the ticket's comment that starts with
 //   `<!-- sorry-matt:status -->` (GitHub) or the ticket file in the ticket worktree (Local Markdown); the scratchpad
 //   is `<worktrees>/review/<ticket key>`; the reviewer is primary.
+//   The review host has an assignment record like every other agent (#143): before its spawn, `deadline.mjs record` in
+//   the ticket worktree with the `timeout-review` limit and `state.mjs assign` (`--reassign` for the review handed out
+//   again after a timeout, its tag ending `-t`). Recorded with `--outcome` (it returned its report), the assignment is
+//   named, released and the agent collected at once. Recorded with `--agent` alone (the Agent tool put it in the
+//   background), it is in flight: the ticket gets no other review action, the deadline scan covers it and the
+//   wake-up ends with the fallback wake-up; its completion notice (`--reported`) brings a `collect` (stage in-review,
+//   outcomes pass | fix | stuck, `--findings` with fix) that records the review. An overdue one is a `timeout` judge
+//   per TIMEOUTS.md: reassign once (in-review counts in `timeoutReassignments`), then stuck; awaiting-ruling; or
+//   collected, which leaves it in flight and brings the collect next.
 //
 // A wake-up
 //   The host runs `run` (with `--reported` for each agent whose completion notice arrived; `next` when bash cannot be
@@ -154,7 +163,8 @@
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
-//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`;
+//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`, which
+//   the prove-it review host's leaves out when it went to the background;
 //   the simplify spawn also `--outcome applied|none|skipped` and `--value <one-line reason>`).
 //   judge and ask: `--outcome <one of outcomes>`, with what the outcome needs: `--agent` for a spawn the judge did,
 //   `--value` for a reason, an issue id or a task id, `--findings` with a review's fix, `--fixed` / `--unfixed` with
@@ -261,6 +271,7 @@ export const LIMIT_DEFAULTS = Object.freeze({
   'timeout-fix': 20,
   'timeout-expand': 15,
   'timeout-merge': 15,
+  'timeout-review': 60,
 });
 // The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
 const BUDGET_LINE = /^\s*(?:[-*+]\s+)?(?:`\s*)?budget:\s*(?:`\s*)?([a-z][a-z-]*)\s+(\d+)\s*(?:`\s*)?$/;
@@ -553,7 +564,8 @@ function context(path, state, now, deps) {
   return c;
 }
 
-const limitFor = (c, stage) => c.limits[{ implementing: 'timeout-implement', fixing: 'timeout-fix', expanding: 'timeout-expand', integrating: 'timeout-merge' }[stage]];
+const limitFor = (c, stage) =>
+  c.limits[{ implementing: 'timeout-implement', fixing: 'timeout-fix', expanding: 'timeout-expand', integrating: 'timeout-merge', 'in-review': 'timeout-review' }[stage]];
 
 // ---- steps ----------------------------------------------------------------------------------------------------------
 
@@ -615,6 +627,13 @@ const COLLECT = {
       `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: ${report ? keepReport(report, 'fixed') : ''}on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
     reference: [doc('SKILL.md', 'section 2, Batched fix')],
   },
+  'in-review': {
+    // #143: the review host went to the background; its report comes with its completion notice
+    outcomes: ['pass', 'fix', 'stuck'],
+    what: (ids) =>
+      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck.`,
+    reference: [doc('REVIEWER.md', 'section 2, the review report'), doc('SKILL.md', 'section 2, Close-out checks and review')],
+  },
   integrating: {
     outcomes: ['resolved', 'unresolved'],
     what: (ids) => `Take the merge agent's report for ${ids.join(', ')}: record each trade-off in the self-answer log. resolved: the merge is committed; unresolved: it could not be resolved safely and the ticket is sent back.`,
@@ -660,6 +679,13 @@ function stepReports(c) {
             meta: { agent, stage: t0.stage },
           }),
         );
+        continue;
+      }
+      if (t0.stage === 'in-review') {
+        // #143: a review host that went to the background reports here; its verdict is recorded as a review
+        const a = judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full' } });
+        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>]`;
+        c.emit(a);
         continue;
       }
       const needs = t0.stage === 'fixing' && !c.profile.recheck ? { fixed: 'the finding ids it fixed', unfixed: 'the ones still open' } : null;
@@ -909,7 +935,7 @@ function stepTimeouts(c) {
           `timeout:${x.id}@${x.a.assigned}`,
           'timeout',
           `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md step 3 (${hint}); write the timeout handling into the status record (step 4). Record the branch taken; collected when it had already finished (its report is then taken).`,
-          ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
+          x.stage === 'in-review' ? ['reassign', 'stuck', 'awaiting-ruling', 'collected'] : ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
           [doc('TIMEOUTS.md', 'steps 3 and 4')],
           { tickets: x.tickets, line: t.line, meta: { agent: x.id, stage: x.stage, hint } },
         ),
@@ -1184,13 +1210,18 @@ function unfixed(c, id, t, what) {
   );
 }
 
+/** The review a ticket in in-review is due: a recheck when it came back from a fix round, else the initial one. */
+const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial');
+
 function stepInReview(c, id, t) {
   const k = t.history.filter((h) => h.to === 'in-review').length;
-  const mode = t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial';
+  const mode = reviewMode(t);
   const flag = c.flag(id);
   let cr = currentReview(t);
   const retrying = cr?.verdict === 'stuck' && flag.retryReviews === t.reviews.length;
   if (retrying) cr = null;
+  // #143: the review host is in flight (it went to the background): its report, or the deadline scan, comes first
+  if (!cr && t.assignment?.deadline && t.assignment.agentId) return;
   if (cr) {
     if (cr.verdict === 'pass') return stageTo(c, id, t, 'queued');
     if (cr.verdict === 'fix') {
@@ -1208,7 +1239,8 @@ function stepInReview(c, id, t) {
       ),
     );
   }
-  const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}`;
+  // a review handed out again after its host timed out (#143) is a new review: its own ids and spawn file
+  const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}${flag.redispatch?.reassign ? '-t' : ''}`;
   const against = c.tick('against', `${keyOf(id)}-${tag}.json`);
   const ag = c.emit(
     exec(`against:${id}:${tag}`, 'acceptance-check', acceptanceArgv(c, id, t, ['--against', c.snapshot(id), '--sha', t.snapshotSha256 ?? '<sha256>']), {
@@ -1329,18 +1361,31 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
     )}\n`,
   );
   const b = c.emit(exec(`brief:${id}:review-${tag}`, 'brief', ['node', js('brief.mjs'), 'review', values], { stdout: c.tick('review', `${keyOf(id)}-${tag}.json`), tickets: [id], line: t.line, after: [ag, body.id] }));
+  // #143: the assignment record, as for any agent: deadline.mjs record in the ticket worktree with timeout-review,
+  // then state.mjs assign (--reassign when the previous review host timed out); the spawn's record names the agent
+  const wt = resolve(t.assignment?.worktree ?? c.git.wtOf(t.branch) ?? c.cfg.root);
+  const rec = c.tick('rec', `${keyOf(id)}-review-${tag}.json`);
+  const r1 = c.emit(exec(`rec:review:${id}:${tag}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', wt, '--limit', String(limitFor(c, 'in-review'))], { stdout: rec, tickets: [id], line: t.line }));
+  const r2 = c.emit(
+    exec(`assign:review:${id}:${tag}`, 'assignment', stateArgv(c, 'assign', id, '--record', rec, '--type', 'general-purpose', '--worktree', wt, ...(flag.redispatch?.reassign ? ['--reassign'] : [])), {
+      tickets: [id],
+      line: t.line,
+      after: [r1],
+    }),
+  );
   return c.emit({
     id: `review:${id}:${tag}`,
     kind: 'spawn',
     step: 'review',
     tickets: [id],
     line: t.line,
-    after: [b, ag, body.id],
+    after: [b, ag, body.id, r2],
     spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
     meta: { mode, kind: 'full' },
-    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>]`,
+    // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>]   (in the background: --agent <agent id> alone)`,
   });
 }
 
@@ -2223,7 +2268,9 @@ export function record(path, id, flags, now, deps) {
     entry.exit = Number(flags.exit);
   } else {
     const allowed = issued.outcomes ?? [];
-    if (issued.kind === 'spawn' && !allowed.length) {
+    // #143: a prove-it review host the Agent tool put in the background is recorded by its agent alone
+    const inBackground = issued.step === 'review' && issued.kind === 'spawn' && issued.meta?.kind === 'full' && outcome === null;
+    if (issued.kind === 'spawn' && (!allowed.length || inBackground)) {
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
     } else if (!allowed.includes(outcome)) throw new UsageError(`${id}: --outcome must be one of ${allowed.join(', ')}`);
     if (outcome !== null) entry.outcome = outcome;
@@ -2297,11 +2344,26 @@ export function record(path, id, flags, now, deps) {
     const fix = book.red[line]?.ciFix;
     if (fix) fix.status = 'ended';
   };
+  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once.
+  const reviewEnded = (tid, agent, mode, verdict) => {
+    release([tid]);
+    if (book.agents[agent]) book.agents[agent].status = 'collected';
+    book.inbox = book.inbox.filter((x) => x !== agent);
+    const t = ticket(tid);
+    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
+      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []));
+    }
+  };
 
   switch (issued.step) {
     case 'collect': {
       if (meta.stage === 'ci-fix') {
         ciFixEnded(issued.line, meta.agent, 'collected');
+        break;
+      }
+      if (meta.stage === 'in-review') {
+        // #143: the report of a review host that went to the background
+        reviewEnded(tickets[0], meta.agent, meta.mode, outcome);
         break;
       }
       // #138: a round a review follows hands its report over first (checked before anything is written)
@@ -2393,6 +2455,14 @@ export function record(path, id, flags, now, deps) {
         if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
       }
+      if (meta.kind === 'full') {
+        // #143: the review host holds the assignment tick recorded before the spawn; with no outcome it is in flight
+        named(tickets, flags.agent);
+        book.agents[flags.agent].status = 'current';
+        delete flag(tid).redispatch;
+        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome);
+        break;
+      }
       if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
         S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []));
       }
@@ -2429,6 +2499,11 @@ export function record(path, id, flags, now, deps) {
       if (meta.stage === 'ci-fix') {
         ciFixEnded(issued.line, meta.agent, outcome === 'collected' ? 'collected' : 'stopped', true);
         if (outcome === 'failed') book.failed[issued.line] = now;
+        break;
+      }
+      if (meta.stage === 'in-review' && outcome === 'collected') {
+        // #143: the review host had finished: its report is taken by the collect the next list gives (a verdict)
+        if (!book.inbox.includes(meta.agent)) book.inbox.push(meta.agent);
         break;
       }
       release(tickets, true);

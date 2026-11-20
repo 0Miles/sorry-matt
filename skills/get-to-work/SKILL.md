@@ -158,6 +158,12 @@ expansion, and wider after a send-back.
   coverage, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
   report (six lines at most), and record its verdict with `--outcome`.
+- **The review's assignment record**: before the spawn tick writes the assignment record (`deadline.mjs record` in the
+  ticket worktree with the `timeout-review` limit, then `state.mjs assign`), so the review host agent has a time limit
+  like every other agent. When its report comes back with the spawn, record `--agent` and `--outcome`; when the Agent
+  tool put it in the background and the spawn returned only an agent id, record `--agent` alone: it is in flight, tick
+  scans its deadline and schedules the fallback wake-up all the same, and when its completion notice arrives you pass
+  it to tick with `--reported`, and a `collect` records the verdict.
 - **Act on the report**: `findings` go to the batched fix; when `observations` or `pre-existing` is not 0, read only
   those two parts of the review block and file one raw ticket for them ("Filing along the way"). The spawn file's
   reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier (`architecture` at `full`).

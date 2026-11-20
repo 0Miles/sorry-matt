@@ -94,7 +94,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 刪除行不派被刪除的行為，沒有規則檔涵蓋改動檔不派 repo 慣例，簽章沒變時跨檔案契約併入逐行。
 
 本 skill 的 finder、architect（下方）、verifier（第 4 節）與 Fix Verifier（第 7 節）一律由你以前景派送：你在自己的
-回合裡等它們全部回來才往下，而你本身也是呼叫方以前景派出的。`get-to-work` 不給審查設時限，前提就是這一條。
+回合裡等它們全部回來才往下，而你本身也是呼叫方以前景派出的。`get-to-work` 仍給審查主持 agent 一個時限
+（`timeout-review`）：你被放到背景時它照樣掃時限，超時就停下你，改派一次、重發同一模式的審查。
 spawn 被拒 —— 拿不到 Agent tool，或被 plugin 的 hook 以預算為由擋下 —— 時不重試、不換路，也不自己兼任：結論
 `stuck`，原因寫被拒的訊息，已完成的節照第 5 節留給續跑。
 

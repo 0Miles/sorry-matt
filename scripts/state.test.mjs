@@ -424,7 +424,25 @@ test('assignments, agent ids, extension, release and timeout reassignment', (t) 
   assert.equal(s.usage.timeoutExtensions, 1);
   assert.equal(s.usage.timeoutStops, 1);
   r.ok('add', '#3', '--line', LINE);
-  r.refused(/a timeout reassignment is for implementing, fixing, expanding; it is candidate/, 'assign', '#3', '--record', rec, '--type', 'x', '--reassign');
+  r.refused(/a timeout reassignment is for implementing, fixing, expanding, in-review; it is candidate/, 'assign', '#3', '--record', rec, '--type', 'x', '--reassign');
+});
+
+test('#143: a review host is reassigned once for a timeout in in-review; a state from before the count reads it as 0', (t) => {
+  const r = run(t);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--worktree', process.cwd(), '--limit', '60', '--now', NOW]));
+  at(r, '#1', 'in-review');
+  assert.equal(r.state().tickets['#1'].timeoutReassignments['in-review'], 0, 'a new ticket counts in-review too');
+  // a state written before in-review was counted: the key is missing, and the file still loads
+  const s = r.state();
+  delete s.tickets['#1'].timeoutReassignments['in-review'];
+  writeFileSync(r.path, JSON.stringify(s));
+  r.ok('assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  r.ok('agent', '#1', '--id', 'rv1');
+  r.ok('release', '#1', '--stopped');
+  r.ok('assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd(), '--reassign');
+  assert.equal(r.state().tickets['#1'].timeoutReassignments['in-review'], 1);
+  r.ok('release', '#1', '--stopped');
+  r.refused(/already reassigned for a timeout in in-review/, 'assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd(), '--reassign');
 });
 
 test('#144: a line holds its own assignment (the ci-fix of a red light that maps to no ticket)', (t) => {

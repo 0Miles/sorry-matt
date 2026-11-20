@@ -118,7 +118,9 @@ signature changed the cross-file lens is folded into line by line.
 
 This skill's finders, the architect (below), verifiers (section 4) and Fix Verifiers (section 7) are always dispatched by you in the
 foreground: you wait within your own turn until every one of them is back, and you were yourself dispatched in the
-foreground by the caller. `get-to-work` puts no time limit on review because of this rule. When a spawn is refused —
+foreground by the caller. `get-to-work` still gives the review host agent a time limit (`timeout-review`): when you
+are put in the background it scans that deadline all the same, and once you are overdue it stops you and hands the
+review out again, in the same mode, once. When a spawn is refused —
 no Agent tool, or the plugin's hook blocks it over the budget — do not retry, take another route, or stand in
 yourself: the verdict is `stuck`, the reason is the refusal's message, and the sections already done stay for the
 resume per section 5.
