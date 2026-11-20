@@ -427,6 +427,35 @@ test('assignments, agent ids, extension, release and timeout reassignment', (t) 
   r.refused(/a timeout reassignment is for implementing, fixing, expanding; it is candidate/, 'assign', '#3', '--record', rec, '--type', 'x', '--reassign');
 });
 
+test('#144: a line holds its own assignment (the ci-fix of a red light that maps to no ticket)', (t) => {
+  const r = run(t);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--worktree', process.cwd(), '--limit', '20', '--now', NOW]));
+  r.ok('add', '#1', '--line', LINE);
+  assert.equal(r.state().lines[LINE].assignment, null, 'a new line holds no assignment');
+  r.refused(/not an integration branch of this run/, 'assign', '--line', 'run-1/nowhere', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  assert.equal(r.cmd('assign', '#1', '--line', LINE, '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd()).code, 2, 'tickets or a line, not both');
+  r.refused(/no assignment in flight/, 'agent', '--line', LINE, '--id', 'c1');
+  r.ok('assign', '--line', LINE, '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  r.ok('agent', '--line', LINE, '--id', 'c1');
+  r.refused(/already belongs to c1/, 'agent', '--line', LINE, '--id', 'c2');
+  r.ok('extend', '--line', LINE, '--deadline', '2026-03-10T12:40:00Z');
+  r.refused(/already extended once/, 'extend', '--line', LINE, '--deadline', '2026-03-10T12:50:00Z');
+  const a = r.state().lines[LINE].assignment;
+  assert.deepEqual([a.agentId, a.type, a.limit, a.deadline, a.extended], ['c1', 'general-purpose', 20, '2026-03-10T12:40:00Z', 'yes']);
+  assert.equal(r.state().tickets['#1'].assignment, null, 'no ticket holds it');
+  const res = r.ok('resume');
+  assert.deepEqual(res.inFlight.map((x) => [x.id, x.tickets, x.line]), [['c1', [], LINE]]);
+  r.ok('release', '--line', LINE, '--stopped');
+  r.refused(/no assignment in flight/, 'release', '--line', LINE);
+  const s = r.state();
+  assert.equal(s.lines[LINE].assignment.deadline, null);
+  assert.equal(s.usage.timeoutExtensions, 1);
+  assert.equal(s.usage.timeoutStops, 1);
+  // an expansion record is for tickets only
+  const ex = r.file('ex.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--limit', '15', '--now', NOW]));
+  assert.equal(r.cmd('assign', '--line', LINE, '--record', ex, '--type', 'general-purpose').code, 2);
+});
+
 test('resume rebuilds the open tickets, their agents and a deadline scan plan from the state file alone', (t) => {
   const r = run(t);
   // #1 implementing with agent i1 in a worktree, #2 and #3 expanding under one agent, #4 delivered, #5 assigned

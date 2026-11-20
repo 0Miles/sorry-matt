@@ -39,12 +39,22 @@ do not queue.
 
      The CI failure is the finding: it goes through the batched fix (`recheck` with the ticket's previous review
      block), then `integrate.mjs merge --ci --push`, without queueing.
-   - Maps to no ticket: the host, or a newly spawned `ci-fix` agent whose target is the integration branch, fixes it in
-     the integration worktree, commits (subject without a ticket ID) and pushes.
+   - Maps to no ticket: the host neither fixes it nor dispatches anyone itself. Write the failing lines taken in point 3
+     to the file this judge's `meta.failure` names and record `unmatched` (with that file missing or empty the record
+     is refused). tick then hands out the line's ci-fix: `deadline.mjs record` in the integration worktree (time limit
+     `timeout-fix`), `state.mjs assign --line` to put the assignment record on the line (`lines[<line>].assignment`),
+     and a background general-purpose spawn whose description is the `ci-fix` role word followed by the integration
+     branch, with a brief tick writes (the integration worktree, the red SHA, the failing lines, the round; the commit
+     subject carries no ticket ID; no push). Send the spawn as handed out and record it with `--agent`. While it is in
+     flight the line gets no red-light handling, push or CI read, and the finish waits for it; when it reports, tick
+     hands out a `collect` (`fixed` / `blocked`). A new commit is pushed by tick and its CI read; with no new commit,
+     tick hands out the `red-light` judge again at the same SHA to open the next round. Once both rounds are used the
+     judge no longer offers `unmatched`: go to point 6.
    - A fix agent's dispatch has its assignment record and time limit as usual; one stopped for a timeout counts as a
-     round ([`TIMEOUTS.md`](TIMEOUTS.md)). The flaky-red hard rail applies. Push after every round (skip it with no
-     `origin`); the next verification decides: in the pipeline, tick's next CI read or local verification; at the
-     finish, `FINISH.md` step 3 verifies again on the spot. Record `handled`.
+     round ([`TIMEOUTS.md`](TIMEOUTS.md)). The flaky-red hard rail applies. Mapped to a ticket, push after every round
+     (skip it with no `origin`) and record `handled`; mapped to no ticket, tick pushes. The next verification decides:
+     in the pipeline, tick's next CI read or local verification; at the finish, `FINISH.md` step 3 verifies again on
+     the spot.
 5. **Still red after two rounds, mapped to a ticket: revert.** List the tickets of the same line that depend on it
    (from the frontier's `blockedBy`) and run
    `integrate.mjs revert <state> <ticket> --worktree <integration worktree> --reason <the CI red and failed jobs> --push`
@@ -53,7 +63,7 @@ do not queue.
    those in flight awaiting ruling with their branch tip kept); its header has each step. On GitHub also file the raw
    issue of "mark stuck" in [`SEND-BACK.md`](SEND-BACK.md). The aggregate PR lists them as gaps, without `Closes`. To
    integrate a reverted ticket again later, first `git revert <the revert commit>`. Record `reverted`.
-6. **Still red after two rounds, mapped to no ticket**: the line has **failed verification**; record `failed`, and tick
+6. **Still red after two rounds, mapped to no ticket** (the judge no longer offers `unmatched`): the line has **failed verification**; record `failed`, and tick
    sets its candidates and never-dispatched tickets aside as awaiting ruling and stops pausing the queue for the red.
    No `gh pr merge` and no merge queue: the aggregate PR says so and is left for a human to merge, and the human-work
    list names the failed jobs.
