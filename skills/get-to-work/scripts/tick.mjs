@@ -16,7 +16,7 @@
 //   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
-//                        [--now <UTC>]
+//                        [--observations <n>] [--pre-existing <n>] [--now <UTC>]
 //
 // setup writes the run's configuration into the state file once at the freeze (again to change it; the bookkeeping
 // below is kept). `--repo` is required with github, `--tickets-dir` (where the ticket files are, e.g.
@@ -66,7 +66,9 @@
 //   reviewer, scratchpad — their keys in the header of brief.mjs), then a foreground `spawn` (step `review`,
 //   general-purpose, description `review <ticket>`, outcomes pass | fix | stuck) whose prompt is to read that spawn
 //   file: nothing is left for the host to fill in, and the diff and the review's output stay with the review host.
-//   Record it with `--agent` and `--outcome` (`--findings` with fix). The targeted checks come from the report of the
+//   Record it with `--agent`, `--outcome` (`--findings` with fix) and the counts of its report's `counts:` line,
+//   `--observations <n> --pre-existing <n>` (#142: both required, exit 2 without; a minimal reviewer's record takes
+//   neither, exit 2 with either). The targeted checks come from the report of the
 //   round under review: the collect of an implementation round (and of a fix round a recheck follows) names
 //   `tick/report/<ticket key>-<assigned>.md`, and record green / fixed is refused (3) until that file holds the
 //   report with its `targeted checks:` line. A ticket in review with no such file on record (a timeout's collected
@@ -91,6 +93,15 @@
 //   (deadline.mjs progress; a stop ends the dispatching for good), CI per line, frontier.mjs, stalled tickets to
 //   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
 //   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
+//
+// Observations and pre-existing (#142)
+//   A review recorded with observations or pre-existing above 0 (state.mjs keeps both counts on the review) gets a
+//   `judge` (step `observations`, id `observations:<ticket>:<review number>`, outcome `filed` with `--value <issue
+//   id>`): read only those two sections of its review block and file one raw ticket (SKILL.md, Filing along the way).
+//   It does not hold the ticket up: the verdict's stage move is in the same list. One judge per such review, in review
+//   order, the next handed out once the one before is recorded; once a raw ticket is on file for the ticket (tick's
+//   flag `observationsIssue`), the judge names it, the new items go into it, and `filed` with another id is refused
+//   (3). The wrap-up waits for the filings in its list.
 //
 // A red light that maps to no ticket (#144)
 //   The `red-light` judge (RED-LIGHT.md) has the outcome `unmatched` while the line has a fix round left (two per red
@@ -146,7 +157,8 @@
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
-//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`).
+//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`, and the
+//   prove-it review `--observations` and `--pre-existing`).
 //   judge and ask: `--outcome <one of outcomes>`, with what the outcome needs: `--agent` for a spawn the judge did,
 //   `--value` for a reason, an issue id or a task id, `--findings` with a review's fix, `--fixed` / `--unfixed` with
 //   a fix report under `recheck: false`, `--type` when the spawn had to use another agent type. The state writes
@@ -1331,8 +1343,40 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
     meta: { mode, kind: 'full' },
-    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>]`,
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>`,
   });
+}
+
+/**
+ * #142: a review whose report counts observations or pre-existing gets a judge to file them as one raw ticket per
+ * ticket (SKILL.md, Filing along the way). It does not hold the ticket up: the review's conclusion goes on beside it.
+ * One judge per such review, in review order: a later one is handed out once the earlier is recorded, and names
+ * the raw ticket that one filed, which its new items join.
+ */
+function stepObservations(c) {
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    const at = t.reviews.findIndex((r, i) => (r.observations ?? 0) + (r.preExisting ?? 0) > 0 && !c.done(`observations:${id}:${i + 1}`));
+    if (at < 0) continue;
+    const r = t.reviews[at];
+    const o = r.observations ?? 0;
+    const counts = `${o} observation${o === 1 ? '' : 's'} and ${r.preExisting ?? 0} pre-existing`;
+    const where = `the \`observations\` and \`pre-existing\` sections of its ${r.mode} review block (review ${at + 1}) in ${statusRecordOf(c, id, t)}`;
+    const issue = c.flag(id).observationsIssue;
+    const how =
+      c.cfg.tracker === 'github'
+        ? '`gh issue create` without `ready-for-agent`, the body polished by ASKING section 6'
+        : `the next unused ticket file in ${c.cfg.ticketsDir} with Status needs-triage, committed to ${t.line} (pushed before this wake-up ends when there is an origin)`;
+    const what = issue
+      ? `${id}'s ${r.mode} review reports ${counts}. Read only ${where}; add the items not already in ${issue} to it (location, one sentence, evidence path each) — the same raw ticket, not another. Record filed with --value ${issue}.`
+      : `${id}'s ${r.mode} review reports ${counts}. Read only ${where}, and file one raw ticket listing each item (location, one sentence, evidence path), linked to the status record: ${how}. It stays outside the frozen ticket set. Record filed with --value <issue id>.`;
+    c.emit(
+      judge(`observations:${id}:${at + 1}`, 'observations', what, ['filed'], [doc('SKILL.md', 'section 2, Filing along the way'), doc('ASKING.md', 'section 6')], {
+        tickets: [id],
+        line: t.line,
+        needs: { value: 'issue id' },
+      }),
+    );
+  }
 }
 
 function stepFixing(c, id, t) {
@@ -1907,6 +1951,7 @@ function stepFinish(c) {
       `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone. Record done.`,
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
+      { after: c.actions.filter((a) => a.step === 'observations').map((a) => a.id) }, // #142: the raw tickets are filed first
     ),
   );
 }
@@ -2043,6 +2088,7 @@ export function next(path, reported, now, deps) {
     else if (t.stage === 'implementing') stepImplementing(c, id, t);
     else if (t.stage === 'expanding') stepExpanding(c, id, t);
   }
+  stepObservations(c);
   stepExpandReassign(c);
   stepIntegration(c);
   stepDispatch(c);
@@ -2308,6 +2354,13 @@ export function record(path, id, flags, now, deps) {
     case 'review': {
       const [tid] = tickets;
       const t = ticket(tid);
+      // #142: a prove-it review is recorded with its report's two counts; a minimal reviewer reports findings only
+      const given = [flags.observations, flags['pre-existing']].filter((x) => x !== undefined).length;
+      if (meta.kind === 'minimal' && given) throw new UsageError(`${id}: a minimal review reports blocking findings only; record it without --observations and --pre-existing`);
+      if (meta.kind !== 'minimal' && given < 2)
+        throw new UsageError(`${id}: record the review with the counts of its report's \`counts:\` line: --observations <n> --pre-existing <n>`);
+      for (const k of ['observations', 'pre-existing'])
+        if (flags[k] !== undefined && !/^\d+$/.test(flags[k])) throw new UsageError(`--${k}: expected a whole number, 0 or more, got ${JSON.stringify(flags[k])}`);
       if (meta.report) {
         checkReport(meta.report, outcome, issued.at, deps); // review: minimal
         flag(tid).report = meta.report;
@@ -2317,7 +2370,8 @@ export function record(path, id, flags, now, deps) {
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
       }
       if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []));
+        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []),
+          ...(given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : []));
       }
       break;
     }
@@ -2334,6 +2388,15 @@ export function record(path, id, flags, now, deps) {
     case 'mark-stuck':
       stageIf(tickets[0], 'stuck', flags.value ?? 'findings still open after the fix rounds');
       break;
+    case 'observations': {
+      // #142: one raw ticket per ticket; a later review's items go into it
+      if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
+      const f = flag(tickets[0]);
+      if (f.observationsIssue && f.observationsIssue !== flags.value)
+        throw new Refused(`${id}: ${tickets[0]}'s observations and pre-existing go to ${f.observationsIssue}, the raw ticket filed for its earlier review; add the new items there and record filed with --value ${f.observationsIssue}`);
+      f.observationsIssue = flags.value;
+      break;
+    }
     case 'file-issue':
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
       if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
@@ -2593,7 +2656,7 @@ const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
   run: { reported: 'many', now: 'one' },
-  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', now: 'one' },
+  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', now: 'one' },
 };
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.

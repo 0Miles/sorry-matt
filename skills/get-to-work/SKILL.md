@@ -157,10 +157,16 @@ expansion, and wider after a send-back.
   tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI
   coverage, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
-  report (six lines at most), and record its verdict with `--outcome`.
-- **Act on the report**: `findings` go to the batched fix; when `observations` or `pre-existing` is not 0, read only
-  those two parts of the review block and file one raw ticket for them ("Filing along the way"). The spawn file's
-  reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier (`architecture` at `full`).
+  report (six lines at most), and record its verdict with `--outcome` and the report's `counts:` line as
+  `--observations <n> --pre-existing <n>` (both, 0 when there are none; with one missing the record is refused with
+  2). A minimal review reports blocking findings only and takes neither count.
+- **Act on the report**: `findings` go to the batched fix. When `observations` or `pre-existing` is not 0, tick hands
+  you an `observations` judge: read only those two parts of the review block, file one raw ticket for them ("Filing
+  along the way") and record it with `--value <issue id>`. When a later review of the same ticket (a recheck, a retry)
+  brings more, the judge tick hands out names that raw ticket: the new items go into it, not into another, and
+  recording a different id is refused (3). The judge does not hold the ticket up: the review's verdict goes on as
+  usual. The spawn file's reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier
+  (`architecture` at `full`).
 
 ### Batched fix
 
@@ -188,8 +194,9 @@ criterion, with the line on one side and the base on the other.
 ### Filing along the way
 
 Out-of-scope bugs, prefactors, tech debt, flaky reds whose root cause lies out of scope, and the review's `observations`
-and `pre-existing` (one ticket per reviewed ticket, each item with its location, one sentence and evidence path; those a
-recheck brings go into the same one) get a raw ticket only, linked back to the source:
+and `pre-existing` (when tick's `observations` judge hands them out: one ticket per reviewed ticket, each item with its
+location, one sentence and evidence path; those a recheck brings go into the same one) get a raw ticket only, linked
+back to the source:
 
 - **GitHub**: `gh issue create`, without `ready-for-agent`; the body polished per `ASKING.md` section 6.
 - **Local Markdown**: the next unused number by the tracker's convention, `Status` set to `needs-triage`, committed to
