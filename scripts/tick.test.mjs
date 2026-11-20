@@ -21,6 +21,7 @@ import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs
 import { main as ciMain, defaultDeps as ciDeps } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
+import { classify } from '../hooks/classify.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1532,7 +1533,9 @@ const runOut = (h, ...args) => {
   assert.equal(r.err, '');
   return JSON.parse(r.out);
 };
-const leftForHost = (a) => a.kind === 'exec' && a.step === 'push';
+/** An exec run leaves to the host: one the guard hook's classification gives a verdict, so the guard sees it (#146). */
+const guarded = (a) => classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
+const leftForHost = (a) => a.kind === 'exec' && guarded(a);
 
 test('#129: run checks its arguments as next does; with no exec to run it lists what next lists, and ran is []', (t) => {
   const h = world(t);
@@ -1587,7 +1590,7 @@ test('#129: run goes from the dispatch point to the first implementation spawn, 
   assert.equal(new Set(ran.map((x) => x.log)).size, ran.length, 'one log per exec');
   const left = new Set(ids(out.actions));
   assert.ok(!out.ran.some((x) => left.has(x.id)), 'no exec it ran is still listed');
-  assert.ok(out.actions.filter((a) => a.batch === 1 && a.kind === 'exec').every(leftForHost), 'batch 1 holds no exec but a push');
+  assert.ok(out.actions.filter((a) => a.batch === 1 && a.kind === 'exec').every(leftForHost), 'batch 1 holds no exec but one the guard classifies');
   const spawn = implement(out);
   assert.ok(spawn, 'an implementation spawn');
   assert.equal(spawn.spawn.subagent_type, 'sorry-matt:implementer');
@@ -1923,9 +1926,160 @@ test('#147: a refused record ends run with exit 3; stdout lists what ran and the
   assert.equal(dirname(log), join(h.W, 'tick', 'run'));
   assert.notEqual(log, out.ran[0].log);
   assert.match(out.do, /ran/);
-  assert.match(out.do, /do not run `run` again/i);
+  assert.match(out.do, /run `run` again/); // #146: the next run records blocked, it does not run it again
+  assert.match(out.do, /not run again/);
   assert.match(out.do, /blocked\.exit/);
   assert.deepEqual(out.lists.flatMap((l) => l.ran), [out.ran[0].id]);
+});
+
+// ---- #146: what run's execs leave behind when it fails, and which execs it leaves to the host -------------------------
+
+test('#146: a run that throws does not count the batch-1 spawns of its list as handed out; a run that returns does', (t) => {
+  const h = world(t);
+  h.acceptance['#2'] = { items: [], expansions: [] }; // #2's expansion spawn comes up while #1's chain still has execs
+  let thrown = null;
+  h.execute = (a) => {
+    const st = h.state().tick;
+    const spawn = Object.keys(st.issued).find((id) => st.issued[id].kind === 'spawn' && st.issued[id].batch === 1 && !st.done[id]);
+    if (spawn && !thrown) {
+      thrown = { exec: a.id, spawn };
+      throw new Error('execute broke');
+    }
+    return { code: h.exec(a) };
+  };
+  assert.throws(() => h.runWake(), /execute broke/);
+  assert.ok(thrown, 'an exec ran beside a batch-1 spawn and threw');
+  // the host never saw that list: the next one hands the spawn out again, as a spawn
+  const again = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(!again.actions.some((a) => a.step === 'spawn-check'), 'no spawn-check for a spawn the host never saw');
+  const spawn = again.actions.find((a) => a.id === thrown.spawn);
+  assert.equal(spawn?.kind, 'spawn');
+  assert.equal(spawn.batch, 1);
+  h.run(again.actions); // the host takes that list
+  // a run that returns its list hands its batch-1 spawns out: interrupted before their record, they come back as checks
+  h.execute = null;
+  let out = null;
+  for (let i = 0; i < 10 && !out?.actions.some((a) => a.kind === 'spawn' && a.batch === 1); i += 1) {
+    out = runOut(h);
+    if (!out.actions.some((a) => a.kind === 'spawn' && a.batch === 1)) h.run(out.actions);
+  }
+  const handed = out.actions.filter((a) => a.kind === 'spawn' && a.batch === 1 && a.spawn.background);
+  assert.ok(handed.length, 'run returned a background spawn at batch 1');
+  const checks = JSON.parse(h.tick('next', h.path).out).actions.filter((a) => a.step === 'spawn-check');
+  assert.deepEqual(checks.map((a) => a.meta.of).sort(), ids(handed).sort());
+});
+
+test('#146: an exec killed by a signal is no normal end: exit 128 + the signal number, said in its log, and its failed judge', (t) => {
+  const h = world(t);
+  const log = join(h.dir, 'killed.log');
+  const killedBy = (signal) => bashExecutor({ spawn: (cmd, args) => (args[1] === 'uname -s' ? { status: 0, stdout: 'Linux\n' } : { status: null, signal }), platform: 'linux' });
+  assert.deepEqual(killedBy('SIGKILL')({ id: 'x', command: 'true' }, log), { code: 137, signal: 'SIGKILL' });
+  assert.match(readFileSync(log, 'utf8'), /killed by SIGKILL/);
+  assert.deepEqual(killedBy('SIGTERM')({ id: 'x', command: 'true' }, log), { code: 143, signal: 'SIGTERM' });
+  // in run: the first exec is killed; it is recorded as killed, not as exit 1 (which some execs take as a normal end)
+  const kill = killedBy('SIGKILL');
+  let first = null;
+  h.execute = (a, file) => {
+    if (first) return { code: h.exec(a) };
+    first = a.id;
+    return kill(a, file);
+  };
+  const out = runOut(h);
+  assert.deepEqual(out.ran[0], { id: first, exit: 137, signal: 'SIGKILL', log: out.ran[0].log });
+  assert.equal(h.state().tick.done[first].exit, 137);
+  const judged = out.actions.find((a) => a.id === `failed:${first}`);
+  assert.ok(judged && judged.batch === 1, 'its failed judge is listed');
+  assert.match(readFileSync(out.ran[0].log, 'utf8'), /killed by SIGKILL/);
+});
+
+test('#146: an exec whose record failed is not run again: the next run records it with the exit it had', (t) => {
+  const h = world(t);
+  const seen = new Set(); // CI runs at each SHA's first read: the finish reads it again, and its record counts a full verification
+  h.ci = (branch, sha) => (seen.has(sha) ? 'green' : (seen.add(sha), 'running'));
+  // state.mjs refuses the usage write of the finish's CI record once: the exec ran, its record is refused
+  const plain = defaultDeps().stateMain;
+  let refuse = true;
+  const stateMain = (argv) => {
+    if (refuse && argv[0] === 'usage' && argv.includes('fullVerifications=1')) {
+      refuse = false;
+      return { code: 3, out: '', err: 'state: refused: usage is held (test)\n' };
+    }
+    return plain(argv);
+  };
+  const counts = {};
+  const deps = {
+    ...defaultDeps(),
+    stateMain,
+    execute: (a) => {
+      counts[a.id] = (counts[a.id] ?? 0) + 1;
+      return { code: h.exec(a) };
+    },
+  };
+  let refused = null;
+  let listed = null;
+  let after = null;
+  const via = (...args) => {
+    const r = tick(['run', h.path, ...args, '--now', h.iso()], deps);
+    if (r.code !== 3 || refused) return r;
+    refused = JSON.parse(r.out);
+    // a host on next sees it ran and is pointed at its record, not at its command
+    listed = JSON.parse(h.tick('next', h.path).out).actions.find((a) => a.id === refused.blocked.id);
+    // the refusal settled (state.mjs no longer says no): run again, as its `do` says
+    const again = tick(['run', h.path, '--now', h.iso()], deps);
+    after = JSON.parse(again.out);
+    return again;
+  };
+  assert.equal(h.untilDone(() => h.wake({ via })).then, 'done');
+  assert.ok(refused, 'a record was refused');
+  assert.equal(refused.exit, 3);
+  const { blocked } = refused;
+  assert.equal(blocked.at, 'record');
+  assert.equal(blocked.exit, 0);
+  assert.match(refused.do, /run `run` again/);
+  assert.doesNotMatch(refused.do, /do not run `run` again/i);
+  assert.deepEqual([listed.kind, listed.ran.exit], ['exec', 0], 'next lists it with what it ran');
+  assert.match(listed.note, /do not run it again/i);
+  assert.equal(counts[blocked.id], 1, `${blocked.id} ran once`);
+  assert.deepEqual(after.ran.find((x) => x.id === blocked.id), { id: blocked.id, exit: 0, log: blocked.log }, 'the run after records it with its exit');
+  const st = h.state();
+  assert.equal(st.tick.done[blocked.id].exit, 0);
+  assert.equal(st.tick.ran?.[blocked.id], undefined, 'nothing left to record');
+  assert.equal(st.usage.fullVerifications, 1, 'its record applied once');
+  assert.ok(Object.values(counts).every((n) => n === 1), 'no exec ran twice');
+});
+
+test("#146: which execs run leaves to the host is the guard hook's classification, not the step: a push of a line is run, a flagged exec is left", (t) => {
+  // a push of the integration branch: no verdict from the guard, so run runs it (#144's ci-fix commit)
+  const h = world(t);
+  unmatchedRed(h);
+  h.runWake();
+  assert.equal(ciFixSpawns(h).length, 1, 'the ci-fix spawn');
+  const outs = h.runWake();
+  const fixed = git(h.intWt, 'rev-parse', 'HEAD');
+  const pushed = outs.flatMap((o) => o.ran).find((x) => x.id === `push:${LINE}:@${fixed}`);
+  assert.ok(pushed, 'run pushed the line itself');
+  assert.equal(pushed.exit, 0);
+  assert.equal(git(h.repo, 'rev-parse', `origin/${LINE}`), fixed);
+  assert.ok(!h.log.some((a) => a.step === 'push'), 'the host was not handed the push');
+
+  // an exec the guard gives a verdict, whatever its step: left to the host at batch 1, not run
+  const g = world(t);
+  const flagged = (event) => (/frontier\.mjs/.test(event.tool_input.command) ? [{ category: 'release-deploy', level: 'ask', detail: 'x' }] : []);
+  const r = tick(['run', g.path, '--now', g.iso()], { ...defaultDeps(), classify: flagged, execute: (a) => ({ code: g.exec(a) }) });
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  const frontier = out.actions.find((a) => a.step === 'frontier');
+  assert.ok(frontier && frontier.batch === 1 && frontier.kind === 'exec', 'the flagged exec is listed for the host');
+  assert.ok(!out.ran.some((x) => x.id === frontier.id), 'run did not run it');
+
+  // no classification to go by (the plugin's hooks are not beside the skill): run runs nothing, exit 1, as without bash
+  const n = world(t);
+  const r2 = tick(['run', n.path, '--now', n.iso()], { ...defaultDeps(), classify: null, execute: () => assert.fail('nothing runs') });
+  assert.equal(r2.code, 1);
+  assert.match(r2.err, /classify\.mjs/);
+  const o2 = JSON.parse(r2.out);
+  assert.deepEqual(o2.ran, []);
+  assert.equal(o2.blocked.at, 'execute');
 });
 
 // #153: the finish's simplify pass is a spawn; the simplify agent judges first and reports applied, none or skipped.

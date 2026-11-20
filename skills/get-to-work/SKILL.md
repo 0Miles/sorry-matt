@@ -77,12 +77,15 @@ Each wake-up:
 
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`, with one `--reported <agent id>` for each agent whose
    completion notice arrived. Whether its report is taken is tick's call. `run` runs `next` again and again: it runs
-   each list's batch-1 execs (`push` aside) in bash, in order, and records them, until batch 1 still holds a spawn, a
-   judge, an ask or a `push`, or `then` is `end` or `done`. Its output is the list that is left, with `ran` naming the
-   execs it ran (id, exit code, the log file of their error output) and `lists` giving, in order, each list it made:
-   its `reports`, `reconcile`, `dispatch`, `wrote` and the execs run from it. Read the reports taken, the
-   reconciliations and the files written by earlier lists there, not only the last one. When `run` exits 1 saying
-   bash cannot be used, run `next` instead this wake-up and run the execs' `command` yourself.
+   each list's batch-1 execs in bash, in order, and records them, until batch 1 still holds a spawn, a judge, an ask
+   or an exec left to you, or `then` is `end` or `done`. Which execs are left to you is the plugin guard hook's action
+   classification, not the step name: only those the guard would ask you to confirm (a push to a protected branch,
+   say) stay. Its output is the list that is left, with `ran` naming the execs it ran (id, exit code, the log file of
+   their error output; one killed by a signal also has `signal`, and its exit code is recorded as 128 plus the signal
+   number: not a normal end) and `lists` giving, in order, each list it made: its `reports`, `reconcile`, `dispatch`,
+   `wrote` and the execs run from it. Read the reports taken, the reconciliations and the files written by earlier
+   lists there, not only the last one. When `run` exits 1 saying bash cannot be used or the guard hook's
+   classification could not be loaded, run `next` instead this wake-up and run the execs' `command` yourself.
 
    When the Bash tool moves `run` to the background, wait for it to end and read its output before acting on the
    list. **Never start another `run` before a backgrounded one has ended**, and run no `next` or `record` meanwhile:
@@ -91,11 +94,13 @@ Each wake-up:
    When `run` exits non-zero, stdout is still JSON: `ran` and `lists` are what it ran and recorded before it stopped,
    and `blocked` is the exec it stopped at (null when it stopped in `next`). With `blocked.at` `execute`, that exec
    did not finish running and nothing of it is recorded; with `record`, it ran (its exit code is `blocked.exit` and
-   its side effects happened) and recording it failed. `run` exiting **3** means `blocked`'s record was refused:
-   - Do not run `run` again yet — it would run `blocked` a second time — and do not edit the state by hand.
-   - Settle what `error` says, as for a refused `record`: never force it another way.
-   - Once settled, record it with `blocked.record`'s command and `--exit <blocked.exit>` (not when `error` says it is
-     already recorded), then run `run` again.
+   its side effects happened) and recording it failed. tick keeps that it ran before recording it, so a later `run`
+   only records it and does not run it again (unless the state file could not be written at all). The list that
+   `run` never handed you does not count its batch-1 spawns as sent: they are handed out again as usual. `run`
+   exiting **3** means `blocked`'s record was refused:
+   - Do not edit the state by hand. Settle what `error` says, as for a refused `record`: never force it another way.
+   - Once settled, run `run` again: it records `blocked` with `blocked.exit` and does not run it a second time
+     (when `error` says it is already recorded, nothing is left to record).
    - A refusal you cannot settle is a ruling point: ask, per section 3.
 
    The output's `do` carries the same handling.
@@ -103,8 +108,10 @@ Each wake-up:
    command in its `record` field. Leave the later batches this time: once the actions before them are recorded, they
    are handed out again in a later list (tick counts only a batch-1 background spawn as handed out). Record nothing
    you did not do, and do nothing that was not handed out. `reference` is what that action needs you to read.
-   - **exec**: `run` has run them. An exec left in the list is a `push`, left for you so the guard hook sees it: run
-     `command` as written in bash (Git Bash on Windows) and record its exit code. An exit code not in `okExit` comes
+   - **exec**: `run` has run them. An exec left in the list is one the guard hook would ask you to confirm, left for
+     you so the guard sees it: run `command` as written in bash (Git Bash on Windows) and record its exit code. An
+     exec with `ran` already ran and was not recorded: do not run it again; handle its `note`, then run the command in
+     its `record` field (the exit code is filled in). An exit code not in `okExit` comes
      back in the next list as a `failed` judge, whose `do` names the log file of an exec `run` ran.
    - **spawn**: send the Agent tool the `spawn` fields as they are, adding no rules: the implementation and expansion
      agents' fixed rules are in the plugin's agent definitions (`sorry-matt:implementer`, `sorry-matt:expander`),
@@ -123,7 +130,7 @@ Each wake-up:
 
 Done when: every wake-up ran `run` (`next` when bash could not be used) to `end` or `done`; each list had only its
 batch-1 actions sent; every action `run` left and you did was written back by its `record`; only one `run` ran at a
-time; no `run` followed an exit 3 directly; nobody edited the state file by hand.
+time; after an exit 3, `run` ran again only once the refusal was settled; nobody edited the state file by hand.
 
 ## 2. What tick leaves to you
 
