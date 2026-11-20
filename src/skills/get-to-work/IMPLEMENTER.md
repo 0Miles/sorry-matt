@@ -7,7 +7,7 @@ prompt 只叫它讀這份檔。實作 agent 的固定規則在 plugin 的 agent 
 本檔的值。
 
 本檔的佔位與 `brief.mjs` 的填值要一起改。驗收來源是二選一的佔位：`brief.mjs` 依值檔的 `acceptance`
-（`criteria` 或 `ticket-text`）取 `=` 後的文字，profile 為 `expand: skip` 時 tick 給 `ticket-text`；它的兩段文字與
+（`criteria` 或 `ticket-text`）取 `=` 後的文字，profile 為 `expand: skip` 而驗收快照沒有驗收項時 tick 給 `ticket-text`（快照有驗收項就給 `criteria`）；它的兩段文字與
 定義檔第 1 節第 3 條要一起改。定義檔的規則與 `ASKING.md` 第 3、5 節、第 7 節的回報上限、
 `have-it-all-done` 第 0 節重疊處要一起改；定義檔第 2 節的 commit message 格式與 [`FINISH.md`](FINISH.md) 收官的
 總 PR body 要一起改；定義檔第 1 節的驗收只讀與 `SKILL.md` 派票的驗收快照、展開 agent 定義檔的展開區塊格式、

@@ -10,7 +10,8 @@ frontmatter followed by this file's values.
 
 Change this file's placeholders together with what `brief.mjs` fills in. The acceptance source is a choice
 placeholder: `brief.mjs` takes the text after `=` for the values file's `acceptance` (`criteria` or `ticket-text`), and
-tick gives `ticket-text` under the profile's `expand: skip`; change its two texts together with the definition's
+tick gives `ticket-text` under the profile's `expand: skip` when the acceptance snapshot has no criteria (`criteria`
+when it has some); change its two texts together with the definition's
 section 1, item 3. Where the definition's rules overlap
 `ASKING.md` sections 3 and 5, the report limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them
 together. Change the definition's section 2 commit message format together with the aggregate PR body in

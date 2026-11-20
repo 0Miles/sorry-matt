@@ -23,9 +23,21 @@ do not queue.
    - Maps to a ticket: `integrate.mjs ci-init` cuts `<ticket branch>-ci` and its worktree from the integration branch;
      hand it to that ticket's original agent, or, when it is gone, spawn a new one by `IMPLEMENTER.md` with the
      `ci-fix` role word of `brief.mjs` (agent type and general-purpose fallback per the spawn in `SKILL.md` section 1),
-     the failure summary added to the ticket text. The CI failure is the finding:
-     it goes through the batched fix (`recheck` with the ticket's previous review block), then
-     `integrate.mjs merge --ci --push`, without queueing.
+     the failure summary added to the ticket text. Every key of the `brief.mjs implement` values file is filled, from
+     these sources:
+     - `out`: the spawn file's path, in the run directory (for example
+       `sorry-matt/runs/<run>/tick/brief/<ticket key>-ci-<round>.md`)
+     - `role`: `ci-fix`
+     - `snapshot`: the ticket's acceptance snapshot, `sorry-matt/runs/<run>/acceptance/<ticket key>.json`
+     - `worktree`, `branch`: the absolute path of the `<ticket branch>-ci` worktree `ci-init` cut, and that branch
+     - `integration`: the integration branch of the ticket's line (the base branch under `integrate: direct`)
+     - `bodyFile`: a file holding the full ticket text with the failure summary added
+     - `sendBackFile`: `null`
+     - `acceptance`: `criteria` when the snapshot's `items` hold criteria; `ticket-text` only under `expand: skip` with
+       none in the snapshot (the way tick picks it for an implementation agent)
+
+     The CI failure is the finding: it goes through the batched fix (`recheck` with the ticket's previous review
+     block), then `integrate.mjs merge --ci --push`, without queueing.
    - Maps to no ticket: the host, or a newly spawned `ci-fix` agent whose target is the integration branch, fixes it in
      the integration worktree, commits (subject without a ticket ID) and pushes.
    - A fix agent's dispatch has its assignment record and time limit as usual; one stopped for a timeout counts as a

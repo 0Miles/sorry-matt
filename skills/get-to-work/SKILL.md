@@ -121,8 +121,10 @@ expansion, and wider after a send-back.
 ### Batched fix
 
 Hand the review block's location to the original agent, which keeps its context: it reads each finding's `summary`,
-`evidence` and `fix` verbatim and closes them all in one round; you do not paraphrase. The state guards the round
-limit.
+`evidence` and `fix` verbatim and closes them all in one round; you do not paraphrase. Under `review: minimal` there is
+no review block: hand the original agent the path of the reviewer's report file
+(`tick/review/<ticket key>-<tag>.report.md`), not a review block's location, and it reads each finding there verbatim.
+The state guards the round limit.
 
 **Hard rail — a flaky red is always run down to its root cause.** Red and green on one commit is a real failure: a
 root cause in the test's writing fixes the test; in the product, fix it or file a defect ticket. Reruns, relaxed waits,
