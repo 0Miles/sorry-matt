@@ -419,6 +419,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 裁剪(lens) | prune |
 | 併入(lens) | fold into |
 | 合批 | batch |
+| 寫到 symbol(預計檔案) | narrow to a symbol |
+| symbol 鏈 | symbol chain |
 
 ## 外部語義來源
 
