@@ -263,6 +263,7 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     timeout: () => 'reassign',
     'red-light': () => 'handled',
     'file-issue': () => ({ outcome: 'filed', value: '#99' }),
+    observations: () => ({ outcome: 'filed', value: '#90' }),
     'verify-local': () => 'green',
     'deliver-ticket': () => 'done',
     'deliver-line': () => 'done',
@@ -295,7 +296,9 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
       const v = typeof r === 'string' ? { outcome: r } : r;
       // the minimal reviewer writes its report to the file its brief names (#128); the review host writes a block
       if (a.meta.kind === 'minimal') h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
-      return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : [])];
+      // #142: a prove-it review's report line `counts:` gives the observations and pre-existing counts
+      const counts = a.meta.kind === 'minimal' ? [] : ['--observations', String(v.observations ?? 0), '--pre-existing', String(v.preExisting ?? 0)];
+      return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : []), ...counts];
     }
     if (a.step === 'simplify') {
       // the simplify agent (#153): applied is one commit on the line, without a ticket id; none and skipped commit nothing
@@ -1216,6 +1219,80 @@ test('#138: a prove-it review is a foreground spawn whose spawn file brief.mjs r
   const agents = Object.values(h.state().tick.agents).filter((x) => x.role === 'review');
   assert.equal(agents.length, h.log.filter((a) => a.step === 'review').length);
   assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.kind, r.mode, r.verdict]), [['full', 'initial', 'fix'], ['full', 'recheck', 'pass']]);
+});
+
+test('#142: a review reporting observations or pre-existing gets one raw ticket; the recheck adds its new items to the same one', (t) => {
+  const h = world(t);
+  h.policy.review = (a) =>
+    a.tickets[0] !== '#1' ? 'pass' : a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1', observations: 2, preExisting: 1 } : { outcome: 'pass', observations: 1, preExisting: 0 };
+  const filed = [];
+  h.policy.observations = (a) => {
+    filed.push(a);
+    if (a.id === 'observations:#1:2') {
+      // the recheck's items go to the raw ticket of the initial review, not to another one
+      const other = h.tick('record', h.path, a.id, '--outcome', 'filed', '--value', '#91');
+      assert.equal(other.code, 3, 'another issue id is refused');
+      assert.match(other.err, /#90/);
+    }
+    return { outcome: 'filed', value: '#90' };
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(stage(h, '#1'), 'delivered');
+  assert.equal(stage(h, '#2'), 'delivered');
+  // the counts are in the state, one pair per review
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.mode, r.verdict, r.observations, r.preExisting]), [['initial', 'fix', 2, 1], ['recheck', 'pass', 1, 0]]);
+  assert.deepEqual(h.state().tickets['#2'].reviews.map((r) => [r.observations, r.preExisting]), [[0, 0]]);
+  // one judge per review with something to file, each handed out once; nothing for #2, whose review had none
+  assert.deepEqual(filed.map((a) => [a.kind, a.id, a.tickets]), [['judge', 'observations:#1:1', ['#1']], ['judge', 'observations:#1:2', ['#1']]]);
+  assert.equal(h.log.filter((a) => a.step === 'observations').length, 2);
+  const [initial, recheck] = filed;
+  // the initial review: open one raw ticket from the two sections of the review block in the status record
+  assert.match(initial.do, /2 observations and 1 pre-existing/);
+  assert.match(initial.do, /one raw ticket/);
+  assert.ok(initial.do.includes('the comment on o/r#1 whose first line is `<!-- sorry-matt:status -->`'), initial.do);
+  assert.match(initial.do, /`observations` and `pre-existing` sections/);
+  assert.match(initial.record, /--outcome filed --value <issue id>$/);
+  // the recheck: the new items go into the same raw ticket
+  assert.match(recheck.do, /1 observation and 0 pre-existing/);
+  assert.ok(recheck.do.includes('#90') && /not another/.test(recheck.do), recheck.do);
+  // filing does not hold the ticket up: the initial review's fix round starts in the list that hands the judge out
+  const list = h.wakes.flat().find((o) => o.actions.some((a) => a.id === 'observations:#1:1'));
+  assert.ok(list.actions.some((a) => a.id.startsWith('stage:#1:fixing') && a.batch === 1), 'the fix round goes on beside it');
+  // and the wrap-up comes after every filing
+  const steps = h.log.map((a) => a.step);
+  assert.ok(steps.lastIndexOf('observations') < steps.indexOf('wrap-up'));
+});
+
+test('#142: a prove-it review is recorded with both counts; a minimal review takes neither', (t) => {
+  const h = world(t);
+  let checked = 0;
+  h.policy.review = (a) => {
+    if (!checked++) {
+      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n>$/);
+      for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
+        const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', ...missing);
+        assert.equal(r.code, 2, `without ${missing.length ? 'one' : 'both'}`);
+        assert.match(r.err, /--observations <n> --pre-existing <n>/);
+      }
+      assert.equal(h.state().tickets[a.tickets[0]].reviews.length, 0, 'nothing recorded');
+    }
+    return 'pass';
+  };
+  assert.equal(h.untilDone().then, 'done');
+
+  const m = world(t, { profile: { review: 'minimal' } });
+  let minimal = 0;
+  m.policy.review = (a) => {
+    if (!minimal++) {
+      assert.doesNotMatch(a.record, /--observations/);
+      const r = m.tick('record', m.path, a.id, '--agent', 'x', '--outcome', 'pass', '--observations', '1', '--pre-existing', '0');
+      assert.equal(r.code, 2);
+      assert.match(r.err, /minimal/);
+    }
+    return 'pass';
+  };
+  assert.equal(m.untilDone().then, 'done');
+  assert.ok(!m.log.some((a) => a.step === 'observations'));
 });
 
 test('#138: record green is refused (3) until the agent report the collect names holds a targeted checks line', (t) => {
