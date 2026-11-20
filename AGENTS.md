@@ -143,6 +143,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 硬停 | hard stop |
 | 確認呼叫 | prompting call |
 | 精簡 | simplify pass |
+| 精簡 agent | simplify agent |
+| 跳過精簡 | skip the simplify pass |
 | 展開(票) | expand |
 | 兩段展開 | two-stage expansion |
 | 完整展開 | full expansion |
