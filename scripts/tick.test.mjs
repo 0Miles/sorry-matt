@@ -42,8 +42,17 @@ const BASH_CHECK = bashUsable();
 const BASH = BASH_CHECK.ok;
 const NO_BASH = BASH ? null : `no bash that runs tick's commands: ${BASH_CHECK.why}`;
 
-/** A run with tickets #1 and #2 on one line, set up as the freeze leaves it. */
-function world(t, { profile = null } = {}) {
+/** The ticket files a Local Markdown run's tickets live in (`--tickets-dir`). */
+const TICKETS_DIR = '.scratch/issues';
+const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id}.\n\n## Acceptance criteria\n\n- [ ] criterion of ${id}\n`;
+
+/**
+ * A run with two tickets on one line, set up as the freeze leaves it: #1 and #2 on GitHub, or (`tracker: 'local'`)
+ * two ticket files under TICKETS_DIR. `h.ids` holds the two ids.
+ */
+function world(t, { profile = null, tracker = 'github' } = {}) {
+  const local = tracker === 'local';
+  const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-tick-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const origin = join(dir, 'origin.git');
@@ -57,6 +66,10 @@ function world(t, { profile = null } = {}) {
   git(repo, 'config', 'user.email', 't@t');
   write(join(repo, 'README.md'), 'hello\n');
   write(join(repo, 'docs', 'agents', 'commands.md'), '# Commands\n\n## Full checks\n\n```bash\nnode -e "process.exit(0)"\n```\n');
+  if (local) {
+    write(join(repo, TICKETS_DIR, ID1), localTicket(ID1, 'First thing'));
+    write(join(repo, TICKETS_DIR, ID2), localTicket(ID2, 'Second thing'));
+  }
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'remote', 'add', 'origin', origin);
@@ -80,7 +93,9 @@ function world(t, { profile = null } = {}) {
     log: [], // every action handed out, with the wake-up it came in
     wakes: [],
     reportsNext: [],
-    titles: { '#1': 'First thing', '#2': 'Second thing' },
+    ids: [ID1, ID2],
+    titles: { [ID1]: 'First thing', [ID2]: 'Second thing' },
+    comments: {}, // GitHub: ticket id → the issue's comments, as `gh issue view --json comments` gives them
     blockers: {},
     acceptance: {},
     ci: () => 'green',
@@ -104,12 +119,13 @@ function world(t, { profile = null } = {}) {
   h.tick = (...args) => tick([...args, '--now', h.iso()]);
 
   h.S('init', '--run', 'r1');
-  h.S('add', '#1', '#2', '--line', h.line);
+  h.S('add', ID1, ID2, '--line', h.line);
   h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
   if (profile) h.S('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
-  write(join(W, 'files', '1.txt'), 'a.txt\n');
-  write(join(W, 'files', '2.txt'), 'b.txt\n');
-  const s = h.tick('setup', path, '--tracker', 'github', '--repo', REPO, '--root', repo, '--base', 'main', '--worktrees', join(dir, 'wts'));
+  write(join(W, 'files', `${numOf(ID1)}.txt`), 'a.txt\n');
+  write(join(W, 'files', `${numOf(ID2)}.txt`), 'b.txt\n');
+  const where = local ? ['--tracker', 'local', '--tickets-dir', TICKETS_DIR] : ['--tracker', 'github', '--repo', REPO];
+  const s = h.tick('setup', path, ...where, '--root', repo, '--base', 'main', '--worktrees', join(dir, 'wts'));
   assert.equal(s.code, 0, s.err);
 
   h.record = (id, ...flags) => {
@@ -135,19 +151,20 @@ function world(t, { profile = null } = {}) {
     const flag = (name) => (args.includes(name) ? new Set(args[args.indexOf(name) + 1].split(',')) : new Set());
     const done = flag('--done');
     const stuck = flag('--stuck');
-    const ids = args.filter((x, k) => x.startsWith('#') && !['--done', '--stuck'].includes(args[k - 1]));
+    const ids = local ? args.filter((x) => x.endsWith('.md')) : args.filter((x, k) => x.startsWith('#') && !['--done', '--stuck'].includes(args[k - 1]));
     const stateOf = (id) => (done.has(numOf(id)) ? 'done' : stuck.has(numOf(id)) ? 'stuck' : 'open');
     const tickets = ids.map((id) => {
       const blockedBy = (h.blockers[id] ?? []).map((b) => ({ id: b, state: stateOf(b), inSet: true }));
       const ready = stateOf(id) === 'open' && blockedBy.every((b) => b.state === 'done');
-      return { id, title: h.titles[id], state: stateOf(id), trackerState: 'open', blockedBy, line: '#1', ready, stalled: null };
+      return { id, title: h.titles[basename(id)] ?? h.titles[id], state: stateOf(id), trackerState: 'open', blockedBy, line: '#1', ready, stalled: null };
     });
-    return { format: 'sorry-matt/frontier@1', tracker: 'github', source: REPO, tickets, lines: [ids], frontier: tickets.filter((x) => x.ready).map((x) => x.id), warnings: [] };
+    return { format: 'sorry-matt/frontier@1', tracker, source: local ? 'worktree' : REPO, tickets, lines: [ids], frontier: tickets.filter((x) => x.ready).map((x) => x.id), warnings: [] };
   };
   h.accept = (args) => {
-    const id = `#${args[args.indexOf('--repo') + 2]}`;
-    const spec = h.acceptance[id] ?? { items: [{ from: 'original', text: `criterion of ${id}` }], expansions: [] };
-    const out = { format: 'sorry-matt/acceptance@1', tracker: 'github', source: REPO, id, title: h.titles[id], items: spec.items, expansions: spec.expansions, needsExpansion: spec.items.length === 0, sha256: itemsHash(spec.items) };
+    const key = local ? basename(args[3]) : `#${args[args.indexOf('--repo') + 2]}`;
+    const id = local ? args[3] : key;
+    const spec = h.acceptance[key] ?? { items: [{ from: 'original', text: `criterion of ${key}` }], expansions: [] };
+    const out = { format: 'sorry-matt/acceptance@1', tracker, source: local ? args[2] : REPO, id, title: h.titles[key], items: spec.items, expansions: spec.expansions, needsExpansion: spec.items.length === 0, sha256: itemsHash(spec.items) };
     if (args.includes('--against')) out.check = { against: args[args.indexOf('--against') + 1], snapshotIntact: true, changed: false, removed: [], added: [] };
     return out;
   };
@@ -180,7 +197,17 @@ function world(t, { profile = null } = {}) {
         code = e.status ?? 1;
       }
     } else if (cmd === 'gh') {
-      if (args[0] === 'issue') out = `title: ${h.titles[`#${args[2]}`]}\n\nThe ticket text of #${args[2]}.\n`;
+      if (args[0] === 'issue') {
+        // gh issue view off a TTY: --json gives the fields asked for; --comments prints the comments only, not the body
+        const id = `#${args[2]}`;
+        const comments = h.comments[id] ?? [];
+        if (args.includes('--json')) {
+          const fields = args[args.indexOf('--json') + 1].split(',');
+          const all = { title: h.titles[id], body: `The ticket text of ${id}.`, comments };
+          out = `${JSON.stringify(Object.fromEntries(fields.map((f) => [f, all[f]])))}\n`;
+        } else if (args.includes('--comments')) out = comments.map((x) => `author:\t${x.author.login}\n--\n${x.body}\n--\n`).join('');
+        else out = `title:\t${h.titles[id]}\n--\nThe ticket text of ${id}.\n`;
+      }
       else if (args[0] === 'run' && args[1] === 'list') out = '[]';
     } else throw new Error(`unknown command ${cmd}`);
     if (a.stdout) write(a.stdout, out);
@@ -193,7 +220,7 @@ function world(t, { profile = null } = {}) {
     const st = h.state();
     const wt = st.tickets[tid].assignment?.worktree;
     if (wt) {
-      const file = join(wt, numOf(tid) === '1' ? 'a.txt' : 'b.txt');
+      const file = join(wt, tid === ID1 ? 'a.txt' : 'b.txt');
       write(file, `${agent} ${(h.commits = (h.commits ?? 0) + 1)}\n`);
       git(wt, 'add', '-A');
       git(wt, 'commit', '-q', '-m', `work by ${agent}`);
@@ -263,10 +290,13 @@ function world(t, { profile = null } = {}) {
           h.record(a.id, ...r.flags);
           if (r.agent && h.agentOf[r.agent].role === 'expand') {
             for (const tid of a.tickets) {
+              // the expansion agent's block: on GitHub an issue comment, which acceptance.mjs reads back
+              const block = `<!-- sorry-matt:expansion -->\nby: x\nrun: r1\nround: 1\n\nacceptance:\n- [ ] expanded criterion of ${tid}`;
               h.acceptance[tid] = {
                 items: [{ from: 'expansion', by: 'x', run: 'r1', round: '1', text: `expanded criterion of ${tid}` }],
-                expansions: [{ by: 'x', run: 'r1', round: '1', at: 'u', text: '<!-- sorry-matt:expansion -->\nby: x' }],
+                expansions: [{ by: 'x', run: 'r1', round: '1', at: 'u', text: block }],
               };
+              (h.comments[tid] ??= []).push({ author: { login: 'x' }, body: block, createdAt: h.iso() });
             }
             h.reportsNext.push(r.agent);
           } else if (r.agent) h.work(r.agent, a.tickets[0]);
@@ -648,6 +678,46 @@ test('#128 D2: a background spawn listed at batch 2 or later and not recorded co
   const r = JSON.parse(h.tick('next', h.path).out);
   assert.ok(!r.actions.some((a) => a.step === 'spawn-check'), 'not a check: it was never handed out');
   assert.equal(r.actions.find((a) => a.id === late.id)?.kind, 'spawn', `${late.id} is issued again as a spawn`);
+});
+
+/** The full ticket text a spawn file of IMPLEMENTER.md carries: from its `票面全文` item to the expansion block's. */
+const fullTextOf = (brief) => brief.slice(brief.indexOf('- 票面全文：'), brief.indexOf('- 展開區塊：'));
+const inOrder = (text, parts) => {
+  const at = parts.map((p) => text.indexOf(p));
+  return at.every((i, k) => i >= 0 && (k === 0 || i > at[k - 1]));
+};
+
+test('#137: on GitHub the ticket face holds the title, body and comments, then the expansion block; the expansion and implementation spawn files embed it', (t) => {
+  const h = world(t);
+  h.acceptance['#1'] = { items: [], expansions: [] }; // #1 goes to expansion first
+  h.comments['#1'] = [{ author: { login: 'maintainer' }, body: 'A comment on #1.', createdAt: '2026-04-30T09:00:00Z' }];
+  const expand = distinct(h.actions(h.wake())).find((a) => a.kind === 'spawn' && a.spawn.description === 'expand #1');
+  assert.ok(expand, '#1 goes to an expansion agent');
+  const expansionBrief = readFileSync(briefOf(expand), 'utf8');
+  assert.ok(inOrder(expansionBrief, ['First thing', 'The ticket text of #1.', 'A comment on #1.']), `the title, body and comment of #1 in\n${expansionBrief}`);
+  assert.ok(!expansionBrief.includes('<!-- sorry-matt:expansion -->'), 'no expansion block before the expansion');
+
+  const implement = distinct(h.actions(h.wake())).find((a) => a.kind === 'spawn' && a.spawn.description === 'implement #1');
+  assert.ok(implement, '#1 is dispatched after its expansion');
+  const face = readFileSync(join(h.W, 'tick', 'body', '1.md'), 'utf8');
+  assert.ok(inOrder(face, ['First thing', 'The ticket text of #1.', 'A comment on #1.', '<!-- sorry-matt:expansion -->', 'expanded criterion of #1']), `title, body, comment, then the expansion block:\n${face}`);
+  assert.equal(face.split('<!-- sorry-matt:expansion -->').length, 2, 'the expansion block once');
+  const fullText = fullTextOf(readFileSync(briefOf(implement), 'utf8'));
+  for (const text of ['First thing', 'The ticket text of #1.', 'A comment on #1.', 'expanded criterion of #1']) assert.ok(fullText.includes(text), `${JSON.stringify(text)} in the full ticket text:\n${fullText}`);
+  // every fetch asks gh for the JSON of the title, body and comments
+  const fetches = distinct(h.log).filter((a) => a.step === 'body');
+  assert.ok(fetches.length >= 2, 'fetched for the expansion and again for the implementation');
+  for (const a of fetches) assert.deepEqual(a.argv.slice(-2), ['--json', 'title,body,comments'], a.command);
+});
+
+test('#137: on Local Markdown the ticket face is the ticket file, as before: no gh fetch, the spawn file embeds the file', (t) => {
+  const h = world(t, { tracker: 'local' });
+  const [id] = h.ids;
+  const implement = distinct(h.actions(h.wake())).find((a) => a.kind === 'spawn' && a.spawn.description === `implement ${id}`);
+  assert.ok(implement, `${id} is dispatched`);
+  assert.ok(!h.log.some((a) => a.step === 'body' || (a.kind === 'exec' && a.argv[0] === 'gh' && a.argv[1] === 'issue')), 'no ticket fetch');
+  const fullText = fullTextOf(readFileSync(briefOf(implement), 'utf8'));
+  for (const line of localTicket(id, 'First thing').split('\n').filter(Boolean)) assert.ok(fullText.includes(line), `${JSON.stringify(line)} in the full ticket text:\n${fullText}`);
 });
 
 test('#128 D3: under expand: skip the spawn file says the ticket text is the acceptance; under agent, the criteria', (t) => {
