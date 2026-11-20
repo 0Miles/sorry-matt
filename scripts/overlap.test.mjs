@@ -180,3 +180,110 @@ test('a plan file that starts with a UTF-8 BOM is read', (t) => {
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(JSON.parse(r.out).start, ['#11']);
 });
+
+// ---------- path#symbol ----------
+
+test('path#symbol: the same path with disjoint symbols does not overlap; the same symbol does', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    {
+      running: [{ id: '#1', files: 'r.txt' }],
+      candidates: [{ id: '#2', files: 'c2.txt' }, { id: '#3', files: 'c3.txt' }, { id: '#4', files: 'c4.txt' }],
+    },
+    {
+      'r.txt': 'src/tick.mjs#nextActions\n',
+      'c2.txt': 'src/tick.mjs#record\n',
+      'c3.txt': 'src/tick.mjs#nextActions\n',
+      'c4.txt': 'SKILL.md#2. 判斷\nsrc/tick.mjs#record\n',
+    },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.running[0].predicted, ['src/tick.mjs#nextActions']);
+  assert.deepEqual(r.json.start, ['#2']);
+  assert.deepEqual(r.json.wait, [
+    { id: '#3', overlaps: [{ with: '#1', paths: ['src/tick.mjs#nextActions'] }] },
+    { id: '#4', overlaps: [{ with: '#2', paths: ['src/tick.mjs#record'] }] },
+  ]);
+});
+
+test('path#symbol: a path without a symbol is the whole file on either side', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    {
+      running: [{ id: '#1', files: 'whole.txt' }, { id: '#2', files: 'sym.txt' }],
+      candidates: [{ id: '#3', files: 'c3.txt' }, { id: '#4', files: 'c4.txt' }, { id: '#5', files: 'c5.txt' }],
+    },
+    {
+      'whole.txt': 'a.md\n',
+      'sym.txt': 'b.md#Usage\n',
+      'c3.txt': 'a.md#Intro\n', // a symbol inside a file held whole
+      'c4.txt': 'b.md\n', // the whole file against a held symbol
+      'c5.txt': 'docs#Intro\n', // a symbol under a directory: the directory is held by nobody
+    },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.start, ['#5']);
+  assert.deepEqual(r.json.wait, [
+    { id: '#3', overlaps: [{ with: '#1', paths: ['a.md#Intro'] }] },
+    { id: '#4', overlaps: [{ with: '#2', paths: ['b.md'] }] },
+  ]);
+});
+
+test('path#symbol: a nested symbol is written from the outermost one, and the outer one covers it', (t) => {
+  const dir = scratch(t);
+  const r = run(
+    dir,
+    { running: [{ id: '#1', files: 'r.txt' }], candidates: [{ id: '#2', files: 'c2.txt' }, { id: '#3', files: 'c3.txt' }] },
+    {
+      'r.txt': 'SKILL.md#2. 判斷#預計檔案\n',
+      'c2.txt': 'SKILL.md#2. 判斷\n', // the parent section holds its subsections
+      'c3.txt': 'SKILL.md#2. 判斷#集中修正\nSKILL.md # 1. 喚醒 \n', // a sibling subsection; spaces around # are trimmed
+    },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.start, ['#3']);
+  assert.deepEqual(r.json.wait, [{ id: '#2', overlaps: [{ with: '#1', paths: ['SKILL.md#2. 判斷'] }] }]);
+});
+
+test('path#symbol: a symbol on "/" or an empty symbol exits 2', (t) => {
+  const dir = scratch(t);
+  for (const [text, message] of [['/#x\n', /whole repository has no symbol/], ['a.md#\n', /empty symbol/], ['a.md#x##y\n', /empty symbol/]]) {
+    const r = run(dir, { candidates: [{ id: '#1', files: 'bad.txt' }] }, { 'bad.txt': text });
+    assert.equal(r.code, 2, text);
+    assert.match(r.err, message);
+  }
+});
+
+test('path#symbol: a running worktree that changed a file it predicted by symbol holds only those symbols', (t) => {
+  const dir = scratch(t);
+  const repo = join(dir, 'repo');
+  const wt = join(dir, 'wt');
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync('git', ['init', '-q', '-b', 'line', repo]);
+  git(repo, 'config', 'user.email', 'test@example.invalid');
+  git(repo, 'config', 'user.name', 'test');
+  for (const f of ['a.md', 'b.md']) writeFileSync(join(repo, f), `${f}\n`);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'base');
+  git(repo, 'worktree', 'add', '-q', '-b', 'ticket', wt);
+  writeFileSync(join(wt, 'a.md'), 'ticket\n');
+  writeFileSync(join(wt, 'b.md'), 'ticket\n');
+
+  const r = run(
+    dir,
+    {
+      base: 'line',
+      running: [{ id: '#1', files: 'p1.txt', worktree: wt }],
+      candidates: [{ id: '#2', files: 'p2.txt' }, { id: '#3', files: 'p3.txt' }],
+    },
+    { 'p1.txt': 'a.md#Intro\n', 'p2.txt': 'a.md#Usage\n', 'p3.txt': 'b.md#Usage\n' },
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.running, [
+    { id: '#1', base: 'line', predicted: ['a.md#Intro'], actual: ['a.md', 'b.md'], unpredicted: ['b.md'] },
+  ]);
+  assert.deepEqual(r.json.start, ['#2'], 'a.md is changed where the ticket said it would be');
+  assert.deepEqual(r.json.wait, [{ id: '#3', overlaps: [{ with: '#1', paths: ['b.md#Usage'] }] }]);
+});
