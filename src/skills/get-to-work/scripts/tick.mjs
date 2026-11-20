@@ -227,6 +227,9 @@ const list = (text, where) => {
 const q = (s) => (/^[A-Za-z0-9_/.:=@%+,-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, `'\\''`)}'`);
 const commandLine = (argv, stdout, cwd) => `${cwd ? `cd ${q(cwd)} && ` : ''}${argv.map(q).join(' ')}${stdout ? ` > ${q(stdout)}` : ''}`;
 
+/** The run directory `<state dir>/<run>/`; tick's own files are under its `tick/`. */
+const runDir = (path, run) => join(dirname(path), run);
+
 function readJsonFile(deps, path) {
   try {
     return parseJson(deps.read(path));
@@ -385,7 +388,7 @@ function context(path, state, now, deps) {
   const book = structuredClone(state.tick);
   const cfg = book.config;
   const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
-  const W = join(dirname(path), state.run);
+  const W = runDir(path, state.run);
   const limits = { ...LIMIT_DEFAULTS };
   if (cfg.ledger) {
     let text;
@@ -458,7 +461,7 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
       );
-    } else if (a.kind === 'spawn' && a.spawn?.background && (book.issued[a.id]?.batch ?? 1) === 1 && book.issued[a.id] && (a.after ?? []).every((x) => !x || c.done(x))) {
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
       // Handed out before in batch 1, runnable then, never recorded: the host was interrupted between spawn and
       // record. A spawn listed at a later batch was not handed out: the host sends batch 1 only (#128). An entry from
       // before batches were kept counts as handed out.
@@ -766,18 +769,16 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
 
 const WHY = {
   red: 'its targeted checks were red: fix them to green (close-out step 1)',
-  // review: minimal leaves its findings in the reviewer's report file (the ticket's flag `report`), not in a review block
-  fix: (f) =>
-    f.report
-      ? `the review's findings, verbatim, in ${f.report} (the reviewer's report): close them all in this one round (close-out step 3)`
-      : "the review's findings, verbatim (summary, evidence, fix) from the status record: close them all in this one round (close-out step 3)",
+  fix: "the review's findings, verbatim (summary, evidence, fix) from the status record: close them all in this one round (close-out step 3)",
   'send-back': 'the send-back record and the rebuilt worktree: redo the ticket from the latest integration branch (SEND-BACK.md)',
 };
-/** Why an agent gets the work: WHY's text for `why`, given the ticket's flags. */
-const whyText = (flag, why) => {
-  const w = WHY[why];
-  return typeof w === 'function' ? w(flag ?? {}) : (w ?? why);
-};
+/** review: minimal leaves its findings in the reviewer's report file (the ticket's flag `report`), not in a review block. */
+const reportAt = (flag) => (flag.report ? `${flag.report} (the reviewer's report)` : null);
+/** Why an agent gets the work: WHY's text for `why`, or the reviewer's report for a minimal review's fix round. */
+const whyText = (flag, why) =>
+  why === 'fix' && reportAt(flag)
+    ? `the review's findings, verbatim, in ${reportAt(flag)}: close them all in this one round (close-out step 3)`
+    : (WHY[why] ?? why);
 
 /** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
 function agentTail(c, id, t, p, after) {
@@ -1013,14 +1014,11 @@ function stepFixing(c, id, t) {
 
 function reassignNote(c, id, t, r) {
   const link = t.statusRecord ? ` (${t.statusRecord})` : '';
-  const report = t.stage === 'fixing' ? c.flag(id).report : null; // review: minimal: the findings are in the reviewer's report
-  if (!r?.reassign) {
-    if (report) return `The fix round of ${id}: the findings are in ${report} (the reviewer's report); close them all.`;
-    return `The fix round of ${id}: the findings are in the latest review block of its status record${link}; close them all.`;
-  }
+  const at = t.stage === 'fixing' ? reportAt(c.flag(id)) : null;
+  if (!r?.reassign) return `The fix round of ${id}: the findings are in ${at ?? `the latest review block of its status record${link}`}; close them all.`;
   const head = `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them.`;
-  if (report) return `${head} Update this ticket's existing record in place${link}. The findings of this fix round are in ${report} (the reviewer's report).`;
-  return `${head} Update the existing status record in place${link}.${t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : ''}`;
+  const findings = at ? ` The findings of this fix round are in ${at}.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
+  return `${head} Update ${at ? "this ticket's existing record" : 'the existing status record'} in place${link}.${findings}`;
 }
 
 function stepImplementing(c, id, t) {
@@ -1897,10 +1895,8 @@ export function record(path, id, flags, now, deps) {
         // review: minimal: the fix round reads the findings from the reviewer's report file
         let held = '';
         try {
-          held = deps.exists(meta.report) ? deps.read(meta.report) : '';
-        } catch {
-          held = '';
-        }
+          if (deps.exists(meta.report)) held = deps.read(meta.report);
+        } catch {}
         if (!held.trim())
           throw new Refused(`${meta.report} holds no report: the reviewer writes its full report there; when it did not, write the report it returned there, verbatim, and record fix again`);
       }
@@ -1989,7 +1985,7 @@ export function record(path, id, flags, now, deps) {
 // ---- run --------------------------------------------------------------------------------------------------------------
 
 /** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
-const runLog = (path, run, id) => join(dirname(path), run, 'tick', 'run', `${keyOf(id)}.log`);
+const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
 // An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
 const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
 const RUN_LISTS = 500;

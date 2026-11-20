@@ -271,14 +271,14 @@ function world(t, { profile = null } = {}) {
     }
   };
 
-  /** One wake-up: `next` until it says end (or done); returns every `next` output of it. */
-  h.wake = ({ reported, minutes = 5 } = {}) => {
+  /** One wake-up: `next` (or `via`) until it says end (or done); returns every output of it. */
+  h.wake = ({ reported, minutes = 5, via = (...args) => h.tick('next', path, ...args) } = {}) => {
     h.now += minutes * 60_000;
     const reports = reported ?? h.reportsNext.splice(0);
     const outs = [];
     h.wakes.push(outs);
     for (let i = 0; i < 400; i += 1) {
-      const r = h.tick('next', path, ...(i === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
+      const r = via(...(i === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
       assert.equal(r.code, 0, r.err);
       const out = JSON.parse(r.out);
       outs.push(out);
@@ -293,20 +293,11 @@ function world(t, { profile = null } = {}) {
   h.execute = null;
   h.runTick = (...args) => tick(['run', path, ...args, '--now', h.iso()], { ...defaultDeps(), execute: h.execute ?? ((a) => ({ code: h.exec(a) })) });
   /** One wake-up as SKILL.md has it with run: run, then the host does batch 1 of what is left, until end or done. */
-  h.runWake = ({ minutes = 5 } = {}) => {
-    h.now += minutes * 60_000;
-    const reports = h.reportsNext.splice(0);
-    const outs = [];
-    h.wakes.push(outs);
-    for (let i = 0; i < 400; i += 1) {
-      const r = h.runTick(...(i === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
-      assert.equal(r.code, 0, r.err);
-      const out = JSON.parse(r.out);
-      outs.push(out);
-      h.run(out.actions);
-      if (out.then !== 'tick') return outs;
-    }
-    throw new Error('the wake-up did not end');
+  h.runWake = ({ minutes = 5 } = {}) => h.wake({ minutes, via: h.runTick });
+  /** Wake-ups (`wake`, h.wake by default) until the run is done, at most six; returns the last output. */
+  h.untilDone = (wake = h.wake) => {
+    for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) wake();
+    return h.wakes.at(-1)?.at(-1);
   };
   return h;
 }
@@ -619,8 +610,7 @@ test('#128 D1: next makes the directory of every exec stdout before it returns; 
     }
     run(actions);
   };
-  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
-  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  assert.equal(h.untilDone().then, 'done');
   const steps = new Set(seen.map((a) => a.step));
   for (const step of ['progress', 'ci-read', 'frontier', 'acceptance', 'overlap', 'assignment', 'brief', 'body', 'merge', 'acceptance-check'])
     assert.ok(steps.has(step), `an exec of ${step} with its stdout was checked`);
@@ -629,8 +619,7 @@ test('#128 D1: next makes the directory of every exec stdout before it returns; 
 
 test('#128 D2: the host sends batch 1 of each list and runs next after each record: no spawn-check, on to done', (t) => {
   const h = world(t);
-  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
-  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  assert.equal(h.untilDone().then, 'done');
   assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
   const lists = h.wakes.flat();
   assert.ok(!lists.some((o) => o.actions.some((a) => a.step === 'spawn-check')), 'no list carries a spawn-check');
@@ -687,7 +676,7 @@ test('#128 D4: the minimal reviewer writes its report to a file; record fix is r
     refused += 1;
     return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
   };
-  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  h.untilDone();
   assert.equal(refused, 1);
   assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the same record is taken once the file holds the report');
   // the fix round reads its findings from that file, not from the status record
@@ -702,8 +691,7 @@ test('#128 D4: a fix round given to a new agent names the findings source: the r
     const h = world(t, { profile });
     h.policy.review = (a) => (a.tickets[0] === '#1' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
     h.policy.send = () => 'gone'; // the implementer is gone: a new agent takes the fix round
-    for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
-    assert.equal(h.wakes.at(-1).at(-1).then, 'done', `the run under ${profile ? 'minimal' : 'full'} finished`);
+    assert.equal(h.untilDone().then, 'done', `the run under ${profile ? 'minimal' : 'full'} finished`);
     const send = h.log.find((a) => a.step === 'send' && a.tickets[0] === '#1');
     const respawn = h.log.find((a) => a.kind === 'spawn' && a.step === 'spawn' && a.tickets[0] === '#1' && a.spawn.description === 'fix #1');
     assert.ok(send && respawn, 'a send, then a spawn of a fix agent');
@@ -743,8 +731,7 @@ test('#128 D4: under review: minimal a fix agent reassigned after a timeout is p
 test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
   const h = world(t);
   git(h.repo, 'remote', 'remove', 'origin');
-  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
-  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  assert.equal(h.untilDone().then, 'done');
   const verifies = h.log.filter((a) => a.step === 'verify-local');
   assert.ok(verifies.length >= 2, 'the first dispatch point and the one after the integrations');
   assert.ok(verifies.every((a) => a.kind === 'exec' && a.argv[a.argv.indexOf('--reason') + 1] === 'no-origin'));
@@ -1045,8 +1032,7 @@ test('#129: run stops at then end without recording wakeup-end, and at then done
   assert.equal(runOut(h).then, 'end', 'run again: the same end');
   assert.equal(h.state().tick.wakeup, 1);
   h.run(out.actions);
-  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.runWake();
-  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  assert.equal(h.untilDone(h.runWake).then, 'done');
   const done = runOut(h);
   assert.equal(done.then, 'done');
   assert.deepEqual(done.ran, []);
