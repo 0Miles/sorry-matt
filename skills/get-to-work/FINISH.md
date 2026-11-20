@@ -6,11 +6,25 @@ what you judge or write.
 
 Every line first passes the **three line-level gates**, in a fixed order:
 
-1. **Simplify pass**: in the integration worktree, call the Skill tool with `simplify` for one quality pass over the
-   whole line's changes — reuse, simplification, efficiency, level of abstraction. Duplication across tickets only
-   shows after integration, so it runs once here. Collect the applied fixes into **one separate commit** (a subject
-   like `refactor: simplify <integration branch>`, no ticket ID; no commit when there is nothing to apply), and log the
-   rejected fixes in the self-answer log.
+1. **Simplify pass**: one quality pass over the whole line's changes — reuse, simplification, efficiency, level of
+   abstraction. Duplication across tickets only shows after integration, so it runs once here. You do not call
+   `simplify` yourself, and the line's diff stays out of your context: tick hands out a foreground spawn
+   (`general-purpose`, its `description` `simplify <integration branch>` per the header of `brief.mjs`) whose spawn
+   file tick has written. Send it as given and take only the two lines it returns. The simplify agent first judges
+   from the line's whole change whether a simplify pass is needed:
+   - Only documentation, only deletions, only configuration or data files, or no new logic: it **skips the simplify
+     pass** and does not call `simplify`.
+   - New or rewritten logic that may hold a duplicate implementation, a reusable function, or a branch or a layer of
+     indirection that can go: it simplifies.
+   - When unsure, it simplifies. There is no line-count threshold: what changed counts, not how much.
+
+   To simplify, it calls the Skill tool with `simplify` in the integration worktree. The applied fixes go into **one
+   separate commit** (subject `refactor: simplify <integration branch>`, no ticket ID; the body lists the fixes applied,
+   and each rejected fix with one line on why); with nothing to apply, no commit. It reports one of three outcomes with
+   a one-line reason, which you record with `--outcome` and `--value`: `applied` (a commit), `none` (simplified, no fix
+   to apply), `skipped` (judged unneeded, `simplify` not called). tick lists the `skipped` lines at the closing
+   `wrap-up`: their reasons go into the self-answer log, the lines into the closing summary. Under the run profile's
+   `simplify: false` the step is left out and no agent is sent.
 2. **Sync the base**: merge the latest base tip into the integration branch; a green only counts on the latest base. A
    conflict goes to a merge agent under the criterion of [`SKILL.md`](SKILL.md) section 2, "Merge conflicts": one side
    is this line (each ticket's text and commit messages), the other the base
@@ -77,8 +91,9 @@ branch, found with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.
 **Final output**: each line's aggregate PR or integration branch, the synced base SHA (or that it is unsynced), the full
 verification's SHA and source, the **reconciliation table** covering every initial ticket (`state.mjs show`, with each
 ticket's send-back count, each row pointing to its status record), **this run's metrics and budget** (the state's
-`usage`, with `stop` after a stop) with the **spawn breakdown**, the authorization outcomes (ledger field 5), and the
-list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and
+`usage`, with `stop` after a stop) with the **spawn breakdown**, the authorization outcomes (ledger field 5), the
+**lines that skipped the simplify pass** (the `wrap-up`'s `meta.simplifySkipped`, each with its reason; left out when
+there are none), and the list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and
 `byTicket` of `scripts/spawns.mjs <ledger directory>/<run>.counters.json`, attached as they are; with no counters file,
 or a non-zero exit, say this run has no spawn breakdown and why, never an estimate. Standalone, after the output change
 the ledger's first line to `<!-- sorry-matt:run ended -->`; when composed by `have-it-all-done`, leave it for its
@@ -90,4 +105,5 @@ names its conflicted files and the base SHA tried and is left for a human to mer
 deliverable for a human to merge, or its merge was sent per the `merge-gate.mjs` decision and reported; the delivered
 tickets of every merged aggregate PR are closed, and where the keyword does not apply the human-work list has the
 closing commands; the output lists the reconciliation table, the authorization outcomes and the metrics (with the spawn
-breakdown or why there is none); standalone, the ledger's first line is the ended marker.
+breakdown or why there is none), and the lines that skipped the simplify pass, with their reasons in the self-answer
+log; standalone, the ledger's first line is the ended marker.
