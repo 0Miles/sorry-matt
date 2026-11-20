@@ -183,7 +183,10 @@
 // `failed` judge, and the host puts right what the gate's output lists before retry.
 //
 // Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
-// names them); tick's own plans and outputs go under its `tick/`.
+// names them); tick's own plans and outputs go under its `tick/`. On GitHub the ticket face every spawn file embeds is
+// `tick/body/<n>.md`: tick writes it from `gh issue view --json title,body,comments` (saved beside it as
+// `tick/body/<n>.json`): the title, the body, the comments, then the expansion blocks. In Local Markdown it is the
+// ticket file itself.
 //
 // Exit codes: 0 output written; 1 the state, the ledger or git could not be read, a state write failed, or (run) bash
 // could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
@@ -199,6 +202,7 @@ import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
 import { description as roleDescription, fallbackPath, AGENT_TYPES } from './brief.mjs';
+import { MARKER } from './acceptance.mjs';
 
 export const FORMAT = 'sorry-matt/tick@1';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
@@ -815,16 +819,50 @@ function implementerOf(c, id) {
 }
 
 /**
- * The file holding a ticket's full text, and the exec that fetches it (null when there is none to wait for): the
- * ticket file in Local Markdown; on GitHub `tick/body/<n>.md`, fetched once, or once more under the id suffix `again`
- * (a review reads the ticket as it is then).
+ * The file holding a ticket's full text (its ticket face), and the exec that fetches it (null when there is none to
+ * wait for): the ticket file in Local Markdown; on GitHub `tick/body/<n>.md`, which tick writes from the JSON
+ * `gh issue view --json title,body,comments` left in `tick/body/<n>.json` (ticketFace). It is fetched once, or once
+ * more under the id suffix `again`: an expansion fetches under its own, so the implementation agent's fetch comes after
+ * the expansion and carries its block; a review reads the ticket as it is then.
  */
 function bodyFile(c, id, t, after, again = null) {
   if (c.cfg.tracker === 'local') return { file: join(c.git.wtOf(c.target(t.line)) ?? c.cfg.root, c.ticketPath(id)), id: null };
   const file = c.tick('body', `${keyOf(id)}.md`);
+  const raw = c.tick('body', `${keyOf(id)}.json`);
   const eid = again ? `body:${id}:${again}` : `body:${id}`;
-  if (c.done(eid) && c.deps.exists(file)) return { file, id: null };
-  return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
+  if (c.done(eid)) {
+    if (c.deps.exists(raw)) c.write(file, ticketFace(c.deps.read(raw)));
+    return { file, id: null };
+  }
+  return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--json', 'title,body,comments'], { stdout: raw, tickets: [id], after })) };
+}
+
+/**
+ * A GitHub ticket's face, from `gh issue view --json title,body,comments`: `# <title>`, the body, the comments under
+ * `## Comments` (each `### <author> (<created>)`), then the expansion blocks under `## sorry-matt expansion` — the
+ * comments whose first non-blank line is the marker (acceptance.mjs's rule), the way a Local Markdown ticket file
+ * holds them. A section with nothing in it is left out. Output that is not that JSON is kept as it is.
+ */
+function ticketFace(text) {
+  let issue;
+  try {
+    issue = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (!isObject(issue)) return text;
+  const str = (v) => (typeof v === 'string' ? v.replace(/\r\n/g, '\n').trim() : '');
+  const comments = Array.isArray(issue.comments) ? issue.comments.filter(isObject) : [];
+  const isBlock = (x) => str(x.body).split('\n').find((l) => l.trim())?.trim() === MARKER;
+  const parts = [`# ${str(issue.title) || '(no title)'}`, str(issue.body) || '(no body)'];
+  const said = comments.filter((x) => !isBlock(x));
+  if (said.length) {
+    parts.push('## Comments');
+    for (const x of said) parts.push(`### ${str(x.author?.login) || 'unknown'}${str(x.createdAt) ? ` (${str(x.createdAt)})` : ''}`, str(x.body) || '(empty)');
+  }
+  const blocks = comments.filter(isBlock);
+  if (blocks.length) parts.push('## sorry-matt expansion', ...blocks.map((x) => str(x.body)));
+  return `${parts.join('\n\n')}\n`;
 }
 
 /**
@@ -1575,7 +1613,7 @@ function createDispatch(c, id, t, title) {
 function expandDispatch(c, r, group, { reassign = false } = {}) {
   const { state } = c;
   const ids = group.map((x) => x.id);
-  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], []));
+  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], [], `expand:r${r}`));
   const lines = [...new Set(ids.map((id) => c.target(state.tickets[id].line)))];
   const values = c.tick('brief', `expand-r${r}.values.json`);
   const out = c.tick('brief', `expand-r${r}.md`);
