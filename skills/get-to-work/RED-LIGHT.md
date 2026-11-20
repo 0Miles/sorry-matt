@@ -8,7 +8,10 @@ do not queue.
 1. **Earliest red SHA**: computed by `scripts/ci.mjs earliest-red`, never by walking the log yourself. The plan
    `sorry-matt/runs/<run>/ci/<line-slug>.plan.json` has the fields of the script's header: `local` copies this line's
    `local` lines from the `state.mjs resume` output, and the `tickets`' `merges` are the merge SHAs the state records;
-   a line on local verification sets `ci` to `false`. When `earliestRed` is `null`, no ticket is matched this time:
+   a line on local verification sets `ci` to `false`. A line on local verification is verified only at the finish, so
+   it turns red only there: before tick hands out `red-light`, it has verified the line's integration SHAs locally one
+   by one from the oldest up to the first red one, and the `judge` names that earliest red SHA; the copied `local`
+   holds those records, so `earliestRed` is that SHA. When `earliestRed` is `null`, no ticket is matched this time:
    in the pipeline the next wake-up reads again; at the finish ([`FINISH.md`](FINISH.md) step 3) run `earliest-red`
    once more on the spot, and if it is still `null`, treat it as **maps to no ticket** and go through points 3–6.
    When `truncated` is `true` the script has already extended the range to `lowerBound`; do not judge further or
@@ -53,8 +56,8 @@ do not queue.
    - A fix agent's dispatch has its assignment record and time limit as usual; one stopped for a timeout counts as a
      round ([`TIMEOUTS.md`](TIMEOUTS.md)). The flaky-red hard rail applies. Mapped to a ticket, push after every round
      (skip it with no `origin`) and record `handled`; mapped to no ticket, tick pushes. The next verification decides:
-     in the pipeline, tick's next CI read or local verification; at the finish, `FINISH.md` step 3 verifies again on
-     the spot.
+     in the pipeline, tick's next CI read (a local verification when CI gives no verdict); at the finish, `FINISH.md`
+     step 3 verifies again on the spot.
 5. **Still red after two rounds, mapped to a ticket: revert.** List the tickets of the same line that depend on it
    (from the frontier's `blockedBy`) and run
    `integrate.mjs revert <state> <ticket> --worktree <integration worktree> --reason <the CI red and failed jobs> --push`

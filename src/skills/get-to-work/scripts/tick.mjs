@@ -4,9 +4,11 @@
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
 // The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
-// exec actions but pushes. tick spawns nothing and stops no agent. `next` and `record` run no network call and change
-// no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh) and merge branches (integrate.mjs).
-// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
+// exec actions but those the guard hook would ask about. tick spawns nothing and stops no agent. `next` and `record`
+// run no network call and change no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh)
+// and merge branches (integrate.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash and the plugin's
+// hooks/classify.mjs).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
@@ -46,8 +48,10 @@
 //                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
 //                    returned. `record review:…` is refused (3) when that file is missing or empty with
 //                    `--outcome fix`, or, when it is there, its `verdict:` line is missing or not the outcome, or it
-//                    was written before the review spawn was last issued (`issued.<id>.at`; an interrupted round's
-//                    file): the host writes the report returned this round there verbatim. The fix round (send, the
+//                    was written before this round's review spawn was first issued (`issued.<id>.at`, written once
+//                    per round: the initial review, each recheck and each retry; the same spawn handed out again by
+//                    one more `next` keeps it; an interrupted round's file): the host writes the report returned this
+//                    round there verbatim. The fix round (send, the
 //                    note of a new agent), file-issue and mark-stuck name that file as the findings' source, not the
 //                    status record's review block
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
@@ -108,6 +112,13 @@
 //   (deadline.mjs progress; a stop ends the dispatching for good), CI per line, frontier.mjs, stalled tickets to
 //   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
 //   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
+//   A line on local verification (no `origin`, or settled as CI not covering it) has no CI read and no local
+//   verification at a dispatch point: its full suite runs once, at the finish (#141). When that is red, the
+//   earliest-red scan runs before the red-light judge: the line's integration SHAs (the ticket merges the state
+//   records, in first-parent order) are verified one at a time from the oldest, each in a detached worktree
+//   `<worktrees>/<line-slug>-at-<sha12>` (git worktree add, verify.mjs, git worktree remove --force), until one is
+//   red; the judge names that SHA (meta.earliestRed), or the tip when none is red. A fix round's new tip is
+//   verified before anything else; a green record at the tip ends the red light.
 //
 // A red light that maps to no ticket (#144)
 //   The `red-light` judge (RED-LIGHT.md) has the outcome `unmatched` while the line has a fix round left (two per red
@@ -145,6 +156,8 @@
 //     "record": "<the record command to run afterwards, with <placeholders>>",
 //     exec:  "argv": [...], "command": "<one POSIX shell line>", "stdout": "<file>" | null, "cwd": "<dir>" | null,
 //            "okExit": [0, …]             // run it in bash (Git Bash on Windows); record its exit code
+//            "ran": { "exit", "signal"?, "log" }, "note"   // only on one `run` ran and could not record (#146): do
+//                                         // not run it again; its `record` line carries the exit
 //     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false,
 //                       "fallback": { "subagent_type": "general-purpose", "prompt" } }   // implement and expand only
 //            when `subagent_type` (sorry-matt:implementer, sorry-matt:expander) is not an available agent type, the
@@ -178,14 +191,22 @@
 //   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
 //   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
 //   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
-//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
-//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
-//   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
-//   list carries its `failed` judge, which stops run; nothing is retried.
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or an exec left to the host,
+//   or whose `then` is "end" or "done": the host's actions. It records no wakeup-end. An exec is left to the host when
+//   the guard hook's classification (hooks/classify.mjs, `classify` on the Bash call of its `command`) gives it a
+//   verdict, whatever its step: the host runs it with its own Bash tool, so the guard sees it (a push to a protected
+//   branch is; a push of a line is not, and run pushes it). Without that classification (the plugin's hooks are not
+//   two levels above this skill) run runs no exec: exit 1, as without bash. An exit not in `okExit` is recorded as it
+//   is; the next list carries its `failed` judge, which stops run; nothing is retried. An exec killed by a signal
+//   is no normal end: it is recorded as 128 + the signal number (no `okExit` holds it) and its log says so.
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
 //   name>.log`, which the `failed` judge names.
+//   Each exec is kept as run (`tick.ran`) before its record: when the record fails, `next` lists it first with `ran`,
+//   and the next `run` records it with that exit without running it again (unless the state could not be written at
+//   all). Its own lists' batch-1 spawns count as handed out only once run returns the list: when run fails, the
+//   next list hands them out again as spawns, not as spawn-checks.
 //   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
-//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run, and "lists": one entry per list made, in
+//   renumbered), plus "ran": [{ "id", "exit", "signal"?, "log" }] in the order run, and "lists": one entry per list made, in
 //   order, the last being the output's own: [{ "now", "reports", "reconcile", "dispatch", "wrote", "ran": ["<id run
 //   from that list>"] }] (#147): what an earlier list took, reconciled, dispatched and wrote is not lost.
 //   A non-zero exit after run started (exit 1: an error; 3: a refusal; 2: a usage error from record or next) still
@@ -195,10 +216,10 @@
 //     "do": "<what to do>" }                                  // "do" only with exit 3 at blocked's record
 //   `ran` and `lists` are what it ran and recorded before it stopped. `blocked` is the exec it stopped at (null when
 //   it stopped in `next`): at "execute", it did not finish running and nothing of it is recorded; at "record", it ran
-//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not run `run`
-//   again yet, which would run blocked again, and do not edit the state; settle what `error` says as for a refused
-//   record, then run blocked's `record` line with `--exit <blocked.exit>` (not when `error` says it is already
-//   recorded) and run `run` again; a refusal that cannot be settled is a ruling point.
+//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not edit the
+//   state; settle what `error` says as for a refused record, then run `run` again, which records blocked with its
+//   exit and does not run it again (nothing is left to record when `error` says it is already recorded); a refusal
+//   that cannot be settled is a ruling point.
 //   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
 //   it is not, run exits 1, `blocked` at "execute" of its first exec; what it recorded before stays.
 //
@@ -210,7 +231,9 @@
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
 //   "agents": { "<id>": { "tickets", "line"?, "role", "type", "status": "current" | "collected" | "stopped", "at" } },
-//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
+//   "issued": { "<action id>": {…, "held"?: true} },   // held: a batch-1 spawn of a list run has not returned (#146)
+//   "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
+//   "ran": { "<action id>": { "exit", "signal"?, "log", "at", "argv", "stdout", "cwd" } },  // run ran it, not recorded
 //   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
 //   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
 //                                                  "failure" } } },     // the ci-fix of a red light with no ticket
@@ -237,10 +260,11 @@
 // could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
 // refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
@@ -259,6 +283,21 @@ const doc = (file, part) => ({
   path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
   part,
 });
+
+// The guard hook's classification (hooks/classify.mjs, its `classify`): `run` leaves to the host each exec it gives a
+// verdict (#146). The plugin's hooks are two levels above this skill (dist: <plugin>/hooks; src: the repo's hooks/).
+// It cannot be one static import (src and dist sit at different depths), so it is loaded here; null when it is not
+// there or does not load, and then `run` runs no exec (exit 1, as without bash).
+const PLUGIN = resolve(SKILL, '..', '..');
+export const GUARD_FILE = join(basename(PLUGIN) === 'src' ? dirname(PLUGIN) : PLUGIN, 'hooks', 'classify.mjs');
+let GUARD = null;
+let GUARD_WHY = 'it is not there';
+try {
+  if (existsSync(GUARD_FILE)) GUARD = (await import(pathToFileURL(GUARD_FILE).href)).classify ?? null;
+  if (existsSync(GUARD_FILE)) GUARD_WHY = GUARD ? null : 'it exports no classify';
+} catch (e) {
+  GUARD_WHY = `it did not load: ${e.message}`;
+}
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -433,6 +472,10 @@ export const OPERATIONS = {
   gate: (c, { gate, after = [] }) => exec(`gate:${gate}`, 'gate', ['node', js('state.mjs'), 'check', c.path, gate, '--repo', c.cfg.root], { after }),
 };
 
+/** A line on local verification: no `origin`, or settled as CI not covering it. Its full suite runs once, at the finish. */
+const onLocal = (c, L) => !c.git.hasOrigin || L.ciNotCovering !== null;
+const localReason = (c) => (c.git.hasOrigin ? 'ci-not-covering' : 'no-origin');
+
 /**
  * Local verification of `sha` on `line` through verify.mjs: true while it is under way this wake-up, false once the
  * SHA has a record or verify.mjs found the worktree not at the SHA (exit 5: the line keeps its last result; a later
@@ -441,6 +484,8 @@ export const OPERATIONS = {
 function localVerify(c, line, sha, reason, wt, final = false) {
   const tag = `${final ? 'final-' : ''}w${c.book.wakeup}`;
   if (c.state.lines[line].local.some((x) => x.sha === sha)) return false;
+  // red lines and the finish both verify a new tip: one verification of a SHA per list
+  if (c.actions.some((a) => a.step === 'verify-local' && a.line === line && a.argv.includes(sha))) return true;
   const first = OPERATIONS.verifyLocal(c, { line, sha, reason, wt, tag });
   if (!c.done(first.id)) return c.emit(first) !== null;
   const exit = c.book.done[first.id].exit;
@@ -541,10 +586,10 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
       );
-    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && !book.issued[a.id].held && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
       // Handed out before in batch 1, runnable then, never recorded: the host was interrupted between spawn and
       // record. A spawn listed at a later batch was not handed out: the host sends batch 1 only (#128). An entry from
-      // before batches were kept counts as handed out.
+      // before batches were kept counts as handed out. One `held` is of a list `run` made and never returned (#146).
       const k = book.spawnChecks?.[a.id] ?? 0;
       action = judge(
         `spawn-check:${a.id}:${k}`,
@@ -554,6 +599,12 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id }, needs: { agent: 'the agent id, with spawned' } },
       );
+    }
+    if (s === 'open' && a.kind === 'exec' && book.ran?.[a.id]) {
+      // `run` ran it and its record failed (#146): it is listed to be recorded, not run again
+      const { exit, signal, log } = book.ran[a.id];
+      const r = { exit, ...(signal ? { signal } : {}), log };
+      action = { ...a, ran: r, note: `It already ran (exit ${r.exit}${r.signal ? `, killed by ${r.signal}` : ''}; output in ${r.log}) and its record failed: do not run it again. Settle what refused the record, then run its record line (tick.mjs run does that itself).` };
     }
     if (!c.actions.some((x) => x.id === action.id)) {
       action.after = (action.after ?? []).filter((x) => x && c.actions.some((y) => y.id === x));
@@ -580,6 +631,19 @@ function syncAgents(c) {
   for (const [line, L] of Object.entries(c.state.lines)) {
     const a = L.assignment;
     if (a?.agentId) c.book.agents[a.agentId] ??= { tickets: [], line, role: 'ci-fix', type: a.type, status: 'current', at: a.assigned };
+  }
+}
+
+/**
+ * An exec `run` ran whose record failed (#146): listed first, as it was issued, to be recorded with the exit it had
+ * (c.emit marks it `ran`), never run again; also when nothing else would list it again (its side effect, say, settled
+ * what issued it).
+ */
+function stepRan(c) {
+  for (const [id, r] of Object.entries(c.book.ran ?? {})) {
+    const x = c.book.issued[id];
+    if (!x || x.kind !== 'exec' || c.status(id) !== 'open') continue;
+    c.emit(exec(id, x.step, r.argv ?? [], { stdout: r.stdout ?? null, cwd: r.cwd ?? null, okExit: x.okExit ?? [0], tickets: x.tickets ?? [], line: x.line ?? null }));
   }
 }
 
@@ -732,14 +796,17 @@ function stepRed(c) {
     if (lastLocal?.result === 'red' && !book.red[line]) book.red[line] = { sha: lastLocal.sha, at: c.now };
     const red = book.red[line];
     if (!red) continue;
+    const target = c.target(line);
+    const tip = c.git.ref(target);
+    // A line on local verification: the earliest-red scan records older SHAs too, so only its tip's record counts.
+    const local = c.profile.ci !== 'skip' && tip && target === line && onLocal(c, L);
+    const tipLocal = local ? L.local.find((x) => x.sha === tip) : undefined;
     const greenCi = L.ci?.verdict === 'green' && L.ci.sha !== red.sha;
-    const greenLocal = lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
+    const greenLocal = local ? tipLocal?.result === 'green' && tip !== red.sha : lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
     if (greenCi || greenLocal || book.failed[line]) {
       delete book.red[line];
       continue;
     }
-    const target = c.target(line);
-    const tip = c.git.ref(target);
     const fix = red.ciFix ?? null;
     const held = L.assignment && L.assignment.deadline !== null ? L.assignment : null;
     // A ci-fix agent works in the integration worktree: no judge, no push and no CI read until it reports or is stopped.
@@ -751,32 +818,77 @@ function stepRed(c) {
       ciFixDispatch(c, line, target, red);
       continue;
     }
-    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
-    // A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA.
-    const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
-    const used = fix?.round ?? 0;
-    const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
-    c.emit(
-      judge(
-        `red-light:${line}@${latestRed}${again}`,
-        'red-light',
-        `${line} is red at ${latestRed}${again ? ` (fix round ${used} ended with no new commit)` : ''}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
-          used < 2
-            ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
-            : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
-        }`,
-        ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
-        [doc('RED-LIGHT.md', 'all of it')],
-        { line, meta: { round: used + 1, sha: latestRed, failure } },
-      ),
-    );
-    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target));
+    if (local) {
+      if (!tipLocal) localVerify(c, line, tip, localReason(c), c.git.wtOf(target), true); // a fix moved the tip: the finish's verification of it comes first
+      else {
+        const scan = earliestRedScan(c, line, tip);
+        if (scan.done) c.emit(redLightJudge(c, line, L, red, tip, scan));
+      }
       continue;
     }
+    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
+    c.emit(redLightJudge(c, line, L, red, latestRed));
+    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
     ciRead(c, line, target, tip, `w${book.wakeup}`, false);
   }
+}
+
+/**
+ * The red-light judge of one round at `sha`; on a line on local verification it names the scan's earliest red SHA.
+ * A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA (#144).
+ */
+function redLightJudge(c, line, L, red, sha, scan = null) {
+  const tip = c.git.ref(c.target(line));
+  const fix = red.ciFix ?? null;
+  const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
+  const used = fix?.round ?? 0;
+  const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
+  const found = scan
+    ? ` Each integration SHA was verified locally from the oldest: the earliest red SHA ${scan.sha}${scan.sha === sha ? ' (no integration SHA is red: the red came in after the last of them)' : ''}; ci.mjs earliest-red on the per-SHA records finds the same.`
+    : '';
+  return judge(
+    `red-light:${line}@${sha}${again}`,
+    'red-light',
+    `${line} is red at ${sha}${again ? ` (fix round ${used} ended with no new commit)` : ''}.${found} Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
+      used < 2
+        ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
+        : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
+    }`,
+    ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
+    [doc('RED-LIGHT.md', 'all of it')],
+    { line, after: scan?.after ?? [], meta: { round: used + 1, sha, failure, ...(scan ? { earliestRed: scan.sha } : {}) } },
+  );
+}
+
+/**
+ * The earliest red SHA of a red line on local verification (#141). Its integration SHAs — the ticket merges the state
+ * records on it, in first-parent order — are verified one at a time from the oldest, each in a detached worktree of
+ * its own (`<worktrees>/<line-slug>-at-<sha12>`, removed once the SHA has its record), until one is red: that one is
+ * the earliest red SHA. A SHA with a record is not verified again. None red: the red came in after the last of them
+ * (a host commit, the simplify pass or the base sync), and the earliest red SHA is the tip.
+ * Returns { done: false } while a verification is under way, else { done: true, sha, after }: `after` holds the
+ * worktree removals still in this list, which the red-light judge waits for.
+ */
+function earliestRedScan(c, line, tip) {
+  const L = c.state.lines[line];
+  const recorded = new Set(Object.values(c.state.tickets).flatMap((t) => (c.target(t.line) === line ? t.merges.map((m) => m.sha) : [])));
+  const removing = [];
+  for (const { sha } of c.git.merges(tip).reverse()) {
+    if (!recorded.has(sha)) continue;
+    const wt = join(c.cfg.worktrees, `${slugOf(line)}-at-${sha.slice(0, 12)}`);
+    const add = `earliest-red-add:${line}@${sha}`;
+    const rec = L.local.find((x) => x.sha === sha);
+    if (!rec) {
+      if (!c.emit(exec(add, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'add', '-q', '--detach', wt, sha], { line }))) localVerify(c, line, sha, localReason(c), wt);
+      return { done: false };
+    }
+    if (c.done(add)) {
+      const rm = c.emit(exec(`earliest-red-remove:${line}@${sha}`, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'remove', '--force', wt], { line }));
+      if (rm) removing.push(rm);
+    }
+    if (rec.result === 'red') return { done: true, sha, after: removing };
+  }
+  return { done: true, sha: tip, after: removing };
 }
 
 /** Push when the remote lags, read CI at `tip` and record it. Returns true while that is still to be done. */
@@ -1677,10 +1789,7 @@ function dispatchSteps(c, d) {
     if (L.assignment?.deadline) continue; // its ci-fix agent is at work in the integration worktree (#144)
     const tip = c.git.ref(target);
     if (!tip) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      if (localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target))) waiting = true;
-      continue;
-    }
+    if (onLocal(c, L)) continue; // a line without CI is verified once, at the finish (#141)
     if (c.git.remote(target) === null) continue; // never pushed: not read
     if (ciRead(c, line, target, tip, `r${r}`, true)) {
       waiting = true;
@@ -2124,6 +2233,7 @@ const EXEC_REFERENCE = {
   'ci-branch': { path: js('state.mjs'), part: 'header (ci: --branch-runs)' },
   'ci-watch': doc('FINISH.md', 'step 3 (full verification)'),
   'sync-base': doc('FINISH.md', 'step 2 (sync the base)'),
+  'earliest-red': { path: SELF, part: 'header (a red line on local verification: the earliest-red scan)' },
 };
 
 function batches(actions) {
@@ -2137,7 +2247,7 @@ function batches(actions) {
 function recordLine(c, a) {
   if (a.record) return a.record;
   const head = `node ${q(SELF)} record ${q(c.path)} ${q(a.id)}`;
-  if (a.kind === 'exec') return `${head} --exit <exit code>`;
+  if (a.kind === 'exec') return `${head} --exit ${a.ran ? a.ran.exit : '<exit code>'}`;
   const extra = [];
   if (a.needs?.agent) extra.push('--agent <agent id>');
   if (a.needs?.value) extra.push(`--value <${a.needs.value}>`);
@@ -2145,15 +2255,17 @@ function recordLine(c, a) {
   return `${head} --outcome ${a.outcomes.join('|')}${extra.length ? ` ${extra.join(' ')}` : ''}`;
 }
 
-export function next(path, reported, now, deps) {
+export function next(path, reported, now, deps, { hold = false } = {}) {
   const state = load(path);
   const c = context(path, state, now, deps);
+  c.hold = hold; // run's own lists: their batch-1 spawns are handed out only when run returns the list (#146)
   const { book } = c;
   for (const id of reported) if (!book.inbox.includes(id)) book.inbox.push(id);
   syncAgents(c);
   if (book.finished) {
     return finish(c, 'done');
   }
+  stepRan(c);
   stepTips(c);
   stepReports(c);
   stepRed(c);
@@ -2203,8 +2315,11 @@ function finish(c, then) {
       ...(a.okExit ? { okExit: a.okExit } : {}),
       ...(a.outcomes ? { outcomes: a.outcomes } : {}),
       ...(a.meta ? { meta: a.meta } : {}),
-      // a minimal reviewer's spawn: when it was last issued, so record can tell this round's report from an older one
-      ...(a.meta?.report ? { at: c.now } : {}),
+      // a minimal reviewer's spawn: when its round was first issued, so record can tell this round's report from an
+      // older one. Each round (the initial review, each recheck, each retry) is an action id of its own; the same id
+      // handed out again before it is recorded keeps its time, so a report written before one more `next` counts.
+      ...(a.meta?.report ? { at: book.issued[a.id]?.at ?? c.now } : {}),
+      ...(c.hold && a.kind === 'spawn' && a.batch === 1 ? { held: true } : {}),
     };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
@@ -2233,9 +2348,9 @@ function finish(c, then) {
 // ---- record -----------------------------------------------------------------------------------------------------------
 
 /**
- * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than the review
- * spawn was last issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the file, since the
- * fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
+ * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than this
+ * round's review spawn was first issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the
+ * file, since the fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
  */
 function checkReport(file, outcome, issuedAt, deps) {
   let held = '';
@@ -2252,7 +2367,7 @@ function checkReport(file, outcome, issuedAt, deps) {
   if (verdict !== outcome) throw new Refused(`${file} says verdict: ${verdict}, not ${outcome}: record the verdict the report holds, or ${redo}`);
   const mtime = issuedAt ? deps.stat(file).mtimeMs : null; // an entry from before tick kept the time has none
   if (mtime !== null && mtime < Date.parse(issuedAt))
-    throw new Refused(`${file} was written ${formatTime(mtime)}, before this review spawn was last issued (${issuedAt}): it is an older round's report; ${redo}`);
+    throw new Refused(`${file} was written ${formatTime(mtime)}, before this round's review spawn was first issued (${issuedAt}): it is an older round's report; ${redo}`);
 }
 
 export function record(path, id, flags, now, deps) {
@@ -2309,6 +2424,10 @@ export function record(path, id, flags, now, deps) {
   };
   const meta = issued.meta ?? {};
   const tickets = issued.tickets ?? [];
+  const reissue = (x) => {
+    delete book.done[x];
+    if (book.ran) delete book.ran[x];
+  };
   // A spawn's agent fills the assignment of its tickets (a spawn falling back to another type re-records it).
   const spawned = (tids) => {
     const pending = flag(tids[0]).pending;
@@ -2544,12 +2663,12 @@ export function record(path, id, flags, now, deps) {
       break;
     case 'merge-check':
     case 'sync-base':
-      if (outcome === 'retry') delete book.done[id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`];
+      if (outcome === 'retry') reissue(id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`);
       else if (outcome === 'stuck' || outcome === 'awaiting-ruling') stageIf(tickets[0], outcome, flags.value ?? 'the merge failed');
       else if (outcome === 'unresolved') book.flags[`line:${issued.line}`] = { unsynced: flags.value ?? meta.baseSha };
       break;
     case 'failed':
-      if (outcome === 'retry') delete book.done[meta.of];
+      if (outcome === 'retry') reissue(meta.of);
       break;
     case 'wakeup-end':
       book.wakeup += 1;
@@ -2567,6 +2686,7 @@ export function record(path, id, flags, now, deps) {
       break;
   }
   if (outcome !== 'retry') book.done[id] = entry; // a retry issues the same thing again
+  if (book.ran) delete book.ran[id]; // recorded: what run kept of it is spent (#146)
   update(path, now, (s) => {
     s.tick = book;
     return {};
@@ -2578,18 +2698,38 @@ export function record(path, id, flags, now, deps) {
 
 /** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
 const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
-// An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
-const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
+/**
+ * Whether `run` leaves an exec to the host: the guard hook gives its command a verdict (an action needing
+ * confirmation), so it must run in the host's own tool call where the guard sees it (#146). The guard's own
+ * classification decides, not the step: a push of a line runs here, a push to a protected branch does not. A
+ * classification that throws leaves it to the host, as the guard fails closed.
+ */
+function leftToHost(a, classify) {
+  try {
+    return classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
+  } catch {
+    return true;
+  }
+}
 const RUN_LISTS = 500;
-/** What the host does when `run` exits 3 (#147): the `do` of its output. */
+/** What the host does when `run` exits 3 (#147, #146): the `do` of its output. */
 const RUN_REFUSED =
-  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. Do not run `run` again yet: it would run blocked again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run the `record` line of blocked with --exit <blocked.exit> (skip that when `error` says it is already recorded) and run `run` again. A refusal you cannot settle is a ruling point: ask.';
+  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. tick kept that it ran: it is not run again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run `run` again: it records blocked with its exit without running it (when `error` says it is already recorded, nothing is left to record). A refusal you cannot settle is a ruling point: ask.';
+
+/** Keeps that `run` ran an exec, before its record (#146): an exec whose record fails is recorded later, not run again. */
+function markRan(path, a, result, now) {
+  update(path, now, (s) => {
+    (s.tick.ran ??= {})[a.id] = { ...result, at: now, argv: a.argv, stdout: a.stdout ?? null, cwd: a.cwd ?? null };
+    return {};
+  });
+}
 
 /**
- * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
- * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
- * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
- * and record: the clock moves while the execs run.
+ * `next` again and again: each list's batch-1 execs (those the guard hook classifies aside) run through deps.execute
+ * in list order, each kept as run and recorded with its exit code as `record --exit` does; `next` runs again only
+ * while batch 1 held nothing else and `then` is "tick". An exec an earlier run ran and could not record is recorded,
+ * not run. The output is the last list less the execs run, plus `ran`; its batch-1 spawns count as handed out only
+ * once it is returned. `now` is read again for each `next` and record: the clock moves while the execs run.
  */
 export function run(path, reported, now, deps) {
   const ran = [];
@@ -2599,23 +2739,42 @@ export function run(path, reported, now, deps) {
     let out = null;
     for (let i = 0; ; i += 1) {
       if (i > RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-      out = next(path, i === 0 ? reported : [], now(), deps);
+      out = next(path, i === 0 ? reported : [], now(), deps, { hold: true });
       const list = { now: out.now, reports: out.reports, reconcile: out.reconcile, dispatch: out.dispatch, wrote: out.wrote, ran: [] };
       lists.push(list);
       const first = out.actions.filter((a) => a.batch === 1);
-      const todo = first.filter(runnable);
+      const todo = [];
+      for (const a of first.filter((x) => x.kind === 'exec')) {
+        if (!a.ran && !deps.classify) {
+          blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
+          throw new Error(`the guard hook's classification ${GUARD_FILE} cannot be used (${GUARD_WHY ?? 'none was given'}): run next and the execs by hand`);
+        }
+        if (a.ran || !leftToHost(a, deps.classify)) todo.push(a);
+      }
       for (const a of todo) {
-        blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
-        deps.mkdir(dirname(blocked.log));
-        const { code } = deps.execute(a, blocked.log);
-        Object.assign(blocked, { at: 'record', exit: code });
-        record(path, a.id, { exit: String(code), log: blocked.log }, now(), deps);
-        ran.push({ id: a.id, exit: code, log: blocked.log });
+        let result = a.ran; // ran before, its record failed: record it, do not run it again
+        blocked = { id: a.id, step: a.step, at: result ? 'record' : 'execute', exit: result?.exit ?? null, log: result?.log ?? runLog(path, out.run, a.id), record: a.record };
+        if (!result) {
+          deps.mkdir(dirname(blocked.log));
+          const { code, signal } = deps.execute(a, blocked.log);
+          result = { exit: code, ...(signal ? { signal } : {}), log: blocked.log };
+          Object.assign(blocked, { at: 'record', exit: code });
+          markRan(path, a, result, now());
+        }
+        record(path, a.id, { exit: String(result.exit), log: result.log }, now(), deps);
+        ran.push({ id: a.id, exit: result.exit, ...(result.signal ? { signal: result.signal } : {}), log: result.log });
         list.ran.push(a.id);
         blocked = null;
       }
       if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
         const done = new Set(todo.map((a) => a.id));
+        // returned to the host now: its batch-1 spawns are handed out (a spawn-check if they go unrecorded)
+        const held = first.filter((a) => a.kind === 'spawn').map((a) => a.id);
+        if (held.length)
+          update(path, now(), (s) => {
+            for (const id of held) if (s.tick.issued[id]) delete s.tick.issued[id].held;
+            return {};
+          });
         return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran, lists };
       }
     }
@@ -2655,6 +2814,13 @@ export function bashExecutor({ spawn = spawnSync, platform = process.platform } 
     try {
       const p = spawn('bash', ['-c', a.command], { stdio: ['ignore', fd, fd] });
       if (p.error) throw new Error(`bash could not run ${a.id} (${p.error.message})`);
+      if (p.status === null && p.signal) {
+        // killed, not ended (#146): 128 + the signal number, as a shell reports it, which no okExit holds
+        writeSync(fd, `
+tick.mjs run: killed by ${p.signal}, not a normal end
+`);
+        return { code: 128 + (osConstants.signals[p.signal] ?? 0), signal: p.signal };
+      }
       return { code: p.status ?? 1 };
     } finally {
       closeSync(fd);
@@ -2743,7 +2909,8 @@ export function defaultDeps() {
       execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
     stateMain,
     clock: () => Date.now(),
-    execute: bashExecutor(), // run: (action, log file) => { code }
+    execute: bashExecutor(), // run: (action, log file) => { code, signal? }
+    classify: GUARD, // run: the guard hook's classification of an exec's command, or null when it is not there
   };
 }
 
