@@ -10,6 +10,8 @@
 // a line never spans repositories):
 //   {
 //     "repo":     "<working tree>",                 // optional; default the current directory
+//     "base":     "<base branch>",                  // the branch the lines merge into, e.g. "main"; needed with
+//                                                   // tracker "github", ignored otherwise
 //     "frontier": "<frontier output file>" | { ...frontier.mjs output... },   // format sorry-matt/frontier@1
 //     "files":    { "#11": "<predicted-files list>", ... },                   // one per open ticket
 //     "ignore":   ["<worktree path>" | "<branch>" | "#<pr>"],                // optional holders to leave out
@@ -29,7 +31,11 @@
 //   preflight  `git-repo`: the repo is a git working tree with a commit on HEAD. `clean`: `git status
 //              --porcelain` prints nothing. With tracker "github" also `gh-auth`: `gh auth status` exits 0, and
 //              `repo-match`: one of the repo's remotes points at the frontier's `source` (owner/repo, any host,
-//              case-insensitive). When a check fails, `ok` is false and everything below is null.
+//              case-insensitive), and `base-ci`: `ci.mjs base` on the plan's `base` and the frontier's
+//              `source` — the CI of the base's latest SHA on GitHub. `base-ci` never fails (`ok` is always true):
+//              when that verdict is red or query-failed its `warning` is true and the freeze goes on (what the
+//              host does with a warning is in SKILL.md, freeze step 4); any other verdict is no warning. When a
+//              check fails, `ok` is false and everything below is null.
 //   held       Files other work is changing, each holder with a release condition:
 //              - every other worktree of the repo (not bare, not prunable): `git diff --name-only --no-renames
 //                <merge-base of HEAD and its HEAD>` inside it (committed, staged, unstaged) plus its untracked
@@ -62,8 +68,10 @@
 //     "tracker":    "github" | "local",
 //     "source":     "<owner>/<repo>" | "<git-ref>" | "worktree",
 //     "repo":       "<top level of the working tree>" | null,
-//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match",
+//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match" | "base-ci",
 //                                              "ok": true, "detail": "..." }] },
+//                   // base-ci also has "warning": true | false and "ci": ci.mjs base's output without format and
+//                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed })
 //     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
 //                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
 //     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
@@ -83,6 +91,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { UsageError, canonical, failure, runIfEntry } from './cli.mjs';
 import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
+import { baseVerdict } from './ci.mjs';
 
 export const FORMAT = 'sorry-matt/freeze@1';
 const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
@@ -155,6 +164,9 @@ export function readPlan(path, read, cwd = process.cwd()) {
   }
   const hostHeld = plan.held ?? [];
   if (!Array.isArray(hostHeld)) throw new UsageError(`${path}: held is an array`);
+  const base = plan.base ?? null;
+  if (base !== null && (typeof base !== 'string' || !base)) throw new UsageError(`${path}: base is a non-empty string`);
+  if (frontier.tracker === 'github' && !base) throw new UsageError(`${path}: a github plan needs base, the branch the lines merge into`);
   const held = hostHeld.map((h, i) => {
     if (!h || typeof h.id !== 'string' || !h.id) throw new UsageError(`${path}: held[${i}] has no id`);
     if (typeof h.files !== 'string' || !h.files) throw new UsageError(`${path}: held ${h.id} has no files list`);
@@ -162,7 +174,7 @@ export function readPlan(path, read, cwd = process.cwd()) {
     const file = resolve(dir, h.files);
     return { id: h.id, files: parseList(read(file), file), release: h.release };
   });
-  return { repo, frontier, predicted, ignore, held };
+  return { repo, frontier, predicted, ignore, held, base };
 }
 
 // ---------- preflight ----------
@@ -173,7 +185,7 @@ export function remoteSlug(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
-export function preflight({ repo, tracker, source }, { git, gh }) {
+export function preflight({ repo, tracker, source, base }, { git, gh }) {
   const checks = [];
   let top = null;
   try {
@@ -214,8 +226,18 @@ export function preflight({ repo, tracker, source }, { git, gh }) {
           : { name: 'repo-match', ok: false, detail: `no remote points at ${source}; remotes: ${urls.join(', ') || 'none'}` },
       );
     }
+    checks.push(baseCheck(baseVerdict({ base, repo: source }, gh)));
   }
   return { top, result: { ok: checks.every((c) => c.ok), checks } };
+}
+
+// A red base, or one whose CI could not be read, is a warning: `ok` stays true and the freeze goes on.
+function baseCheck(v) {
+  const { format: _f, command: _c, ...ci } = v;
+  const at = `${v.branch} ${v.sha ?? '(latest SHA unknown)'}`;
+  if (v.verdict === 'red') return { name: 'base-ci', ok: true, warning: true, detail: `${at} is red; failed runs: ${v.failed.join(', ') || 'none listed'}`, ci };
+  if (v.verdict === 'query-failed') return { name: 'base-ci', ok: true, warning: true, detail: `${at}: CI could not be read (${v.error})`, ci };
+  return { name: 'base-ci', ok: true, warning: false, detail: `${at} is ${v.verdict}${v.reason ? ` (${v.reason})` : ''}`, ci };
 }
 
 // ---------- held files ----------
@@ -394,7 +416,7 @@ export function freezeTickets({ frontier, predicted, held }) {
 
 export function freeze(plan, deps) {
   const { frontier } = plan;
-  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source }, deps);
+  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source, base: plan.base }, deps);
   const out = { format: FORMAT, tracker: frontier.tracker, source: frontier.source, repo: top, preflight: result };
   if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null };
   const held = heldFiles({ top, tracker: frontier.tracker, source: frontier.source, ignore: plan.ignore, hostHeld: plan.held }, deps);

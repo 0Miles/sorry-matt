@@ -31,7 +31,20 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 4. Write a plan and run `scripts/freeze.mjs` (preflight, held files, exclusions, **joined lines**, candidate order).
    When `preflight.ok` is false, fix what `checks` lists and rerun; a holder git cannot see (another session you know
    of) goes into the plan's `held`. Each `excluded` ticket is **awaiting ruling**, with its holder and release
-   condition.
+   condition. The plan's `base` is the base branch the lines merge into (required on GitHub).
+   **Base CI**: the `base-ci` check reads the CI of the base's latest SHA and never blocks the freeze; when its
+   `warning` is true (the base is red, or its CI could not be read):
+   - Composed by `have-it-all-done`, follow the choice the ruling point recorded in ledger field 2; when field 2 has no
+     such question (the base was not red at the ruling point), answer "continue" on the user's behalf and log it in
+     the self-answer log.
+   - Standalone, when it is red, ask the user here "continue, or fix the base first" (`ASKING.md` section 2(a);
+     recommend "continue" and state that every line's CI will carry this red), and record the answer in ledger
+     field 2; when it could not be read, answer "continue" on the user's behalf and log it, with the error message,
+     in the self-answer log.
+   - "Fix the base first": do not freeze. The base's red (branch, SHA, the run ids in `ci.failed`) goes on the
+     human-work list, and every initial ticket is awaiting ruling, released when the base turns green. "Continue":
+     a red the base brought in is judged by red-light handling as mapping to no ticket
+     ([`RED-LIGHT.md`](RED-LIGHT.md) point 2).
 5. `state.mjs init`; if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
    when composed, the one written at the ruling point stands). `state.mjs add` each line's tickets,
    `state.mjs line --lines` for the joined lines, then `scripts/integrate.mjs line-init` for each line.
@@ -45,8 +58,9 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 **Hard rail**: the frozen initial set never grows; tickets found or filed during the run are background only.
 
 Done when: the tracker mode is chosen and verified; every initial ticket has its publication source, tracker-native
-identifier and blocker map; every excluded ticket has its holder and release condition; `check freeze` passes; when
-standalone, both `budget:` lines are set from the frozen ticket count.
+identifier and blocker map; every excluded ticket has its holder and release condition; a `base-ci` warning has the
+ruling point's choice, the user's answer or an on-behalf answer on record; `check freeze` passes; when standalone,
+both `budget:` lines are set from the frozen ticket count.
 
 ## 1. The loop: tick
 
