@@ -68,10 +68,19 @@ export function normalize(path) {
 /** Whether one path covers the other. */
 export const pathsOverlap = (a, b) => a === '' || b === '' || a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
 
+/**
+ * The `path#symbol` syntax alone: { path: the text before the first `#`, as written; symbol: the chain, each trimmed }.
+ * No check: parseEntry adds them. prove-it's tier.mjs reads its sensitive-path entries with it (#152).
+ */
+export function splitEntry(text) {
+  const [path, ...rest] = String(text).split('#');
+  return { path, symbol: rest.map((s) => s.trim()) };
+}
+
 /** A predicted-files entry: { path, symbol }, the symbol chain from the outermost; [] is the whole path. */
 export function parseEntry(text) {
-  const [path, ...rest] = String(text).split('#');
-  const entry = { path: normalize(path), symbol: rest.map((s) => s.trim()) };
+  const { path, symbol } = splitEntry(text);
+  const entry = { path: normalize(path), symbol };
   if (entry.symbol.some((s) => !s)) throw new UsageError(`${text}: empty symbol; write path#symbol, a nested one path#outer#inner`);
   if (entry.symbol.length && entry.path === '') throw new UsageError(`${text}: the whole repository has no symbol`);
   return entry;

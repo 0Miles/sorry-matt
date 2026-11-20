@@ -182,6 +182,85 @@ test("#139: this repo's contract: the state script and agent definitions are ful
   }
 });
 
+// #152: a sensitive entry can name a symbol, `path#symbol` as in a predicted-files list (overlap.mjs): only a change
+// that touches the symbol is sensitive; a change elsewhere in the file goes by its line count.
+const STATE = [
+  "export const FORMAT = 'demo/state@1';",
+  '',
+  'export function schema(state) {',
+  '  if (state.format !== FORMAT) return false;',
+  '  return Array.isArray(state.tickets);',
+  '}',
+  '',
+  'function add(state, id) {',
+  '  state.tickets.push(id);',
+  '  return state;',
+  '}',
+  '',
+].join('\n');
+const swap = (text, from, to) => {
+  assert.ok(text.includes(from), from);
+  return text.replace(from, to);
+};
+
+test('#152: a sensitive path#symbol is full when the diff touches the symbol; the rest of the file goes by line count', (t) => {
+  const base = { 'docs/agents/commands.md': CONTRACT('```text\nsrc/state.mjs#schema\n```'), 'src/state.mjs': STATE };
+
+  const inSchema = judge(repo(t, base, { 'src/state.mjs': swap(STATE, 'Array.isArray(state.tickets)', 'Array.isArray(state.tickets) && state.run') }));
+  assert.deepEqual([inSchema.tier, inSchema.reasons, inSchema.signals.sensitive], ['full', ['sensitive'], ['src/state.mjs']]);
+
+  const elsewhere = judge(repo(t, base, { 'src/state.mjs': swap(STATE, 'state.tickets.push(id);', 'state.tickets.push(String(id));') }));
+  assert.deepEqual([elsewhere.tier, elsewhere.reasons, elsewhere.signals.sensitive], ['light', ['few-lines'], []]);
+
+  const larger = judge(repo(t, base, { 'src/state.mjs': `${STATE}${lines(51)}` }));
+  assert.deepEqual([larger.tier, larger.reasons, larger.signals.sensitive], ['standard', ['default'], []]);
+});
+
+test('#152: a symbol that does not resolve fails safe: renamed, removed, never there, or the file deleted are full', (t) => {
+  const base = { 'docs/agents/commands.md': CONTRACT('```text\nsrc/state.mjs#schema\n```'), 'src/state.mjs': STATE };
+  const cases = {
+    renamed: swap(STATE, 'function schema(', 'function shape('),
+    removed: STATE.split('\n').filter((_, i) => i < 2 || i > 6).join('\n'),
+    deleted: null,
+  };
+  for (const [name, text] of Object.entries(cases)) {
+    const out = judge(repo(t, base, { 'src/state.mjs': text }));
+    assert.deepEqual([out.tier, out.signals.sensitive], ['full', ['src/state.mjs']], name);
+  }
+  const stale = { 'docs/agents/commands.md': CONTRACT('```text\nsrc/state.mjs#nowhere\n```'), 'src/state.mjs': STATE };
+  const never = judge(repo(t, stale, { 'src/state.mjs': swap(STATE, 'state.tickets.push(id);', 'state.tickets.push(String(id));') }));
+  assert.deepEqual([never.tier, never.signals.sensitive], ['full', ['src/state.mjs']]);
+});
+
+test('#152: a markdown heading, a nested symbol and a declaration over several lines', (t) => {
+  const doc = '# Guide\n\n## Setup\n\nstep one\n\n### Keys\n\nkey a\n\n## Usage\n\nuse it\n';
+  const docs = { 'docs/agents/commands.md': CONTRACT('```text\ndocs/guide.md#Guide#Setup\n```'), 'docs/guide.md': doc };
+  const inSetup = judge(repo(t, docs, { 'docs/guide.md': swap(doc, 'key a', 'key b') }));
+  assert.deepEqual([inSetup.tier, inSetup.signals.sensitive], ['full', ['docs/guide.md']], 'a subsection is part of its section');
+  const inUsage = judge(repo(t, docs, { 'docs/guide.md': swap(doc, 'use it', 'use it well') }));
+  assert.deepEqual([inUsage.tier, inUsage.reasons, inUsage.signals.sensitive], ['light', ['docs-only'], []]);
+
+  const code = [
+    'export class Store {',
+    '  constructor() {',
+    '    this.items = [];',
+    '  }',
+    '',
+    '  validate(',
+    '    item,',
+    '  ) {',
+    '    return item != null;',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  const nested = { 'docs/agents/commands.md': CONTRACT('```text\nsrc/store.mjs # Store # validate\n```'), 'src/store.mjs': code };
+  const inBody = judge(repo(t, nested, { 'src/store.mjs': swap(code, 'item != null', 'item !== undefined') }));
+  assert.deepEqual([inBody.tier, inBody.signals.sensitive], ['full', ['src/store.mjs']], 'the body past a multi-line signature');
+  const inConstructor = judge(repo(t, nested, { 'src/store.mjs': swap(code, 'this.items = [];', 'this.items = new Set();') }));
+  assert.deepEqual([inConstructor.tier, inConstructor.signals.sensitive], ['light', []]);
+});
+
 test('thresholds are configurable and reported; bad values exit 2', (t) => {
   const dir = repo(t, {}, { 'src/a.js': lines(51) });
   const raised = judge(dir, '--light-max-lines', '60', '--light-cap', '2');
