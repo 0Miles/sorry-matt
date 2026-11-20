@@ -46,8 +46,10 @@
 //                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
 //                    returned. `record review:…` is refused (3) when that file is missing or empty with
 //                    `--outcome fix`, or, when it is there, its `verdict:` line is missing or not the outcome, or it
-//                    was written before the review spawn was last issued (`issued.<id>.at`; an interrupted round's
-//                    file): the host writes the report returned this round there verbatim. The fix round (send, the
+//                    was written before this round's review spawn was first issued (`issued.<id>.at`, written once
+//                    per round: the initial review, each recheck and each retry; the same spawn handed out again by
+//                    one more `next` keeps it; an interrupted round's file): the host writes the report returned this
+//                    round there verbatim. The fix round (send, the
 //                    note of a new agent), file-issue and mark-stuck name that file as the findings' source, not the
 //                    status record's review block
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
@@ -1970,8 +1972,10 @@ function finish(c, then) {
       ...(a.okExit ? { okExit: a.okExit } : {}),
       ...(a.outcomes ? { outcomes: a.outcomes } : {}),
       ...(a.meta ? { meta: a.meta } : {}),
-      // a minimal reviewer's spawn: when it was last issued, so record can tell this round's report from an older one
-      ...(a.meta?.report ? { at: c.now } : {}),
+      // a minimal reviewer's spawn: when its round was first issued, so record can tell this round's report from an
+      // older one. Each round (the initial review, each recheck, each retry) is an action id of its own; the same id
+      // handed out again before it is recorded keeps its time, so a report written before one more `next` counts.
+      ...(a.meta?.report ? { at: book.issued[a.id]?.at ?? c.now } : {}),
     };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
@@ -2000,9 +2004,9 @@ function finish(c, then) {
 // ---- record -----------------------------------------------------------------------------------------------------------
 
 /**
- * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than the review
- * spawn was last issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the file, since the
- * fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
+ * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than this
+ * round's review spawn was first issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the
+ * file, since the fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
  */
 function checkReport(file, outcome, issuedAt, deps) {
   let held = '';
@@ -2019,7 +2023,7 @@ function checkReport(file, outcome, issuedAt, deps) {
   if (verdict !== outcome) throw new Refused(`${file} says verdict: ${verdict}, not ${outcome}: record the verdict the report holds, or ${redo}`);
   const mtime = issuedAt ? deps.stat(file).mtimeMs : null; // an entry from before tick kept the time has none
   if (mtime !== null && mtime < Date.parse(issuedAt))
-    throw new Refused(`${file} was written ${formatTime(mtime)}, before this review spawn was last issued (${issuedAt}): it is an older round's report; ${redo}`);
+    throw new Refused(`${file} was written ${formatTime(mtime)}, before this round's review spawn was first issued (${issuedAt}): it is an older round's report; ${redo}`);
 }
 
 export function record(path, id, flags, now, deps) {

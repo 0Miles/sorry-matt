@@ -960,7 +960,7 @@ test('#130: minimal record review is refused (3) when the report says another ve
   assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
 });
 
-test('#130: minimal record review is refused (3) when the report was written before the review spawn was last issued', (t) => {
+test("#130: minimal record review is refused (3) when the report was written before the round's review spawn was first issued", (t) => {
   const { h, seen } = minimalReview(t, (a, h) => {
     const issued = h.state().tick.issued[a.id].at;
     assert.equal(issued, h.iso(), 'tick keeps when it issued the review spawn');
@@ -988,6 +988,72 @@ test('#130: minimal record review accepts the report this round wrote with the v
   assert.equal(seen.length, 1);
   assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix');
   assert.equal(h.state().tickets['#1'].reviews.at(-1).verdict, 'pass', 'the recheck passes');
+});
+
+/** The host runs `next` once more before it records the review spawn `a`: the list hands the same spawn out again. */
+const nextAgain = (h, a) => {
+  const r = h.tick('next', h.path);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(JSON.parse(r.out).actions.some((x) => x.id === a.id), `${a.id} is handed out again, not recorded yet`);
+};
+
+test('#145: a report written before one more `next` is accepted: issuing the same round again keeps its issue time', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    const first = h.state().tick.issued[a.id].at;
+    assert.equal(first, h.iso(), 'the round was first issued now');
+    h.now += 60_000;
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    h.now += 60_000;
+    nextAgain(h, a);
+    assert.equal(h.state().tick.issued[a.id].at, first, "the issue time is still the round's first");
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1']; // h.record asserts exit 0
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the report written before the extra next is taken');
+});
+
+test('#145: a report from before the round was first issued is still refused after one more `next`', (t) => {
+  const { h, seen } = minimalReview(t, (a, h) => {
+    const first = h.state().tick.issued[a.id].at;
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n', Date.parse(first) - 60_000);
+    h.now += 60_000;
+    nextAgain(h, a);
+    const r = recordReview(h, a, 'fix');
+    assert.equal(r.code, 3, "an older round's report: refused");
+    assert.match(r.err, /before/);
+    assert.ok(r.err.includes(first), r.err);
+    h.writeReport(reportOf(a), 'verdict: fix\nF1: a.txt:1 wrong (evidence)\n');
+    return ['--agent', 'rv1', '--outcome', 'fix', '--findings', 'F1'];
+  });
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(seen.length, 1);
+  assert.equal(h.state().tickets['#1'].reviews[0].verdict, 'fix', 'the report this round wrote is taken');
+});
+
+test('#145: the initial review and each recheck are rounds of their own, each with the time it was first issued', (t) => {
+  const h = world(t, { profile: { review: 'minimal', fixRounds: 2 } });
+  const spawn = h.spawn;
+  const rounds = [];
+  h.spawn = (a) => {
+    if (a.step !== 'review' || a.tickets[0] !== '#1') return spawn(a);
+    const first = h.state().tick.issued[a.id].at;
+    rounds.push({ id: a.id, mode: a.meta.mode, first, now: h.iso() });
+    h.now += 60_000;
+    nextAgain(h, a); // the same round issued again: its time stays
+    assert.equal(h.state().tick.issued[a.id].at, first, `${a.id}: the round's first issue time`);
+    const outcome = rounds.length < 3 ? 'fix' : 'pass';
+    h.writeReport(reportOf(a), `verdict: ${outcome}\n${outcome === 'fix' ? 'F1: a.txt:1 wrong (evidence)\n' : ''}`);
+    return ['--agent', `rv${rounds.length}`, '--outcome', outcome, ...(outcome === 'fix' ? ['--findings', 'F1'] : [])];
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.deepEqual(
+    rounds.map((r) => r.mode),
+    ['initial', 'recheck', 'recheck'],
+  );
+  assert.equal(new Set(rounds.map((r) => r.id)).size, 3, 'each round is its own action');
+  for (const r of rounds) assert.equal(r.first, r.now, `${r.id}: written when the round was first issued`);
+  assert.ok(rounds.every((r, k) => k === 0 || Date.parse(r.first) > Date.parse(rounds[k - 1].first)), 'each round a new, later time');
 });
 
 test('#130: with onUnfixed: stuck the mark-stuck judge names the report file (minimal) or the review block (full)', (t) => {
