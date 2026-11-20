@@ -101,7 +101,15 @@ The files a ticket will change, one repo-relative path per line (covering everyt
 repo), in `sorry-matt/runs/<run>/files/<ticket>.txt`. Sources, in order: paths the ticket text, expansion block and
 criteria name; definitions and main uses (`git grep -l`, `git ls-files`) of the modules, skills, commands, settings keys
 or identifiers it names; files the repo's rule files (`AGENTS.md`, `CLAUDE.md`…) require to change together, such as
-translations. A directory only when the ticket names it whole; `/` only when nothing narrower can be inferred. **Index
+translations. A directory only when the ticket names it whole; `/` only when nothing narrower can be inferred.
+**Narrow to a symbol**: when the ticket text or a criterion confines the change to one function, block or markdown
+heading of a file, write that line as `path#symbol` (a heading as written, without its leading `#`s); a nested one is
+written from the outermost, `path#outer#inner`. Two tickets on the same path that both name a symbol, where neither
+symbol chain starts with the other, do not overlap and are not joined at freeze; when either writes the bare path, the
+whole file is compared as before. What git can see held (other worktrees, branches, PRs) is always whole files; a
+ticket in flight that changes a file it predicted by symbol holds only those symbols. When unsure the change stays
+inside the symbol, write the whole file: a wrong guess costs a conflict at integration and a send-back. A path itself
+cannot contain `#`, and `/` takes no symbol. **Index
 files stay off the list**: files every ticket adds a line to (glossaries, index tables, CI test lists, README tables,
 manifest arrays) would make every ticket exclusive; the merge agent keeps both sides' lines. The list only grows: at
 expansion, and wider after a send-back.

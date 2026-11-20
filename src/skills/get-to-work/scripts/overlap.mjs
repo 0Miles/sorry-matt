@@ -12,17 +12,23 @@
 //                      "base": "<that ticket's line integration branch>" }],
 //     "candidates": [{ "id": "#13", "files": "<predicted-files list>" }]     // in dispatch order
 //   }
-//   `files` is the path (absolute, or relative to the plan file) of a predicted-files list: one repo-relative
-//   path per line, `/` alone for the whole repository; blank lines and lines starting with `#` are ignored.
-//   A path covers itself and everything under it, with or without a trailing `/`. A list with no path is an
-//   error: predict `/` when nothing narrower is known. `worktree` is optional; without it a running ticket
-//   holds only its prediction. A running ticket with a worktree needs a base: its own `base`, else the plan's.
+//   `files` is the path (absolute, or relative to the plan file) of a predicted-files list: one entry per line,
+//   blank lines and lines starting with `#` ignored. An entry is a repo-relative path, `/` alone for the whole
+//   repository, optionally followed by a symbol inside that file: `path#symbol`, the symbol a function, a block
+//   or a markdown heading; a nested one is written from the outermost, `path#outer#inner`. Spaces around each
+//   `#` are trimmed; a path itself cannot contain `#`, and `/` takes no symbol. A path covers itself and
+//   everything under it, with or without a trailing `/`. A list with no entry is an error: predict `/` when
+//   nothing narrower is known. `worktree` is optional; without it a running ticket holds only its prediction.
+//   A running ticket with a worktree needs a base: its own `base`, else the plan's.
 //
-// A running ticket holds its predicted paths plus what its worktree changed since it branched from its base:
+// A running ticket holds its predicted entries plus what its worktree changed since it branched from its base:
 // `git diff --name-only --no-renames <merge-base of base and HEAD>` (committed, staged and unstaged) and the
-// untracked files git does not ignore. Two paths overlap when one covers the other. Candidates are taken in
-// order: one starts when none of its paths overlaps a path held by a running ticket or by a candidate started
-// before it in the same output; otherwise it waits.
+// untracked files git does not ignore. Git sees files, not symbols: a changed file the ticket predicted by
+// symbol is held as those symbols only. Two entries overlap when one path covers the other, except two entries
+// on the same path that both name a symbol: those overlap only when one symbol chain starts with the other (the
+// same symbol, or a symbol and one nested in it). An entry without a symbol is the whole file, on either side.
+// Candidates are taken in order: one starts when none of its entries overlaps one held by a running ticket or
+// by a candidate started before it in the same output; otherwise it waits.
 //
 // Output (stdout, JSON, format "sorry-matt/overlap@1"; fields are only ever added, never renamed)
 //   {
@@ -34,7 +40,9 @@
 //     "start":   ["#13"],
 //     "wait":    [{ "id": "#14", "overlaps": [{ "with": "#12", "paths": ["src/a/x.md"] }] }]
 //   }
-//   `paths` are the waiting candidate's own predicted paths that overlap the holder. Paths are sorted;
+//   `predicted` and `paths` are entries as a list writes them (`path#symbol` when they name one); `unpredicted`
+//   compares paths only. `paths` are the waiting candidate's own predicted entries that overlap the holder.
+//   Paths are sorted;
 //   `start` and `wait` keep the candidates' order.
 //
 // Exit codes: 0 output written; 1 a list or a worktree could not be read; 2 bad arguments or plan.
@@ -58,19 +66,42 @@ export function normalize(path) {
 }
 
 /** Whether one path covers the other. */
-export const overlaps = (a, b) => a === '' || b === '' || a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
+export const pathsOverlap = (a, b) => a === '' || b === '' || a === b || b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
 
-const display = (p) => (p === '' ? '/' : p);
+/** A predicted-files entry: { path, symbol }, the symbol chain from the outermost; [] is the whole path. */
+export function parseEntry(text) {
+  const [path, ...rest] = String(text).split('#');
+  const entry = { path: normalize(path), symbol: rest.map((s) => s.trim()) };
+  if (entry.symbol.some((s) => !s)) throw new UsageError(`${text}: empty symbol; write path#symbol, a nested one path#outer#inner`);
+  if (entry.symbol.length && entry.path === '') throw new UsageError(`${text}: the whole repository has no symbol`);
+  return entry;
+}
+
+/** A path as git reports it: the whole file, even when its name contains `#`. */
+export const whole = (path) => ({ path, symbol: [] });
+
+/** An entry as a list writes it: `/` for the whole repository, `path#symbol` when it names one. */
+export const display = (e) => (e.path === '' ? '/' : e.path) + e.symbol.map((s) => `#${s}`).join('');
+
+/** Whether two entries overlap: their paths do, unless both name a symbol of one path and neither chain starts with the other. */
+export function overlaps(a, b) {
+  if (!pathsOverlap(a.path, b.path)) return false;
+  if (a.path !== b.path || !a.symbol.length || !b.symbol.length) return true;
+  return a.symbol.every((s, i) => i >= b.symbol.length || s === b.symbol[i]);
+}
+
 const uniqueSorted = (xs) => [...new Set(xs)].sort();
 
+/** The entries of a predicted-files list, unique and sorted as written. */
 export function parseList(text, where) {
-  const paths = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
-    .map(normalize);
-  if (!paths.length) throw new UsageError(`${where}: no path; predict "/" when nothing narrower is known`);
-  return uniqueSorted(paths);
+  const entries = new Map();
+  for (const line of text.split(/\r?\n/).map((l) => l.trim())) {
+    if (!line || line.startsWith('#')) continue;
+    const e = parseEntry(line);
+    entries.set(display(e), e);
+  }
+  if (!entries.size) throw new UsageError(`${where}: no path; predict "/" when nothing narrower is known`);
+  return [...entries.keys()].sort().map((k) => entries.get(k));
 }
 
 function changedFiles(git, worktree, base) {
@@ -83,7 +114,7 @@ function changedFiles(git, worktree, base) {
 }
 
 /**
- * plan: { base, running: [{ id, files: [paths], worktree?, base? }], candidates: [{ id, files: [paths] }] }
+ * plan: { base, running: [{ id, files: [entries], worktree?, base? }], candidates: [{ id, files: [entries] }] }
  * with `files` already parsed by parseList. git(cwd, args) returns stdout.
  */
 export function overlapPlan({ base = null, running = [], candidates = [] }, git) {
@@ -91,13 +122,14 @@ export function overlapPlan({ base = null, running = [], candidates = [] }, git)
   const runningOut = running.map((r) => {
     const own = r.base ?? base;
     const actual = r.worktree ? changedFiles(git, r.worktree, own) : [];
-    held.push({ id: r.id, paths: uniqueSorted([...r.files, ...actual]) });
+    const bySymbol = (a) => r.files.some((p) => p.symbol.length && p.path === a);
+    held.push({ id: r.id, paths: [...r.files, ...actual.filter((a) => !bySymbol(a)).map(whole)] });
     return {
       id: r.id,
       base: own,
       predicted: r.files.map(display),
       actual,
-      unpredicted: actual.filter((a) => !r.files.some((p) => overlaps(p, a))),
+      unpredicted: actual.filter((a) => !r.files.some((p) => pathsOverlap(p.path, a))),
     };
   });
   const start = [];
