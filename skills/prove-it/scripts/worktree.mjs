@@ -40,7 +40,7 @@
 // that every command refuses).
 import { existsSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve, basename } from 'node:path';
+import { resolve, basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const FORMAT = 'sorry-matt/review-worktree@1';
@@ -52,15 +52,20 @@ export const LOCKFILES = [
 
 class UsageError extends Error {}
 
-// One key per directory: real path when it exists, forward slashes, no trailing slash, case-insensitive on Windows.
-export function dirKey(p, platform = process.platform) {
-  let full = resolve(p);
+// The real path of `p`, through its nearest existing ancestor when `p` is not on disk: a deleted worktree directory
+// under a Windows 8.3 short name (C:\Users\RUNNER~1) still meets git's long spelling of it.
+const real = (p) => {
   try {
-    full = realpathSync.native(full);
+    return realpathSync.native(p);
   } catch {
-    // not on disk: compare the resolved text
+    const parent = dirname(p);
+    return parent === p ? p : join(real(parent), basename(p));
   }
-  const k = full.replace(/\\/g, '/').replace(/\/+$/, '');
+};
+
+// One key per directory: its real path (see real), forward slashes, no trailing slash, case-insensitive on Windows.
+export function dirKey(p, platform = process.platform) {
+  const k = real(resolve(p)).replace(/\\/g, '/').replace(/\/+$/, '');
   return platform === 'win32' ? k.toLowerCase() : k;
 }
 

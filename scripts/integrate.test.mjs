@@ -4,7 +4,7 @@
 // log, the remote's refs) and from frontier.mjs's reading of a Local Markdown ticket, not from integrate.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +12,7 @@ import { main } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { parseTicket } from '../src/skills/get-to-work/scripts/frontier.mjs';
 import { main as deadline } from '../src/skills/get-to-work/scripts/deadline.mjs';
+import { shortPath } from './lib.mjs';
 
 const NOW = '2026-03-10T12:00:00Z';
 const LINE = 'run-1/line-a';
@@ -122,7 +123,8 @@ test('line-init (direct) uses the base branch where it is checked out and create
   const out = ok('line-init', '--branch', 'main');
   assert.equal(out.integrate, 'direct');
   assert.deepEqual(out.created, { branch: false, worktree: false });
-  assert.equal(out.worktree.toLowerCase().replace(/\\/g, '/'), repo.toLowerCase().replace(/\\/g, '/'));
+  // git reports the long name; tmpdir() may give a Windows 8.3 short one (C:\Users\RUNNER~1): one directory.
+  assert.equal(realpathSync.native(out.worktree), realpathSync.native(repo));
   assert.equal(state().lines.main.tip, git('rev-parse', 'HEAD'));
   assert.equal(integrate('line-init', '--branch', 'main', '--from', 'HEAD').code, 2);
   refused(/checked out at .*that is the line's worktree/, 'line-init', '--branch', 'main', '--worktree', join(dir, 'other'));
@@ -900,4 +902,16 @@ test('an integrating ticket whose merge landed is not marked stuck by stuck; rev
   assert.equal(out.stage, 'stuck');
   assert.equal(existsSync(join(lineWt, 'b.md')), false);
   assert.match(state().tickets['#1'].reason, /^gave up; reverted /);
+});
+
+test('--local under a Windows 8.3 short name of the worktree: a file not on disk is inside it, refused as not committed', (t) => {
+  const { dir, ok, state, refused, queue, work, lineWt } = withLine(t, ['#1']);
+  const short = shortPath(lineWt);
+  if (!short) return t.skip('no 8.3 short path here (not Windows, or 8.3 names disabled)');
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt);
+  work(wt, { 'b.md': 'b\n' }, '#1: b');
+  queue('#1');
+  refused(/--local issues\/none\.md is not committed on run-1\/line-a/, 'merge', '#1', '--worktree', short, '--local', 'issues/none.md', '--checks', 'x');
+  assert.equal(state().tickets['#1'].stage, 'integrating');
 });

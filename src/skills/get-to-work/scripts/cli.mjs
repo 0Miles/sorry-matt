@@ -1,7 +1,7 @@
 // cli: the command-line plumbing get-to-work's scripts share. Not a command itself. No dependencies.
 import { realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** A bad invocation: exit code 2 and a pointer to the script's header. */
@@ -19,15 +19,17 @@ export const run = (cmd, args, cwd) =>
 
 // A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
 // text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
-// path when it exists, else through the real base.
-const realOr = (p, fallback) => {
+// path of its nearest existing ancestor: a file not on disk yet (or a deleted directory) still gets the long
+// spelling of the directories above it.
+const real = (p) => {
   try {
     return realpathSync.native(p);
   } catch {
-    return fallback;
+    const parent = dirname(p);
+    return parent === p ? p : join(real(parent), basename(p));
   }
 };
-export const canonical = (base, p = '.') => realOr(resolve(base, p), resolve(realOr(base, base), p));
+export const canonical = (base, p = '.') => real(resolve(base, p));
 
 /** The { code, out, err } a script's main returns for an error: 2 for a UsageError, else 1. */
 export function failure(name, e) {
