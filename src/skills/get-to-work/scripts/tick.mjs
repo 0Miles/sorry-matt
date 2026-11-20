@@ -84,11 +84,26 @@
 //   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
 //   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
 //
+// A red light that maps to no ticket (#144)
+//   The `red-light` judge (RED-LIGHT.md) has the outcome `unmatched` while the line has a fix round left (two per red
+//   episode): the host writes the failing lines to the file the judge's `meta.failure` names (record is refused, 3,
+//   while it is missing or empty) and records it. tick then hands out the line's ci-fix: `deadline.mjs record` in the
+//   integration worktree with the `timeout-fix` limit, `state.mjs assign --line` (the assignment record is the line's,
+//   `lines[<line>].assignment`), and a background general-purpose spawn, description `ci-fix <line>`, whose brief tick
+//   writes to `tick/ci-fix/` (the worktree, the red SHA, the failing lines, the round; commit with no ticket id, no
+//   push). While that assignment is in flight the line gets no red-light judge, push or CI read, and the finish waits
+//   for it; the deadline scan covers it and gives the fallback wake-up. Its report is a `collect` (fixed | blocked);
+//   an overdue stop is a `timeout` judge (stopped | failed | collected) per TIMEOUTS.md. Either way the round is over:
+//   a new commit is pushed and read as any tip is; no new commit (blocked, or stopped and reset to the assignment's
+//   HEAD) brings the red-light judge again at the same SHA (id suffix `:r<round>`). With both rounds used the judge has
+//   no `unmatched`: record failed.
+//
 // Output of next (stdout, JSON, format "sorry-matt/tick@1"; fields are only ever added, never renamed)
 //   { "format": "sorry-matt/tick@1", "command": "next", "run": "<run>", "wakeup": <n>, "now": "<UTC>",
 //     "profile": { ...the effective profile },
 //     "reports":   [{ "agent": "<id>", "accepted": true | false, "tickets": [<ticket>],
-//                     "why": "current" | "duplicate" | "superseded" | "stopped" | "unknown" }],
+//                     "why": "current" | "duplicate" | "superseded" | "stopped" | "unknown",
+//                     "line"?: "<integration branch>" }],       // a line's ci-fix agent: no tickets
 //     "reconcile": [{ "ticket" | "line": "<id>", "state": "<what the state says>", "git": "<what git says>",
 //                     "follow": "git" | "ruling" }],
 //     "dispatch":  null | { "round": <n>, "reasons": ["<why>"], "closed": true | false },
@@ -168,9 +183,11 @@
 //
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
-//   "agents": { "<id>": { "tickets", "role", "type", "status": "current" | "collected" | "stopped", "at" } },
+//   "agents": { "<id>": { "tickets", "line"?, "role", "type", "status": "current" | "collected" | "stopped", "at" } },
 //   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
-//   "flags": { "<ticket>": {…} }, "red": { "<line>": { "sha", "at" } }, "failed": { "<line>": "<UTC>" },
+//   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
+//   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
+//                                                  "failure" } } },     // the ci-fix of a red light with no ticket
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
@@ -532,6 +549,10 @@ function syncAgents(c) {
     const known = (c.book.agents[a.agentId] ??= { tickets: [], role: null, type: a.type, status: 'current', at: a.assigned });
     if (!known.tickets.includes(id)) known.tickets.push(id);
   }
+  for (const [line, L] of Object.entries(c.state.lines)) {
+    const a = L.assignment;
+    if (a?.agentId) c.book.agents[a.agentId] ??= { tickets: [], line, role: 'ci-fix', type: a.type, status: 'current', at: a.assigned };
+  }
 }
 
 /** The state's tip of each line follows git's. */
@@ -571,6 +592,24 @@ function stepReports(c) {
   const { book, state } = c;
   const keep = [];
   for (const agent of book.inbox) {
+    const held = Object.entries(state.lines).find(([, L]) => L.assignment?.agentId === agent && L.assignment.deadline !== null);
+    if (held) {
+      // the ci-fix agent of a red light that maps to no ticket (#144)
+      const [line, L] = held;
+      c.reports.push({ agent, accepted: true, tickets: [], line, why: 'current' });
+      keep.push(agent);
+      c.emit(
+        judge(
+          `collect:${agent}@${L.assignment.assigned}`,
+          'collect',
+          `Take the ci-fix agent's report for ${line} (its summary and evidence paths, not the diff) into the run's self-answer log. fixed: it committed a fix on ${line} (tick pushes it and reads CI next); blocked: it committed nothing, with --value <what blocks it>. Either way the round is counted.`,
+          ['fixed', 'blocked'],
+          [doc('RED-LIGHT.md', 'step 4 (no ticket matched)')],
+          { line, meta: { agent, stage: 'ci-fix' } },
+        ),
+      );
+      continue;
+    }
     const current = Object.entries(state.tickets).filter(([, t]) => t.assignment?.agentId === agent && t.assignment.deadline !== null);
     if (current.length) {
       const ids = current.map(([id]) => id);
@@ -637,15 +676,34 @@ function stepRed(c) {
     }
     const target = c.target(line);
     const tip = c.git.ref(target);
+    const fix = red.ciFix ?? null;
+    const held = L.assignment && L.assignment.deadline !== null ? L.assignment : null;
+    // A ci-fix agent works in the integration worktree: no judge, no push and no CI read until it reports or is stopped.
+    if (held) {
+      if (!held.agentId && fix) ciFixDispatch(c, line, target, red);
+      continue;
+    }
+    if (fix?.status === 'pending') {
+      ciFixDispatch(c, line, target, red);
+      continue;
+    }
     const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
+    // A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA.
+    const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
+    const used = fix?.round ?? 0;
+    const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
     c.emit(
       judge(
-        `red-light:${line}@${latestRed}`,
+        `red-light:${line}@${latestRed}${again}`,
         'red-light',
-        `${line} is red at ${latestRed}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds).`,
-        ['handled', 'reverted', 'failed'],
+        `${line} is red at ${latestRed}${again ? ` (fix round ${used} ended with no new commit)` : ''}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
+          used < 2
+            ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
+            : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
+        }`,
+        ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
         [doc('RED-LIGHT.md', 'all of it')],
-        { line },
+        { line, meta: { round: used + 1, sha: latestRed, failure } },
       ),
     );
     if (c.profile.ci === 'skip' || !tip || target !== line) continue;
@@ -673,6 +731,65 @@ function ciRead(c, line, target, tip, tag, dispatch) {
   return true;
 }
 
+/**
+ * The ci-fix of a red light that maps to no ticket (#144): the assignment record on the line (deadline.mjs record in
+ * the integration worktree, then state.mjs assign --line), then a general-purpose agent with the brief tick writes.
+ * Ids carry the episode's first red SHA and the round, so a later red episode on the same line dispatches anew.
+ */
+function ciFixDispatch(c, line, target, red) {
+  const fix = red.ciFix;
+  const wt = resolve(c.git.wtOf(target) ?? c.cfg.root);
+  const key = `${line}@${red.sha.slice(0, 12)}:${fix.round}`;
+  const tag = `${slugOf(line)}-${red.sha.slice(0, 12)}-${fix.round}`;
+  const rec = c.tick('rec', `ci-fix-${tag}.json`);
+  const r1 = c.emit(exec(`rec:ci-fix:${key}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', wt, '--limit', String(c.limits['timeout-fix'])], { stdout: rec, line }));
+  const r2 = c.emit(exec(`assign:ci-fix:${key}`, 'assignment', stateArgv(c, 'assign', '--line', line, '--record', rec, '--type', 'general-purpose', '--worktree', wt), { line, after: [r1] }));
+  const brief = c.tick('ci-fix', `${tag}.md`);
+  const commands = join(wt, 'docs', 'agents', 'commands.md');
+  c.write(
+    brief,
+    [
+      `# ci-fix ${line}`,
+      '',
+      `You fix a red light on the integration branch ${target} that maps to no ticket. You cannot ask anyone; this is all of your brief.`,
+      '',
+      `- Integration worktree: ${wt} (branch ${target}). Work and commit only there, on that branch.`,
+      `- Red at ${fix.sha}. The failing lines: ${fix.failure}.`,
+      `- Fix round ${fix.round} of at most 2.${fix.round > 1 ? ' The previous round ended without turning the line green (blocked, stopped at its time limit, or CI still red); start from the worktree as it is now.' : ''}`,
+      `- Project command contract: ${c.deps.exists(commands) ? `${commands}: run its Targeted checks for what failed and read the output as its Failures only says` : 'none: find the checks that cover the failure from the manifest and the CI settings'}. Take pass or fail from the command's own exit status, before any filter; read only the failing lines and the summary.`,
+      '- Find the cause in the failing lines and fix it. Do not weaken or skip a test or a check to get green.',
+      '- Commit the fix on that branch. The subject carries no ticket id (no `#N`, no ticket file name); the body says what failed and what the fix changed; no `Closes` or `Fixes`.',
+      '- Do not push, open a PR, or touch another branch or worktree: tick pushes the fix and reads CI once you report.',
+      '- Do nothing that needs the user\'s confirmation (a push, a release or a deploy, a message to anyone outside, a write to settings that change how Claude Code behaves, deleting anything outside the worktree): list it under human work.',
+      '- When you cannot fix it, commit nothing and say what blocks it.',
+      '',
+      'Report in at most 10 lines:',
+      '',
+      '```',
+      `line: ${line}`,
+      'commit: <sha> | none',
+      'targeted checks: <command> → <result>, …',
+      'cause: <one sentence>',
+      'blocked: <what blocks it> | none',
+      'human work: <what only a person can do> | none',
+      '```',
+      '',
+    ].join('\n'),
+  );
+  c.emit({
+    id: `ci-fix:${key}`,
+    kind: 'spawn',
+    step: 'ci-fix',
+    tickets: [],
+    line,
+    after: [r2],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('ci-fix', [line]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: true },
+    reference: [doc('RED-LIGHT.md', 'step 4 (no ticket matched)')],
+    meta: { round: fix.round },
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`ci-fix:${key}`)} --agent <agent id>`,
+  });
+}
+
 /** deadline.mjs scan over the named agents in flight; extensions are exec, stops are TIMEOUTS.md judges. */
 function stepTimeouts(c) {
   const { state, book } = c;
@@ -686,6 +803,11 @@ function stepTimeouts(c) {
       continue;
     }
     agents.set(a.agentId, { id: a.agentId, tickets: [id], stage: t.stage, a });
+  }
+  for (const [line, L] of Object.entries(state.lines)) {
+    const a = L.assignment;
+    if (!a || a.deadline === null || !a.agentId || agents.has(a.agentId)) continue;
+    agents.set(a.agentId, { id: a.agentId, tickets: [], line, stage: 'ci-fix', a });
   }
   const plan = [];
   let pending = false;
@@ -726,6 +848,10 @@ function stepTimeouts(c) {
   if (!pending) c.fallback = scan.fallback;
   for (const result of scan.agents) {
     const { x } = plan.find((p) => p.entry.id === result.id);
+    if (x.stage === 'ci-fix') {
+      ciFixTimeout(c, x, result);
+      continue;
+    }
     const t = state.tickets[x.tickets[0]];
     if (result.action === 'extend') {
       c.emit(exec(`extend:${x.id}@${x.a.assigned}`, 'extend', stateArgv(c, 'extend', ...x.tickets, '--deadline', result.deadline), { tickets: x.tickets, line: t.line }));
@@ -752,6 +878,31 @@ function stepTimeouts(c) {
       );
     }
   }
+}
+
+/** A line's ci-fix agent in the deadline scan: extended once on progress, else stopped; a stop is a fix round. */
+function ciFixTimeout(c, x, result) {
+  const { a, line } = x;
+  if (result.action === 'extend') {
+    c.emit(exec(`extend:${x.id}@${a.assigned}`, 'extend', stateArgv(c, 'extend', '--line', line, '--deadline', result.deadline), { line }));
+    return;
+  }
+  if (result.action !== 'stop' && !result.error) return;
+  const round = c.book.red[line]?.ciFix?.round ?? 1;
+  const reset = `\`git -C ${q(a.worktree)} reset --hard ${a.fingerprint.head}\``;
+  const hint = result.error
+    ? `the fingerprint could not be computed (${result.error}): ${reset}, then record failed (the line failed verification)`
+    : `${reset} (the assignment's HEAD), then record stopped: it counts as fix round ${round} of 2`;
+  c.emit(
+    judge(
+      `timeout:${x.id}@${a.assigned}`,
+      'timeout',
+      `${x.id} (ci-fix of ${line}, a red light that maps to no ticket) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md (red-light fix): ${hint}. Write the timeout handling into the run's self-answer log. collected when it had already finished (its report is then taken and the round still counts).`,
+      ['stopped', 'failed', 'collected'],
+      [doc('TIMEOUTS.md', 'steps 1 to 3 (red-light fix)')],
+      { line, meta: { agent: x.id, stage: 'ci-fix', hint } },
+    ),
+  );
 }
 
 function acceptanceArgv(c, id, t, extra = []) {
@@ -1367,6 +1518,7 @@ function dispatchSteps(c, d) {
     if (profile.ci === 'skip') break;
     const target = c.target(line);
     if (target !== line) continue; // state.mjs records CI per line; under direct only the base's own line has it
+    if (L.assignment?.deadline) continue; // its ci-fix agent is at work in the integration worktree (#144)
     const tip = c.git.ref(target);
     if (!tip) continue;
     if (!c.git.hasOrigin || L.ciNotCovering) {
@@ -1668,6 +1820,7 @@ function finishLine(c, line, target) {
   const wt = git.wtOf(target) ?? c.cfg.root;
   const merged = Object.values(state.tickets).some((t) => c.target(t.line) === target && t.merges.length);
   if (!merged) return true; // nothing was integrated: nothing to deliver
+  if (L.assignment?.deadline) return false; // its ci-fix agent is at work in the integration worktree (#144)
   if (profile.simplify && simplifySpawn(c, line, target, wt)) return false;
   if (profile.integrate !== 'direct' && !L.base) {
     const baseRef = git.hasOrigin ? `origin/${c.cfg.base}` : c.cfg.base;
@@ -2018,8 +2171,28 @@ export function record(path, id, flags, now, deps) {
     }
   };
 
+  // A line's ci-fix agent (#144): its agent id on the line's assignment, the round dispatched.
+  const ciFixSpawned = (line, agent) => {
+    const a = live().lines[line]?.assignment;
+    if (a?.deadline && a.agentId !== agent) S('agent', '--line', line, '--id', agent);
+    book.agents[agent] = { tickets: [], line, role: 'ci-fix', type: flags.type ?? 'general-purpose', status: 'current', at: now };
+    const fix = book.red[line]?.ciFix;
+    if (fix) fix.status = 'dispatched';
+  };
+  const ciFixEnded = (line, agent, status, stopped = false) => {
+    if (live().lines[line]?.assignment?.deadline) S('release', '--line', line, ...(stopped ? ['--stopped'] : []));
+    if (book.agents[agent]) book.agents[agent].status = status;
+    book.inbox = book.inbox.filter((x) => x !== agent);
+    const fix = book.red[line]?.ciFix;
+    if (fix) fix.status = 'ended';
+  };
+
   switch (issued.step) {
     case 'collect': {
+      if (meta.stage === 'ci-fix') {
+        ciFixEnded(issued.line, meta.agent, 'collected');
+        break;
+      }
       release(tickets);
       if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
       book.inbox = book.inbox.filter((x) => x !== meta.agent);
@@ -2047,11 +2220,16 @@ export function record(path, id, flags, now, deps) {
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
       spawned(tickets);
       break;
+    case 'ci-fix':
+      if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
+      ciFixSpawned(issued.line, flags.agent);
+      break;
     case 'spawn-check': {
       const of = meta.of;
       if (outcome === 'spawned') {
         if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <its id>`);
-        spawned(book.issued[of]?.tickets ?? tickets);
+        if (book.issued[of]?.step === 'ci-fix') ciFixSpawned(book.issued[of].line, flags.agent);
+        else spawned(book.issued[of]?.tickets ?? tickets);
         book.done[of] = { at: now, agent: flags.agent };
       } else {
         book.spawnChecks = { ...(book.spawnChecks ?? {}), [of]: (book.spawnChecks?.[of] ?? 0) + 1 };
@@ -2126,6 +2304,11 @@ export function record(path, id, flags, now, deps) {
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
       break;
     case 'timeout': {
+      if (meta.stage === 'ci-fix') {
+        ciFixEnded(issued.line, meta.agent, outcome === 'collected' ? 'collected' : 'stopped', true);
+        if (outcome === 'failed') book.failed[issued.line] = now;
+        break;
+      }
       release(tickets, true);
       if (book.agents[meta.agent]) book.agents[meta.agent].status = 'stopped';
       const [tid] = tickets;
@@ -2143,6 +2326,19 @@ export function record(path, id, flags, now, deps) {
     }
     case 'red-light':
       if (outcome === 'failed') book.failed[issued.line] = now;
+      else if (outcome === 'unmatched') {
+        // RED-LIGHT step 4: no ticket matched; tick dispatches the ci-fix agent with the failing lines the host wrote
+        const red = book.red[issued.line];
+        if (!red) throw new Refused(`${id}: ${issued.line} is not red any more`);
+        let failure = '';
+        try {
+          failure = deps.read(meta.failure);
+        } catch {
+          failure = '';
+        }
+        if (!failure.trim()) throw new Refused(`${id}: write the failing lines to ${meta.failure} first (the failure output the ci-fix agent reads), then record unmatched`);
+        red.ciFix = { round: meta.round, status: 'pending', sha: meta.sha, failure: meta.failure };
+      }
       break;
     case 'verify-local':
       // verify.mjs wrote the per-SHA record itself; a conclusion at the finish is one full verification
