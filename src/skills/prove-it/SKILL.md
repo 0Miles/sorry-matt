@@ -33,6 +33,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - **CI 覆蓋**：這條線的整合分支整併後有沒有 CI 跑全套 —— `covered`、`uncovered`（呼叫方已定案為 CI 不涵蓋整合
   分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。
 - **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
+- **審查分級**：呼叫方審查前已判好的審查分級，與它來自的判級指令輸出檔（`tier.mjs judge` 的 JSON）。給了就照那份
+  輸出，不再自己判；沒給（`none given`）時由你判（下方）。
 - **接續紀錄**：該票接續紀錄的位置 —— GitHub 是第一行為 `<!-- sorry-matt:status -->` 的那則留言，Local Markdown
   是票檔。審查區塊寫在這裡（第 6 節）。
 - **上一次的審查區塊**：複驗一律有，初審在審中 `stuck` 排除後續跑（第 5 節）時也有：就是接續紀錄裡現在那個
@@ -66,8 +68,9 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 這類凍結寫法），為 false 時沿用既有安裝。不加相依、不下載新工具 —— 審查不改這張票的 diff 與 repo 相依。
 新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
-**審查分級**在這裡由 diff 判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 的數量與各自的
-lens、verifier 與 Fix Verifier 的合批方式和突變上限。在審查用 worktree 的根目錄執行**判級指令**：
+**審查分級**一張票判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 的數量與各自的
+lens、verifier 與 Fix Verifier 的合批方式和突變上限。呼叫方給了審查分級時，你不判：把它給的判級指令輸出檔原樣
+複製到下方判級指令寫輸出的位置（`>` 後的那個檔），以下各節都讀這份。沒給時，在審查用 worktree 的根目錄執行**判級指令**：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <ticket 分支> > <scratchpad>/review-<票>-tier.json 2> <scratchpad>/review-<票>-tier.err
@@ -85,7 +88,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 突變上限 10，`reviewers` 當成 `["primary","architecture"]`，第 4、7 節用 `--tier full`；`<scratchpad>/review-<票>-tier.err` 的路徑補進接續紀錄的「證據路徑」欄。
 
 完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
-審查用 worktree 由 `worktree.mjs open` 開在 ticket 分支尖端，相依依 `install` 處理，diff 已存檔；`tier` 取自判級指令的輸出，或在它失敗時是 `full`。
+審查用 worktree 由 `worktree.mjs open` 開在 ticket 分支尖端，相依依 `install` 處理，diff 已存檔；`tier` 取自呼叫方給的判級輸出，
+沒給時取自判級指令的輸出，或在它失敗時是 `full`。
 
 ## 2. Finder：平行找候選
 

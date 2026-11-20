@@ -30,6 +30,8 @@ This review's values are below the last rule of this file (the labels `brief.mjs
   there is none
 - `reviewer`: this review's reviewer
 - `scratchpad`: an absolute path
+- `review tier`: the review tier tick judged before the review and its tier command output, which `prove-it` goes by
+  instead of judging again; with `none given`, `prove-it` judges it
 
 ## 1. Host the review
 

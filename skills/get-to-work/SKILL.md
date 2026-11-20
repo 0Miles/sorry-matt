@@ -152,10 +152,15 @@ expansion, and wider after a send-back.
   back to the same agent. Before recording green (fixed, for a fix round a recheck follows), write the report it
   returned, verbatim, to the file the collect names: the review's spawn file takes its targeted checks from there,
   and the record is refused without it.
+- **Review method**: before the review tick hands out an exec that judges the **review tier** with `prove-it`'s
+  `tier.mjs judge` (once per initial review; a recheck and a retry after stuck keep it), then picks the review method
+  by the profile's `review`: under `review: minimal` always the minimal review; under `review: full` light gets the
+  minimal review — its report file, its `--kind minimal` record and its freshness check, as they are — and standard
+  and full get the prove-it review below, with the review tier in its spawn file. You do not judge the tier yourself.
 - **Independent review**: tick writes a values file and `brief.mjs review` turns it into the review host agent's
   spawn file — the fixed rules of the sibling [`REVIEWER.md`](REVIEWER.md) followed by this review's values (repo,
   tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI
-  coverage, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
+  coverage, review tier, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
   report (six lines at most), and record its verdict with `--outcome`.
 - **Act on the report**: `findings` go to the batched fix; when `observations` or `pre-existing` is not 0, read only
@@ -165,8 +170,9 @@ expansion, and wider after a send-back.
 ### Batched fix
 
 Hand the review block's location to the original agent, which keeps its context: it reads each finding's `summary`,
-`evidence` and `fix` verbatim and closes them all in one round; you do not paraphrase. Under `review: minimal` there is
-no review block: hand the original agent the path of the reviewer's report file
+`evidence` and `fix` verbatim and closes them all in one round; you do not paraphrase. Under `review: minimal`, and for
+a ticket whose review tier is light under `review: full`, the review is the minimal review and there is no review
+block: hand the original agent the path of the reviewer's report file
 (`tick/review/<ticket key>-<tag>.report.md`), not a review block's location, and it reads each finding there verbatim.
 The state guards the round limit.
 

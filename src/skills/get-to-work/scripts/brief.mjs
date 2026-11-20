@@ -91,7 +91,10 @@
 //     "ci":           "covered" | "uncovered" | "no-origin",              // label `CI coverage`
 //     "previous":     true | false,   // the previous review block is in the status record; a recheck always has it
 //     "reviewer":     "primary" | "<the reviewer and the risk it looks at>",
-//     "scratchpad":   "<absolute path>" }
+//     "scratchpad":   "<absolute path>",
+//     "tier":         "<prove-it's tier.mjs judge output>" | null }   // #139, label `review tier`: the tier and
+//                                                    // that file, which prove-it then reads instead of judging;
+//                                                    // null: none given, prove-it judges it (section 1)
 //   The `targeted checks` value is the report's `targeted checks:` line (agents/implementer.md section 5), with its
 //   `commit:` line when there is one and the report's path; a report without that line is no implementation agent's
 //   report (exit 1). A key added here is a label added to the values and a line to REVIEWER.md's value list.
@@ -115,7 +118,8 @@
 //   { "format": "sorry-matt/brief@1", "kind": "description", "role": "<role word>", "description": "merge #72" }
 //
 // Exit codes: 0 output written; 1 a file is missing or unreadable, the snapshot is not an acceptance snapshot, a
-// definition file has no frontmatter, a review's checks report has no `targeted checks:` line, or a template's
+// definition file has no frontmatter, a review's checks report has no `targeted checks:` line or its tier file is not
+// tier.mjs judge output, or a template's
 // placeholders are not the ones this script fills (REVIEWER.md: any placeholder at all; the template and the script
 // changed apart); nothing is written; 2 bad arguments, or a value missing or malformed.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -323,6 +327,15 @@ export function targetedChecks(reportPath) {
 }
 
 export const CI_COVERAGE = ['covered', 'uncovered', 'no-origin'];
+export const TIER_FORMAT = 'sorry-matt/tier@1';
+
+/** #139: the review tier of prove-it's `tier.mjs judge` output (format sorry-matt/tier@1), which tick ran before the review. */
+function judgedTier(path) {
+  if (!existsSync(path)) throw new Error(`${path} does not exist`);
+  const judged = readJson(path);
+  if (judged?.format !== TIER_FORMAT || !['light', 'standard', 'full'].includes(judged.tier)) throw new Error(`${path} is not ${TIER_FORMAT} output with a tier`);
+  return judged.tier;
+}
 
 function review(values) {
   const out = need(values, 'out');
@@ -343,10 +356,12 @@ function review(values) {
   if (mode === 'recheck' && !previous) throw new UsageError('a recheck always has the previous review block: previous must be true');
   const reviewer = need(values, 'reviewer');
   const scratchpad = need(values, 'scratchpad', absolute, 'an absolute path');
+  const tierFile = need(values, 'tier', orNull(text), 'a file path or null');
   const desc = description('review', [ticket]);
 
   for (const file of [bodyFile, snapshot, against]) if (!existsSync(file)) throw new Error(`${file} does not exist`);
   const checks = targetedChecks(checksReport);
+  const tier = tierFile === null ? 'none given: judge it yourself (prove-it section 1)' : `${judgedTier(tierFile)} (tier.mjs judge output: ${resolve(tierFile)})`;
   const filled = [
     rules(join(SKILL_DIR, 'REVIEWER.md')),
     '---',
@@ -366,6 +381,7 @@ function review(values) {
       `- previous review block: ${previous ? 'in the status record' : 'none'}`,
       `- reviewer: ${reviewer}`,
       `- scratchpad: ${scratchpad}`,
+      `- review tier: ${tier}`,
     ].join('\n'),
   ].join('\n\n');
   return { out, kind: 'review', role: 'review', desc, filled: `${filled.replace(/[ \t]+$/gm, '')}\n` };

@@ -127,9 +127,13 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 - **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。記 green（複驗前的
   修正輪記 fixed）之前，先把它回報的全文原樣寫進 collect 指名的檔：審查的派工檔從那裡取 targeted checks，
   沒寫就記不進去。
+- **審查方式**：審查前 tick 先發一個 exec，以 `prove-it` 的 `tier.mjs judge` 判**審查分級**（每次初審判一次，
+  複驗與 stuck 後的 retry 沿用同一個），再依流程設定 `review` 決定審查方式：`review: minimal` 一律走 minimal
+  審查；`review: full` 下 light 走 minimal 審查 —— 沿用它的報告檔、`--kind minimal` 記錄與新鮮度檢查 ——
+  standard 與 full 走下面的 prove-it 審查，審查分級寫進派工檔。你不自己判級。
 - **獨立審查**：tick 寫好值檔，由 `brief.mjs review` 產出審查主持 agent 的派工檔 —— 同層
   [`REVIEWER.md`](REVIEWER.md) 的固定規則接上這次的值（repo、tracker、票面檔、接續紀錄、驗收快照、比對輸出、
-  固定點、ticket 分支、targeted checks、CI 覆蓋，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
+  固定點、ticket 分支、targeted checks、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
   發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
   記下結論。
 - **照回報落地**：`findings` 交集中修正；`observations` 或 `pre-existing` 不是 0 時只讀審查區塊的這兩段，合開
@@ -139,7 +143,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 ### 集中修正
 
 把審查區塊的位置交回保有 context 的原 agent，要它讀每則 finding 的 `summary`、`evidence` 與 `fix` 原文，一輪
-關上全部；主持人不轉述。`review: minimal` 時沒有審查區塊：交回原 agent 的是 reviewer 報告檔
+關上全部；主持人不轉述。`review: minimal` 時，以及 `review: full` 下審查分級 light 的票，走的是 minimal 審查，
+沒有審查區塊：交回原 agent 的是 reviewer 報告檔
 （`tick/review/<ticket key>-<tag>.report.md`）的路徑，不是審查區塊的位置，它讀報告裡每則 finding 的原文。輪數上限由
 state 守。
 
