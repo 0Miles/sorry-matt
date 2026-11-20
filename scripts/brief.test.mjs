@@ -307,6 +307,7 @@ function reviewValues(dir, overrides = {}) {
     previous: false,
     reviewer: 'primary',
     scratchpad: join(dir, 'scratch', '72'),
+    tier: null,
     ...overrides,
   };
 }
@@ -331,6 +332,7 @@ const reviewLines = (v, { mode = 'initial', previous = 'none' } = {}) => [
   `- previous review block: ${previous}\n`,
   '- reviewer: primary\n',
   `- scratchpad: ${v.scratchpad}\n`,
+  '- review tier: none given: judge it yourself (prove-it section 1)\n',
 ];
 
 test('#138: review writes the review host spawn file: REVIEWER.md fixed rules, then every value of this review', (t) => {
@@ -375,7 +377,7 @@ test('#138: the dist copy writes the English REVIEWER.md rules with the same val
 });
 
 test('#138: review refuses missing or malformed values (2) and a checks report with no targeted checks line (1)', (t) => {
-  for (const key of ['out', 'mode', 'root', 'tracker', 'repo', 'ticket', 'bodyFile', 'statusRecord', 'snapshot', 'against', 'fixedPoint', 'branch', 'checksReport', 'ci', 'previous', 'reviewer', 'scratchpad']) {
+  for (const key of ['out', 'mode', 'root', 'tracker', 'repo', 'ticket', 'bodyFile', 'statusRecord', 'snapshot', 'against', 'fixedPoint', 'branch', 'checksReport', 'ci', 'previous', 'reviewer', 'scratchpad', 'tier']) {
     const dir = scratch(t);
     const values = reviewValues(dir);
     delete values[key];
@@ -391,6 +393,24 @@ test('#138: review refuses missing or malformed values (2) and a checks report w
     assert.equal(r.code, 1, typeof overrides === 'function' ? 'a report without a targeted checks line' : JSON.stringify(overrides));
     assert.equal(existsSync(r.values.out), false);
   }
+});
+
+// #139: tick judges the review tier before the review; prove-it takes it from the judge output instead of judging again.
+test('#139: review names the review tier and the judge output it comes from; a file that is not tier.mjs output is refused (1)', (t) => {
+  const judged = (tier) => ({ format: 'sorry-matt/tier@1', base: 'r1/line-a', head: 'r1/72-widgets', tier, reasons: ['default'], finders: [] });
+  for (const tier of ['standard', 'full']) {
+    const r = runReview(t, (dir) => ({ tier: put(dir, 'tier.json', judged(tier)) }));
+    assert.equal(r.code, 0, r.err);
+    const line = `- review tier: ${tier} (tier.mjs judge output: ${r.values.tier})\n`;
+    assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+    assert.ok(!r.brief.includes('- review tier: none'));
+  }
+  for (const overrides of [{ tier: '/no/such/tier.json' }, (dir) => ({ tier: put(dir, 'tier.json', { format: 'other' }) }), (dir) => ({ tier: put(dir, 'tier.json', judged('huge')) })]) {
+    const r = runReview(t, overrides);
+    assert.equal(r.code, 1, r.err);
+    assert.equal(existsSync(r.values.out), false);
+  }
+  assert.equal(runReview(t, { tier: 3 }).code, 2);
 });
 
 test('a missing required value exits 2 and writes nothing', (t) => {

@@ -23,6 +23,7 @@
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
+//                           [--tier light|standard|full]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //   node state.mjs merge    <state> <ticket> <merge sha>
@@ -74,6 +75,7 @@
 //                                   "in-review": <n> },     // the review host (#143); missing in an older file: 0
 //         "sendBacks": <n>, "fixRounds": <n>,
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
+//                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
 //                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
 //                       "after": <history length when recorded> }],   // the counts of the review report (#142)
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
@@ -104,8 +106,8 @@
 //   stuck, awaiting-ruling → nothing
 // and these guards hold on top, each refused with what is missing (the profile's defaults shown; see Profile):
 //   - implementing from candidate needs the acceptance snapshot's sha256 (`set --snapshot`);
-//   - queued needs a `pass` from a full review as the latest review recorded since the ticket last entered
-//     in-review; fixing needs a `fix` there, and at most two fix rounds per ticket (a third is refused: mark it
+//   - queued needs a `pass` from a full review (or a minimal one recorded with tier light) as the latest review
+//     recorded since the ticket last entered in-review; fixing needs a `fix` there, and at most two fix rounds per ticket (a third is refused: mark it
 //     stuck);
 //   - delivered needs a merge SHA recorded with `merge`;
 //   - integrating → candidate (send back) at most once per ticket (a second is refused: mark it stuck);
@@ -119,7 +121,8 @@
 // not given, and every field while nothing is written, take the defaults, which are the strict flow above. A
 // relaxed field changes what the guards accept, never what evidence they need:
 //   review     full (default: prove-it) | minimal (a single reviewer reporting blocking findings only). Under full,
-//              queued needs the passing review to be `--kind full`; under minimal either kind counts. A review is
+//              queued needs the passing review to be `--kind full`, or `--kind minimal --tier light` (#139: a ticket
+//              whose review tier is light gets the minimal review); under minimal either kind counts. A review is
 //              needed either way.
 //   fixRounds  2 (default) | 1 | 0: the most fix rounds per ticket; fixing beyond it is refused.
 //   recheck    true (default) | false: after a fix round, no re-review. fixing → queued is then allowed, but only
@@ -172,9 +175,10 @@
 //   set       Fills a ticket's free-text, snapshot and unfixed-issue fields.
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
 //             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
-//   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--findings` (with
-//             `fix`) lists the finding ids; `--observations` and `--pre-existing` are the report's counts of those
-//             two sections (default 0; a review recorded before #142 has neither). Adds one to usage `reviewRounds`.
+//   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
+//             tier the review was chosen by (none without it); `--findings` (with `fix`) lists the finding ids;
+//             `--observations` and `--pre-existing` are the report's counts of those two sections (default 0; a
+//             review recorded before #142 has neither). Adds one to usage `reviewRounds`.
 //   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
 //             the latest (fix) review exactly once.
 //   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
@@ -232,6 +236,8 @@ import { UsageError, failure, run as exec, runIfEntry } from './cli.mjs';
 import { GATES, TARGETS, runGate } from './gates.mjs';
 
 export const FORMAT = 'sorry-matt/state@1';
+/** The review tiers of prove-it's tier.mjs (#139): a review records the one tick judged. */
+export const TIERS = ['light', 'standard', 'full'];
 export const STAGES = ['candidate', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered', 'stuck', 'awaiting-ruling'];
 export const TERMINAL = ['delivered', 'stuck', 'awaiting-ruling'];
 const EDGES = {
@@ -428,10 +434,11 @@ function check(state, bad) {
     t.reviews.forEach((r, i) =>
       need(
         isObject(r) && ['initial', 'recheck'].includes(r.mode) && ['pass', 'fix', 'stuck'].includes(r.verdict) && ['full', 'minimal'].includes(r.kind) &&
+          (r.tier == null || TIERS.includes(r.tier)) &&
           isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))) &&
           [r.observations, r.preExisting].every((n) => n === undefined || isCount(n)),
         `${w}.reviews[${i}]`,
-        'is not { mode, verdict, kind, findings, observations, preExisting, after }',
+        'is not { mode, verdict, kind, tier, findings, observations, preExisting, after }',
       ),
     );
     need(
@@ -491,7 +498,8 @@ function unfixedGate(id, t, profile, what) {
 function queueFromReview(id, t, profile) {
   const r = currentReview(t);
   if (!r) return `${id}: queued needs a review recorded since it entered in-review; there is none (record it with review)`;
-  if (profile.review === 'full' && r.kind !== 'full') return `${id}: queued needs a full review (profile review: full); the latest is ${r.kind}`;
+  if (profile.review === 'full' && r.kind !== 'full' && r.tier !== 'light')
+    return `${id}: queued needs a full review (profile review: full), or a minimal one of a ticket whose review tier is light; the latest is ${r.kind}${r.tier ? ` (tier ${r.tier})` : ''}`;
   if (r.verdict === 'pass') return null;
   if (r.verdict !== 'fix') return `${id}: queued needs the latest review verdict to be pass; it is ${r.verdict} (${r.mode})`;
   if (profile.onUnfixed !== 'file-issue') return `${id}: queued needs the latest review verdict to be pass; it is fix (${r.mode})`;
@@ -784,7 +792,7 @@ function importLedger(path, rest, flags, ctx) {
     state.lines[t.line] ??= newLine();
     const ticket = { ...newTicket(t.line), ...t };
     ticket.timeoutReassignments = { ...newTicket().timeoutReassignments, ...(t.timeoutReassignments ?? {}) };
-    ticket.reviews = (t.reviews ?? []).map((r) => ({ kind: 'full', findings: null, at: ctx.now, after: 0, ...r }));
+    ticket.reviews = (t.reviews ?? []).map((r) => ({ kind: 'full', tier: null, findings: null, at: ctx.now, after: 0, ...r }));
     ticket.fixReports = (t.fixReports ?? []).map((r) => ({ at: ctx.now, after: 0, ...r }));
     ticket.merges = (t.merges ?? []).map((m) => (typeof m === 'string' ? { sha: m, at: ctx.now } : { at: ctx.now, ...m }));
     state.tickets[id] = ticket;
@@ -936,6 +944,7 @@ function review(path, rest, flags, ctx) {
   const mode = oneOf(flags.mode, ['initial', 'recheck'], '--mode');
   const verdict = oneOf(flags.verdict, ['pass', 'fix', 'stuck'], '--verdict');
   const kind = oneOf(flags.kind ?? 'full', ['full', 'minimal'], '--kind');
+  const tier = flags.tier === undefined ? null : oneOf(flags.tier, TIERS, '--tier');
   const findings = flags.findings === undefined ? null : ids(flags.findings, '--findings');
   if (findings !== null && verdict !== 'fix') throw new UsageError('--findings goes with --verdict fix');
   const observations = count(flags.observations ?? 0, '--observations');
@@ -944,7 +953,7 @@ function review(path, rest, flags, ctx) {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
     if (t.stage !== 'in-review') throw new Refusal(`${id}: a review is recorded only in in-review; it is ${t.stage}`);
-    t.reviews.push({ mode, verdict, kind, findings, observations, preExisting, at: ctx.now, after: t.history.length });
+    t.reviews.push({ mode, verdict, kind, tier, findings, observations, preExisting, at: ctx.now, after: t.history.length });
     state.usage.reviewRounds += 1;
     return { tickets: view(state, [id]) };
   });
@@ -1254,7 +1263,7 @@ const COMMANDS = {
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
   set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
-  review: [review, { mode: 'one', verdict: 'one', kind: 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
   assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],

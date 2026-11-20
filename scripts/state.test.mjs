@@ -296,7 +296,7 @@ test('review minimal: a minimal review passes; no review still blocks; the defau
   const strict = run(t);
   at(strict, '#1', 'in-review');
   strict.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal');
-  strict.refused(/needs a full review \(profile review: full\); the latest is minimal/, 'stage', 'queued', '#1');
+  strict.refused(/needs a full review \(profile review: full\), or a minimal one of a ticket whose review tier is light; the latest is minimal$/m, 'stage', 'queued', '#1');
 
   const r = run(t);
   r.ok('profile', '--review', 'minimal');
@@ -304,6 +304,29 @@ test('review minimal: a minimal review passes; no review still blocks; the defau
   r.refused(/queued needs a review recorded/, 'stage', 'queued', '#1');
   r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal');
   r.ok('stage', 'queued', '#1');
+});
+
+test('#139: under review: full a minimal review recorded with tier light lets the ticket queue; one of another tier does not', (t) => {
+  const light = run(t);
+  at(light, '#1', 'in-review');
+  const out = light.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal', '--tier', 'light');
+  assert.deepEqual(out.tickets['#1'].reviews.map((x) => [x.kind, x.tier, x.verdict]), [['minimal', 'light', 'pass']]);
+  light.ok('stage', 'queued', '#1');
+
+  for (const tier of ['standard', 'full']) {
+    const r = run(t);
+    at(r, '#1', 'in-review');
+    r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal', '--tier', tier);
+    r.refused(new RegExp(`or a minimal one of a ticket whose review tier is light; the latest is minimal \\(tier ${tier}\\)`), 'stage', 'queued', '#1');
+  }
+  // a prove-it review records its tier too; without --tier it is null
+  const full = run(t);
+  at(full, '#1', 'in-review');
+  assert.equal(full.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'standard').tickets['#1'].reviews[0].tier, 'standard');
+  const none = run(t);
+  at(none, '#1', 'in-review');
+  assert.equal(none.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass').tickets['#1'].reviews[0].tier, null);
+  assert.equal(none.cmd('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'huge').code, 2);
 });
 
 test('#142: review records the observations and pre-existing counts; without them both are 0', (t) => {

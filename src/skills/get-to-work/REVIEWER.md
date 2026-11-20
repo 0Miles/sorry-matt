@@ -24,6 +24,7 @@
 - `previous review block`：`in the status record` 時上一次的審查區塊在接續紀錄裡，`none` 時沒有
 - `reviewer`：這次的 reviewer
 - `scratchpad`：絕對路徑
+- `review tier`：tick 審查前判好的審查分級與它的判級輸出檔，`prove-it` 照它不再自己判；`none given` 時由 `prove-it` 判
 
 ## 1. 主持審查
 

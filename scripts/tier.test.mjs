@@ -4,7 +4,7 @@
 // standard), and the line counts from how each fixture is built.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -153,6 +153,33 @@ test('a ticket cannot lower its own tier by editing the contract; a deleted or r
   const moved = judge(repo(t, base, { 'guard/a.js': null, 'lib/a.js': 'a();\n' }));
   assert.deepEqual(moved.signals.sensitive, ['guard/a.js']);
   assert.equal(moved.tier, 'full');
+});
+
+// #139: this repo's own contract. The sensitive paths are the permission boundary, CI, the plugin manifest and the
+// state format: a change to the state script or an agent definition is full however small; a change to any other
+// script of the two skills is judged by its line count.
+test("#139: this repo's contract: the state script and agent definitions are full; other skill scripts go by line count", (t) => {
+  const own = { 'docs/agents/commands.md': readFileSync(fileURLToPath(new URL('../docs/agents/commands.md', import.meta.url)), 'utf8') };
+  for (const path of [
+    'src/skills/get-to-work/scripts/state.mjs',
+    'skills/get-to-work/scripts/state.mjs',
+    'src/agents/finder.md',
+    'agents/implementer.md',
+    'hooks/guard.mjs',
+    '.github/workflows/check.yml',
+    '.claude-plugin/plugin.json',
+    'scripts/check-structure.mjs',
+    'scripts/check-vendored.mjs',
+  ]) {
+    const out = judge(repo(t, own, { [path]: 'a();\nb();\n' }));
+    assert.deepEqual([out.tier, out.reasons, out.signals.sensitive], ['full', ['sensitive'], [path]], path);
+  }
+  for (const path of ['src/skills/get-to-work/scripts/tick.mjs', 'skills/get-to-work/scripts/brief.mjs', 'src/skills/prove-it/scripts/tier.mjs', 'skills/prove-it/scripts/mutate.mjs']) {
+    const small = judge(repo(t, own, { [path]: lines(50) }));
+    assert.deepEqual([small.tier, small.reasons, small.signals.sensitive], ['light', ['few-lines'], []], `${path}, 50 lines`);
+    const larger = judge(repo(t, own, { [path]: lines(51) }));
+    assert.deepEqual([larger.tier, larger.reasons], ['standard', ['default']], `${path}, 51 lines`);
+  }
 });
 
 test('thresholds are configurable and reported; bad values exit 2', (t) => {

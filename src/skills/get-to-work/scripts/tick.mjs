@@ -41,8 +41,9 @@
 //   The target of a line is its integration branch, or the base branch under profile `integrate: direct`.
 //
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
-//   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
-//                    instead of the review host's spawn (below), with a brief tick writes: the ticket text's file (fetched
+//   review: minimal  every ticket gets the minimal review, and no review tier is judged (below): one reviewer `spawn`
+//                    (foreground, description `review <ticket>`, the role word of brief.mjs) instead of the review
+//                    host's spawn (below), with a brief tick writes: the ticket text's file (fetched
 //                    again first on GitHub; the spawn waits for it), the acceptance source (the snapshot's `items`, or
 //                    the ticket text as expand: skip has it below), blocking findings only, `verdict: pass | fix`, the
 //                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
@@ -71,11 +72,23 @@
 //                    (`meta.simplifySkipped`) for the closing summary and the self-answer log
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
 //
+// The review tier picks the review (#139)
+//   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
+//   point> --head <ticket branch>` in the repo (step `tier`, stdout `tick/tier/<ticket key>-<k>.json`, k the number
+//   of the initial review). It is judged at each initial review; a recheck, and a retry after stuck, keep the tier of
+//   the initial review they follow. light gets the minimal review as review: minimal has it (its report file, its
+//   `--kind minimal` record, its freshness check); standard and full get the prove-it review below, with that output
+//   as the values file's `tier`. An output that cannot be read counts as full, with `tier` null: prove-it judges it.
+//   The review is recorded with `--tier` (state.mjs review; for a review host that went to the background, by its
+//   collect): under review: full a minimal review lets the ticket queue only with tier light. A light ticket's minimal
+//   review is a minimal review throughout: its record takes no counts (#142), and it has no assignment record or time
+//   limit (#143); those go with the prove-it review.
+//
 // The review (#138)
-//   Under review: full a ticket in review gets the review host agent: an exec of `brief.mjs review` with the values
+//   A ticket in review whose review is the prove-it review gets the review host agent: an exec of `brief.mjs review` with the values
 //   file tick writes (`tick/review/<ticket key>-<tag>.values.json`: mode, repo, tracker, ticket face, status record,
 //   acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI coverage, previous review block,
-//   reviewer, scratchpad — their keys in the header of brief.mjs), then a foreground `spawn` (step `review`,
+//   reviewer, scratchpad, review tier — their keys in the header of brief.mjs), then a foreground `spawn` (step `review`,
 //   general-purpose, description `review <ticket>`, outcomes pass | fix | stuck) whose prompt is to read that spawn
 //   file: nothing is left for the host to fill in, and the diff and the review's output stay with the review host.
 //   Record it with `--agent`, `--outcome` (`--findings` with fix) and the counts of its report's `counts:` line,
@@ -292,6 +305,9 @@ const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const SKILL = dirname(SCRIPTS);
 const SELF = join(SCRIPTS, 'tick.mjs');
 const js = (name) => join(SCRIPTS, name);
+// prove-it's tier.mjs (#139): tick judges the review tier before the review, from this skill's sibling.
+const TIER_SCRIPT = resolve(SKILL, '..', 'prove-it', 'scripts', 'tier.mjs');
+const TIERS = ['light', 'standard', 'full'];
 // `agents/<name>.md` is a plugin agent definition, two levels up from this skill (src: src/agents; dist: agents).
 const doc = (file, part) => ({
   path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
@@ -760,8 +776,14 @@ function stepReports(c) {
         continue;
       }
       if (t0.stage === 'in-review') {
-        // #143: a review host that went to the background reports here; its verdict is recorded as a review
-        const a = judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full' } });
+        // #143: a review host that went to the background reports here; its verdict is recorded as a review, with
+        // the review tier its spawn was chosen by (#139)
+        const tier = c.flag(ids[0]).reviewTier;
+        const a = judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, {
+          tickets: ids,
+          line: t0.line,
+          meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full', ...(tier ? { tier } : {}) },
+        });
         a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>`;
         c.emit(a);
         continue;
@@ -1377,7 +1399,10 @@ function stepInReview(c, id, t) {
       line: t.line,
     }),
   );
-  if (c.profile.review === 'minimal') {
+  // #139: under review: full the review tier picks the review; it is judged first, once per initial review
+  const tier = c.profile.review === 'full' ? reviewTier(c, id, t) : null;
+  if (tier === undefined) return void bodyFile(c, id, t, [], `review:${tag}`); // the ticket face is fetched meanwhile
+  if (c.profile.review === 'minimal' || tier.tier === 'light') {
     const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
     const report = c.tick('review', `${keyOf(id)}-${tag}.report.md`); // the fix round's findings come from here
     const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
@@ -1413,11 +1438,28 @@ function stepInReview(c, id, t) {
       spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
-      meta: { mode, kind: 'minimal', report },
+      meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}) },
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
     });
   }
-  return proveItReview(c, id, t, { mode, tag, against, ag, previous: mode === 'recheck' || retrying });
+  return proveItReview(c, id, t, { mode, tag, against, ag, previous: mode === 'recheck' || retrying, tier });
+}
+
+/**
+ * #139: the review tier of the ticket's current review, from prove-it's `tier.mjs judge` on the fixed point and the
+ * ticket branch, run in the repo: undefined while it is being judged; else { tier, file }, `file` null when its output
+ * could not be read (the tier is then taken as full, and prove-it judges it itself). It is judged at each initial
+ * review (an implementation round's); a recheck, and a retry after stuck, keep the tier of the initial review they
+ * follow, so a ticket's review does not change kind between its rounds.
+ */
+function reviewTier(c, id, t) {
+  const entries = t.history.filter((h) => h.to === 'in-review');
+  const k = entries.findLastIndex((h) => h.from !== 'fixing') + 1 || entries.length;
+  const file = c.tick('tier', `${keyOf(id)}-${k}.json`);
+  const argv = ['node', TIER_SCRIPT, 'judge', '--base', c.target(t.line), '--head', t.branch];
+  if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
+  const out = readJsonFile(c.deps, file);
+  return TIERS.includes(out?.tier) ? { tier: out.tier, file } : { tier: 'full', file: null };
 }
 
 /**
@@ -1442,7 +1484,7 @@ const ciCoverage = (c, t) => (!c.git.hasOrigin ? 'no-origin' : c.state.lines[t.l
  * a later ticket adds is a key there and in brief.mjs review. Without a usable agent report (a state from before the
  * report was kept, or a timeout's collected report) a judge has it written first.
  */
-function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
+function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
   const flag = c.flag(id);
   if (!agentReportOk(c.deps, flag.agentReport)) {
     const file = flag.agentReport ?? c.tick('report', `${keyOf(id)}-review-${tag}.md`);
@@ -1481,6 +1523,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
         previous,
         reviewer: 'primary',
         scratchpad: join(c.cfg.worktrees, 'review', keyOf(id)),
+        tier: tier?.file ?? null,
       },
       null,
       2,
@@ -1509,7 +1552,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
     spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
-    meta: { mode, kind: 'full' },
+    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}) },
     // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
     record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>   (in the background: --agent <agent id> alone)`,
   });
@@ -2527,14 +2570,14 @@ export function record(path, id, flags, now, deps) {
     return given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : [];
   };
   // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once, with
-  // its report's counts (#142).
-  const reviewEnded = (tid, agent, mode, verdict, counts) => {
+  // its report's counts (#142) and the review tier it was chosen by (#139).
+  const reviewEnded = (tid, agent, mode, verdict, counts, tier) => {
     release([tid]);
     if (book.agents[agent]) book.agents[agent].status = 'collected';
     book.inbox = book.inbox.filter((x) => x !== agent);
     const t = ticket(tid);
     if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(tier ? ['--tier', tier] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
     }
   };
 
@@ -2546,7 +2589,7 @@ export function record(path, id, flags, now, deps) {
       }
       if (meta.stage === 'in-review') {
         // #143: the report of a review host that went to the background, with its counts as for the spawn (#142)
-        reviewEnded(tickets[0], meta.agent, meta.mode, outcome, reviewCounts(true, true));
+        reviewEnded(tickets[0], meta.agent, meta.mode, outcome, reviewCounts(true, true), meta.tier);
         break;
       }
       // #138: a round a review follows hands its report over first (checked before anything is written)
@@ -2645,11 +2688,14 @@ export function record(path, id, flags, now, deps) {
         named(tickets, flags.agent);
         book.agents[flags.agent].status = 'current';
         delete flag(tid).redispatch;
-        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome, counts);
+        // #139: a host that went to the background is recorded by its collect, with this spawn's tier
+        if (meta.tier) flag(tid).reviewTier = meta.tier;
+        else delete flag(tid).reviewTier;
+        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome, counts, meta.tier);
         break;
       }
       if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
       }
       break;
     }

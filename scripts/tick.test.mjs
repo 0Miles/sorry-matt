@@ -20,6 +20,7 @@ import { main as integrateMain } from '../src/skills/get-to-work/scripts/integra
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
 import { main as ciMain, defaultDeps as ciDeps } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
+import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
 import { classify } from '../hooks/classify.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -106,6 +107,9 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     crashAfter: null, // (action) => true to stop right after running it, before recording
     reviewBackground: false, // #143: the prove-it review host's spawn comes back without its report
     policy: {},
+    // #139: what an agent's work changes, per ticket: { path, lines }. The default is a code file of 60 lines, which
+    // tier.mjs judges standard (a prove-it review); 50 lines or fewer is light (a minimal review under review: full).
+    change: {},
   };
   h.iso = () => new Date(h.now).toISOString().replace(/\.\d{3}Z$/, 'Z');
   /** A reviewer's report written on the run's clock: its mtime is the test's `now` (or `at`), not the wall clock's. */
@@ -187,6 +191,7 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
       else if (script === 'deadline.mjs') r = deadlineMain(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
       else if (script === 'brief.mjs') r = briefMain(rest);
       else if (script === 'overlap.mjs') r = overlapMain(rest);
+      else if (script === 'tier.mjs') r = tierMain(rest, tierDeps(a.cwd ?? process.cwd())); // #139: run for real, on the repo
       else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
       else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
       else if (script === 'acceptance.mjs') r = { code: 0, out: JSON.stringify(h.accept(rest)) };
@@ -223,8 +228,9 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     const st = h.state();
     const wt = st.tickets[tid].assignment?.worktree;
     if (wt) {
-      const file = join(wt, tid === ID1 ? 'a.txt' : 'b.txt');
-      write(file, `${agent} ${(h.commits = (h.commits ?? 0) + 1)}\n`);
+      const { path: name = tid === ID1 ? 'a.js' : 'b.js', lines = 60 } = h.change[tid] ?? {};
+      const n = (h.commits = (h.commits ?? 0) + 1);
+      write(join(wt, name), Array.from({ length: lines }, (_, i) => `${agent}(${n}, ${i});\n`).join(''));
       git(wt, 'add', '-A');
       git(wt, 'commit', '-q', '-m', `work by ${agent}`);
     }
@@ -1210,7 +1216,10 @@ test('#138: a prove-it review is a foreground spawn whose spawn file brief.mjs r
     const first = h.wakes.flat().flatMap((o) => o.actions).find((x) => x.id === a.id);
     const brief = h.log.find((x) => x.step === 'brief' && x.argv[2] === 'review' && first.after.includes(x.id));
     assert.ok(brief, `${a.id} waits for brief.mjs review: ${first.after}`);
-    assert.ok(first.after.includes(`body:#1:review:${k + 1}`), 'and for the ticket face fetched again');
+    // and for the ticket face fetched again: in the same list, or (#139: fetched while the tier is judged) before it
+    const body = `body:#1:review:${k + 1}`;
+    assert.ok(first.after.includes(body) || h.log.findIndex((x) => x.id === body) < h.log.findIndex((x) => x.id === a.id), 'the ticket face is fetched again before the spawn');
+    assert.ok(h.log.some((x) => x.id === body), `${body} ran`);
     const file = readFileSync(briefOf(a), 'utf8');
     assert.doesNotMatch(file, /\{[^{}]*\}/, 'no placeholder is left for the host');
     assert.ok(file.startsWith('你是審查主持 agent：'), 'REVIEWER.md fixed rules first');
@@ -1580,8 +1589,8 @@ for (const [name, reason, setup] of [
 }
 
 for (const [culprit, file] of [
-  ['#1', 'a.txt'],
-  ['#2', 'b.txt'],
+  ['#1', 'a.js'],
+  ['#2', 'b.js'],
 ]) {
   test(`#141: no origin: a red finish verifies the integration SHAs from the oldest; the first red, ${culprit}'s merge, is the earliest red`, (t) => {
     // the Full checks fail once the culprit's file is in the tree: from its merge on
@@ -1634,10 +1643,10 @@ for (const [culprit, file] of [
 }
 
 test('#141: no origin: after a fix round the new tip is verified once; green ends the red-light handling', (t) => {
-  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.txt') ? 1 : 0)"` });
+  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.js') ? 1 : 0)"` });
   git(h.repo, 'remote', 'remove', 'origin');
   h.policy['red-light'] = () => {
-    git(h.intWt, 'rm', '-q', 'b.txt');
+    git(h.intWt, 'rm', '-q', 'b.js');
     git(h.intWt, 'commit', '-q', '-m', 'fix the red light');
     return 'handled';
   };
@@ -1750,6 +1759,7 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
     'spawn:sorry-matt:expander:expand',
     'stage:expanding',
     'sync-base', // … and no base sync
+    'tier', // review: minimal judges no review tier (#139)
   ]);
   assert.deepEqual(only(relaxed, strict), [
     'file-issue', // onUnfixed: file-issue
@@ -2100,14 +2110,15 @@ test('#129: --reported goes to the first next of run only', (t) => {
   assert.ok(collected(), "a1's collect is recorded");
   // the same report again: the first next of run takes it as a duplicate, the later lists never see it
   const out = runOut(h, '--reported', 'a1');
-  // three lists: the acceptance check, the ticket face and the review's deadline record (#143) ran in the first, the
-  // review's spawn file (#138) and its assignment in the second; the review spawn they lead to is listed by the next
-  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1', 'body:#1:review:1', 'rec:review:#1:1', 'brief:#1:review-1', 'assign:review:#1:1']);
+  // the lists: the acceptance check, the review tier (#139) and the ticket face ran in the first; the review's spawn
+  // file (#138) and its deadline record (#143) in the second, its assignment (#143) in the third; the review spawn they
+  // lead to is listed by the next after them
+  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1', 'tier:#1:1', 'body:#1:review:1', 'brief:#1:review-1', 'rec:review:#1:1', 'assign:review:#1:1']);
   assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
   assert.deepEqual(out.reports, [], 'the last list was not handed the report');
   // #147: the first list's take of it is still in the output, beside what that list ran
-  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], [], []]);
-  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1', 'body:#1:review:1', 'rec:review:#1:1'], ['brief:#1:review-1', 'assign:review:#1:1'], []]);
+  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], [], [], []]);
+  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1', 'tier:#1:1', 'body:#1:review:1'], ['brief:#1:review-1', 'rec:review:#1:1'], ['assign:review:#1:1'], []]);
 });
 
 // ---- #147: run's output and use -----------------------------------------------------------------------------------------
@@ -2433,4 +2444,104 @@ test('#153: simplify: false sends no simplify agent and lists no skipped line', 
   assert.ok(!h.log.some((a) => a.step === 'simplify'));
   assert.ok(!Object.keys(h.state().tick.issued).some((x) => x.startsWith('simplify:')));
   assert.equal(h.actions(w2).find((x) => x.step === 'wrap-up').meta, undefined);
+});
+
+// ---- #139: tick judges the review tier first, then picks the review -------------------------------------------------
+
+/** The tier judgements tick handed out for `id`, each once. */
+const tierJudges = (h, id) => distinct(h.log).filter((a) => a.step === 'tier' && a.tickets[0] === id);
+const reviewsOf = (h, id) => h.log.filter((a) => a.step === 'review' && a.tickets[0] === id);
+const recorded = (h, id) => h.state().tickets[id].reviews.map((r) => [r.kind, r.tier ?? null, r.mode, r.verdict]);
+
+test('#139: on one line a light ticket gets the minimal review, a standard one the prove-it review with its tier in the spawn file', (t) => {
+  const h = world(t);
+  h.change['#1'] = { lines: 10 }; // a few lines of code: light
+  h.policy.review = (a) => (a.tickets[0] === '#2' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+  assert.equal(h.untilDone().then, 'done');
+  const judged = {};
+  for (const id of ['#1', '#2']) {
+    const all = tierJudges(h, id);
+    assert.equal(all.length, 1, `${id}: the tier is judged once; the recheck keeps it`);
+    const [j] = all;
+    assert.equal(j.kind, 'exec');
+    assert.deepEqual(j.argv.slice(1, 6).map((x, i) => (i ? x : basename(x))), ['tier.mjs', 'judge', '--base', LINE, '--head']);
+    assert.match(j.argv[6], /^r1\//, 'the head is the ticket branch');
+    assert.equal(resolve(j.cwd), resolve(h.repo), 'run in the repo');
+    judged[id] = j;
+  }
+  assert.equal(JSON.parse(readFileSync(judged['#1'].stdout, 'utf8')).tier, 'light');
+  assert.equal(JSON.parse(readFileSync(judged['#2'].stdout, 'utf8')).tier, 'standard');
+
+  // light: the minimal review, its report file and its --kind minimal record, no review host
+  const light = reviewsOf(h, '#1');
+  assert.deepEqual(light.map((a) => [a.meta.kind, a.meta.mode]), [['minimal', 'initial']]);
+  assert.ok(readFileSync(briefOf(light[0]), 'utf8').startsWith('# Review #1'), 'the minimal reviewer brief');
+  assert.equal(reportOf(light[0]).replace(/\\/g, '/'), `${h.W.replace(/\\/g, '/')}/tick/review/1-1.report.md`);
+  assert.ok(!h.log.some((a) => a.step === 'brief' && a.tickets[0] === '#1' && a.argv[2] === 'review'), 'no brief.mjs review for a light ticket');
+  assert.deepEqual(recorded(h, '#1'), [['minimal', 'light', 'initial', 'pass']]);
+
+  // standard: the prove-it review, its tier and the judge output in the spawn file, at the initial review and the recheck
+  const standard = reviewsOf(h, '#2');
+  assert.deepEqual(standard.map((a) => [a.meta.kind, a.meta.mode]), [['full', 'initial'], ['full', 'recheck']]);
+  for (const a of standard) {
+    const file = readFileSync(briefOf(a), 'utf8');
+    assert.ok(file.startsWith('你是審查主持 agent：'), 'the review host spawn file');
+    const line = `- review tier: standard (tier.mjs judge output: ${resolve(judged['#2'].stdout)})\n`;
+    assert.ok(file.includes(line), `${JSON.stringify(line)} in\n${file.slice(file.lastIndexOf('\n---\n'))}`);
+  }
+  assert.deepEqual(recorded(h, '#2'), [['full', 'standard', 'initial', 'fix'], ['full', 'standard', 'recheck', 'pass']]);
+});
+
+test('#139: a full ticket (a sensitive path) gets the prove-it review with tier full in its spawn file', (t) => {
+  const h = world(t);
+  h.change['#1'] = { path: '.github/workflows/ci.yml', lines: 2 };
+  assert.equal(h.untilDone().then, 'done');
+  const [a] = reviewsOf(h, '#1');
+  assert.equal(a.meta.kind, 'full');
+  assert.match(readFileSync(briefOf(a), 'utf8'), /^- review tier: full \(tier\.mjs judge output: .+\)$/m);
+  assert.deepEqual(recorded(h, '#1'), [['full', 'full', 'initial', 'pass']]);
+});
+
+test('#139: under review: minimal every ticket gets the minimal review, whatever its tier; no tier is judged', (t) => {
+  const h = world(t, { profile: { review: 'minimal' } });
+  h.change['#1'] = { lines: 10 };
+  assert.equal(h.untilDone().then, 'done');
+  assert.deepEqual(h.log.filter((a) => a.step === 'tier'), []);
+  for (const id of ['#1', '#2']) {
+    assert.deepEqual(reviewsOf(h, id).map((a) => a.meta.kind), ['minimal'], id);
+    assert.deepEqual(recorded(h, id), [['minimal', null, 'initial', 'pass']], id);
+  }
+});
+
+// ---- #139 × #142 × #143: the review tier picks the review; the counts and the assignment record go with it -------------
+
+test("#139 × #142 × #143: a light ticket's minimal review takes no counts and has no assignment record; a standard ticket's review host in the background is recorded by its collect, with its tier and counts", (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  h.change['#1'] = { lines: 10 }; // a few lines of code: light
+  let checked = 0;
+  h.policy.review = (a) => {
+    if (a.tickets[0] === '#1' && !checked++) {
+      assert.equal(a.meta.kind, 'minimal');
+      assert.doesNotMatch(a.record, /--observations/);
+      const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', '--observations', '1', '--pre-existing', '0');
+      assert.equal(r.code, 2, 'a minimal review takes no counts');
+      assert.match(r.err, /minimal/);
+    }
+    return a.tickets[0] === '#2' ? { outcome: 'pass', observations: 1, preExisting: 0 } : 'pass';
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(checked, 1);
+  // #1, light: the minimal review in the foreground, no assignment record or time limit, no counts
+  assert.ok(!h.log.some((a) => /^(rec|assign):review:#1:/.test(a.id)), 'no assignment record for the minimal review');
+  assert.ok(!h.log.some((a) => a.step === 'collect' && a.meta?.stage === 'in-review' && a.tickets[0] === '#1'));
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.kind, r.tier, r.observations, r.preExisting]), [['minimal', 'light', 0, 0]]);
+  // #2, standard: the prove-it review with its assignment record; its host went to the background and its collect
+  // recorded the review with the tier its spawn was chosen by, and the counts
+  assert.ok(h.log.some((a) => a.id.startsWith('rec:review:#2:')) && h.log.some((a) => a.id.startsWith('assign:review:#2:')));
+  const collect = h.log.find((a) => a.step === 'collect' && a.meta?.stage === 'in-review' && a.tickets[0] === '#2');
+  assert.ok(collect, "#2's review host is collected");
+  assert.equal(collect.meta.tier, 'standard');
+  assert.deepEqual(h.state().tickets['#2'].reviews.map((r) => [r.kind, r.tier, r.observations, r.preExisting]), [['full', 'standard', 1, 0]]);
+  assert.deepEqual(distinct(h.log).filter((a) => a.step === 'observations').map((a) => a.id), ['observations:#2:1']);
 });

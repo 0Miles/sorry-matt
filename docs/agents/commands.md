@@ -43,9 +43,9 @@ claude plugin validate .
   | `src/agents/implementer.md`、`src/agents/expander.md` 與 `agents/` 的同名檔（`brief.mjs` 把本文寫進通用 agent 的退回檔） | `scripts/brief.test.mjs`、`node scripts/check-structure.mjs` |
   | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/integrate.test.mjs` |
   | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs` |
-  | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`） |
+  | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`、`scripts/tick.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`，`tick.test.mjs` 實跑 `tier.mjs`） |
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs run` 以 `hooks/classify.mjs` 判斷哪些 exec 留給主持人） |
-  | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它） |
+  | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它）、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的判級指令） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs`、`scripts/tick.test.mjs`、`scripts/integrate.test.mjs`（`tick.mjs` import 它） |
   | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`（`verify.mjs` import 它） |
   | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs`、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的指令） |
@@ -108,15 +108,15 @@ agents/
 src/agents/
 .github/workflows/
 .claude-plugin/
-src/skills/get-to-work/scripts/
-src/skills/prove-it/scripts/
-skills/get-to-work/scripts/
-skills/prove-it/scripts/
 scripts/check-structure.mjs
 scripts/check-vendored.mjs
+src/skills/get-to-work/scripts/state.mjs
+skills/get-to-work/scripts/state.mjs
 ```
 
-`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿 `src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI；`.claude-plugin/` 是 plugin 的 manifest；
-兩支 skill 的 `scripts/` 是 skill 在使用者 repo 裡執行的腳本；兩支 `check-*.mjs` 是 CI 的檢查本身。
+範圍是權限邊界、CI、plugin manifest 與 state 格式：`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿
+`src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI，兩支
+`check-*.mjs` 是 CI 的檢查本身；`.claude-plugin/` 是 plugin 的 manifest；`state.mjs` 定義 run 的 state 格式與它的守門規則，
+在預計檔案能寫到 symbol 之前整支都算（#136）。兩支 skill 其餘的腳本不在這裡：它們的改動依行數判審查分級。
 
 來源：`AGENTS.md`「結構」、`hooks/hooks.json`、`agents/*.md`、`.github/workflows/check.yml`、`.claude-plugin/plugin.json`。

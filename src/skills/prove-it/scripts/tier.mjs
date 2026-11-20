@@ -27,8 +27,10 @@
 //          ruleFiles      CLAUDE.md, AGENTS.md, CONTRIBUTING.md, CODING_STANDARDS.md on head, at the root or in a
 //                         directory above a changed path
 //        Tier, top to bottom, the first match wins (`reasons` names every condition of the matching row that held):
+//          full      a sensitive path, documentation or not (#139: an agent definition is   (sensitive, over-lines)
+//                    Markdown, and what it grants is the permission boundary)
 //          light     docsOnly                                                   (reason docs-only)
-//          full      a sensitive path, or changedLines > --full-over-lines (400)  (sensitive, over-lines)
+//          full      changedLines > --full-over-lines (400)                     (over-lines)
 //          light     changedLines <= --light-max-lines (50)                     (few-lines)
 //          standard  everything else                                            (default)
 //        Finders: one per inner array of `finders`, which lists that finder's lenses (LENSES). Groups per tier:
@@ -259,7 +261,8 @@ export function judgeTier(signals, thresholds = DEFAULT_THRESHOLDS) {
     ...(signals.sensitive.length > 0 ? ['sensitive'] : []),
     ...(signals.changedLines > t.fullOverLines ? ['over-lines'] : []),
   ];
-  if (signals.docsOnly) [tier, reasons] = ['light', ['docs-only']];
+  if (signals.sensitive.length > 0) [tier, reasons] = ['full', full];
+  else if (signals.docsOnly) [tier, reasons] = ['light', ['docs-only']];
   else if (full.length) [tier, reasons] = ['full', full];
   else if (signals.changedLines <= t.lightMaxLines) [tier, reasons] = ['light', ['few-lines']];
   else [tier, reasons] = ['standard', ['default']];

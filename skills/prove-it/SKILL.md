@@ -39,6 +39,9 @@ The caller supplies:
   When it is not given, section 3's scope command decides from whether `origin` exists. It goes into the `live run`
   line only; it does not change the live run's scope (section 3).
 - **Mode:** `initial`, or `recheck` (the recheck after a batched fix; it follows section 7).
+- **Review tier:** the review tier the caller judged before the review, with the tier command output it comes from
+  (`tier.mjs judge` JSON). When it is given, go by that output and do not judge again; when it is not (`none given`),
+  you judge it (below).
 - **Status record:** where the ticket's status record is — on GitHub the comment whose first line is
   `<!-- sorry-matt:status -->`, on Local Markdown the ticket file. The review block goes there (section 6).
 - **Previous review block:** a recheck always has one, and so does an initial review resuming after a mid-review
@@ -82,9 +85,11 @@ restore dependencies from the lockfile (frozen forms such as `npm ci` or `pnpm i
 false, keep the existing install. Never add a dependency or download a new tool — the review changes neither this
 ticket's diff nor the repo's dependencies. New-file line numbers always come from `git show <ticket branch>:<path>`.
 
-The **review tier** is judged here, once, from the diff, written into the review block as `tier`, and kept for the
-whole ticket, rechecks included. It sets the number of finders and the lenses each applies, how verifiers and Fix
-Verifiers are batched, and the mutation cap. At the root of the review worktree, run the **tier command**:
+The **review tier** is judged once per ticket, written into the review block as `tier`, and kept for the whole
+ticket, rechecks included. It sets the number of finders and the lenses each applies, how verifiers and Fix Verifiers
+are batched, and the mutation cap. When the caller gave the review tier, you do not judge it: copy the tier command
+output it gave, as it is, to where the tier command below writes its output (the file after `>`), which every section
+below reads. When it did not, run the **tier command** at the root of the review worktree:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <ticket branch> > <scratchpad>/review-<ticket>-tier.json 2> <scratchpad>/review-<ticket>-tier.err
@@ -107,7 +112,8 @@ When the tier command exits non-zero, take `tier` as `full`, `finders` as
 
 Done when: the inputs are complete; a failed precondition has produced `stuck` and stopped the review; changed
 acceptance criteria have been recorded as an `acceptance` finding; `worktree.mjs open` put the review worktree at the
-ticket branch tip, dependencies were handled per `install`, and the diff is saved; `tier` comes from the tier command's output, or is `full` when it failed.
+ticket branch tip, dependencies were handled per `install`, and the diff is saved; `tier` comes from the tier output
+the caller gave, else from the tier command's output, or is `full` when it failed.
 
 ## 2. Finder: candidates in parallel
 
