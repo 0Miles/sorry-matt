@@ -18,6 +18,7 @@ import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
+import { main as ciMain, defaultDeps as ciDeps } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,8 +43,8 @@ const BASH_CHECK = bashUsable();
 const BASH = BASH_CHECK.ok;
 const NO_BASH = BASH ? null : `no bash that runs tick's commands: ${BASH_CHECK.why}`;
 
-/** A run with tickets #1 and #2 on one line, set up as the freeze leaves it. */
-function world(t, { profile = null } = {}) {
+/** A run with tickets #1 and #2 on one line, set up as the freeze leaves it; `check` is the contract's Full checks. */
+function world(t, { profile = null, check = 'node -e "process.exit(0)"' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-tick-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const origin = join(dir, 'origin.git');
@@ -56,7 +57,7 @@ function world(t, { profile = null } = {}) {
   git(repo, 'config', 'user.name', 't'); // integrate.mjs commits with the repository's identity
   git(repo, 'config', 'user.email', 't@t');
   write(join(repo, 'README.md'), 'hello\n');
-  write(join(repo, 'docs', 'agents', 'commands.md'), '# Commands\n\n## Full checks\n\n```bash\nnode -e "process.exit(0)"\n```\n');
+  write(join(repo, 'docs', 'agents', 'commands.md'), `# Commands\n\n## Full checks\n\n\`\`\`bash\n${check}\n\`\`\`\n`);
   git(repo, 'add', '-A');
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'remote', 'add', 'origin', origin);
@@ -896,19 +897,108 @@ test('#128 D4: under review: minimal a fix agent reassigned after a timeout is p
   assert.doesNotMatch(brief, /review block/);
 });
 
-test('no origin: the dispatch points and the finish verify the line through verify.mjs', (t) => {
-  const h = world(t);
+/** Seeds the line as settled "CI does not cover the integration branch" (state.mjs ci sets it after two empty reads). */
+const settleNotCovering = (h) => {
+  const st = h.state();
+  st.lines[LINE].ciNotCovering = { sha: st.lines[LINE].tip, at: h.iso() };
+  writeFileSync(h.path, `${JSON.stringify(st, null, 2)}\n`);
+};
+
+for (const [name, reason, setup] of [
+  ['no origin', 'no-origin', (h) => git(h.repo, 'remote', 'remove', 'origin')],
+  ['CI not covering the line', 'ci-not-covering', settleNotCovering],
+]) {
+  test(`#141: ${name}: no local verification at the dispatch points; a green finish verifies the latest SHA once`, (t) => {
+    const h = world(t);
+    setup(h);
+    assert.equal(h.untilDone().then, 'done');
+    const tip = git(h.intWt, 'rev-parse', 'HEAD');
+    const verifies = h.log.filter((a) => a.step === 'verify-local');
+    assert.deepEqual(
+      verifies.map((a) => [a.argv[a.argv.indexOf('--sha') + 1], a.argv[a.argv.indexOf('--reason') + 1]]),
+      [[tip, reason]],
+      'one verification, at the finish, of the latest SHA',
+    );
+    assert.ok(!h.log.some((a) => a.step === 'red-light'), 'green: no red-light handling');
+    const L = h.state().lines[LINE];
+    assert.deepEqual(L.local.map((x) => [x.sha, x.result]), [[tip, 'green']], 'one per-SHA record: the latest SHA');
+    assert.ok(!h.log.some((a) => a.step === 'ci-read'), 'nothing reads CI');
+    assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  });
+}
+
+for (const [culprit, file] of [
+  ['#1', 'a.txt'],
+  ['#2', 'b.txt'],
+]) {
+  test(`#141: no origin: a red finish verifies the integration SHAs from the oldest; the first red, ${culprit}'s merge, is the earliest red`, (t) => {
+    // the Full checks fail once the culprit's file is in the tree: from its merge on
+    const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('${file}') ? 1 : 0)"` });
+    git(h.repo, 'remote', 'remove', 'origin');
+    let handed = null;
+    h.policy['red-light'] = (a) => {
+      // RED-LIGHT.md step 1: ci.mjs earliest-red on the state's per-SHA records, `ci` false on a line on local verification
+      const st = h.state();
+      const plan = join(h.W, 'ci', 'line-1.plan.json');
+      write(
+        plan,
+        JSON.stringify({
+          worktree: h.intWt,
+          line: LINE,
+          base: 'main',
+          ci: false,
+          local: st.lines[LINE].local.map((x) => `local: ${LINE} ${x.sha} ${x.result} ${x.reason}`),
+          tickets: Object.entries(st.tickets).map(([id, x]) => ({ id, merges: x.merges.map((m) => m.sha) })),
+        }),
+      );
+      const r = ciMain(['earliest-red', plan], ciDeps());
+      assert.equal(r.code, 0, r.err);
+      handed = { action: a, logged: h.log.length, earliest: JSON.parse(r.out) };
+      return 'failed'; // the line failed verification: on to the delivery
+    };
+    assert.equal(h.untilDone().then, 'done');
+    const st = h.state();
+    const tip = git(h.intWt, 'rev-parse', 'HEAD');
+    const merges = git(h.intWt, 'rev-list', '--first-parent', '--merges', '--reverse', `main..${LINE}`).split('\n'); // oldest first
+    const earliest = st.tickets[culprit].merges[0].sha;
+    const scanned = merges.slice(0, merges.indexOf(earliest) + 1).filter((x) => x !== tip);
+    const verified = h.log.filter((a) => a.step === 'verify-local').map((a) => a.argv[a.argv.indexOf('--sha') + 1]);
+    assert.deepEqual(verified, [tip, ...scanned], 'the finish verifies the tip once; then each integration SHA from the oldest, up to the first red');
+    assert.deepEqual(
+      st.lines[LINE].local.map((x) => [x.sha, x.result]),
+      [[tip, 'red'], ...scanned.map((x) => [x, x === earliest ? 'red' : 'green'])],
+    );
+    assert.ok(handed, 'the red goes to red-light handling');
+    assert.equal(h.log.filter((a) => a.step === 'red-light').length, 1);
+    assert.equal(handed.action.meta.earliestRed, earliest);
+    assert.match(handed.action.do, new RegExp(`earliest red SHA ${earliest}`));
+    assert.ok(h.log.slice(handed.logged).every((a) => a.step !== 'verify-local'), 'every verification came before it');
+    assert.equal(handed.earliest.earliestRed, earliest, 'ci.mjs earliest-red on those records finds the same SHA');
+    assert.deepEqual(handed.earliest.tickets, [culprit]);
+    const trees = git(h.repo, 'worktree', 'list', '--porcelain');
+    assert.ok(!scanned.some((x) => trees.includes(x.slice(0, 12))), 'the worktrees of the scan are removed');
+    assert.equal(git(h.intWt, 'rev-parse', 'HEAD'), tip, 'the integration worktree stays at the tip');
+  });
+}
+
+test('#141: no origin: after a fix round the new tip is verified once; green ends the red-light handling', (t) => {
+  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.txt') ? 1 : 0)"` });
   git(h.repo, 'remote', 'remove', 'origin');
+  h.policy['red-light'] = () => {
+    git(h.intWt, 'rm', '-q', 'b.txt');
+    git(h.intWt, 'commit', '-q', '-m', 'fix the red light');
+    return 'handled';
+  };
   assert.equal(h.untilDone().then, 'done');
-  const verifies = h.log.filter((a) => a.step === 'verify-local');
-  assert.ok(verifies.length >= 2, 'the first dispatch point and the one after the integrations');
-  assert.ok(verifies.every((a) => a.kind === 'exec' && a.argv[a.argv.indexOf('--reason') + 1] === 'no-origin'));
-  const tip = git(h.intWt, 'rev-parse', 'HEAD');
-  const L = h.state().lines[LINE];
-  assert.ok(L.local.some((x) => x.sha === tip && x.result === 'green'), 'the latest SHA has its per-SHA record');
-  assert.equal(new Set(L.local.map((x) => x.sha)).size, L.local.length, 'one record per SHA');
-  assert.ok(!h.log.some((a) => ['ci-read', 'push'].includes(a.step)), 'nothing reads CI or pushes');
-  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  const st = h.state();
+  const [m1, m2] = [st.tickets['#1'].merges[0].sha, st.tickets['#2'].merges[0].sha];
+  const fixed = git(h.intWt, 'rev-parse', 'HEAD');
+  const verified = h.log.filter((a) => a.step === 'verify-local').map((a) => a.argv[a.argv.indexOf('--sha') + 1]);
+  assert.deepEqual(verified, [m2, m1, fixed], 'the red tip, the scan, then the fixed tip: each once');
+  assert.equal(st.lines[LINE].local.find((x) => x.sha === fixed).result, 'green');
+  assert.equal(h.log.filter((a) => a.step === 'red-light').length, 1);
+  assert.ok(h.log.some((a) => a.step === 'deliver-line'), 'the line is delivered');
+  assert.equal(st.tick.red[LINE], undefined);
 });
 
 test('a failed command comes back as a judge; retry issues it again', (t) => {

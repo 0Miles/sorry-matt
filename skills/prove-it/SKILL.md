@@ -36,7 +36,8 @@ The caller supplies:
   the reviewer picks the live run's commands itself (section 3).
 - **CI coverage:** whether CI runs the full suite on the line's integration branch after integration — `covered`,
   `uncovered` (the caller ruled "CI does not cover the integration branch") or `no-origin` (there is no `origin`).
-  When it is not given, section 3's scope command decides from whether `origin` exists.
+  When it is not given, section 3's scope command decides from whether `origin` exists. It goes into the `live run`
+  line only; it does not change the live run's scope (section 3).
 - **Mode:** `initial`, or `recheck` (the recheck after a batched fix; it follows section 7).
 - **Status record:** where the ticket's status record is — on GitHub the comment whose first line is
   `<!-- sorry-matt:status -->`, on Local Markdown the ticket file. The review block goes there (section 6).
@@ -198,7 +199,9 @@ The reviewer does this step; it is never handed to the implementer.
 
 ### Live run
 
-**The full suite belongs to CI; the review runs only the affected scope.** At the root of the review worktree, first
+**The review runs only the affected scope; the full suite is never run in a review.** On a line with CI, CI runs it
+after integration; on a line CI does not cover, or one without `origin`, the caller runs it once at the finish
+(get-to-work's local verification). CI coverage does not change the scope. At the root of the review worktree, first
 judge the scope:
 
 ```bash
@@ -206,20 +209,16 @@ node "${CLAUDE_SKILL_DIR}/scripts/scope.mjs" --base <fixed point> --ci <section 
 ```
 
 Leave out `--ci` when the caller gave no CI coverage. The rules for the scope and for where the commands come from
-are in the script header; read the output as it is:
-
-- `scope: full`: CI does not cover the integration branch, or there is no `origin`, so no one else runs the full
-  suite before the line finishes; run the project's test, typecheck and lint once each, as before. Take the commands
-  from the output's `commands`; when it is `null`, find them yourself from the manifest and the CI configuration.
-- `scope: affected`: CI runs the full suite after integration, so run only typecheck, the tests that cover the changed
-  files, and the lint of the changed files. Derive the commands by applying the output's `targeted` (the text of the
-  command contract's "Targeted checks") to `changed`; when it is `null`, derive them yourself from the manifest and
-  the test configuration. `tests` lists candidate test files; one counts only once an import chain or the contract's
-  mapping confirms it covers a changed file. Skip typecheck or lint when the project has none.
+are in the script header; read the output as it is: its `scope` is always `affected`, so run only typecheck, the
+tests that cover the changed files, and the lint of the changed files. Derive the commands by applying the output's
+`targeted` (the text of the command contract's "Targeted checks") to `changed`; when it is `null`, derive them
+yourself from the manifest and the test configuration. `tests` lists candidate test files; one counts only once an
+import chain or the contract's mapping confirms it covers a changed file. Skip typecheck or lint when the project has
+none.
 
 The reviewer picks the commands; never copy the one the implementation agent reported. Copy the output's `scope`,
-`ci` and `source` into the `live run` line (section 6), so it shows whether this was the full suite or the affected
-scope, and whether the commands came from the contract or were derived. This is the baseline for mutation:
+`ci` and `source` into the `live run` line (section 6), so it shows the CI coverage and whether the commands came
+from the contract or were derived. This is the baseline for mutation:
 
 - All green → go on to mutation.
 - Red → the red light is itself a candidate (lens `live-run`) for the Verifier. Mutation means nothing on a red
@@ -402,7 +401,7 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: scope=<affected | full | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
+live run: scope=<affected | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
 - <command> -> green | red
 mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived | restore-failed: <disposition: F2 | equivalent, invalid | ...>
@@ -411,7 +410,7 @@ restored: yes | no | n/a
 ```
 
 The `live run` line gives the scope, the CI coverage and the command source, with one line per command under it:
-`scope` is `full` or `affected` from section 3's `scope.mjs` output, and `findings` in a recheck (section 7); `ci` is
+`scope` is `affected` from section 3's `scope.mjs` output, and `findings` in a recheck (section 7); `ci` is
 the output's `ci`; `source` is `commands.md` when the commands came from the contract, `self-found` when the reviewer
 found or derived them. `- error:` appears only when `mutate.mjs` ended in a runtime error; `restore-failed` is used
 only for the mutant behind an exit code 3 (the output's `restoreFailed`). An empty list is written `none`. An
@@ -496,7 +495,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" close --path <scratchpad>/review
 
 Any other `fix` keeps it for the next recheck to reuse.
 
-Done when: the block follows the format above; the `live run` line shows whether the scope was `full`, `affected` or
+Done when: the block follows the format above; the `live run` line shows whether the scope was `affected` or
 `findings`; `restored` comes from `worktree.mjs status`; the status record holds exactly one, current review block
 that keeps every round's mutation record; no PR comment, review, or `suggestion` block was produced; once the verdict
 is final the review worktree is removed, and any other `fix` keeps it; the caller got only the review report of six

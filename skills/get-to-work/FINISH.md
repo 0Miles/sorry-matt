@@ -22,7 +22,10 @@ Every line first passes the **three line-level gates**, in a fixed order:
    integration, a conflict resolution, a red-light fix, the simplify pass and the base sync all make an earlier green
    expire. Red goes to [`RED-LIGHT.md`](RED-LIGHT.md). The report gives the SHA verified, the source (CI, or local and
    why; for local also the `source` of the `verify.mjs` output) and the synced base SHA; an unsynced line is verified
-   on its unsynced tree all the same.
+   on its unsynced tree all the same. A line CI does not cover, or one without `origin`, has its full suite verified
+   locally only here, once: the review runs only the affected scope, and nothing is verified after an integration.
+   When it is red, tick verifies the line's integration SHAs locally one by one from the oldest; the first red one is
+   the earliest red SHA, and the red-light handling is handed out with it.
 
 Then deliver each line by mode:
 
