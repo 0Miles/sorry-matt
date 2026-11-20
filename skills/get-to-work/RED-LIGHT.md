@@ -15,10 +15,11 @@ do not queue.
    re-query by hand.
 2. **Map to a ticket**: the output's `tickets` run oldest first; start from the earliest, which is the first one (the
    matching rules are in the header of `scripts/review-guide.mjs`). When `unmatched` is `true` — the red came from a
-   host commit, the simplify pass or the base sync — it **maps to no ticket**.
+   host commit, the simplify pass or the base sync, or the line has no green and the base was already red at the
+   merge base (`baseCi.verdict` is `red`) — it **maps to no ticket**.
 3. **Failure output**: on a line with CI, save `gh run view <id> --log-failed` for every id in `failed` of the
-   `earliestRed` entry of the same output; a local red is the `log` of the `verify.mjs` output. The host takes only the
-   failing lines.
+   `earliestRed` entry of the same output, and, when `baseCi` is red, for every id in its `failed` as well; a local red
+   is the `log` of the `verify.mjs` output. The host takes only the failing lines.
 4. **Fix, at most two rounds**:
    - Maps to a ticket: `integrate.mjs ci-init` cuts `<ticket branch>-ci` and its worktree from the integration branch;
      hand it to that ticket's original agent, or, when it is gone, spawn a new one by `IMPLEMENTER.md` with the
