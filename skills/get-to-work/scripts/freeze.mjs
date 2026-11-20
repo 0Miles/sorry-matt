@@ -19,7 +19,10 @@
 //   set, run without --line; its `tracker` and `source` decide the GitHub checks and which repository's pull
 //   requests are read. A predicted-files list is the format overlap.mjs reads: one repo-relative path per line,
 //   `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
-//   under it. Every ticket whose state is "open" needs a list; lists of other tickets are ignored. `held` is
+//   under it, and `path#symbol` (`path#outer#inner` when nested) narrows it to a function, block or markdown
+//   heading of that file. Overlap is overlap.mjs's: two entries on the same path that both name a symbol
+//   overlap only when one symbol chain starts with the other; an entry without a symbol is the whole file.
+//   Every ticket whose state is "open" needs a list; lists of other tickets are ignored. `held` is
 //   what git cannot see (another session the host knows of), with its own release condition.
 //
 // What it computes
@@ -36,9 +39,10 @@
 //              - with tracker "github", every open pull request of `source` whose head is not the current branch:
 //                its files as `gh pr list --json files` returns them;
 //              - the plan's `held` entries.
+//              Git, worktree and PR holders hold whole files; only a `held` entry's list can name symbols.
 //              A holder named in `ignore` (a worktree by path or by its branch, a branch, a PR as `#n`) is left
 //              out; holders with no file are not listed.
-//   excluded   Open tickets whose predicted paths overlap a held path (one path covers the other). They leave
+//   excluded   Open tickets whose predicted entries overlap a held entry, in the sense above. They leave
 //              the frozen set; the host records them as awaiting ruling with the holders and release conditions.
 //   stalled    Open tickets left in the set that can no longer become ready because of an exclusion, in
 //              frontier.mjs's terms: "blocked-external" (an in-set blocker was excluded) or "blocked-upstream"
@@ -70,7 +74,7 @@
 //     "candidates": [{ "id": "#5", "line": "#5", "unlocks": 2 }]
 //   }
 //   `held` through `candidates` are null when the preflight fails. Paths are sorted, `/` is the whole
-//   repository; lines, their tickets and members follow the frontier's ticket order.
+//   repository, an entry that names a symbol is written `path#symbol`; lines, their tickets and members follow the frontier's ticket order.
 //
 // Exit codes: 0 output written (read `preflight.ok`); 1 a list, git or gh read failed after the preflight;
 // 2 bad arguments or plan.
@@ -78,12 +82,11 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { UsageError, canonical, failure, runIfEntry } from './cli.mjs';
-import { overlaps, parseList } from './overlap.mjs';
+import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
 
 export const FORMAT = 'sorry-matt/freeze@1';
 const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
 
-const display = (p) => (p === '' ? '/' : p);
 const uniqueSorted = (xs) => [...new Set(xs)].sort();
 const z = (out) => out.split('\0').filter(Boolean);
 const detail = (e) => (e.stderr && String(e.stderr).trim()) || e.message;
@@ -296,14 +299,15 @@ const pathsOverlapping = (mine, theirs) => mine.filter((p) => theirs.some((q) =>
 export function freezeTickets({ frontier, predicted, held }) {
   const order = new Map(frontier.tickets.map((t, i) => [t.id, i]));
   const byOrder = (a, b) => order.get(a) - order.get(b);
-  const asPaths = (files) => files.map((f) => (f === '/' ? '' : f));
+  // Held files as entries: git reports whole files; only a host-known holder's list can name symbols.
+  const entries = (h) => h.files.map((f) => (h.source === 'host' ? parseEntry(f) : whole(f)));
 
-  // Exclusion: an open ticket whose predicted paths overlap a held path.
+  // Exclusion: an open ticket whose predicted entries overlap a held one.
   const excluded = [];
   for (const t of frontier.tickets) {
     if (t.state !== 'open') continue;
     const hits = held
-      .map((h) => ({ with: h.id, source: h.source, paths: pathsOverlapping(predicted.get(t.id), asPaths(h.files)).map(display), release: h.release }))
+      .map((h) => ({ with: h.id, source: h.source, paths: pathsOverlapping(predicted.get(t.id), entries(h)).map(display), release: h.release }))
       .filter((h) => h.paths.length);
     if (hits.length) excluded.push({ id: t.id, overlaps: hits });
   }
@@ -347,10 +351,10 @@ export function freezeTickets({ frontier, predicted, held }) {
       if (baseLine.get(a) === baseLine.get(b)) continue;
       const pa = predicted.get(a);
       const pb = predicted.get(b);
-      const paths = uniqueSorted([...pathsOverlapping(pa, pb), ...pathsOverlapping(pb, pa)]);
+      const paths = uniqueSorted([...pathsOverlapping(pa, pb), ...pathsOverlapping(pb, pa)].map(display));
       if (!paths.length) continue;
       union(a, b);
-      joins.push({ tickets: [a, b], paths: paths.map(display) });
+      joins.push({ tickets: [a, b], paths });
     }
   }
   const groups = new Map();
@@ -371,7 +375,7 @@ export function freezeTickets({ frontier, predicted, held }) {
         id,
         members: [...members].sort(byOrder),
         tickets: ids,
-        files: uniqueSorted(ids.flatMap((t) => predicted.get(t) ?? [])).map(display),
+        files: uniqueSorted(ids.flatMap((t) => (predicted.get(t) ?? []).map(display))),
         joins: joins.filter((j) => ids.includes(j.tickets[0])),
       };
     });

@@ -125,6 +125,71 @@ test('lines that do not overlap stay apart; "/" overlaps everything', (t) => {
   assert.deepEqual(all.json.lines.map((l) => [l.id, l.files]), [['#1', ['/', 'b']]]);
 });
 
+test('path#symbol: same-path tickets with disjoint symbols stay on their own lines; the same symbol joins them', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2'], ['#3'], ['#4']]),
+    files: {
+      '#1': 'src/tick.mjs#nextActions\n',
+      '#2': 'src/tick.mjs#record\n',
+      '#3': 'SKILL.md#2. 判斷#預計檔案\n',
+      '#4': 'SKILL.md#2. 判斷\n', // the parent section covers the subsection #3 names
+    },
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.lines.map((l) => [l.id, l.tickets, l.files]), [
+    ['#1', ['#1'], ['src/tick.mjs#nextActions']],
+    ['#2', ['#2'], ['src/tick.mjs#record']],
+    ['#3', ['#3', '#4'], ['SKILL.md#2. 判斷', 'SKILL.md#2. 判斷#預計檔案']],
+  ]);
+  assert.deepEqual(r.json.lines[2].joins, [{ tickets: ['#3', '#4'], paths: ['SKILL.md#2. 判斷', 'SKILL.md#2. 判斷#預計檔案'] }]);
+  assert.deepEqual(r.json.candidates.map((c) => c.id), ['#1', '#2', '#3', '#4']);
+});
+
+test('path#symbol: a ticket that writes only the path joins every ticket naming a symbol in it', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2'], ['#3']]),
+    files: { '#1': 'src/tick.mjs#nextActions\n', '#2': 'src/tick.mjs\n', '#3': 'src/tick.mjs#record\n' },
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.lines.map((l) => [l.id, l.tickets]), [['#1', ['#1', '#2', '#3']]]);
+  assert.deepEqual(r.json.lines[0].joins, [
+    { tickets: ['#1', '#2'], paths: ['src/tick.mjs', 'src/tick.mjs#nextActions'] },
+    { tickets: ['#2', '#3'], paths: ['src/tick.mjs', 'src/tick.mjs#record'] },
+  ]);
+});
+
+test('path#symbol: a held file excludes every symbol in it; a host-held symbol excludes only that symbol', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  git(repo, 'checkout', '-q', '-b', 'run/line-x');
+  writeFileSync(join(repo, 'src/a.md'), 'theirs\n');
+  git(repo, 'commit', '-q', '-am', 'line x');
+  git(repo, 'checkout', '-q', 'main');
+  writeFileSync(join(dir, 'session.txt'), 'docs.md#Usage\n');
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2'], ['#3']]),
+    files: { '#1': 'src/a.md#Intro\n', '#2': 'docs.md#Usage\n', '#3': 'docs.md#Install\n' },
+    extra: { held: [{ id: 'session B', files: 'session.txt', release: 'session B finishes' }] },
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.held.map((h) => [h.source, h.id, h.files]), [
+    ['branch', 'run/line-x', ['src/a.md']],
+    ['host', 'session B', ['docs.md#Usage']],
+  ]);
+  assert.deepEqual(r.json.excluded.map((e) => [e.id, e.overlaps.map((o) => [o.with, o.paths])]), [
+    ['#1', [['run/line-x', ['src/a.md#Intro']]]],
+    ['#2', [['session B', ['docs.md#Usage']]]],
+  ]);
+  assert.deepEqual(r.json.candidates.map((c) => c.id), ['#3']);
+});
+
 // ---------- candidate order ----------
 
 test('candidates that unlock more open tickets come first', (t) => {
