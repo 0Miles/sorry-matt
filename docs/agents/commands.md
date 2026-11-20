@@ -34,6 +34,7 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/acceptance.mjs` | `scripts/acceptance.test.mjs` |
   | `src/skills/get-to-work/scripts/frontier.mjs` | `scripts/frontier.test.mjs` |
   | `src/skills/get-to-work/scripts/freeze.mjs` | `scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/ci.mjs` | `scripts/ci.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`freeze.mjs` import 它，`tick.mjs` import `freeze.mjs`） |
   | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs`、`scripts/freeze.test.mjs` |
   | `src/skills/get-to-work/scripts/review-guide.mjs` | `scripts/review-guide.test.mjs` |
   | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs`、`scripts/brief.test.mjs` |
