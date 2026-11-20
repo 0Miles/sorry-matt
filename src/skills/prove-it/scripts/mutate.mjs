@@ -6,7 +6,7 @@
 // Usage
 //   node mutate.mjs lines --base <fixed-point> [--head <ref>] [--lcov <lcov-file>]
 //   node mutate.mjs run --base <fixed-point> --plan <plan.json> --ledger <ledger.json> --cmd "<test command>"
-//                       [--head <ref>] [--lcov <lcov-file>] [--cap <n>] [--timeout <seconds>]
+//                       [--head <ref>] [--lcov <lcov-file>] [--cap <n>] [--timeout <seconds>] [--green-at <sha>]
 //
 // lines  Lists the lines this ticket added or changed: `git diff -U0 <base>...<head>` (head defaults to HEAD), new-file
 //        line numbers, blank lines left out. With --lcov, each line's `covered` is true when the lcov file has a
@@ -18,6 +18,13 @@
 //             (default 10; --cap can only lower it); each `original` equals the current text of that line and each
 //             `mutant` differs from it.
 //          2. Runs the command once on the untouched tree (the baseline). A red baseline stops here: exit 1.
+//             --green-at <sha> says this very command already ran green at <sha> (the implementation agent's
+//             targeted checks, or the review's own live run; #140): when <sha> is the commit checked out here
+//             (`git rev-parse HEAD` in the current directory, not --head), that run is the baseline and the command
+//             is not run again ("baselineSource": "reused"). Any other <sha>, or one git cannot resolve, is ignored
+//             with the reason in "greenAtIgnored", and the baseline runs as without it. It is only for a command
+//             that is verbatim one that ran green: a narrower one runs its own baseline, so a command that fails for
+//             every tree cannot pass its failures off as killed mutants.
 //          3. For each mutant: reads the file's bytes, writes the mutated line (keeping the file's line endings), runs
 //             the command, then writes the original bytes back and checks their SHA-256. Exit status 0 means the
 //             mutant survived; a timeout counts as killed (reported as "timeout"); any other status means killed.
@@ -35,6 +42,8 @@
 //   lines:  { "format": "sorry-matt/mutate-lines@1", "base", "head", "coverage": "lcov" | null,
 //             "files": [{ "path", "lines": [{ "line": 12, "text": "...", "covered": true | false | null }] }] }
 //   run:    { "format": "sorry-matt/mutate-run@1", "cmd", "cap", "baseline": "green" | "red",
+//             "baselineSource": "ran" | "reused", "greenAt"?: "<full sha, when reused>",
+//             "greenAtIgnored"?: "<why --green-at did not stand in for the baseline>",
 //             "results": [{ "file", "line", "operator", "outcome": "killed" | "timeout" | "survived",
 //                           "ms", "tail" }],                 // tail: last lines of the test output, evidence only
 //             "survived": <n>, "restored": true | false,
@@ -233,22 +242,40 @@ export function defaultDeps(cwd = process.cwd()) {
   };
 }
 
-export function runPlan({ plan, cmd, cap, timeoutMs, deps, scope, used = [] }) {
+// #140: { sha } when --green-at names the commit checked out here, else { ignored: <why> }.
+export function greenAtHead(given, git) {
+  const commit = (ref) => git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).trim();
+  let sha;
+  try {
+    sha = commit(given);
+  } catch {
+    return { ignored: `--green-at ${given} is not a commit git can resolve; the baseline ran` };
+  }
+  const head = commit('HEAD');
+  return sha === head ? { sha } : { ignored: `--green-at ${given} (${sha}) is not HEAD (${head}); the baseline ran` };
+}
+
+export function runPlan({ plan, cmd, cap, timeoutMs, deps, scope, used = [], greenAt = null }) {
   const problems = validatePlan(plan, { cap, read: deps.read, scope, used });
   if (problems.length) throw new UsageError(`invalid plan:\n  - ${problems.join('\n  - ')}`);
-  const report = { format: RUN_FORMAT, cmd, cap, baseline: 'green', results: [], survived: 0, restored: true };
+  const reused = !!greenAt?.sha;
+  const report = { format: RUN_FORMAT, cmd, cap, baseline: 'green', baselineSource: reused ? 'reused' : 'ran', results: [], survived: 0, restored: true };
+  if (reused) report.greenAt = greenAt.sha;
+  else if (greenAt?.ignored) report.greenAtIgnored = greenAt.ignored;
 
-  let base;
-  try {
-    base = deps.exec(cmd, timeoutMs);
-  } catch (e) {
-    report.error = `baseline: ${describe(e)}`;
-    return { code: 1, report };
-  }
-  if (base.timedOut || base.status !== 0) {
-    report.baseline = 'red';
-    report.baselineTail = tail(base.output);
-    return { code: 1, report };
+  if (!reused) {
+    let base;
+    try {
+      base = deps.exec(cmd, timeoutMs);
+    } catch (e) {
+      report.error = `baseline: ${describe(e)}`;
+      return { code: 1, report };
+    }
+    if (base.timedOut || base.status !== 0) {
+      report.baseline = 'red';
+      report.baselineTail = tail(base.output);
+      return { code: 1, report };
+    }
   }
 
   for (const m of plan.mutants) {
@@ -290,11 +317,12 @@ function parseArgs(argv) {
   const args = { command };
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i];
-    if (!/^--(base|head|lcov|plan|ledger|cmd|cap|timeout)$/.test(flag)) throw new UsageError(`unknown argument ${flag}`);
+    if (!/^--(base|head|lcov|plan|ledger|cmd|cap|timeout|green-at)$/.test(flag)) throw new UsageError(`unknown argument ${flag}`);
     if (i + 1 >= rest.length) throw new UsageError(`${flag} needs a value`);
     args[flag.slice(2)] = rest[++i];
   }
   if (!args.base) throw new UsageError(`${command} needs --base`);
+  if (command === 'lines' && args['green-at'] != null) throw new UsageError('--green-at is for run only');
   if (command === 'run' && (!args.plan || !args.ledger || !args.cmd)) throw new UsageError('run needs --plan, --ledger and --cmd');
   for (const k of ['cap', 'timeout']) {
     if (args[k] != null && !(Number.isInteger(Number(args[k])) && Number(args[k]) > 0)) {
@@ -334,7 +362,8 @@ export function main(argv, deps = defaultDeps()) {
     const used = readLedger(deps, args.ledger);
     const cap = args.cap ? Number(args.cap) : DEFAULT_CAP;
     const timeoutMs = (args.timeout ? Number(args.timeout) : 300) * 1000;
-    const { code, report } = runPlan({ plan, cmd: args.cmd, cap, timeoutMs, deps, scope: scopeOf(lines), used });
+    const greenAt = args['green-at'] != null ? greenAtHead(args['green-at'], deps.git) : null;
+    const { code, report } = runPlan({ plan, cmd: args.cmd, cap, timeoutMs, deps, scope: scopeOf(lines), used, greenAt });
 
     const ran = report.results.map((r) => ({ file: r.file, line: r.line, outcome: r.outcome }));
     if (report.restoreFailed) ran.push({ ...report.restoreFailed, outcome: 'restore-failed' });

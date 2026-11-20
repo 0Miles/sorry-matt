@@ -166,8 +166,8 @@ expansion, and wider after a send-back.
   and full get the prove-it review below, with the review tier in its spawn file. You do not judge the tier yourself.
 - **Independent review**: tick writes a values file and `brief.mjs review` turns it into the review host agent's
   spawn file — the fixed rules of the sibling [`REVIEWER.md`](REVIEWER.md) followed by this review's values (repo,
-  tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI
-  coverage, review tier, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
+  tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks and the
+  SHA they ran at, CI coverage, review tier, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
   report (six lines at most), and record its verdict with `--outcome`.
 - **Act on the report**: `findings` go to the batched fix; when `observations` or `pre-existing` is not 0, read only
