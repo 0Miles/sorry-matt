@@ -99,6 +99,13 @@
 //   (deadline.mjs progress; a stop ends the dispatching for good), CI per line, frontier.mjs, stalled tickets to
 //   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
 //   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
+//   A line on local verification (no `origin`, or settled as CI not covering it) has no CI read and no local
+//   verification at a dispatch point: its full suite runs once, at the finish (#141). When that is red, the
+//   earliest-red scan runs before the red-light judge: the line's integration SHAs (the ticket merges the state
+//   records, in first-parent order) are verified one at a time from the oldest, each in a detached worktree
+//   `<worktrees>/<line-slug>-at-<sha12>` (git worktree add, verify.mjs, git worktree remove --force), until one is
+//   red; the judge names that SHA (meta.earliestRed), or the tip when none is red. A fix round's new tip is
+//   verified before anything else; a green record at the tip ends the red light.
 //
 // A red light that maps to no ticket (#144)
 //   The `red-light` judge (RED-LIGHT.md) has the outcome `unmatched` while the line has a fix round left (two per red
@@ -422,6 +429,10 @@ export const OPERATIONS = {
   gate: (c, { gate, after = [] }) => exec(`gate:${gate}`, 'gate', ['node', js('state.mjs'), 'check', c.path, gate, '--repo', c.cfg.root], { after }),
 };
 
+/** A line on local verification: no `origin`, or settled as CI not covering it. Its full suite runs once, at the finish. */
+const onLocal = (c, L) => !c.git.hasOrigin || L.ciNotCovering !== null;
+const localReason = (c) => (c.git.hasOrigin ? 'ci-not-covering' : 'no-origin');
+
 /**
  * Local verification of `sha` on `line` through verify.mjs: true while it is under way this wake-up, false once the
  * SHA has a record or verify.mjs found the worktree not at the SHA (exit 5: the line keeps its last result; a later
@@ -430,6 +441,8 @@ export const OPERATIONS = {
 function localVerify(c, line, sha, reason, wt, final = false) {
   const tag = `${final ? 'final-' : ''}w${c.book.wakeup}`;
   if (c.state.lines[line].local.some((x) => x.sha === sha)) return false;
+  // red lines and the finish both verify a new tip: one verification of a SHA per list
+  if (c.actions.some((a) => a.step === 'verify-local' && a.line === line && a.argv.includes(sha))) return true;
   const first = OPERATIONS.verifyLocal(c, { line, sha, reason, wt, tag });
   if (!c.done(first.id)) return c.emit(first) !== null;
   const exit = c.book.done[first.id].exit;
@@ -706,14 +719,17 @@ function stepRed(c) {
     if (lastLocal?.result === 'red' && !book.red[line]) book.red[line] = { sha: lastLocal.sha, at: c.now };
     const red = book.red[line];
     if (!red) continue;
+    const target = c.target(line);
+    const tip = c.git.ref(target);
+    // A line on local verification: the earliest-red scan records older SHAs too, so only its tip's record counts.
+    const local = c.profile.ci !== 'skip' && tip && target === line && onLocal(c, L);
+    const tipLocal = local ? L.local.find((x) => x.sha === tip) : undefined;
     const greenCi = L.ci?.verdict === 'green' && L.ci.sha !== red.sha;
-    const greenLocal = lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
+    const greenLocal = local ? tipLocal?.result === 'green' && tip !== red.sha : lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
     if (greenCi || greenLocal || book.failed[line]) {
       delete book.red[line];
       continue;
     }
-    const target = c.target(line);
-    const tip = c.git.ref(target);
     const fix = red.ciFix ?? null;
     const held = L.assignment && L.assignment.deadline !== null ? L.assignment : null;
     // A ci-fix agent works in the integration worktree: no judge, no push and no CI read until it reports or is stopped.
@@ -725,32 +741,77 @@ function stepRed(c) {
       ciFixDispatch(c, line, target, red);
       continue;
     }
-    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
-    // A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA.
-    const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
-    const used = fix?.round ?? 0;
-    const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
-    c.emit(
-      judge(
-        `red-light:${line}@${latestRed}${again}`,
-        'red-light',
-        `${line} is red at ${latestRed}${again ? ` (fix round ${used} ended with no new commit)` : ''}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
-          used < 2
-            ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
-            : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
-        }`,
-        ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
-        [doc('RED-LIGHT.md', 'all of it')],
-        { line, meta: { round: used + 1, sha: latestRed, failure } },
-      ),
-    );
-    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target));
+    if (local) {
+      if (!tipLocal) localVerify(c, line, tip, localReason(c), c.git.wtOf(target), true); // a fix moved the tip: the finish's verification of it comes first
+      else {
+        const scan = earliestRedScan(c, line, tip);
+        if (scan.done) c.emit(redLightJudge(c, line, L, red, tip, scan));
+      }
       continue;
     }
+    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
+    c.emit(redLightJudge(c, line, L, red, latestRed));
+    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
     ciRead(c, line, target, tip, `w${book.wakeup}`, false);
   }
+}
+
+/**
+ * The red-light judge of one round at `sha`; on a line on local verification it names the scan's earliest red SHA.
+ * A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA (#144).
+ */
+function redLightJudge(c, line, L, red, sha, scan = null) {
+  const tip = c.git.ref(c.target(line));
+  const fix = red.ciFix ?? null;
+  const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
+  const used = fix?.round ?? 0;
+  const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
+  const found = scan
+    ? ` Each integration SHA was verified locally from the oldest: the earliest red SHA ${scan.sha}${scan.sha === sha ? ' (no integration SHA is red: the red came in after the last of them)' : ''}; ci.mjs earliest-red on the per-SHA records finds the same.`
+    : '';
+  return judge(
+    `red-light:${line}@${sha}${again}`,
+    'red-light',
+    `${line} is red at ${sha}${again ? ` (fix round ${used} ended with no new commit)` : ''}.${found} Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
+      used < 2
+        ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
+        : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
+    }`,
+    ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
+    [doc('RED-LIGHT.md', 'all of it')],
+    { line, after: scan?.after ?? [], meta: { round: used + 1, sha, failure, ...(scan ? { earliestRed: scan.sha } : {}) } },
+  );
+}
+
+/**
+ * The earliest red SHA of a red line on local verification (#141). Its integration SHAs — the ticket merges the state
+ * records on it, in first-parent order — are verified one at a time from the oldest, each in a detached worktree of
+ * its own (`<worktrees>/<line-slug>-at-<sha12>`, removed once the SHA has its record), until one is red: that one is
+ * the earliest red SHA. A SHA with a record is not verified again. None red: the red came in after the last of them
+ * (a host commit, the simplify pass or the base sync), and the earliest red SHA is the tip.
+ * Returns { done: false } while a verification is under way, else { done: true, sha, after }: `after` holds the
+ * worktree removals still in this list, which the red-light judge waits for.
+ */
+function earliestRedScan(c, line, tip) {
+  const L = c.state.lines[line];
+  const recorded = new Set(Object.values(c.state.tickets).flatMap((t) => (c.target(t.line) === line ? t.merges.map((m) => m.sha) : [])));
+  const removing = [];
+  for (const { sha } of c.git.merges(tip).reverse()) {
+    if (!recorded.has(sha)) continue;
+    const wt = join(c.cfg.worktrees, `${slugOf(line)}-at-${sha.slice(0, 12)}`);
+    const add = `earliest-red-add:${line}@${sha}`;
+    const rec = L.local.find((x) => x.sha === sha);
+    if (!rec) {
+      if (!c.emit(exec(add, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'add', '-q', '--detach', wt, sha], { line }))) localVerify(c, line, sha, localReason(c), wt);
+      return { done: false };
+    }
+    if (c.done(add)) {
+      const rm = c.emit(exec(`earliest-red-remove:${line}@${sha}`, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'remove', '--force', wt], { line }));
+      if (rm) removing.push(rm);
+    }
+    if (rec.result === 'red') return { done: true, sha, after: removing };
+  }
+  return { done: true, sha: tip, after: removing };
 }
 
 /** Push when the remote lags, read CI at `tip` and record it. Returns true while that is still to be done. */
@@ -1632,10 +1693,7 @@ function dispatchSteps(c, d) {
     if (L.assignment?.deadline) continue; // its ci-fix agent is at work in the integration worktree (#144)
     const tip = c.git.ref(target);
     if (!tip) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      if (localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target))) waiting = true;
-      continue;
-    }
+    if (onLocal(c, L)) continue; // a line without CI is verified once, at the finish (#141)
     if (c.git.remote(target) === null) continue; // never pushed: not read
     if (ciRead(c, line, target, tip, `r${r}`, true)) {
       waiting = true;
@@ -2079,6 +2137,7 @@ const EXEC_REFERENCE = {
   'ci-branch': { path: js('state.mjs'), part: 'header (ci: --branch-runs)' },
   'ci-watch': doc('FINISH.md', 'step 3 (full verification)'),
   'sync-base': doc('FINISH.md', 'step 2 (sync the base)'),
+  'earliest-red': { path: SELF, part: 'header (a red line on local verification: the earliest-red scan)' },
 };
 
 function batches(actions) {

@@ -31,7 +31,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - **待審 ref**：ticket 分支。
 - **針對性檢查結果**：實作 agent 回報的指令與結果。只用來確認是綠的；實跑的指令由審查方自己選（第 3 節）。
 - **CI 覆蓋**：這條線的整合分支整併後有沒有 CI 跑全套 —— `covered`、`uncovered`（呼叫方已定案為 CI 不涵蓋整合
-  分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。
+  分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。它只寫進 `live run` 行，
+  不改實跑範圍（第 3 節）。
 - **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
 - **接續紀錄**：該票接續紀錄的位置 —— GitHub 是第一行為 `<!-- sorry-matt:status -->` 的那則留言，Local Markdown
   是票檔。審查區塊寫在這裡（第 6 節）。
@@ -158,23 +159,21 @@ Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktre
 
 ### 實跑
 
-**全套交給 CI，審查只跑受影響範圍。** 在審查用 worktree 的根目錄先判範圍：
+**審查只跑受影響範圍，全套不在審查裡跑。** 有 CI 的線由 CI 在整併後跑全套；CI 不涵蓋整合分支或沒有 `origin`
+的線，由呼叫方在收官跑一次全套（`get-to-work` 的本機驗證）。CI 覆蓋不改變範圍。在審查用 worktree 的根目錄先判
+範圍：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/scope.mjs" --base <fixed point> --ci <第 1 節的 CI 覆蓋> > <scratchpad>/review-<票>-scope.json
 ```
 
-呼叫方沒給 CI 覆蓋時省略 `--ci`。範圍與指令來源的規則寫在腳本檔頭，照輸出讀：
-
-- `scope: full`：CI 不涵蓋整合分支或沒有 `origin`，收官前沒有別人會跑全套，所以照舊跑專案完整的 test、
-  typecheck、lint，各一次。指令取輸出的 `commands`；它是 `null` 時自己從 manifest 與 CI 設定找。
-- `scope: affected`：整併後 CI 會跑全套，這裡只跑 typecheck、涵蓋改動檔的測試、改動檔相關的 lint。把輸出的
-  `targeted`（指令契約「Targeted checks」原文）套到 `changed` 上得出指令；它是 `null` 時自己從 manifest 與測試
-  設定推。`tests` 是候選的測試檔，沿 import 或契約的對照確認涵蓋改動檔才算。專案沒有 typecheck 或 lint 就不跑
-  那一項。
+呼叫方沒給 CI 覆蓋時省略 `--ci`。範圍與指令來源的規則寫在腳本檔頭，照輸出讀：輸出的 `scope` 一律是
+`affected`，這裡只跑 typecheck、涵蓋改動檔的測試、改動檔相關的 lint。把輸出的 `targeted`（指令契約「Targeted
+checks」原文）套到 `changed` 上得出指令；它是 `null` 時自己從 manifest 與測試設定推。`tests` 是候選的測試檔，沿
+import 或契約的對照確認涵蓋改動檔才算。專案沒有 typecheck 或 lint 就不跑那一項。
 
 指令由審查方自己選，不照抄實作 agent 回報的那條。輸出的 `scope`、`ci`、`source` 照抄進 `live run` 行（第 6 節），
-所以看得出這次是全套還是受影響範圍、指令來自契約還是自己推的。這是突變的基準：
+所以看得出 CI 覆蓋、指令來自契約還是自己推的。這是突變的基準：
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，
@@ -327,7 +326,7 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: scope=<affected | full | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
+live run: scope=<affected | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
 - <command> -> green | red
 mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived | restore-failed: <disposition: F2 | equivalent, invalid | ...>
@@ -335,8 +334,8 @@ mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> m
 restored: yes | no | n/a
 ```
 
-`live run` 一行寫範圍、CI 覆蓋與指令來源，底下每條指令一行：`scope` 是第 3 節 `scope.mjs` 輸出的 `full` 或
-`affected`，複驗（第 7 節）寫 `findings`；`ci` 照輸出的 `ci`；`source` 取自契約寫 `commands.md`，自己找或自己推的
+`live run` 一行寫範圍、CI 覆蓋與指令來源，底下每條指令一行：`scope` 是第 3 節 `scope.mjs` 輸出的 `affected`，
+複驗（第 7 節）寫 `findings`；`ci` 照輸出的 `ci`；`source` 取自契約寫 `commands.md`，自己找或自己推的
 寫 `self-found`。`- error:` 只在 `mutate.mjs` 以執行期錯誤結束時出現；`restore-failed` 只用在結束代碼 3 那個
 mutant（輸出的 `restoreFailed`）。沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫
 `file:line`。spec 層級的觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
@@ -408,7 +407,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" close --path <scratchpad>/review
 
 其餘的 `fix` 留著它，給下一次複驗沿用。
 
-完成判準：區塊符合上述格式；`live run` 行看得出範圍是 `full`、`affected` 還是 `findings`；`restored` 取自
+完成判準：區塊符合上述格式；`live run` 行看得出範圍是 `affected` 還是 `findings`；`restored` 取自
 `worktree.mjs status`；接續紀錄只有一個最新的 review 區塊，而且保有歷輪的突變紀錄；沒有發出任何 PR 評語、
 review 或 `suggestion` 區塊；結論定案時審查用 worktree 已移除，其餘的 `fix` 留著它；回傳給呼叫方的只有至多
 六行的審查回報，不含 finding 全文。
