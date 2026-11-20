@@ -108,15 +108,15 @@ agents/
 src/agents/
 .github/workflows/
 .claude-plugin/
-src/skills/get-to-work/scripts/
-src/skills/prove-it/scripts/
-skills/get-to-work/scripts/
-skills/prove-it/scripts/
 scripts/check-structure.mjs
 scripts/check-vendored.mjs
+src/skills/get-to-work/scripts/state.mjs
+skills/get-to-work/scripts/state.mjs
 ```
 
-`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿 `src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI；`.claude-plugin/` 是 plugin 的 manifest；
-兩支 skill 的 `scripts/` 是 skill 在使用者 repo 裡執行的腳本；兩支 `check-*.mjs` 是 CI 的檢查本身。
+範圍是權限邊界、CI、plugin manifest 與 state 格式：`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿
+`src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI，兩支
+`check-*.mjs` 是 CI 的檢查本身；`.claude-plugin/` 是 plugin 的 manifest；`state.mjs` 定義 run 的 state 格式與它的守門規則，
+在預計檔案能寫到 symbol 之前整支都算（#136）。兩支 skill 其餘的腳本不在這裡：它們的改動依行數判審查分級。
 
 來源：`AGENTS.md`「結構」、`hooks/hooks.json`、`agents/*.md`、`.github/workflows/check.yml`、`.claude-plugin/plugin.json`。
