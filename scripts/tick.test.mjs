@@ -218,7 +218,7 @@ function world(t, { profile = null } = {}) {
     'verify-local': () => 'green',
     'deliver-ticket': () => 'done',
     'deliver-line': () => 'done',
-    simplify: () => 'done',
+    simplify: () => ({ outcome: 'none', value: 'looked at the line: nothing to reuse or remove' }),
     'wrap-up': () => 'done',
     'wakeup-end': () => 'done',
   };
@@ -243,6 +243,17 @@ function world(t, { profile = null } = {}) {
       // the minimal reviewer writes its report to the file its brief names (#128)
       h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : [])];
+    }
+    if (a.step === 'simplify') {
+      // the simplify agent (#153): applied is one commit on the line, without a ticket id; none and skipped commit nothing
+      const r = (h.policy.simplify ?? DEFAULTS.simplify)(a);
+      const v = typeof r === 'string' ? { outcome: r } : r;
+      if (v.outcome === 'applied') {
+        write(join(h.intWt, 'simplified.txt'), `${agent}\n`);
+        git(h.intWt, 'add', '-A');
+        git(h.intWt, 'commit', '-q', '-m', `refactor: simplify ${a.line}`);
+      }
+      return ['--agent', agent, '--outcome', v.outcome, ...(v.value !== undefined ? ['--value', v.value] : [])];
     }
     return { agent, flags: ['--agent', agent] };
   };
@@ -1003,7 +1014,7 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
     'gate', // … no finish gate (its assertions assume aggregate PRs and a CI read) …
     'review:initial', // review: minimal (no prove-it judge) …
     'review:recheck', // … and recheck: false
-    'simplify', // simplify: false
+    'spawn:general-purpose:simplify', // simplify: false
     'spawn:sorry-matt:expander:expand',
     'stage:expanding',
     'sync-base', // … and no base sync
@@ -1348,4 +1359,105 @@ test('#129: --reported goes to the first next of run only', (t) => {
   assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1']);
   assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
   assert.deepEqual(out.reports, [], 'the last list was not handed the report');
+});
+
+// #153: the finish's simplify pass is a spawn; the simplify agent judges first and reports applied, none or skipped.
+test('#153: the finish spawns the simplify agent in the foreground on the line, with the criteria in its brief', (t) => {
+  const h = world(t);
+  h.wake();
+  const w2 = h.wake();
+  const spawns = distinct(h.actions(w2)).filter((a) => a.step === 'simplify');
+  assert.equal(spawns.length, 1);
+  const [a] = spawns;
+  assert.equal(a.kind, 'spawn');
+  assert.equal(a.id, `simplify:${LINE}`);
+  assert.equal(a.line, LINE);
+  assert.deepEqual(a.outcomes, ['applied', 'none', 'skipped']);
+  assert.deepEqual(a.spawn, { subagent_type: 'general-purpose', description: `simplify ${LINE}`, prompt: a.spawn.prompt, background: false });
+  assert.match(a.record, /--agent <agent id> --outcome applied\|none\|skipped --value <one-line reason>/);
+  const brief = readFileSync(briefOf(a), 'utf8');
+  // the worktree, the diff to judge, the criteria, the Skill tool call, the commit and the reply
+  assert.ok(brief.includes(`Worktree: ${git(h.intWt, 'rev-parse', '--show-toplevel')} (branch ${LINE})`), 'the integration worktree, as git names it');
+  assert.ok(brief.includes(`git diff origin/main...${LINE}`), 'the whole line against the base');
+  for (const rule of [
+    'only documentation',
+    'only deletions',
+    'only configuration or data files',
+    'no new logic',
+    'duplicate implementation',
+    'reusable function',
+    'a branch or a layer of indirection',
+    'When unsure, simplify',
+    'There is no line-count threshold',
+    'call the Skill tool with `simplify`',
+    `refactor: simplify ${LINE}`,
+    'outcome: applied | none | skipped',
+  ])
+    assert.ok(brief.includes(rule), `the brief says: ${rule}`);
+  // the line was verified and delivered after it; the agent is on the books as a simplify agent
+  assert.equal(w2.at(-1).then, 'done');
+  const st = h.state();
+  assert.equal(st.tick.done[a.id].outcome, 'none');
+  assert.equal(st.tick.done[a.id].value, 'looked at the line: nothing to reuse or remove');
+  const agent = st.tick.done[a.id].agent;
+  assert.deepEqual([st.tick.agents[agent].role, st.tick.agents[agent].tickets], ['simplify', []]);
+  assert.ok(!git(h.intWt, 'log', '--format=%s', `main..${LINE}`).includes('refactor: simplify'), 'none: no commit');
+  const wrap = h.actions(w2).find((x) => x.step === 'wrap-up');
+  assert.equal(wrap.meta, undefined, 'no line skipped the simplify pass');
+});
+
+test('#153: record simplify takes applied, none or skipped with a one-line reason, nothing else', (t) => {
+  const h = world(t);
+  h.wake();
+  h.policy.simplify = () => {
+    throw new Crash('stop at the simplify spawn');
+  };
+  assert.throws(() => h.wake(), Crash);
+  const id = `simplify:${LINE}`;
+  assert.ok(h.state().tick.issued[id], 'the simplify spawn was handed out');
+  const rec = (...flags) => h.tick('record', h.path, id, ...flags);
+  assert.equal(rec('--agent', 'a9', '--outcome', 'done', '--value', 'x').code, 2, 'done is no longer an outcome');
+  assert.equal(rec('--agent', 'a9', '--outcome', 'skipped').code, 2, 'a reason is required');
+  assert.equal(rec('--agent', 'a9', '--outcome', 'none', '--value', 'two\nlines').code, 2, 'the reason is one line');
+  assert.equal(rec('--outcome', 'none', '--value', 'x').code, 2, 'the agent id is required');
+  assert.equal(rec('--agent', 'a9', '--outcome', 'none', '--value', 'nothing to reuse').code, 0);
+  assert.equal(rec('--agent', 'a9', '--outcome', 'applied', '--value', 'nothing to reuse').code, 3, 'a different result is not taken');
+});
+
+test('#153: applied is one commit on the line, verified with the line; skipped is listed at the wrap-up for the self-answer log', (t) => {
+  const applied = world(t);
+  applied.policy.simplify = () => ({ outcome: 'applied', value: 'folded the two copies of the parser into one' });
+  applied.wake();
+  const w = applied.wake();
+  assert.equal(w.at(-1).then, 'done');
+  const subjects = git(applied.intWt, 'log', '--first-parent', '--format=%s', `main..${LINE}`).split('\n');
+  assert.ok(subjects.includes(`refactor: simplify ${LINE}`), 'the applied fixes are one commit on the line');
+  const tip = git(applied.intWt, 'rev-parse', 'HEAD');
+  assert.equal(applied.state().lines[LINE].ci.sha, tip, 'the full verification is of the tip after the simplify commit');
+  assert.equal(applied.actions(w).find((x) => x.step === 'wrap-up').meta, undefined);
+
+  const skipped = world(t);
+  skipped.policy.simplify = () => ({ outcome: 'skipped', value: 'only documentation changed' });
+  skipped.wake();
+  const w2 = skipped.wake();
+  assert.equal(w2.at(-1).then, 'done');
+  assert.ok(!git(skipped.intWt, 'log', '--format=%s', `main..${LINE}`).includes('refactor: simplify'), 'skipped: no commit');
+  const wrap = skipped.actions(w2).find((x) => x.step === 'wrap-up');
+  assert.deepEqual(wrap.meta, { simplifySkipped: [{ line: LINE, reason: 'only documentation changed' }] });
+  assert.ok(wrap.do.includes(`${LINE}: only documentation changed`), 'the wrap-up names the line and its reason');
+  assert.match(wrap.do, /self-answer log/);
+  assert.match(wrap.do, /closing summary/);
+});
+
+test('#153: simplify: false sends no simplify agent and lists no skipped line', (t) => {
+  const h = world(t, { profile: { simplify: false } });
+  h.policy.simplify = () => {
+    throw new Error('no simplify agent under simplify: false');
+  };
+  h.wake();
+  const w2 = h.wake();
+  assert.equal(w2.at(-1).then, 'done');
+  assert.ok(!h.log.some((a) => a.step === 'simplify'));
+  assert.ok(!Object.keys(h.state().tick.issued).some((x) => x.startsWith('simplify:')));
+  assert.equal(h.actions(w2).find((x) => x.step === 'wrap-up').meta, undefined);
 });

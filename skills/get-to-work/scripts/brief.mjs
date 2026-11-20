@@ -25,6 +25,8 @@
 //     merge      the merge agent; its target is the ticket, or the line's integration branch for the merge that
 //                syncs the base when the run finishes
 //     review     the review host agent, spawned in the foreground at close-out to host prove-it for the ticket
+//     simplify   the simplify agent, spawned in the foreground at the finish; its target is the line's integration
+//                branch
 //   prove-it's finder, architect, verifier and fix-verifier, which the review host spawns, are named by prove-it's own
 //   rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
@@ -92,7 +94,7 @@ import { UsageError, failure, runIfEntry } from './cli.mjs';
 import { ticketOf } from './spawns.mjs';
 
 export const FORMAT = 'sorry-matt/brief@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review'];
+export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'simplify'];
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PLUGIN_ROOT = join(SKILL_DIR, '..', '..');
 /** The agent type each spawn file is for, and its definition file's name under `<plugin>/agents/`. */
@@ -122,7 +124,7 @@ export function description(role, targets) {
   if (!ROLES.includes(role)) throw new UsageError(`unknown role word ${JSON.stringify(role)}; one of ${ROLES.join(', ')}`);
   if (!targets.length) throw new UsageError(`${role} needs a target`);
   if (role !== 'expand' && targets.length !== 1) throw new UsageError(`${role} takes one target, got ${targets.length}`);
-  const branchAllowed = role === 'ci-fix' || role === 'merge';
+  const branchAllowed = role === 'ci-fix' || role === 'merge' || role === 'simplify';
   const names = targets.map((target) => {
     const name = ticketName(target);
     if (name) return name;

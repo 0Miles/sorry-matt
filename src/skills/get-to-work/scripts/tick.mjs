@@ -56,7 +56,15 @@
 //                    given `acceptance: ticket-text`, so the spawn file says the ticket text is the acceptance); one
 //                    with criteria (the ticket's own, or a previous run's expansion block) keeps them: `criteria`
 //   ci: skip         no CI read and no local verification, in the pipeline or at the finish
-//   simplify: false  no simplify pass at the finish
+//   simplify: false  no simplify agent at the finish. Otherwise each line's finish starts with one simplify `spawn`
+//                    (foreground, general-purpose, description `simplify <line>`, the role word of brief.mjs) with a
+//                    brief tick writes under `tick/simplify/`: the integration worktree, the line's whole diff, and the
+//                    rule to judge first (skip only documentation, only deletions, only configuration or data files,
+//                    or no new logic; simplify new or rewritten logic that may hold a duplicate implementation, a
+//                    reusable function, a branch or a layer of indirection that can go; when unsure, simplify; no
+//                    line-count threshold). The agent reports applied (one commit `refactor: simplify <line>`), none
+//                    or skipped, with a one-line reason; the wrap-up lists the skipped lines and their reasons
+//                    (`meta.simplifySkipped`) for the closing summary and the self-answer log
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
 //
 // A wake-up
@@ -110,12 +118,13 @@
 //   (everything it waited for done) and still not recorded means the host was interrupted between the spawn and its
 //   record: it comes back as a `judge` (step "spawn-check": is that agent running? `spawned` with `--agent`, or
 //   `none` to have the spawn issued again), never as a second spawn. One listed at a later batch was never handed
-//   out, and is issued again as the same spawn. A foreground spawn (the minimal reviewer) ends with the host's turn,
-//   so it is issued again as it is.
+//   out, and is issued again as the same spawn. A foreground spawn (the minimal reviewer, the simplify agent) ends
+//   with the host's turn, so it is issued again as it is.
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
-//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`).
+//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`;
+//   the simplify spawn also `--outcome applied|none|skipped` and `--value <one-line reason>`).
 //   judge and ask: `--outcome <one of outcomes>`, with what the outcome needs: `--agent` for a spawn the judge did,
 //   `--value` for a reason, an issue id or a task id, `--findings` with a review's fix, `--fixed` / `--unfixed` with
 //   a fix report under `recheck: false`, `--type` when the spawn had to use another agent type. The state writes
@@ -1581,13 +1590,17 @@ function stepFinish(c) {
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
   if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
   if (gates.some(Boolean)) return;
+  const skipped = simplifySkipped(c);
   c.emit(
     judge(
       'wrap-up',
       'wrap-up',
-      `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone. Record done.`,
+      `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone.${
+        skipped.length ? ` Lines that skipped the simplify pass: write each reason into the self-answer log and list the lines in the closing summary — ${skipped.map((x) => `${x.line}: ${x.reason}`).join('; ')}.` : ''
+      } Record done.`,
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
+      skipped.length ? { meta: { simplifySkipped: skipped } } : {},
     ),
   );
 }
@@ -1599,8 +1612,7 @@ function finishLine(c, line, target) {
   const wt = git.wtOf(target) ?? c.cfg.root;
   const merged = Object.values(state.tickets).some((t) => c.target(t.line) === target && t.merges.length);
   if (!merged) return true; // nothing was integrated: nothing to deliver
-  if (profile.simplify && c.emit(judge(`simplify:${line}`, 'simplify', `Simplify pass on ${line}: call the Skill tool with simplify in ${wt}; commit the applied fixes as one commit without a ticket id (none: no commit); log the rejected ones in the self-answer log. Record done.`, ['done'], [doc('FINISH.md', 'step 1 (simplify pass)')], { line })))
-    return false;
+  if (profile.simplify && simplifySpawn(c, line, target, wt)) return false;
   if (profile.integrate !== 'direct' && !L.base) {
     const baseRef = git.hasOrigin ? `origin/${c.cfg.base}` : c.cfg.base;
     if (git.hasOrigin && c.emit(exec(`fetch:${line}`, 'sync-base', ['git', '-C', wt, 'fetch', 'origin', c.cfg.base], { line }))) return false;
@@ -1637,6 +1649,71 @@ function finishLine(c, line, target) {
   return !c.emit(
     judge(`deliver-line:${line}`, 'deliver-line', `Deliver ${line} as FINISH.md says: ${c.cfg.tracker === 'github' ? 'review-guide.mjs, then the aggregate PR with the per-ticket guide' : 'keep the integration branch, record its name and tip, remove the integration worktree'}. Record done.`, ['done'], [doc('FINISH.md', 'delivering each line')], { line }),
   );
+}
+
+/**
+ * The simplify agent of one line (#153), a foreground spawn with a brief tick writes: it judges from the line's whole
+ * change whether to simplify, and reports applied, none or skipped with a one-line reason. Null once recorded.
+ */
+function simplifySpawn(c, line, target, wt) {
+  const { state, cfg, profile, git } = c;
+  const id = `simplify:${line}`;
+  if (c.done(id)) return null;
+  // The line's whole change: from the base under aggregate-pr; under direct, from before the run's first merge.
+  const first = Object.values(state.tickets)
+    .filter((t) => c.target(t.line) === target)
+    .flatMap((t) => t.merges)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
+  const fork = profile.integrate === 'direct' ? `${first.sha}^1` : git.hasOrigin ? `origin/${cfg.base}` : cfg.base;
+  const brief = c.tick('simplify', `${slugOf(line)}.md`);
+  c.write(
+    brief,
+    [
+      `# Simplify ${line}`,
+      '',
+      `You are the simplify agent of one integration line at the run's finish. You cannot ask anyone; this is all of your brief.`,
+      '',
+      `- Worktree: ${wt} (branch ${target}). Work and commit only there; do not push.`,
+      `- The line's whole change: \`git diff ${fork}...${target}\`, run in the worktree (\`--stat\` first).`,
+      '',
+      'First judge from that change whether it needs a simplify pass:',
+      '- Skip it when the change is only documentation, only deletions, only configuration or data files, or adds no new logic.',
+      '- Do it when the change adds or rewrites logic that may hold a duplicate implementation, a reusable function it does not use, or a branch or a layer of indirection that can go.',
+      '- When unsure, simplify. There is no line-count threshold: judge by what changed, not by how much.',
+      '',
+      `To simplify, call the Skill tool with \`simplify\` in the worktree, on the line's change above. Commit the fixes you apply as one commit with the subject \`refactor: simplify ${line}\` and no ticket id; its body lists each fix applied, and each fix you rejected with one line on why. With no fix to apply, commit nothing.`,
+      '',
+      'Reply with these two lines and nothing else:',
+      '',
+      '```text',
+      'outcome: applied | none | skipped',
+      'reason: <one line>',
+      '```',
+      '',
+      'applied: you committed fixes. none: you simplified and found no fix to apply. skipped: you judged that no simplify pass is needed and did not call simplify.',
+      '',
+    ].join('\n'),
+  );
+  return c.emit({
+    id,
+    kind: 'spawn',
+    step: 'simplify',
+    tickets: [],
+    line,
+    after: [],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('simplify', [line]), prompt: `Read ${brief} in full and follow it.`, background: false },
+    reference: [doc('FINISH.md', 'step 1 (simplify pass)')],
+    outcomes: ['applied', 'none', 'skipped'],
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(id)} --agent <agent id> --outcome applied|none|skipped --value <one-line reason>`,
+  });
+}
+
+/** The lines whose simplify agent skipped the pass, with its reason, in the state's line order. */
+function simplifySkipped(c) {
+  return Object.keys(c.state.lines)
+    .map((line) => ({ line, d: c.book.done[`simplify:${line}`] }))
+    .filter(({ d }) => d?.outcome === 'skipped')
+    .map(({ line, d }) => ({ line, reason: d.value }));
 }
 
 /** The full verification at the line's latest SHA; true once it has a conclusion (or the line failed). */
@@ -1970,6 +2047,12 @@ export function record(path, id, flags, now, deps) {
       }
       break;
     }
+    case 'simplify':
+      // the simplify agent's report (#153): applied, none or skipped, and a one-line reason (the wrap-up lists skipped)
+      if (!flags.agent) throw new UsageError(`${id}: record the simplify agent with --agent <agent id>`);
+      if (typeof flags.value !== 'string' || !flags.value.trim() || /[\r\n]/.test(flags.value)) throw new UsageError(`${id}: record the agent's reason with --value <one line>`);
+      book.agents[flags.agent] = { tickets: [], role: 'simplify', type: 'general-purpose', status: 'collected', at: now };
+      break;
     case 'review-stuck':
       if (outcome === 'retry') flag(tickets[0]).retryReviews = ticket(tickets[0]).reviews.length;
       else if (outcome === 'awaiting-ruling') stageIf(tickets[0], 'awaiting-ruling', flags.value ?? 'the review was stopped by the budget');
