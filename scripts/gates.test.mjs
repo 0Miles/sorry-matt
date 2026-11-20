@@ -657,6 +657,20 @@ test('wake-end fails on fallback-wake: an agent is in flight and no background s
   failsOnly(w.check('wake-end'), 'fallback-wake', /agents are in flight \(#1\)/);
 });
 
+test("#144: wake-end fails on fallback-wake while a line's ci-fix agent is in flight with no background sleep", (t) => {
+  const w = world(t, { origin: true });
+  const lwt = line(w);
+  w.git('push', '-q', 'origin', LINE);
+  w.ok('add', '#1', '--line', LINE);
+  const out = deadline(['record', '--worktree', lwt, '--limit', '20', '--now', NOW]);
+  assert.equal(out.code, 0, out.err);
+  w.ok('assign', '--line', LINE, '--record', w.file('rec-line.json', out.out), '--type', 'general-purpose', '--worktree', lwt);
+  w.ok('agent', '--line', LINE, '--id', 'c1');
+  failsOnly(w.check('wake-end'), 'fallback-wake', new RegExp(`agents are in flight \\(${LINE}\\)`));
+  w.ok('usage', '--sleep-task', 'task-1');
+  passes(w.check('wake-end'), ['fallback-wake']);
+});
+
 test('wake-end fails on pushed: a line with a merge was never pushed', (t) => {
   const w = world(t, { origin: true });
   const lwt = line(w);
