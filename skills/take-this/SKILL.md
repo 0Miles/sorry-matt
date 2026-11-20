@@ -86,6 +86,12 @@ With the newly published spec as input, cut **tracer-bullet** vertical slices:
 - Each ticket cuts a narrow but complete path through every layer (schema, API, UI, tests), is demoable or
   verifiable on its own, and fits in a single fresh context window. Prefactoring goes first: make the change easy,
   then make the easy change.
+- **About 3–5 acceptance criteria per ticket.** Each criterion is a surface the review checks one by one, and only a
+  small ticket can be reviewed in full and run in parallel with others. A ticket with a small scope may have fewer
+  than three; do not pad it. More than five means the ticket should be split: split it into two or more, and do not
+  cram — do not fold distinct behaviours into one criterion, and do not drop an outcome that needs checking just to
+  get down to five. For a blocked ticket whose criteria are deferred, estimate from its scope, and split it now if it
+  clearly exceeds five.
 - **Wide refactors are the exception:** when one mechanical change (renaming a field, changing a shared type)
   fans across the whole codebase and no vertical slice can land green, sequence it as **expand–contract**. First
   add the new form beside the old (expand); then migrate call sites in batches sized by blast radius, each batch

@@ -28,9 +28,12 @@ rewritten a fact, the current state wins. Read only: change no code, create no b
   acceptance".
 - Write only what is inside the ticket's scope. Where an open question inside that scope admits a recommendation,
   answer it on the user's behalf and write the answer as a criterion or a ruling.
-- **At most ten criteria per ticket.** Each criterion is a surface the review checks one by one: write the outcomes
-  the ticket delivers, folding several inputs of one behaviour into one criterion. When ten cannot hold it, the
-  ticket is two tickets: write no block, report it as awaiting ruling, and state the split you recommend.
+- **About 3–5 criteria per ticket** (counting the ones already on it). Each criterion is a surface the review checks
+  one by one, and only a small ticket can be reviewed in full and run in parallel with others: write the outcomes the
+  ticket delivers, folding several inputs of one behaviour into one criterion. A ticket with a small scope may have
+  fewer than three; do not pad it. More than five means the ticket should be split: write no block, report it as
+  awaiting ruling, and state the split you recommend. Do not cram — do not fold distinct behaviours into one
+  criterion, and do not drop an outcome that needs checking just to get down to five.
 - **A ticket whose design is not settled goes back to a person.** When the ticket has to define a new set of
   permissions, trigger conditions or an external interface, and neither the ticket nor the spec settles that
   design, it is a design decision for a person to rule on: write no block, report it as awaiting ruling, and state
@@ -84,5 +87,5 @@ run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
 ```
 
 Done when: every ticket to expand has one expansion block, or is reported as awaiting ruling with the missing fact,
-the recommended split or the design to settle named; no expansion block holds more than ten criteria; the tickets'
+the recommended split or the design to settle named; no expansion block, together with the ticket's existing criteria, holds more than five criteria; the tickets'
 existing criteria are unchanged; the report follows the format above.
