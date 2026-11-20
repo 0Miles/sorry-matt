@@ -45,7 +45,8 @@
 //     "bodyFile":     "<file holding the full ticket text>",
 //     "sendBackFile": "<file holding the send-back record>" | null,   // null: none
 //     "acceptance":   "criteria" | "ticket-text" }   // where the acceptance is; tick gives ticket-text under the
-//                                                    // profile's expand: skip
+//                                                    // profile's expand: skip when the snapshot has no
+//                                                    // criteria, criteria otherwise
 //   The ticket and its tracker come from the snapshot (`id`, `tracker`, `source`); the expansion block is every
 //   `expansions[].text` of the snapshot, a blank line apart, or none; the project command contract is
 //   `<worktree>/docs/agents/commands.md` when that file exists, else none. The acceptance source is a choice
