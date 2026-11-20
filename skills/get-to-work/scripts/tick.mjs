@@ -4,9 +4,11 @@
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
 // The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
-// exec actions but pushes. tick spawns nothing and stops no agent. `next` and `record` run no network call and change
-// no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh) and merge branches (integrate.mjs).
-// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
+// exec actions but those the guard hook would ask about. tick spawns nothing and stops no agent. `next` and `record`
+// run no network call and change no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh)
+// and merge branches (integrate.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash and the plugin's
+// hooks/classify.mjs).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
@@ -145,6 +147,8 @@
 //     "record": "<the record command to run afterwards, with <placeholders>>",
 //     exec:  "argv": [...], "command": "<one POSIX shell line>", "stdout": "<file>" | null, "cwd": "<dir>" | null,
 //            "okExit": [0, …]             // run it in bash (Git Bash on Windows); record its exit code
+//            "ran": { "exit", "signal"?, "log" }, "note"   // only on one `run` ran and could not record (#146): do
+//                                         // not run it again; its `record` line carries the exit
 //     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false,
 //                       "fallback": { "subagent_type": "general-purpose", "prompt" } }   // implement and expand only
 //            when `subagent_type` (sorry-matt:implementer, sorry-matt:expander) is not an available agent type, the
@@ -177,14 +181,22 @@
 //   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
 //   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
 //   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
-//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
-//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
-//   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
-//   list carries its `failed` judge, which stops run; nothing is retried.
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or an exec left to the host,
+//   or whose `then` is "end" or "done": the host's actions. It records no wakeup-end. An exec is left to the host when
+//   the guard hook's classification (hooks/classify.mjs, `classify` on the Bash call of its `command`) gives it a
+//   verdict, whatever its step: the host runs it with its own Bash tool, so the guard sees it (a push to a protected
+//   branch is; a push of a line is not, and run pushes it). Without that classification (the plugin's hooks are not
+//   two levels above this skill) run runs no exec: exit 1, as without bash. An exit not in `okExit` is recorded as it
+//   is; the next list carries its `failed` judge, which stops run; nothing is retried. An exec killed by a signal
+//   is no normal end: it is recorded as 128 + the signal number (no `okExit` holds it) and its log says so.
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
 //   name>.log`, which the `failed` judge names.
+//   Each exec is kept as run (`tick.ran`) before its record: when the record fails, `next` lists it first with `ran`,
+//   and the next `run` records it with that exit without running it again (unless the state could not be written at
+//   all). Its own lists' batch-1 spawns count as handed out only once run returns the list: when run fails, the
+//   next list hands them out again as spawns, not as spawn-checks.
 //   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
-//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run, and "lists": one entry per list made, in
+//   renumbered), plus "ran": [{ "id", "exit", "signal"?, "log" }] in the order run, and "lists": one entry per list made, in
 //   order, the last being the output's own: [{ "now", "reports", "reconcile", "dispatch", "wrote", "ran": ["<id run
 //   from that list>"] }] (#147): what an earlier list took, reconciled, dispatched and wrote is not lost.
 //   A non-zero exit after run started (exit 1: an error; 3: a refusal; 2: a usage error from record or next) still
@@ -194,10 +206,10 @@
 //     "do": "<what to do>" }                                  // "do" only with exit 3 at blocked's record
 //   `ran` and `lists` are what it ran and recorded before it stopped. `blocked` is the exec it stopped at (null when
 //   it stopped in `next`): at "execute", it did not finish running and nothing of it is recorded; at "record", it ran
-//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not run `run`
-//   again yet, which would run blocked again, and do not edit the state; settle what `error` says as for a refused
-//   record, then run blocked's `record` line with `--exit <blocked.exit>` (not when `error` says it is already
-//   recorded) and run `run` again; a refusal that cannot be settled is a ruling point.
+//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not edit the
+//   state; settle what `error` says as for a refused record, then run `run` again, which records blocked with its
+//   exit and does not run it again (nothing is left to record when `error` says it is already recorded); a refusal
+//   that cannot be settled is a ruling point.
 //   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
 //   it is not, run exits 1, `blocked` at "execute" of its first exec; what it recorded before stays.
 //
@@ -209,7 +221,9 @@
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
 //   "agents": { "<id>": { "tickets", "line"?, "role", "type", "status": "current" | "collected" | "stopped", "at" } },
-//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
+//   "issued": { "<action id>": {…, "held"?: true} },   // held: a batch-1 spawn of a list run has not returned (#146)
+//   "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
+//   "ran": { "<action id>": { "exit", "signal"?, "log", "at", "argv", "stdout", "cwd" } },  // run ran it, not recorded
 //   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
 //   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
 //                                                  "failure" } } },     // the ci-fix of a red light with no ticket
@@ -236,10 +250,11 @@
 // could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
 // refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
@@ -258,6 +273,21 @@ const doc = (file, part) => ({
   path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
   part,
 });
+
+// The guard hook's classification (hooks/classify.mjs, its `classify`): `run` leaves to the host each exec it gives a
+// verdict (#146). The plugin's hooks are two levels above this skill (dist: <plugin>/hooks; src: the repo's hooks/).
+// It cannot be one static import (src and dist sit at different depths), so it is loaded here; null when it is not
+// there or does not load, and then `run` runs no exec (exit 1, as without bash).
+const PLUGIN = resolve(SKILL, '..', '..');
+export const GUARD_FILE = join(basename(PLUGIN) === 'src' ? dirname(PLUGIN) : PLUGIN, 'hooks', 'classify.mjs');
+let GUARD = null;
+let GUARD_WHY = 'it is not there';
+try {
+  if (existsSync(GUARD_FILE)) GUARD = (await import(pathToFileURL(GUARD_FILE).href)).classify ?? null;
+  if (existsSync(GUARD_FILE)) GUARD_WHY = GUARD ? null : 'it exports no classify';
+} catch (e) {
+  GUARD_WHY = `it did not load: ${e.message}`;
+}
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -545,10 +575,10 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
       );
-    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && !book.issued[a.id].held && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
       // Handed out before in batch 1, runnable then, never recorded: the host was interrupted between spawn and
       // record. A spawn listed at a later batch was not handed out: the host sends batch 1 only (#128). An entry from
-      // before batches were kept counts as handed out.
+      // before batches were kept counts as handed out. One `held` is of a list `run` made and never returned (#146).
       const k = book.spawnChecks?.[a.id] ?? 0;
       action = judge(
         `spawn-check:${a.id}:${k}`,
@@ -558,6 +588,12 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id }, needs: { agent: 'the agent id, with spawned' } },
       );
+    }
+    if (s === 'open' && a.kind === 'exec' && book.ran?.[a.id]) {
+      // `run` ran it and its record failed (#146): it is listed to be recorded, not run again
+      const { exit, signal, log } = book.ran[a.id];
+      const r = { exit, ...(signal ? { signal } : {}), log };
+      action = { ...a, ran: r, note: `It already ran (exit ${r.exit}${r.signal ? `, killed by ${r.signal}` : ''}; output in ${r.log}) and its record failed: do not run it again. Settle what refused the record, then run its record line (tick.mjs run does that itself).` };
     }
     if (!c.actions.some((x) => x.id === action.id)) {
       action.after = (action.after ?? []).filter((x) => x && c.actions.some((y) => y.id === x));
@@ -583,6 +619,19 @@ function syncAgents(c) {
   for (const [line, L] of Object.entries(c.state.lines)) {
     const a = L.assignment;
     if (a?.agentId) c.book.agents[a.agentId] ??= { tickets: [], line, role: 'ci-fix', type: a.type, status: 'current', at: a.assigned };
+  }
+}
+
+/**
+ * An exec `run` ran whose record failed (#146): listed first, as it was issued, to be recorded with the exit it had
+ * (c.emit marks it `ran`), never run again; also when nothing else would list it again (its side effect, say, settled
+ * what issued it).
+ */
+function stepRan(c) {
+  for (const [id, r] of Object.entries(c.book.ran ?? {})) {
+    const x = c.book.issued[id];
+    if (!x || x.kind !== 'exec' || c.status(id) !== 'open') continue;
+    c.emit(exec(id, x.step, r.argv ?? [], { stdout: r.stdout ?? null, cwd: r.cwd ?? null, okExit: x.okExit ?? [0], tickets: x.tickets ?? [], line: x.line ?? null }));
   }
 }
 
@@ -2153,7 +2202,7 @@ function batches(actions) {
 function recordLine(c, a) {
   if (a.record) return a.record;
   const head = `node ${q(SELF)} record ${q(c.path)} ${q(a.id)}`;
-  if (a.kind === 'exec') return `${head} --exit <exit code>`;
+  if (a.kind === 'exec') return `${head} --exit ${a.ran ? a.ran.exit : '<exit code>'}`;
   const extra = [];
   if (a.needs?.agent) extra.push('--agent <agent id>');
   if (a.needs?.value) extra.push(`--value <${a.needs.value}>`);
@@ -2161,15 +2210,17 @@ function recordLine(c, a) {
   return `${head} --outcome ${a.outcomes.join('|')}${extra.length ? ` ${extra.join(' ')}` : ''}`;
 }
 
-export function next(path, reported, now, deps) {
+export function next(path, reported, now, deps, { hold = false } = {}) {
   const state = load(path);
   const c = context(path, state, now, deps);
+  c.hold = hold; // run's own lists: their batch-1 spawns are handed out only when run returns the list (#146)
   const { book } = c;
   for (const id of reported) if (!book.inbox.includes(id)) book.inbox.push(id);
   syncAgents(c);
   if (book.finished) {
     return finish(c, 'done');
   }
+  stepRan(c);
   stepTips(c);
   stepReports(c);
   stepRed(c);
@@ -2223,6 +2274,7 @@ function finish(c, then) {
       // older one. Each round (the initial review, each recheck, each retry) is an action id of its own; the same id
       // handed out again before it is recorded keeps its time, so a report written before one more `next` counts.
       ...(a.meta?.report ? { at: book.issued[a.id]?.at ?? c.now } : {}),
+      ...(c.hold && a.kind === 'spawn' && a.batch === 1 ? { held: true } : {}),
     };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
@@ -2325,6 +2377,10 @@ export function record(path, id, flags, now, deps) {
   };
   const meta = issued.meta ?? {};
   const tickets = issued.tickets ?? [];
+  const reissue = (x) => {
+    delete book.done[x];
+    if (book.ran) delete book.ran[x];
+  };
   // A spawn's agent fills the assignment of its tickets (a spawn falling back to another type re-records it).
   const spawned = (tids) => {
     const pending = flag(tids[0]).pending;
@@ -2532,12 +2588,12 @@ export function record(path, id, flags, now, deps) {
       break;
     case 'merge-check':
     case 'sync-base':
-      if (outcome === 'retry') delete book.done[id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`];
+      if (outcome === 'retry') reissue(id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`);
       else if (outcome === 'stuck' || outcome === 'awaiting-ruling') stageIf(tickets[0], outcome, flags.value ?? 'the merge failed');
       else if (outcome === 'unresolved') book.flags[`line:${issued.line}`] = { unsynced: flags.value ?? meta.baseSha };
       break;
     case 'failed':
-      if (outcome === 'retry') delete book.done[meta.of];
+      if (outcome === 'retry') reissue(meta.of);
       break;
     case 'wakeup-end':
       book.wakeup += 1;
@@ -2555,6 +2611,7 @@ export function record(path, id, flags, now, deps) {
       break;
   }
   if (outcome !== 'retry') book.done[id] = entry; // a retry issues the same thing again
+  if (book.ran) delete book.ran[id]; // recorded: what run kept of it is spent (#146)
   update(path, now, (s) => {
     s.tick = book;
     return {};
@@ -2566,18 +2623,38 @@ export function record(path, id, flags, now, deps) {
 
 /** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
 const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
-// An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
-const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
+/**
+ * Whether `run` leaves an exec to the host: the guard hook gives its command a verdict (an action needing
+ * confirmation), so it must run in the host's own tool call where the guard sees it (#146). The guard's own
+ * classification decides, not the step: a push of a line runs here, a push to a protected branch does not. A
+ * classification that throws leaves it to the host, as the guard fails closed.
+ */
+function leftToHost(a, classify) {
+  try {
+    return classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
+  } catch {
+    return true;
+  }
+}
 const RUN_LISTS = 500;
-/** What the host does when `run` exits 3 (#147): the `do` of its output. */
+/** What the host does when `run` exits 3 (#147, #146): the `do` of its output. */
 const RUN_REFUSED =
-  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. Do not run `run` again yet: it would run blocked again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run the `record` line of blocked with --exit <blocked.exit> (skip that when `error` says it is already recorded) and run `run` again. A refusal you cannot settle is a ruling point: ask.';
+  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. tick kept that it ran: it is not run again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run `run` again: it records blocked with its exit without running it (when `error` says it is already recorded, nothing is left to record). A refusal you cannot settle is a ruling point: ask.';
+
+/** Keeps that `run` ran an exec, before its record (#146): an exec whose record fails is recorded later, not run again. */
+function markRan(path, a, result, now) {
+  update(path, now, (s) => {
+    (s.tick.ran ??= {})[a.id] = { ...result, at: now, argv: a.argv, stdout: a.stdout ?? null, cwd: a.cwd ?? null };
+    return {};
+  });
+}
 
 /**
- * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
- * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
- * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
- * and record: the clock moves while the execs run.
+ * `next` again and again: each list's batch-1 execs (those the guard hook classifies aside) run through deps.execute
+ * in list order, each kept as run and recorded with its exit code as `record --exit` does; `next` runs again only
+ * while batch 1 held nothing else and `then` is "tick". An exec an earlier run ran and could not record is recorded,
+ * not run. The output is the last list less the execs run, plus `ran`; its batch-1 spawns count as handed out only
+ * once it is returned. `now` is read again for each `next` and record: the clock moves while the execs run.
  */
 export function run(path, reported, now, deps) {
   const ran = [];
@@ -2587,23 +2664,42 @@ export function run(path, reported, now, deps) {
     let out = null;
     for (let i = 0; ; i += 1) {
       if (i > RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-      out = next(path, i === 0 ? reported : [], now(), deps);
+      out = next(path, i === 0 ? reported : [], now(), deps, { hold: true });
       const list = { now: out.now, reports: out.reports, reconcile: out.reconcile, dispatch: out.dispatch, wrote: out.wrote, ran: [] };
       lists.push(list);
       const first = out.actions.filter((a) => a.batch === 1);
-      const todo = first.filter(runnable);
+      const todo = [];
+      for (const a of first.filter((x) => x.kind === 'exec')) {
+        if (!a.ran && !deps.classify) {
+          blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
+          throw new Error(`the guard hook's classification ${GUARD_FILE} cannot be used (${GUARD_WHY ?? 'none was given'}): run next and the execs by hand`);
+        }
+        if (a.ran || !leftToHost(a, deps.classify)) todo.push(a);
+      }
       for (const a of todo) {
-        blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
-        deps.mkdir(dirname(blocked.log));
-        const { code } = deps.execute(a, blocked.log);
-        Object.assign(blocked, { at: 'record', exit: code });
-        record(path, a.id, { exit: String(code), log: blocked.log }, now(), deps);
-        ran.push({ id: a.id, exit: code, log: blocked.log });
+        let result = a.ran; // ran before, its record failed: record it, do not run it again
+        blocked = { id: a.id, step: a.step, at: result ? 'record' : 'execute', exit: result?.exit ?? null, log: result?.log ?? runLog(path, out.run, a.id), record: a.record };
+        if (!result) {
+          deps.mkdir(dirname(blocked.log));
+          const { code, signal } = deps.execute(a, blocked.log);
+          result = { exit: code, ...(signal ? { signal } : {}), log: blocked.log };
+          Object.assign(blocked, { at: 'record', exit: code });
+          markRan(path, a, result, now());
+        }
+        record(path, a.id, { exit: String(result.exit), log: result.log }, now(), deps);
+        ran.push({ id: a.id, exit: result.exit, ...(result.signal ? { signal: result.signal } : {}), log: result.log });
         list.ran.push(a.id);
         blocked = null;
       }
       if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
         const done = new Set(todo.map((a) => a.id));
+        // returned to the host now: its batch-1 spawns are handed out (a spawn-check if they go unrecorded)
+        const held = first.filter((a) => a.kind === 'spawn').map((a) => a.id);
+        if (held.length)
+          update(path, now(), (s) => {
+            for (const id of held) if (s.tick.issued[id]) delete s.tick.issued[id].held;
+            return {};
+          });
         return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran, lists };
       }
     }
@@ -2643,6 +2739,13 @@ export function bashExecutor({ spawn = spawnSync, platform = process.platform } 
     try {
       const p = spawn('bash', ['-c', a.command], { stdio: ['ignore', fd, fd] });
       if (p.error) throw new Error(`bash could not run ${a.id} (${p.error.message})`);
+      if (p.status === null && p.signal) {
+        // killed, not ended (#146): 128 + the signal number, as a shell reports it, which no okExit holds
+        writeSync(fd, `
+tick.mjs run: killed by ${p.signal}, not a normal end
+`);
+        return { code: 128 + (osConstants.signals[p.signal] ?? 0), signal: p.signal };
+      }
       return { code: p.status ?? 1 };
     } finally {
       closeSync(fd);
@@ -2731,7 +2834,8 @@ export function defaultDeps() {
       execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
     stateMain,
     clock: () => Date.now(),
-    execute: bashExecutor(), // run: (action, log file) => { code }
+    execute: bashExecutor(), // run: (action, log file) => { code, signal? }
+    classify: GUARD, // run: the guard hook's classification of an exec's command, or null when it is not there
   };
 }
 
