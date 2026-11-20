@@ -40,7 +40,7 @@
 //
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
 //   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
-//                    instead of the review host's `judge`, with a brief tick writes: the ticket text's file (fetched
+//                    instead of the review host's spawn (below), with a brief tick writes: the ticket text's file (fetched
 //                    again first on GitHub; the spawn waits for it), the acceptance source (the snapshot's `items`, or
 //                    the ticket text as expand: skip has it below), blocking findings only, `verdict: pass | fix`, the
 //                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
@@ -58,6 +58,22 @@
 //   ci: skip         no CI read and no local verification, in the pipeline or at the finish
 //   simplify: false  no simplify pass at the finish
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
+//
+// The review (#138)
+//   Under review: full a ticket in review gets the review host agent: an exec of `brief.mjs review` with the values
+//   file tick writes (`tick/review/<ticket key>-<tag>.values.json`: mode, repo, tracker, ticket face, status record,
+//   acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI coverage, previous review block,
+//   reviewer, scratchpad — their keys in the header of brief.mjs), then a foreground `spawn` (step `review`,
+//   general-purpose, description `review <ticket>`, outcomes pass | fix | stuck) whose prompt is to read that spawn
+//   file: nothing is left for the host to fill in, and the diff and the review's output stay with the review host.
+//   Record it with `--agent` and `--outcome` (`--findings` with fix). The targeted checks come from the report of the
+//   round under review: the collect of an implementation round (and of a fix round a recheck follows) names
+//   `tick/report/<ticket key>-<assigned>.md`, and record green / fixed is refused (3) until that file holds the
+//   report with its `targeted checks:` line. A ticket in review with no such file on record (a timeout's collected
+//   report, a state from before) gets an `agent-report` judge to write it first, refused the same way. The status
+//   record is the host's `state.mjs set --status-record` when there is one, else the ticket's comment that starts with
+//   `<!-- sorry-matt:status -->` (GitHub) or the ticket file in the ticket worktree (Local Markdown); the scratchpad
+//   is `<worktrees>/review/<ticket key>`; the reviewer is primary.
 //
 // A wake-up
 //   The host runs `run` (with `--reported` for each agent whose completion notice arrived; `next` when bash cannot be
@@ -110,8 +126,8 @@
 //   (everything it waited for done) and still not recorded means the host was interrupted between the spawn and its
 //   record: it comes back as a `judge` (step "spawn-check": is that agent running? `spawned` with `--agent`, or
 //   `none` to have the spawn issued again), never as a second spawn. One listed at a later batch was never handed
-//   out, and is issued again as the same spawn. A foreground spawn (the minimal reviewer) ends with the host's turn,
-//   so it is issued again as it is.
+//   out, and is issued again as the same spawn. A foreground spawn (the review host, the minimal reviewer) ends with
+//   the host's turn, so it is issued again as it is.
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
@@ -194,7 +210,7 @@ import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './s
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
-import { description as roleDescription, fallbackPath, AGENT_TYPES } from './brief.mjs';
+import { description as roleDescription, fallbackPath, AGENT_TYPES, reportField } from './brief.mjs';
 import { MARKER } from './acceptance.mjs';
 
 export const FORMAT = 'sorry-matt/tick@1';
@@ -535,10 +551,27 @@ function stepTips(c) {
   }
 }
 
+/**
+ * #138: where the report of an implementation or fix round a review follows is kept, one file per assignment: the
+ * review's spawn file takes its `targeted checks:` line from there (brief.mjs review).
+ */
+const agentReportFile = (c, id, assigned) => c.tick('report', `${keyOf(id)}-${String(assigned).replace(/[-:]/g, '')}.md`);
+const keepReport = (file, outcome) =>
+  `first write the report it returned, verbatim, to ${file} (the review's spawn file takes its targeted checks line from there; record ${outcome} is refused without it), then `;
+/** An agent report a review can be given: its file holds a `targeted checks:` line (agents/implementer.md section 5). */
+function agentReportOk(deps, file) {
+  try {
+    return !!file && deps.exists(file) && reportField(deps.read(file), 'targeted checks') !== null;
+  } catch {
+    return false;
+  }
+}
+
 const COLLECT = {
   implementing: {
     outcomes: ['green', 'red', 'blocked'],
-    what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
+    what: (ids, report) =>
+      `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: ${keepReport(report, 'green')}on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
     reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
   },
   expanding: {
@@ -548,7 +581,8 @@ const COLLECT = {
   },
   fixing: {
     outcomes: ['fixed', 'blocked'],
-    what: (ids) => `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
+    what: (ids, report) =>
+      `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: ${report ? keepReport(report, 'fixed') : ''}on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
     reference: [doc('SKILL.md', 'section 2, Batched fix')],
   },
   integrating: {
@@ -581,7 +615,11 @@ function stepReports(c) {
         continue;
       }
       const needs = t0.stage === 'fixing' && !c.profile.recheck ? { fixed: 'the finding ids it fixed', unfixed: 'the ones still open' } : null;
-      c.emit(judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta: { agent, stage: t0.stage }, needs }));
+      // #138: the report of a round a review follows, kept for that review's spawn file (one file per assignment)
+      const reviewed = t0.stage === 'implementing' || (t0.stage === 'fixing' && c.profile.recheck);
+      const agentReport = reviewed ? agentReportFile(c, ids[0], t0.assignment.assigned) : null;
+      const meta = { agent, stage: t0.stage, ...(agentReport ? { agentReport } : {}) };
+      c.emit(judge(id, 'collect', spec.what(ids, agentReport), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta, needs }));
       continue;
     }
     const known = book.agents[agent];
@@ -1061,16 +1099,89 @@ function stepInReview(c, id, t) {
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
     });
   }
-  return c.emit(
-    judge(
-      `review:${id}:${tag}`,
-      'review',
-      `Review ${id}, mode ${mode}: fill REVIEWER.md (the ticket's id and text with its expansion block, the snapshot ${c.snapshot(id)}, the comparison ${against}, the fixed point ${c.target(t.line)}, the ticket branch ${t.branch}, the targeted-check result, the line's CI coverage${mode === 'recheck' ? ', the previous review block: in the status record' : ''}) and spawn the review host agent in the foreground with description \`${roleDescription('review', [id])}\`. Take only its review report. Record its verdict, with fix also --findings <the finding ids>.`,
-      ['pass', 'fix', 'stuck'],
-      [doc('REVIEWER.md', 'the brief below the rule'), doc('SKILL.md', 'section 2, Close-out checks and review')],
-      { tickets: [id], line: t.line, after: [ag], meta: { mode, kind: 'full' } },
-    ),
+  return proveItReview(c, id, t, { mode, tag, against, ag, previous: mode === 'recheck' || retrying });
+}
+
+/**
+ * The status record's place, as prove-it section 1 names it: the host's own note of it (state.mjs set
+ * --status-record), else on GitHub the ticket's comment that starts with the status marker, in Local Markdown the
+ * ticket file in the ticket worktree (the implementation agent keeps it there, on the ticket branch).
+ */
+function statusRecordOf(c, id, t) {
+  if (t.statusRecord) return t.statusRecord;
+  if (c.cfg.tracker === 'github') return `the comment on ${c.cfg.repo}#${numOf(id)} whose first line is \`<!-- sorry-matt:status -->\``;
+  const wt = c.git.wtOf(t.branch);
+  return wt ? resolve(wt, c.ticketPath(id)) : `the ticket file ${c.ticketPath(id)} on ${t.branch}`;
+}
+
+/** The line's CI coverage for prove-it (brief.mjs review's `ci`): no-origin, uncovered (settled as CI not covering it), or covered. */
+const ciCoverage = (c, t) => (!c.git.hasOrigin ? 'no-origin' : c.state.lines[t.line]?.ciNotCovering ? 'uncovered' : 'covered');
+
+/**
+ * The prove-it review (#138): brief.mjs review writes the review host's spawn file from the values tick writes here —
+ * every one filled, none left to the host — and the review host is spawned with it in the foreground, so the diff
+ * and its output stay out of the host's context. The values file is `tick/review/<key>-<tag>.values.json`; a value
+ * a later ticket adds is a key there and in brief.mjs review. Without a usable agent report (a state from before the
+ * report was kept, or a timeout's collected report) a judge has it written first.
+ */
+function proveItReview(c, id, t, { mode, tag, against, ag, previous }) {
+  const flag = c.flag(id);
+  if (!agentReportOk(c.deps, flag.agentReport)) {
+    const file = flag.agentReport ?? c.tick('report', `${keyOf(id)}-review-${tag}.md`);
+    return c.emit(
+      judge(
+        `agent-report:${id}:${tag}`,
+        'agent-report',
+        `${id} is to be reviewed, but its implementation (or fix) agent's report is not on file. Write the latest report that agent returned for ${id}, verbatim, to ${file} (the review's spawn file takes its targeted checks line from there), and record written.`,
+        ['written'],
+        [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
+        { tickets: [id], line: t.line, after: [ag], meta: { agentReport: file } },
+      ),
+    );
+  }
+  const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+  const values = c.tick('review', `${keyOf(id)}-${tag}.values.json`);
+  const out = c.tick('review', `${keyOf(id)}-${tag}.md`);
+  c.write(
+    values,
+    `${JSON.stringify(
+      {
+        out,
+        mode,
+        root: c.cfg.root,
+        tracker: c.cfg.tracker,
+        ...(c.cfg.tracker === 'github' ? { repo: c.cfg.repo } : {}),
+        ticket: id,
+        bodyFile: body.file,
+        statusRecord: statusRecordOf(c, id, t),
+        snapshot: c.snapshot(id),
+        against,
+        fixedPoint: c.target(t.line),
+        branch: t.branch,
+        checksReport: flag.agentReport,
+        ci: ciCoverage(c, t),
+        previous,
+        reviewer: 'primary',
+        scratchpad: join(c.cfg.worktrees, 'review', keyOf(id)),
+      },
+      null,
+      2,
+    )}\n`,
   );
+  const b = c.emit(exec(`brief:${id}:review-${tag}`, 'brief', ['node', js('brief.mjs'), 'review', values], { stdout: c.tick('review', `${keyOf(id)}-${tag}.json`), tickets: [id], line: t.line, after: [ag, body.id] }));
+  return c.emit({
+    id: `review:${id}:${tag}`,
+    kind: 'spawn',
+    step: 'review',
+    tickets: [id],
+    line: t.line,
+    after: [b, ag, body.id],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
+    reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
+    outcomes: ['pass', 'fix', 'stuck'],
+    meta: { mode, kind: 'full' },
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>]`,
+  });
 }
 
 function stepFixing(c, id, t) {
@@ -1943,6 +2054,12 @@ export function record(path, id, flags, now, deps) {
 
   switch (issued.step) {
     case 'collect': {
+      // #138: a round a review follows hands its report over first (checked before anything is written)
+      if (meta.agentReport && ((meta.stage === 'implementing' && outcome === 'green') || (meta.stage === 'fixing' && outcome === 'fixed'))) {
+        if (!agentReportOk(deps, meta.agentReport))
+          throw new Refused(`${meta.agentReport} holds no agent report with a \`targeted checks:\` line: write the report ${meta.agent} returned there, verbatim, and record ${outcome} again`);
+        for (const tid of tickets) flag(tid).agentReport = meta.agentReport;
+      }
       release(tickets);
       if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
       book.inbox = book.inbox.filter((x) => x !== meta.agent);
@@ -2026,6 +2143,11 @@ export function record(path, id, flags, now, deps) {
       }
       break;
     }
+    case 'agent-report':
+      if (!agentReportOk(deps, meta.agentReport))
+        throw new Refused(`${meta.agentReport} holds no agent report with a \`targeted checks:\` line: write the latest report of ${tickets[0]}'s implementation or fix agent there, verbatim, and record written again`);
+      flag(tickets[0]).agentReport = meta.agentReport;
+      break;
     case 'review-stuck':
       if (outcome === 'retry') flag(tickets[0]).retryReviews = ticket(tickets[0]).reviews.length;
       else if (outcome === 'awaiting-ruling') stageIf(tickets[0], 'awaiting-ruling', flags.value ?? 'the review was stopped by the budget');
@@ -2052,6 +2174,7 @@ export function record(path, id, flags, now, deps) {
       else if (outcome === 'send-back') stageIf(tid, 'candidate', flags.value ?? 'the merge agent timed out: sent back');
       else if (outcome === 'collected') {
         if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
+        delete flag(tid).agentReport; // #138: an earlier round's report is not this one's; the review has it written
         if (meta.stage === 'implementing') stageIf(tid, 'in-review');
         else if (meta.stage === 'expanding') for (const x of tickets) stageIf(x, 'candidate');
         else if (meta.stage === 'fixing') stageIf(tid, 'in-review');

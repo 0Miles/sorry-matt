@@ -1,33 +1,35 @@
-# REVIEWER: the review host agent's brief
+# REVIEWER: the review host agent's fixed rules
 
-At close-out (`SKILL.md` section 2, "Close-out checks and review", tick's `review` action) the host fills in the `{…}`
-placeholders and spawns one review host agent **in the foreground** with the full text below the rule as its prompt,
-adding no rules: `subagent_type` is the general-purpose agent, and the `description` takes the role word `review` from
-the header of `brief.mjs`. This file is self-contained on purpose. The input list changes together with `prove-it`
-section 1, and the report format with the review report at the end of `prove-it` section 6 and with that part of
-`SKILL.md`.
+At close-out (`SKILL.md` section 2, "Close-out checks and review") tick writes a values file, and
+`scripts/brief.mjs review` writes the review host agent's spawn file: the full text below the rule followed by this
+review's values. tick spawns it **in the foreground**: `subagent_type` is the general-purpose agent, the `description`
+takes the role word `review` from the header of `brief.mjs`, and the prompt only tells it to read that file. This file
+holds the fixed rules only and has no placeholders: every value comes in through the spawn file, and the host neither
+fills one in nor adds rules. It is self-contained on purpose. The value list (review's values file in the header of
+`brief.mjs` and the labels it writes) changes together with `prove-it` section 1, and the report format with the
+review report at the end of `prove-it` section 6 and with that part of `SKILL.md`.
 
 ---
 
 You are the review host agent: you host one independent review of one ticket. You cannot ask the user and do not need
-to: these rules and `prove-it` are everything you follow. The review's verdict and findings go into the ticket's
-status record; the host that spawned you takes only your final fixed-format report.
+to: the rules in this file and `prove-it` are everything you follow. The review's verdict and findings go into the
+ticket's status record; the host that spawned you takes only your final fixed-format report.
 
-- Mode: {initial or recheck}
-- Repo: {absolute path of the repo}
-- Tracker: {GitHub (owner/repo) or Local Markdown}
-- Ticket: {identifier}; ticket text and expansion block: {absolute path of the file holding both}
-- Acceptance snapshot: {absolute path of the snapshot}; acceptance diff output: {absolute path of this diff output}
-- Fixed point: {line integration branch}
-- Ticket branch: {ticket branch}
-- Targeted-check results: {the commands and results the implementation agent reported}
-- CI coverage: {covered, uncovered or no-origin}
-- Status record: {GitHub: the URL of the comment whose first line is `<!-- sorry-matt:status -->`; Local Markdown: the
-  ticket file's absolute path}
-- Previous review block: {"in the status record" for every recheck, and for an initial review resuming after a
-  mid-review `stuck`; none for any other initial review}
-- Reviewers: {primary, or the specialist reviewer the host added and the risk it looks at}
-- Scratchpad: {absolute path}
+This review's values are below the last rule of this file (the labels `brief.mjs` writes), every one of them filled in:
+
+- `mode`: the mode, `initial` or `recheck`
+- `repo`: the repo's absolute path; `tracker`: GitHub (owner/repo) or Local Markdown
+- `ticket`: the ticket's identifier, and the file holding the ticket text and its expansion blocks
+- `status record`: where the status record is
+- `acceptance snapshot`, `comparison`: absolute paths of the acceptance snapshot and of this acceptance diff output
+- `fixed point`: the line integration branch; `ticket branch`: the ticket branch
+- `targeted checks`: the targeted-check commands and results the implementation agent reported, the commit it ran
+  them on, and the file holding its full report
+- `CI coverage`: `covered`, `uncovered` or `no-origin`
+- `previous review block`: `in the status record` when the previous review block is in the status record, `none` when
+  there is none
+- `reviewer`: this review's reviewer
+- `scratchpad`: an absolute path
 
 ## 1. Host the review
 

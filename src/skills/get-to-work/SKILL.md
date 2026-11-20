@@ -116,13 +116,17 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 
 ### 收票的檢查與審查
 
-- **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。
-- **獨立審查**：填好同層 [`REVIEWER.md`](REVIEWER.md) 的佔位，以前景 spawn 一個審查主持 agent。它呼叫
-  `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報。CI 覆蓋填 `no-origin`（沒有 `origin`）、
-  `uncovered`（已定案為 CI 不涵蓋整合分支）或 `covered`。
+- **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。記 green（複驗前的
+  修正輪記 fixed）之前，先把它回報的全文原樣寫進 collect 指名的檔：審查的派工檔從那裡取 targeted checks，
+  沒寫就記不進去。
+- **獨立審查**：tick 寫好值檔，由 `brief.mjs review` 產出審查主持 agent 的派工檔 —— 同層
+  [`REVIEWER.md`](REVIEWER.md) 的固定規則接上這次的值（repo、tracker、票面檔、接續紀錄、驗收快照、比對輸出、
+  固定點、ticket 分支、targeted checks、CI 覆蓋，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
+  發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
+  記下結論。
 - **照回報落地**：`findings` 交集中修正；`observations` 或 `pre-existing` 不是 0 時只讀審查區塊的這兩段，合開
-  一張 raw ticket（「期間開票」）。一張票預設只有這一位 reviewer；只有具體風險才加專項 reviewer，指名風險並記進
-  自答清單，「再看一遍比較保險」不是風險。
+  一張 raw ticket（「期間開票」）。派工檔的 reviewer 是 `primary`；專項 reviewer 由 `prove-it` 依審查分級自己加
+  （`full` 級的 `architecture`）。
 
 ### 集中修正
 
@@ -159,8 +163,8 @@ merge commit 裡，不改寫 ticket 分支。它逐塊回報取捨，你記進�
 `judge` 的 `reference` 指到下列檔案時全文讀取並照做：紅燈處置 [`RED-LIGHT.md`](RED-LIGHT.md)、超時處置
 [`TIMEOUTS.md`](TIMEOUTS.md)、退回重做與標卡住 [`SEND-BACK.md`](SEND-BACK.md)、收官 [`FINISH.md`](FINISH.md)。
 
-完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的票都有一張 raw ticket；加了專項 reviewer
-的票都指名了風險；每個衝突解法只在 merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來源連結，
+完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的票都有一張 raw ticket；每個衝突解法只在
+merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來源連結，
 沒有混入凍結票集。
 
 ## 3. 裁決與停止

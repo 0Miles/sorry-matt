@@ -135,14 +135,18 @@ expansion, and wider after a send-back.
 ### Close-out checks and review
 
 - **Targeted checks**: review only once the affected-scope checks the implementation agent reports are green; red goes
-  back to the same agent.
-- **Independent review**: fill in the sibling [`REVIEWER.md`](REVIEWER.md) and spawn one review host agent in the
-  foreground. It calls `prove-it`; you never load `prove-it` and take only its review report (six lines at most). CI
-  coverage is `no-origin`, `uncovered` (settled as CI not covering the integration branch) or `covered`.
+  back to the same agent. Before recording green (fixed, for a fix round a recheck follows), write the report it
+  returned, verbatim, to the file the collect names: the review's spawn file takes its targeted checks from there,
+  and the record is refused without it.
+- **Independent review**: tick writes a values file and `brief.mjs review` turns it into the review host agent's
+  spawn file — the fixed rules of the sibling [`REVIEWER.md`](REVIEWER.md) followed by this review's values (repo,
+  tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI
+  coverage, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
+  says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
+  report (six lines at most), and record its verdict with `--outcome`.
 - **Act on the report**: `findings` go to the batched fix; when `observations` or `pre-existing` is not 0, read only
-  those two parts of the review block and file one raw ticket for them ("Filing along the way"). A ticket has this one
-  reviewer by default; add a specialist reviewer only for a concrete risk, named and logged in the self-answer log —
-  "another look would be safer" is not a risk.
+  those two parts of the review block and file one raw ticket for them ("Filing along the way"). The spawn file's
+  reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier (`architecture` at `full`).
 
 ### Batched fix
 
@@ -186,8 +190,7 @@ When a `judge`'s `reference` points to one of these, read it in full and follow 
 the finish [`FINISH.md`](FINISH.md).
 
 Done when: every fix got the `findings` by location, verbatim; every ticket with observations or pre-existing items
-has one raw ticket; every specialist reviewer names its risk; every conflict resolution lives only in its merge commit,
-its trade-offs logged; every raw ticket links its source and stays out of the frozen set.
+has one raw ticket; every conflict resolution lives only in its merge commit, its trade-offs logged; every raw ticket links its source and stays out of the frozen set.
 
 ## 3. Rulings and stopping
 
