@@ -1326,8 +1326,8 @@ for (const [name, reason, setup] of [
 }
 
 for (const [culprit, file] of [
-  ['#1', 'a.txt'],
-  ['#2', 'b.txt'],
+  ['#1', 'a.js'],
+  ['#2', 'b.js'],
 ]) {
   test(`#141: no origin: a red finish verifies the integration SHAs from the oldest; the first red, ${culprit}'s merge, is the earliest red`, (t) => {
     // the Full checks fail once the culprit's file is in the tree: from its merge on
@@ -1380,10 +1380,10 @@ for (const [culprit, file] of [
 }
 
 test('#141: no origin: after a fix round the new tip is verified once; green ends the red-light handling', (t) => {
-  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.txt') ? 1 : 0)"` });
+  const h = world(t, { check: `node -e "process.exit(require('fs').existsSync('b.js') ? 1 : 0)"` });
   git(h.repo, 'remote', 'remove', 'origin');
   h.policy['red-light'] = () => {
-    git(h.intWt, 'rm', '-q', 'b.txt');
+    git(h.intWt, 'rm', '-q', 'b.js');
     git(h.intWt, 'commit', '-q', '-m', 'fix the red light');
     return 'handled';
   };
