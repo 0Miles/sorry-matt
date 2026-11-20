@@ -25,6 +25,8 @@ This review's values are below the last rule of this file (the labels `brief.mjs
 - `fixed point`: the line integration branch; `ticket branch`: the ticket branch
 - `targeted checks`: the targeted-check commands and results the implementation agent reported, the commit it ran
   them on, and the file holding its full report
+- `targeted checks ran at`: the SHA those targeted checks ran at, or `not reported` when the report gives none;
+  `prove-it` section 3 decides from it whether to reuse them or rerun them
 - `CI coverage`: `covered`, `uncovered` or `no-origin`
 - `previous review block`: `in the status record` when the previous review block is in the status record, `none` when
   there is none

@@ -38,6 +38,9 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
   主持人整併後交給 CI 跑。專案指令契約不是 none 時，讀那份檔，照它的「Targeted checks」縮範圍、照它的
   「Failures only」讀輸出；是 none，或那份檔的「Targeted checks」寫 `none` 時，自己從 manifest 與 CI 設定找指令，
   回報的來源寫 `self-found`。
+- **回報針對性檢查跑的 SHA。** 最後一次針對性檢查在全部改動 commit 之後、工作樹乾淨時跑，回報它跑的 commit
+  （當時的 `git rev-parse HEAD`，完整 40 字元）。跑完又 commit 就再跑一次：審查只在這個 SHA 等於它審的 head 時
+  沿用你的結果，不相等就自己重跑，所以 SHA 對不上的回報等於白跑。
 - **指令輸出先縮小再讀**：測試、build 與 lint 的輸出只把失敗的行與結尾摘要讀進 context；全綠時只留摘要
   那一行。契約有「Failures only」時用它的寫法。完整輸出要留就導到檔案，檔案放在 ticket worktree 之外，或放在被 ignore 的路徑，回報與接續紀錄只給路徑。
   只留失敗的行看不出原因時，可以再讀該失敗前後的片段，不讀整份輸出。通過與否以指令本身的結束狀態判定，
@@ -87,7 +90,7 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
 ```
 ticket: <識別碼>
 commit: <sha>（分支 <branch>）
-targeted checks: source=<commands.md | self-found>; <指令> → <結果>，…
+targeted checks: sha=<針對性檢查跑的 SHA>; source=<commands.md | self-found>; <指令> → <結果>，…
 status record: <位置>
 acceptance: <逐項 ✅／❌／待裁決，精簡>
 run-level self-answers: <反轉成本跨票的代答，或 none>
@@ -95,5 +98,6 @@ awaiting ruling / stuck: <或 none>
 human work: <或 none>
 ```
 
-完成判準：成果已 commit 到 ticket 分支；針對性檢查是綠的，或紅燈已寫進回報；票面與展開區塊的
+完成判準：成果已 commit 到 ticket 分支；針對性檢查是綠的，或紅燈已寫進回報；回報的 `targeted checks` 行帶著
+最後一次針對性檢查跑的 SHA；票面與展開區塊的
 驗收項沒有被改動，做不到的項目已回報為待裁決或卡住；接續紀錄寫到最新；回報符合上述格式。

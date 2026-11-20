@@ -97,7 +97,9 @@
 //                                                    // null: none given, prove-it judges it (section 1)
 //   The `targeted checks` value is the report's `targeted checks:` line (agents/implementer.md section 5), with its
 //   `commit:` line when there is one and the report's path; a report without that line is no implementation agent's
-//   report (exit 1). A key added here is a label added to the values and a line to REVIEWER.md's value list.
+//   report (exit 1). The label after it, `targeted checks ran at` (#140), is the SHA that line's `sha=` names (7 to 40
+//   hex digits, lower-cased), or `not reported: rerun them (prove-it section 3)`: prove-it reuses the checks only
+//   at the head it reviews. A key added here is a label added to the values and a line to REVIEWER.md's value list.
 //
 // Every key above is required; `null` is how a value says none. Files are read as UTF-8; a byte order mark is
 // dropped and CRLF line ends read as LF. A value of several lines has its following lines indented under the list
@@ -317,13 +319,17 @@ export function reportField(text, name) {
   return new RegExp(`^[\\s>*\`-]*${name}[\\s*\`]*:[\\s*\`]*(\\S.*?)\\s*$`, 'im').exec(String(text).replace(/\r\n/g, '\n'))?.[1] ?? null;
 }
 
-/** The `targeted checks:` line of an implementation agent's report (agents/implementer.md section 5), with its commit. */
+/**
+ * The `targeted checks:` line of an implementation agent's report (agents/implementer.md section 5), with its commit,
+ * and the SHA it says they ran at (its `sha=`, lower case; #140), null when it gives none.
+ */
 export function targetedChecks(reportPath) {
   const report = read(reportPath);
   const checks = reportField(report, 'targeted checks');
   if (!checks) throw new Error(`${reportPath} has no \`targeted checks:\` line: it is not an implementation agent's report`);
   const commit = reportField(report, 'commit');
-  return `${checks} (${commit ? `commit ${commit}; ` : ''}the agent's report: ${resolve(reportPath)})`;
+  const sha = /(?:^|[\s;`*(])sha=([0-9a-f]{7,40})(?![0-9a-z])/i.exec(checks)?.[1]?.toLowerCase() ?? null;
+  return { text: `${checks} (${commit ? `commit ${commit}; ` : ''}the agent's report: ${resolve(reportPath)})`, sha };
 }
 
 export const CI_COVERAGE = ['covered', 'uncovered', 'no-origin'];
@@ -376,7 +382,8 @@ function review(values) {
       `- acceptance snapshot: ${resolve(snapshot)}; comparison: ${resolve(against)}`,
       `- fixed point: ${fixedPoint}`,
       `- ticket branch: ${branch}`,
-      `- targeted checks: ${checks}`,
+      `- targeted checks: ${checks.text}`,
+      `- targeted checks ran at: ${checks.sha ?? 'not reported: rerun them (prove-it section 3)'}`,
       `- CI coverage: ${ci}`,
       `- previous review block: ${previous ? 'in the status record' : 'none'}`,
       `- reviewer: ${reviewer}`,

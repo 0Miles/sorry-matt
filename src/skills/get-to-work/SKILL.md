@@ -136,7 +136,7 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
   照下面兩項。你不自己判級。
 - **獨立審查**：tick 寫好值檔，由 `brief.mjs review` 產出審查主持 agent 的派工檔 —— 同層
   [`REVIEWER.md`](REVIEWER.md) 的固定規則接上這次的值（repo、tracker、票面檔、接續紀錄、驗收快照、比對輸出、
-  固定點、ticket 分支、targeted checks、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
+  固定點、ticket 分支、targeted checks 與它跑的 SHA、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
   發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
   記下結論，並照回報的 `counts:` 行帶 `--observations <n> --pre-existing <n>`（兩個都要帶，沒有就寫 0；少一個
   record 以 2 拒絕）。minimal 審查只回報擋下整併的 finding，不帶這兩個計數。
