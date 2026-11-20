@@ -56,8 +56,8 @@
 //     pushed             (as in integrated, for every line with a recorded merge or already on `origin`: a line
 //                        is first pushed at its first integration)
 //     assignment         (as in dispatch)
-//     fallback-wake      while any assignment is in flight, a background sleep task is recorded (`usage
-//                        --sleep-task`).
+//     fallback-wake      while any assignment is in flight (a ticket's or a line's), a background sleep task is
+//                        recorded (`usage --sleep-task`).
 //   stopped                    The run stopped on a limit and the undispatched tickets were set aside.
 //     stop-recorded      the state has a stop with the limits that stopped it.
 //     no-dispatch-after-stop  no ticket entered expanding or implementing at or after the stop.
@@ -409,7 +409,9 @@ const gates = {
     pushed(r, g, Object.keys(state.lines).filter((branch) => merged(branch) || (g.hasOrigin() && g.originHead(branch).sha)));
     assignments(r, state);
     const fail = r.check('fallback-wake');
-    const inFlight = Object.entries(state.tickets).filter(([, t]) => t.assignment && t.assignment.deadline !== null).map(([id]) => id);
+    const held = (x) => x?.assignment && x.assignment.deadline !== null;
+    // a ticket's agent, or a line's (the ci-fix of a red light that maps to no ticket)
+    const inFlight = [...Object.entries(state.tickets), ...Object.entries(state.lines)].filter(([, x]) => held(x)).map(([id]) => id);
     if (inFlight.length && state.usage.sleepTask === null) fail('usage', `agents are in flight (${inFlight.join(', ')}) and no fallback wake-up is recorded (usage --sleep-task)`);
   },
 

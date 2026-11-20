@@ -33,18 +33,24 @@
 
      CI 失敗就是 finding，走集中修正（`recheck` 附上該票上一次的審查區塊），修完 `integrate.mjs merge --ci --push`，
      不排隊。
-   - 對不到票：主持人或新 spawn 的 `ci-fix` agent（目標是整合分支）在整合 worktree 修，commit（subject 不帶票 ID）、
-     push。
+   - 對不到票：主持人不自己修，也不自己派。把第 3 點取的失敗行寫進這個 judge 的 `meta.failure` 指的檔，record
+     `unmatched`（那個檔不在或是空的，record 會被拒）。tick 接著發這條線的 ci-fix：在整合 worktree 跑
+     `deadline.mjs record`（時限 `timeout-fix`）、以 `state.mjs assign --line` 把派送紀錄記在線上
+     （`lines[<line>].assignment`），再發一個背景的通用 agent spawn，description 是角色字 `ci-fix` 接整合分支，交付說明
+     由 tick 寫好（整合 worktree、紅的 SHA、失敗的行、輪次；commit 的 subject 不帶票 ID、不 push）。照 spawn 發出，
+     以 `--agent` record。它在途期間這條線沒有紅燈處置、push 與讀 CI，收官也等它；它回報時 tick 發 `collect`
+     （`fixed`／`blocked`）。有新 commit 就由 tick push 並讀 CI；沒有新 commit，tick 在同一個 SHA 再發一次
+     `red-light` judge 開下一輪。兩輪用完時 judge 不再有 `unmatched`，照第 6 點。
    - 修正 agent 的派送照常有派送紀錄與時限；超時被停下也算一輪（[`TIMEOUTS.md`](TIMEOUTS.md)）。偶發紅燈的硬護欄
-     照用。每輪修完都 push（沒有 `origin` 時略過），由下一次驗證判結果：流水線中是 tick 下一次的讀 CI（CI 沒有判定時是
-     本機驗證），收官是 `FINISH.md` 步驟 3 當場再驗。record `handled`。
+     照用。對到票時每輪修完都 push（沒有 `origin` 時略過），record `handled`；對不到票由 tick push。結果由下一次驗證判：
+     流水線中是 tick 下一次的讀 CI（CI 沒有判定時是本機驗證），收官是 `FINISH.md` 步驟 3 當場再驗。
 5. **兩輪仍紅，對到票：撤回。** 依 frontier 的 `blockedBy` 列出依賴它的同線票，跑
    `integrate.mjs revert <state> <票> --worktree <整合 worktree> --reason <CI 紅燈與失敗的 job> --push`，每張依賴票加一個
    `--dependent`（Local Markdown 附票檔）。它撤回每個 merge 與完成紀錄、標卡住、處置依賴票（已整併的標卡住並寫明
    上游撤回；在途的標待裁決並留住分支尖端），檔頭寫了每一步。GitHub 另照 [`SEND-BACK.md`](SEND-BACK.md) 的
    「標卡住」開 raw issue。總 PR 把它們列為缺口，不寫 `Closes`。日後要重新整併被撤回的票，先
    `git revert <撤回的 commit>` 還原撤回。record `reverted`。
-6. **兩輪仍紅，對不到票**：這條線**驗證未過**，record `failed`：tick 把它的候選與沒派過的票標待裁決、佇列不再
+6. **兩輪仍紅，對不到票**（judge 已沒有 `unmatched`）：這條線**驗證未過**，record `failed`：tick 把它的候選與沒派過的票標待裁決、佇列不再
    為紅燈暫停。不送 `gh pr merge`、不進 merge queue，總 PR 寫明並留給人合併，人工作業清單列出失敗的 job。
 
 完成判準：撤回都經 `integrate.mjs revert`，依賴票都列為 `--dependent`；驗證未過的線在人工作業清單列出失敗的

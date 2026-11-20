@@ -27,9 +27,10 @@
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //   node state.mjs merge    <state> <ticket> <merge sha>
 //   node state.mjs assign   <state> <ticket>... --record <record.json> --type <agent type> [--worktree <path>] [--reassign]
-//   node state.mjs agent    <state> <ticket>... --id <agent id>
-//   node state.mjs extend   <state> <ticket>... --deadline <UTC>
-//   node state.mjs release  <state> <ticket>... [--stopped]
+//   node state.mjs assign   <state> --line <integration branch> --record <record.json> --type <agent type> --worktree <path>
+//   node state.mjs agent    <state> <ticket>... | --line <integration branch>  --id <agent id>
+//   node state.mjs extend   <state> <ticket>... | --line <integration branch>  --deadline <UTC>
+//   node state.mjs release  <state> <ticket>... | --line <integration branch>  [--stopped]
 //   node state.mjs ci       <state> <integration branch> --from <verdict.json> [--dispatch] [--branch-runs <n>]
 //   node state.mjs local    <state> <integration branch> <full sha> green|red no-origin|ci-not-covering|no-verdict
 //   node state.mjs usage    <state> [--started <UTC>] [--wait <seconds>] [--spawns <n>] [--add <counter>=<n>]...
@@ -57,7 +58,10 @@
 //                                                          // read an empty run list
 //         "ciNotCovering": { "sha", "at" } | null,         // settled: CI does not cover the branch
 //         "local": [{ "sha", "result": "green" | "red", "reason", "at" }],   // per-SHA local verification
-//         "base": { "sha", "synced": true | false, "at" } | null } },        // the finish's base sync
+//         "base": { "sha", "synced": true | false, "at" } | null,           // the finish's base sync
+//         "assignment": null | { …as a ticket's, a { head, tree } fingerprint } } },   // the agent that works on
+//                                                          // the line itself: the ci-fix of a red light that maps
+//                                                          // to no ticket (missing in an older file: null)
 //     "tickets": { "<ticket>": {
 //         "line": "<integration branch>", "stage": "<stage>", "branch": "<ticket branch>" | null,
 //         "deliverable", "verification", "statusRecord": <text> | null,   // free text the host gives
@@ -150,11 +154,13 @@
 //             { "format", "command": "resume", "run", "revision", "profile": <effective>, "profileWritten",
 //               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline" }],  // not at an end
 //               "inFlight": [{ "id": "<agent id>", "type", "tickets": [<ticket>], "assigned", "limit", "deadline",
-//                              "extended", "fingerprint", "worktree"? }],   // one per agent with a deadline;
+//                              "extended", "fingerprint", "worktree"?, "line"? }],   // one per agent with a
+//                                                         // deadline (`line` and no tickets: a line's agent);
 //                                                         // the agent list of a `deadline.mjs scan` plan (add the
 //                                                         // current `expansions` counts for an expansion agent)
 //               "unnamed": [<ticket>],                    // a deadline but no agent id: record ran, the spawn
 //                                                         // or `agent` did not
+//               "unnamedLines": [<integration branch>],   // the same for a line's assignment
 //               "terminal": { "delivered": [], "stuck": [], "awaiting-ruling": [] },
 //               "lines": { "<branch>": { "tip", "ci", "ciNotCovering",
 //                                        "local": ["local: <branch> <sha> <result> <reason>"] } },  // for ci.mjs
@@ -174,13 +180,16 @@
 //             each ticket the agent covers. `--worktree` is required with a { head, tree } fingerprint and not
 //             allowed with { expansions }. The agent id is filled by `agent` after the spawn. `--reassign` marks a
 //             timeout reassignment: it adds one to the ticket's count for its stage (implementing, fixing or
-//             expanding) and is refused when that count is already 1.
+//             expanding) and is refused when that count is already 1. `--line` records it on the integration
+//             branch instead of tickets (an agent that works on the line itself, in its integration worktree): it
+//             needs `--worktree` and a { head, tree } fingerprint, and takes no `--reassign`.
 //   agent     Fills the agent id of the current assignment. Refused without an assignment in flight, or when
 //             another id is already there.
 //   extend    Sets the deadline from `deadline.mjs scan`'s `extend` and `extended` to "yes"; refused when already
 //             extended. One call per agent, naming every ticket it covers: usage `timeoutExtensions` + 1.
 //   release   The agent reported or was stopped: deadline null. `--stopped` (one call per agent) adds one to
-//             usage `timeoutStops`.
+//             usage `timeoutStops`. `agent`, `extend` and `release` take `--line` in place of tickets for a line's
+//             assignment.
 //   ci        Records a `ci.mjs verdict` output for its branch. An empty `no-run` read with `--dispatch` counts one
 //             dispatch point (once per value of usage `rounds`); any other verdict resets the count. At a count of
 //             two, `--branch-runs <n>` (the length of `gh run list --branch <branch> --limit 1`) of 0 settles the
@@ -318,7 +327,7 @@ const newUsage = () => ({
   sleepTask: null,
   tokens: null,
 });
-const newLine = () => ({ lines: [], tip: null, ci: null, noRun: { count: 0, round: null }, ciNotCovering: null, local: [], base: null });
+const newLine = () => ({ lines: [], tip: null, ci: null, noRun: { count: 0, round: null }, ciNotCovering: null, local: [], base: null, assignment: null });
 const newTicket = (line) => ({
   line,
   stage: 'candidate',
@@ -352,6 +361,18 @@ const newState = (run, now) => ({
   stop: null,
 });
 
+/** One assignment record (a ticket's or a line's), through check's `need`. */
+function checkAssignment(a, w, need) {
+  need(isObject(a), w, 'is not an object or null');
+  need(a.agentId === null || isText(a.agentId), `${w}.agentId`, 'is not an id or null');
+  need(isText(a.type), `${w}.type`, 'is not an agent type');
+  need(isTime(a.assigned) && (a.deadline === null || isTime(a.deadline)), w, 'has no assigned time, or a deadline that is not a time or null');
+  need(Number.isInteger(a.limit) && a.limit > 0, `${w}.limit`, 'is not minutes above 0');
+  need(a.extended === 'no' || a.extended === 'yes', `${w}.extended`, 'is not "no" or "yes"');
+  need(isObject(a.fingerprint), `${w}.fingerprint`, 'is not an object');
+  need(a.worktree === null || isText(a.worktree), `${w}.worktree`, 'is not a path or null');
+}
+
 // Every check throws `bad(where, what)`; the caller decides whether that is a corrupt file (1) or bad input (2).
 function check(state, bad) {
   const need = (ok, where, what) => {
@@ -379,6 +400,11 @@ function check(state, bad) {
       need(isObject(r) && FULL_SHA.test(r.sha) && ['green', 'red'].includes(r.result) && LOCAL_REASONS.includes(r.reason) && isTime(r.at), `${w}.local[${i}]`, 'is not { sha, result, reason, at }'),
     );
     need(l.base === null || (isObject(l.base) && SHA.test(l.base.sha) && typeof l.base.synced === 'boolean'), `${w}.base`, 'is not { sha, synced } or null');
+    // a state written before lines held assignments has no key: read as null
+    if (l.assignment !== undefined && l.assignment !== null) {
+      checkAssignment(l.assignment, `${w}.assignment`, need);
+      need(isObject(l.assignment.fingerprint) && !isObject(l.assignment.fingerprint.expansions), `${w}.assignment.fingerprint`, 'is not { head, tree }');
+    }
   }
   for (const [id, t] of Object.entries(state.tickets)) {
     const w = `tickets.${id}`;
@@ -386,17 +412,7 @@ function check(state, bad) {
     need(isText(t.line) && t.line in state.lines, `${w}.line`, 'is not a known integration branch');
     need(STAGES.includes(t.stage), `${w}.stage`, `is not one of ${STAGES.join(', ')}`);
     for (const k of ['branch', 'deliverable', 'verification', 'statusRecord', 'snapshotSha256', 'reason']) need(optText(t[k]), `${w}.${k}`, 'is not text or null');
-    const a = t.assignment;
-    if (a !== null) {
-      need(isObject(a), `${w}.assignment`, 'is not an object or null');
-      need(a.agentId === null || isText(a.agentId), `${w}.assignment.agentId`, 'is not an id or null');
-      need(isText(a.type), `${w}.assignment.type`, 'is not an agent type');
-      need(isTime(a.assigned) && (a.deadline === null || isTime(a.deadline)), `${w}.assignment`, 'has no assigned time, or a deadline that is not a time or null');
-      need(Number.isInteger(a.limit) && a.limit > 0, `${w}.assignment.limit`, 'is not minutes above 0');
-      need(a.extended === 'no' || a.extended === 'yes', `${w}.assignment.extended`, 'is not "no" or "yes"');
-      need(isObject(a.fingerprint), `${w}.assignment.fingerprint`, 'is not an object');
-      need(a.worktree === null || isText(a.worktree), `${w}.assignment.worktree`, 'is not a path or null');
-    }
+    if (t.assignment !== null) checkAssignment(t.assignment, `${w}.assignment`, need);
     need(isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s])), `${w}.timeoutReassignments`, 'is not a count per stage');
     need(isCount(t.sendBacks) && isCount(t.fixRounds), `${w}.sendBacks/fixRounds`, 'are not counts');
     need(Array.isArray(t.reviews), `${w}.reviews`, 'is not a list');
@@ -827,13 +843,20 @@ function resume(state) {
     if (a.worktree !== null) entry.worktree = a.worktree;
     agents.set(a.agentId, entry);
   }
+  const unnamedLines = [];
+  for (const [branch, l] of Object.entries(state.lines)) {
+    const a = l.assignment;
+    if (!a || a.deadline === null) continue;
+    if (a.agentId === null) unnamedLines.push(branch);
+    else agents.set(a.agentId, { id: a.agentId, type: a.type, tickets: [], line: branch, assigned: a.assigned, limit: a.limit, deadline: a.deadline, extended: a.extended, fingerprint: a.fingerprint, worktree: a.worktree });
+  }
   const lines = Object.fromEntries(
     Object.entries(state.lines).map(([branch, l]) => [
       branch,
       { tip: l.tip, ci: l.ci, ciNotCovering: l.ciNotCovering !== null, local: l.local.map((r) => localLine(branch, r)) },
     ]),
   );
-  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, terminal, lines, usage: state.usage, stop: state.stop };
+  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, lines, usage: state.usage, stop: state.stop };
 }
 
 function add(path, rest, flags, ctx) {
@@ -989,6 +1012,16 @@ function assign(path, rest, flags, ctx) {
   if (!expander && !(isObject(f) && isText(f.head) && isText(f.tree))) throw new UsageError('record.fingerprint: not { head, tree } or { expansions }');
   if (expander && flags.worktree !== undefined) throw new UsageError('--worktree: an expansion agent works in no worktree');
   if (!expander && flags.worktree === undefined) throw new UsageError('--worktree is required with a { head, tree } fingerprint');
+  if (flags.line !== undefined) {
+    if (rest.length) throw new UsageError('assign takes tickets or --line <integration branch>, not both');
+    if (expander) throw new UsageError('--line: a line is assigned an agent that works in its integration worktree, not an expansion agent');
+    if (flags.reassign) throw new UsageError('--reassign is for tickets');
+    return update(path, ctx.now, (state) => {
+      const l = lineOf(state, flags.line);
+      l.assignment = newAssignment(flags, r, f, false);
+      return { branch: flags.line, line: l };
+    });
+  }
   return update(path, ctx.now, (state) => {
     const ids = ticketsOf(state, rest);
     for (const id of ids) {
@@ -1000,61 +1033,77 @@ function assign(path, rest, flags, ctx) {
     for (const id of ids) {
       const t = state.tickets[id];
       if (flags.reassign) t.timeoutReassignments[t.stage] += 1;
-      t.assignment = {
-        agentId: null,
-        type: flags.type,
-        worktree: expander ? null : resolve(flags.worktree),
-        assigned: r.assigned,
-        limit: r.limit,
-        deadline: r.deadline,
-        extended: r.extended === 'yes' ? 'yes' : 'no',
-        fingerprint: f,
-      };
+      t.assignment = newAssignment(flags, r, f, expander);
     }
     return { tickets: view(state, ids) };
   });
+}
+
+const newAssignment = (flags, r, f, expander) => ({
+  agentId: null,
+  type: flags.type,
+  worktree: expander ? null : resolve(flags.worktree),
+  assigned: r.assigned,
+  limit: r.limit,
+  deadline: r.deadline,
+  extended: r.extended === 'yes' ? 'yes' : 'no',
+  fingerprint: f,
+});
+
+/**
+ * What `agent`, `extend` and `release` act on: the named tickets, or the line `--line` names (never both). Each
+ * holder is { name, holder } with `holder.assignment` its record; `out` gives the command's output.
+ */
+function holdersOf(state, rest, flags) {
+  if (flags.line === undefined) {
+    const ids = ticketsOf(state, rest);
+    return { holders: ids.map((id) => ({ name: id, holder: state.tickets[id] })), out: () => ({ tickets: view(state, ids) }) };
+  }
+  if (rest.length) throw new UsageError('name tickets or --line <integration branch>, not both');
+  const l = lineOf(state, flags.line);
+  return { holders: [{ name: flags.line, holder: l }], out: () => ({ branch: flags.line, line: l }) };
 }
 
 function agent(path, rest, flags, ctx) {
   if (!isText(flags.id)) throw new UsageError('agent needs --id <agent id>');
   return update(path, ctx.now, (state) => {
-    const ids = ticketsOf(state, rest);
-    for (const id of ids) {
-      const a = state.tickets[id].assignment;
-      if (!a || a.deadline === null) throw new Refusal(`${id}: no assignment in flight; run deadline.mjs record and assign before the spawn`);
-      if (a.agentId !== null && a.agentId !== flags.id) throw new Refusal(`${id}: the assignment already belongs to ${a.agentId}; a new dispatch needs a new assign`);
+    const { holders, out } = holdersOf(state, rest, flags);
+    for (const { name, holder } of holders) {
+      const a = holder.assignment;
+      if (!a || a.deadline === null) throw new Refusal(`${name}: no assignment in flight; run deadline.mjs record and assign before the spawn`);
+      if (a.agentId !== null && a.agentId !== flags.id) throw new Refusal(`${name}: the assignment already belongs to ${a.agentId}; a new dispatch needs a new assign`);
     }
-    for (const id of ids) state.tickets[id].assignment.agentId = flags.id;
-    return { tickets: view(state, ids) };
+    for (const { holder } of holders) holder.assignment.agentId = flags.id;
+    return out();
   });
 }
 
-function inFlight(state, ids) {
-  for (const id of ids) {
-    const a = state.tickets[id].assignment;
-    if (!a || a.deadline === null) throw new Refusal(`${id}: no assignment in flight`);
+function inFlight(holders) {
+  for (const { name, holder } of holders) {
+    const a = holder.assignment;
+    if (!a || a.deadline === null) throw new Refusal(`${name}: no assignment in flight`);
   }
 }
 
 function extend(path, rest, flags, ctx) {
   const deadline = time(flags.deadline, '--deadline');
   return update(path, ctx.now, (state) => {
-    const ids = ticketsOf(state, rest);
-    inFlight(state, ids);
-    for (const id of ids) if (state.tickets[id].assignment.extended === 'yes') throw new Refusal(`${id}: the assignment was already extended once; stop it`);
-    for (const id of ids) Object.assign(state.tickets[id].assignment, { deadline, extended: 'yes' });
+    const { holders, out } = holdersOf(state, rest, flags);
+    inFlight(holders);
+    for (const { name, holder } of holders) if (holder.assignment.extended === 'yes') throw new Refusal(`${name}: the assignment was already extended once; stop it`);
+    for (const { holder } of holders) Object.assign(holder.assignment, { deadline, extended: 'yes' });
     state.usage.timeoutExtensions += 1;
-    return { tickets: view(state, ids) };
+    return out();
   });
 }
 
 function release(path, rest, flags, ctx) {
   return update(path, ctx.now, (state) => {
-    const ids = ticketsOf(state, rest);
-    inFlight(state, ids);
-    for (const id of ids) state.tickets[id].assignment.deadline = null;
+    const { holders, out } = holdersOf(state, rest, flags);
+    inFlight(holders);
+    for (const { holder } of holders) holder.assignment.deadline = null;
     if (flags.stopped) state.usage.timeoutStops += 1;
-    return { tickets: view(state, ids) };
+    return out();
   });
 }
 
@@ -1196,10 +1245,10 @@ const COMMANDS = {
   review: [review, { mode: 'one', verdict: 'one', kind: 'one', findings: 'one', ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
-  assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', ...NOW }],
-  agent: [agent, { id: 'one', ...NOW }],
-  extend: [extend, { deadline: 'one', ...NOW }],
-  release: [release, { stopped: 'bool', ...NOW }],
+  assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],
+  agent: [agent, { id: 'one', line: 'one', ...NOW }],
+  extend: [extend, { deadline: 'one', line: 'one', ...NOW }],
+  release: [release, { stopped: 'bool', line: 'one', ...NOW }],
   ci: [ci, { from: 'one', dispatch: 'bool', 'branch-runs': 'one', ...NOW }],
   local: [local, NOW],
   usage: [usage, { started: 'one', wait: 'one', spawns: 'one', add: 'many', 'sleep-task': 'one', tokens: 'one', ...NOW }],
