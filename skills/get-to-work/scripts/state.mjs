@@ -70,7 +70,8 @@
 //           "agentId": "<id>" | null, "type": "<subagent_type>", "worktree": "<path>" | null,
 //           "assigned", "limit", "deadline": "<UTC>" | null, "extended": "no" | "yes",
 //           "fingerprint": { "head", "tree" } | { "expansions": { "<ticket>": <n> } } },
-//         "timeoutReassignments": { "implementing": <n>, "fixing": <n>, "expanding": <n> },
+//         "timeoutReassignments": { "implementing": <n>, "fixing": <n>, "expanding": <n>,
+//                                   "in-review": <n> },     // the review host (#143); missing in an older file: 0
 //         "sendBacks": <n>, "fixRounds": <n>,
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
 //                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
@@ -181,8 +182,8 @@
 //   assign    Records an assignment from `deadline.mjs record`'s output (record.json) with the agent type, for
 //             each ticket the agent covers. `--worktree` is required with a { head, tree } fingerprint and not
 //             allowed with { expansions }. The agent id is filled by `agent` after the spawn. `--reassign` marks a
-//             timeout reassignment: it adds one to the ticket's count for its stage (implementing, fixing or
-//             expanding) and is refused when that count is already 1. `--line` records it on the integration
+//             timeout reassignment: it adds one to the ticket's count for its stage (implementing, fixing,
+//             expanding, or in-review for the review host) and is refused when that count is already 1. `--line` records it on the integration
 //             branch instead of tickets (an agent that works on the line itself, in its integration worktree): it
 //             needs `--worktree` and a { head, tree } fingerprint, and takes no `--reassign`.
 //   agent     Fills the agent id of the current assignment. Refused without an assignment in flight, or when
@@ -245,7 +246,9 @@ const EDGES = {
   stuck: [],
   'awaiting-ruling': [],
 };
-const TIMEOUT_STAGES = ['implementing', 'fixing', 'expanding'];
+const TIMEOUT_STAGES = ['implementing', 'fixing', 'expanding', 'in-review'];
+// counts a state written before #143 does not have: read as 0
+const TIMEOUT_STAGES_ADDED = ['in-review'];
 export const PROFILE_DEFAULTS = Object.freeze({
   review: 'full',
   fixRounds: 2,
@@ -339,7 +342,7 @@ const newTicket = (line) => ({
   statusRecord: null,
   snapshotSha256: null,
   assignment: null,
-  timeoutReassignments: { implementing: 0, fixing: 0, expanding: 0 },
+  timeoutReassignments: { implementing: 0, fixing: 0, expanding: 0, 'in-review': 0 },
   sendBacks: 0,
   fixRounds: 0,
   reviews: [],
@@ -415,7 +418,11 @@ function check(state, bad) {
     need(STAGES.includes(t.stage), `${w}.stage`, `is not one of ${STAGES.join(', ')}`);
     for (const k of ['branch', 'deliverable', 'verification', 'statusRecord', 'snapshotSha256', 'reason']) need(optText(t[k]), `${w}.${k}`, 'is not text or null');
     if (t.assignment !== null) checkAssignment(t.assignment, `${w}.assignment`, need);
-    need(isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s])), `${w}.timeoutReassignments`, 'is not a count per stage');
+    need(
+      isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s]) || (TIMEOUT_STAGES_ADDED.includes(s) && t.timeoutReassignments[s] === undefined)),
+      `${w}.timeoutReassignments`,
+      'is not a count per stage',
+    );
     need(isCount(t.sendBacks) && isCount(t.fixRounds), `${w}.sendBacks/fixRounds`, 'are not counts');
     need(Array.isArray(t.reviews), `${w}.reviews`, 'is not a list');
     t.reviews.forEach((r, i) =>
@@ -1033,11 +1040,11 @@ function assign(path, rest, flags, ctx) {
       const t = state.tickets[id];
       if (!flags.reassign) continue;
       if (!TIMEOUT_STAGES.includes(t.stage)) throw new Refusal(`${id}: a timeout reassignment is for ${TIMEOUT_STAGES.join(', ')}; it is ${t.stage}`);
-      if (t.timeoutReassignments[t.stage] >= 1) throw new Refusal(`${id}: it was already reassigned for a timeout in ${t.stage}; the rule is stuck (awaiting-ruling for expanding)`);
+      if ((t.timeoutReassignments[t.stage] ?? 0) >= 1) throw new Refusal(`${id}: it was already reassigned for a timeout in ${t.stage}; the rule is stuck (awaiting-ruling for expanding)`);
     }
     for (const id of ids) {
       const t = state.tickets[id];
-      if (flags.reassign) t.timeoutReassignments[t.stage] += 1;
+      if (flags.reassign) t.timeoutReassignments[t.stage] = (t.timeoutReassignments[t.stage] ?? 0) + 1;
       t.assignment = newAssignment(flags, r, f, expander);
     }
     return { tickets: view(state, ids) };

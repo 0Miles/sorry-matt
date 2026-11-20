@@ -167,6 +167,13 @@ expansion, and wider after a send-back.
   report (six lines at most), and record its verdict with `--outcome` and the report's `counts:` line as
   `--observations <n> --pre-existing <n>` (both, 0 when there are none; with one missing the record is refused with
   2). A minimal review reports blocking findings only and takes neither count.
+- **The review's assignment record**: before the spawn tick writes the assignment record (`deadline.mjs record` in the
+  ticket worktree with the `timeout-review` limit, then `state.mjs assign`), so the review host agent has a time limit
+  like every other agent. When its report comes back with the spawn, record `--agent`, `--outcome` and the two counts;
+  when the Agent tool put it in the background and the spawn returned only an agent id, record `--agent` alone (the
+  counts are refused with 2 there): it is in flight, tick scans its deadline and schedules the fallback wake-up all the
+  same, and when its completion notice arrives you pass it to tick with `--reported`, and a `collect` records the
+  verdict, again with `--observations <n> --pre-existing <n>` (refused with 2 when one is missing).
 - **Act on the report**: `findings` go to the batched fix. When `observations` or `pre-existing` is not 0, tick hands
   you an `observations` judge: read only those two parts of the review block, file one raw ticket for them ("Filing
   along the way") and record it with `--value <issue id>`. When a later review of the same ticket (a recheck, a retry)

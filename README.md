@@ -243,8 +243,8 @@ a run is in progress, know how far it reaches:
 The other limits (`rounds`, which counts dispatch points — 40 when the ledger is created, rewritten to
 `3 × tickets + 1` alongside `spawns` — `hours`, `no-progress`) and the no-progress breaker are enforced by
 `get-to-work` itself at every dispatch point. The stage time limits (`budget: timeout-implement 30`,
-`timeout-fix 20`, `timeout-expand 15`, `timeout-merge 15`, in minutes) are checked by `get-to-work` at every
-wake-up: an overdue agent whose worktree moved is extended once, otherwise it is stopped with `TaskStop` and the
+`timeout-fix 20`, `timeout-expand 15`, `timeout-merge 15`, `timeout-review 60`, in minutes) are checked by
+`get-to-work` at every wake-up: an overdue agent whose worktree moved is extended once, otherwise it is stopped with `TaskStop` and the
 ticket is reassigned, sent back for a redo (an overdue merge agent), marked stuck or left awaiting ruling; a
 red-light fix agent that is stopped counts as one failed fix round. The spawn-budget check has its own opt-out, separate from the guard's, so turning one off leaves the other on:
 
