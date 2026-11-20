@@ -43,10 +43,14 @@
 //     "branch":       "<ticket branch>",
 //     "integration":  "<integration branch>",
 //     "bodyFile":     "<file holding the full ticket text>",
-//     "sendBackFile": "<file holding the send-back record>" | null }   // null: none
+//     "sendBackFile": "<file holding the send-back record>" | null,   // null: none
+//     "acceptance":   "criteria" | "ticket-text" }   // where the acceptance is; tick gives ticket-text under the
+//                                                    // profile's expand: skip
 //   The ticket and its tracker come from the snapshot (`id`, `tracker`, `source`); the expansion block is every
 //   `expansions[].text` of the snapshot, a blank line apart, or none; the project command contract is
-//   `<worktree>/docs/agents/commands.md` when that file exists, else none.
+//   `<worktree>/docs/agents/commands.md` when that file exists, else none. The acceptance source is a choice
+//   placeholder of the template, `{criteria=<text> | ticket-text=<text>}`: the spawn file carries the text of the
+//   key `acceptance` names, in the template's own language (ticket-text: the ticket text is the acceptance).
 //
 // expand — the expansion agent's spawn file, EXPANDER.md, and the definition agents/expander.md
 //   values.json:
@@ -140,7 +144,21 @@ const orNull = (ok) => (v) => v === null || ok(v);
 // Following lines of a multi-line value, indented to stay under the list item it fills.
 const indent = (value, pad) => value.replace(/\n(?=[^\n])/g, `\n${pad}`);
 
-/** The template below its `---` rule, with its placeholders filled by `fills` in order. */
+/**
+ * The fill of a choice placeholder `{<key>=<text> | <key>=<text>}`: the text of `key`. A placeholder without that
+ * key means the template and the script changed apart.
+ */
+export function choose(key) {
+  return (placeholder, templatePath) => {
+    for (const option of placeholder.slice(1, -1).split('|')) {
+      const at = option.indexOf('=');
+      if (at > 0 && option.slice(0, at).trim() === key) return option.slice(at + 1).trim();
+    }
+    throw new Error(`${templatePath}: the placeholder ${placeholder} has no ${key}=: the template and the script changed apart`);
+  };
+}
+
+/** The template below its `---` rule, with its placeholders filled by `fills` in order (a function fills a choice). */
 export function fill(templatePath, fills) {
   const template = read(templatePath);
   const rule = template.search(/^---$/m);
@@ -150,7 +168,12 @@ export function fill(templatePath, fills) {
   if (found.length !== fills.length)
     throw new Error(`${templatePath} has ${found.length} placeholders, brief.mjs fills ${fills.length}: the template and the script changed apart`);
   let i = 0;
-  return body.replace(PLACEHOLDER, () => fills[i++]).replace(/[ \t]+$/gm, '');
+  return body
+    .replace(PLACEHOLDER, (placeholder) => {
+      const f = fills[i++];
+      return typeof f === 'function' ? f(placeholder, templatePath) : f;
+    })
+    .replace(/[ \t]+$/gm, '');
 }
 
 /** Where the general-purpose fallback of the spawn file `out` is written. */
@@ -179,6 +202,7 @@ function implement(values) {
   const integration = need(values, 'integration');
   const bodyFile = need(values, 'bodyFile');
   const sendBackFile = need(values, 'sendBackFile', orNull(text), 'a file path or null');
+  const acceptance = need(values, 'acceptance', (v) => v === 'criteria' || v === 'ticket-text', '"criteria" or "ticket-text"');
 
   const snapshot = readJson(snapshotPath);
   const wrong = () => new Error(`${snapshotPath} is not a sorry-matt acceptance snapshot`);
@@ -198,6 +222,7 @@ function implement(values) {
     integration,
     indent(read(bodyFile).trim(), pad),
     expansion ? indent(expansion, pad) : 'none',
+    choose(acceptance),
     existsSync(commands) ? commands : 'none',
     sendBackFile === null ? 'none' : indent(read(sendBackFile).trim(), pad),
   ]);

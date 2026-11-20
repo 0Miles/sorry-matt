@@ -8,7 +8,10 @@ file's values together cover every rule; this file holds values only, never rule
 available, the spawn file `brief.mjs` also writes for a general-purpose agent is the definition's body below its
 frontmatter followed by this file's values.
 
-Change this file's placeholders together with what `brief.mjs` fills in. Where the definition's rules overlap
+Change this file's placeholders together with what `brief.mjs` fills in. The acceptance source is a choice
+placeholder: `brief.mjs` takes the text after `=` for the values file's `acceptance` (`criteria` or `ticket-text`), and
+tick gives `ticket-text` under the profile's `expand: skip`; change its two texts together with the definition's
+section 1, item 3. Where the definition's rules overlap
 `ASKING.md` sections 3 and 5, the report limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them
 together. Change the definition's section 2 commit message format together with the aggregate PR body in
 [`FINISH.md`](FINISH.md), finishing the run. Change the definition's section 1 read-only acceptance criteria together
@@ -27,6 +30,7 @@ Spawn file: this ticket's values. The rules you follow are in the body of the im
 - Integration branch: {integration branch}
 - Ticket text: {full ticket text}
 - Expansion block: {the full `expansions[].text` from the acceptance snapshot, or none}
+- Acceptance source: {criteria=the acceptance criteria and the expansion block | ticket-text=the ticket text is the acceptance}
 - Project command contract: {the absolute path of `docs/agents/commands.md` in the ticket worktree, or none}
 - Send-back record: {the previous attempt's ref and SHA, the conflicting files, the integration branch's SHA at the
   time, and the files the old attempt touched that the predicted files did not cover, or none}
