@@ -748,7 +748,7 @@ function bodyFile(c, id, t, after, again = null) {
   if (c.cfg.tracker === 'local') return { file: join(c.git.wtOf(c.target(t.line)) ?? c.cfg.root, c.ticketPath(id)), id: null };
   const file = c.tick('body', `${keyOf(id)}.md`);
   const eid = again ? `body:${id}:${again}` : `body:${id}`;
-  if (c.deps.exists(file) && c.done(eid)) return { file, id: null };
+  if (c.done(eid) && c.deps.exists(file)) return { file, id: null };
   return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
 }
 
@@ -759,7 +759,7 @@ function bodyFile(c, id, t, after, again = null) {
  */
 function acceptanceSource(c, id) {
   if (c.profile.expand !== 'skip') return 'criteria';
-  const snap = c.deps.exists(c.snapshot(id)) ? readJsonFile(c.deps, c.snapshot(id)) : null;
+  const snap = readJsonFile(c.deps, c.snapshot(id)); // null when missing or unreadable
   return Array.isArray(snap?.items) && snap.items.length ? 'criteria' : 'ticket-text';
 }
 
@@ -902,9 +902,10 @@ const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
 
 /** Findings still open with no fix round left: a raw issue (onUnfixed: file-issue) or stuck. */
 function unfixed(c, id, t, what) {
+  if (c.profile.onUnfixed === 'file-issue' && t.unfixedIssue) return stageTo(c, id, t, 'queued');
+  // review: minimal: the open findings are in the reviewer's report; a full review's are in the status record's review block
+  const report = c.flag(id).report;
   if (c.profile.onUnfixed === 'file-issue') {
-    if (t.unfixedIssue) return stageTo(c, id, t, 'queued');
-    const report = c.flag(id).report; // review: minimal: the findings are in the reviewer's report
     return c.emit(
       judge(
         `file-issue:${id}:h${hist(t)}`,
@@ -916,8 +917,6 @@ function unfixed(c, id, t, what) {
       ),
     );
   }
-  // review: minimal: the open findings are in the reviewer's report; a full review's are in the status record's review block
-  const report = c.flag(id).report;
   const source = report ? `${report}, the reviewer's report` : 'the latest review block of its status record';
   return c.emit(
     judge(
@@ -1763,7 +1762,7 @@ function finish(c, then) {
       ...(a.outcomes ? { outcomes: a.outcomes } : {}),
       ...(a.meta ? { meta: a.meta } : {}),
       // a minimal reviewer's spawn: when it was last issued, so record can tell this round's report from an older one
-      ...(a.kind === 'spawn' && a.meta?.report ? { at: c.now } : {}),
+      ...(a.meta?.report ? { at: c.now } : {}),
     };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
@@ -1958,9 +1957,10 @@ export function record(path, id, flags, now, deps) {
     case 'review': {
       const [tid] = tickets;
       const t = ticket(tid);
-      if (meta.report) checkReport(meta.report, outcome, issued.at, deps); // review: minimal
-      if (meta.report) flag(tid).report = meta.report;
-      else delete flag(tid).report;
+      if (meta.report) {
+        checkReport(meta.report, outcome, issued.at, deps); // review: minimal
+        flag(tid).report = meta.report;
+      } else delete flag(tid).report;
       if (issued.kind === 'spawn') {
         if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
