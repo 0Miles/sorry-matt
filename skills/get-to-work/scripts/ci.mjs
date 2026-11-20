@@ -82,9 +82,9 @@
 //   no-run, query-failed) changes nothing. null when the base is not read.
 //   `tickets`: unless `baseCi` is red, the tickets owning the two-parent first-parent merges of
 //   `<lowerBound.sha>..<earliestRed>`, oldest first, each once, matched by the rules in the header of
-//   review-guide.mjs (merges.mjs implements them for both scripts): a ticket with recorded `merges` is matched only by SHA; one without, by its subject —
-//   `Merge branch '<branch>'` or `Merge branch '<branch>-ci'`, or `Merge <id>`. Host commits in the stretch are
-//   not merges and own nothing.
+//   review-guide.mjs (merges.mjs implements them for both scripts): a ticket with recorded `merges` is matched
+//   only by SHA; one without, by its subject — `Merge branch '<branch>'` or `Merge branch '<branch>-ci'`, or
+//   `Merge <id>`. Host commits in the stretch are not merges and own nothing.
 //
 //   Output (stdout, JSON, format "sorry-matt/ci@1"; fields are only ever added, never renamed)
 //   {
