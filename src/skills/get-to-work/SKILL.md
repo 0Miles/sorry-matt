@@ -57,8 +57,24 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`，每個送來完成通知的 agent 加一個
    `--reported <agent id>`。收不收它的回報由 tick 判。`run` 反覆跑 `next`，把每份清單 batch 1 的 exec（`push`
    除外）依序在 bash 跑完並 record，直到 batch 1 還剩 spawn、judge、ask 或 `push`，或 `then` 是 `end`／`done`。
-   輸出是剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔）。`run` 以 1 結束、訊息說 bash
-   不能用時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
+   輸出是剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔），`lists` 依序列出它做過的每份
+   清單的 `reports`、`reconcile`、`dispatch`、`wrote` 與從那份清單跑的 exec：較早清單收下的回報、對帳與寫出的檔
+   都從這裡讀，不只看最後一份。`run` 以 1 結束、訊息說 bash 不能用時，這次喚醒改跑 `next`，exec 自己照抄
+   `command`。
+
+   Bash tool 把 `run` 移到背景時，等它結束、讀到它的輸出，才處理清單。**背景化的 `run` 結束前不可再開一個**
+   `run`，也不跑 `next` 或 `record`：兩者會搶寫同一份 state 檔。
+
+   `run` 非零結束時，stdout 仍是 JSON：`ran` 與 `lists` 是停下前已跑且已記錄的，`blocked` 是它停在哪個 exec
+   （停在 `next` 時是 null）。`blocked.at` 是 `execute` 時那個 exec 沒跑完、什麼都沒記；是 `record` 時它已經跑過
+   （結束代碼是 `blocked.exit`，副作用已發生），記錄失敗。`run` 以 **3** 結束是 `blocked` 的 record 被拒：
+   - 先不再跑 `run` —— 它會把 `blocked` 再跑一次 —— 也不手改 state。
+   - 照 `error` 的訊息處理拒絕的原因，和 `record` 被拒時一樣，不換一種寫法硬寫。
+   - 處理好後，以 `blocked.record` 的指令加 `--exit <blocked.exit>` 記錄它（`error` 說它已經記錄過時不記），再跑
+     `run`。
+   - 處理不了的拒絕是裁決點，照第 3 節問。
+
+   輸出的 `do` 也寫著這段處置。
 2. 照 `actions` 做，但一份清單只送出 `batch` 為 1 的動作，在同一回合一起送出。每做完一個就跑它 `record` 欄的
    指令。較後的 batch 這次不做：前面的動作 record 後，它們會在之後的清單再發下來（tick 只把 batch 1 的背景 spawn
    當成已發出）。沒做的不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
@@ -79,7 +95,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 `record` 以 3 結束是拒絕：結果不合 state 的守門，照訊息處理，不換一種寫法硬寫。
 
 完成判準：每次喚醒都跑 `run`（bash 不能用時是 `next`）到 `end` 或 `done`；每份清單只送出 batch 1 的動作；
-`run` 留下的每個做了的動作都照它的 `record` 回寫；state 檔沒有被手改。
+`run` 留下的每個做了的動作都照它的 `record` 回寫；同一時間只有一個 `run` 在跑；`run` 以 3 結束後沒有直接再跑
+`run`；state 檔沒有被手改。
 
 ## 2. tick 留給你的判斷
 

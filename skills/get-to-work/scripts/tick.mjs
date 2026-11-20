@@ -144,9 +144,27 @@
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
 //   name>.log`, which the `failed` judge names.
 //   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
-//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run.
+//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run, and "lists": one entry per list made, in
+//   order, the last being the output's own: [{ "now", "reports", "reconcile", "dispatch", "wrote", "ran": ["<id run
+//   from that list>"] }] (#147): what an earlier list took, reconciled, dispatched and wrote is not lost.
+//   A non-zero exit after run started (exit 1: an error; 3: a refusal; 2: a usage error from record or next) still
+//   prints JSON on stdout, the message on stderr as ever:
+//   { "format", "command": "run", "exit": <code>, "error": "<message>", "ran": [...], "lists": [...],
+//     "blocked": null | { "id", "step", "at": "execute" | "record", "exit": <code> | null, "log", "record" },
+//     "do": "<what to do>" }                                  // "do" only with exit 3 at blocked's record
+//   `ran` and `lists` are what it ran and recorded before it stopped. `blocked` is the exec it stopped at (null when
+//   it stopped in `next`): at "execute", it did not finish running and nothing of it is recorded; at "record", it ran
+//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not run `run`
+//   again yet, which would run blocked again, and do not edit the state; settle what `error` says as for a refused
+//   record, then run blocked's `record` line with `--exit <blocked.exit>` (not when `error` says it is already
+//   recorded) and run `run` again; a refusal that cannot be settled is a ruling point.
 //   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
-//   it is not, run exits 1 with nothing on stdout; what it recorded before stays.
+//   it is not, run exits 1, `blocked` at "execute" of its first exec; what it recorded before stays.
+//
+// Flags
+//   A flag's value is the token after it, unless that token is missing or starts with `--`: `--reported --now <UTC>`
+//   is "--reported needs a value" (exit 2), never `--now` taken as an agent id. A value starting with one dash (`-1`)
+//   is a value.
 //
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
@@ -2131,6 +2149,9 @@ const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyO
 // An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
 const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
 const RUN_LISTS = 500;
+/** What the host does when `run` exits 3 (#147): the `do` of its output. */
+const RUN_REFUSED =
+  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. Do not run `run` again yet: it would run blocked again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run the `record` line of blocked with --exit <blocked.exit> (skip that when `error` says it is already recorded) and run `run` again. A refusal you cannot settle is a ruling point: ask.';
 
 /**
  * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
@@ -2140,23 +2161,35 @@ const RUN_LISTS = 500;
  */
 export function run(path, reported, now, deps) {
   const ran = [];
-  let out = next(path, reported, now(), deps);
-  for (let i = 0; ; i += 1) {
-    const first = out.actions.filter((a) => a.batch === 1);
-    const todo = first.filter(runnable);
-    for (const a of todo) {
-      const log = runLog(path, out.run, a.id);
-      deps.mkdir(dirname(log));
-      const { code } = deps.execute(a, log);
-      record(path, a.id, { exit: String(code), log }, now(), deps);
-      ran.push({ id: a.id, exit: code, log });
+  const lists = []; // each list's own reports, reconcile, dispatch and wrote, with the ids run from it (#147)
+  let blocked = null;
+  try {
+    let out = null;
+    for (let i = 0; ; i += 1) {
+      if (i > RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
+      out = next(path, i === 0 ? reported : [], now(), deps);
+      const list = { now: out.now, reports: out.reports, reconcile: out.reconcile, dispatch: out.dispatch, wrote: out.wrote, ran: [] };
+      lists.push(list);
+      const first = out.actions.filter((a) => a.batch === 1);
+      const todo = first.filter(runnable);
+      for (const a of todo) {
+        blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
+        deps.mkdir(dirname(blocked.log));
+        const { code } = deps.execute(a, blocked.log);
+        Object.assign(blocked, { at: 'record', exit: code });
+        record(path, a.id, { exit: String(code), log: blocked.log }, now(), deps);
+        ran.push({ id: a.id, exit: code, log: blocked.log });
+        list.ran.push(a.id);
+        blocked = null;
+      }
+      if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
+        const done = new Set(todo.map((a) => a.id));
+        return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran, lists };
+      }
     }
-    if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
-      const done = new Set(todo.map((a) => a.id));
-      return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran };
-    }
-    if (i >= RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-    out = next(path, [], now(), deps);
+  } catch (e) {
+    e.run = { ran, blocked, lists }; // what main prints beside the error: what ran, and where run stopped
+    throw e;
   }
 }
 
@@ -2254,7 +2287,8 @@ function parseArgs(argv, spec) {
     }
     const name = a.slice(2);
     if (!(name in spec)) throw new UsageError(`unknown flag ${a}`);
-    if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+    // the next token is the value unless it is missing or is a flag itself (`--reported --now …`); `-1` is a value
+    if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new UsageError(`${a} needs a value`);
     const value = argv[(i += 1)];
     if (spec[name] === 'many') (flags[name] ??= []).push(value);
     else if (name in flags) throw new UsageError(`${a} is given twice`);
@@ -2315,9 +2349,13 @@ export function main(argv, deps = defaultDeps()) {
     }
     return { code: 0, out: `${JSON.stringify(out, null, 2)}\n`, err: '' };
   } catch (e) {
-    if (e instanceof Refused) return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
-    if (e?.constructor?.name === 'Refusal') return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
-    return failure('tick', e);
+    const refused = e instanceof Refused || e?.constructor?.name === 'Refusal';
+    const r = refused ? { code: 3, out: '', err: `tick: refused: ${e.message}\n` } : failure('tick', e);
+    if (!e?.run) return r;
+    // run stopped part way (#147): what it ran and recorded, the exec it stopped at, and, for a refusal, what to do
+    const out = { format: FORMAT, command: 'run', exit: r.code, error: r.err.replace(/^tick: (refused: )?/, '').replace(/\nusage: see the header of tick\.mjs\n$/, '').trim(), ...e.run };
+    if (r.code === 3 && e.run.blocked?.at === 'record') out.do = RUN_REFUSED;
+    return { ...r, out: `${JSON.stringify(out, null, 2)}\n` };
   }
 }
 
