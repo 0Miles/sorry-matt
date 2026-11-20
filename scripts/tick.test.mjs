@@ -240,6 +240,10 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
   const DEFAULTS = {
     collect: (a) => ({ implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved', 'ci-fix': 'fixed' })[a.meta.stage] ?? 'logged',
     review: () => 'pass',
+    'agent-report': (a) => {
+      write(a.meta.agentReport, h.agentReport({ tickets: a.tickets, meta: { agent: 'the-last-agent' } }));
+      return 'written';
+    },
     'review-stuck': () => 'stuck',
     predict: () => 'written',
     send: (a) => {
@@ -264,10 +268,15 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
     if (!fn) throw new Error(`no policy for ${a.step}: ${a.do}`);
     let r = fn(a);
     if (typeof r === 'string') r = { outcome: r };
+    // #138: the host writes the agent's report it takes to the file the collect names, before a review follows
+    if (a.step === 'collect' && a.meta.agentReport && ['green', 'fixed'].includes(r.outcome)) write(a.meta.agentReport, h.agentReport(a));
     const flags = ['--outcome', r.outcome];
     for (const k of ['value', 'findings', 'fixed', 'unfixed', 'agent']) if (r[k] !== undefined) flags.push(`--${k}`, r[k]);
     return flags;
   };
+  /** The implementation (or fix) agent's report as agents/implementer.md section 5 has it. */
+  h.agentReport = (a) =>
+    `ticket: ${a.tickets[0]}\ncommit: c-${a.meta.agent} (branch ${h.state().tickets[a.tickets[0]].branch})\ntargeted checks: source=commands.md; node --test by ${a.meta.agent} → green\nstatus record: none\n`;
 
   h.spawn = (a) => {
     const agent = `a${++h.agents}`;
@@ -276,8 +285,8 @@ function world(t, { profile = null, tracker = 'github' } = {}) {
     if (a.step === 'review') {
       const r = (h.policy.review ?? DEFAULTS.review)(a);
       const v = typeof r === 'string' ? { outcome: r } : r;
-      // the minimal reviewer writes its report to the file its brief names (#128)
-      h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
+      // the minimal reviewer writes its report to the file its brief names (#128); the review host writes a block
+      if (a.meta.kind === 'minimal') h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : [])];
     }
     if (a.step === 'simplify') {
@@ -1079,6 +1088,116 @@ test('#128 D4: a fix round given to a new agent names the findings source: the r
   }
 });
 
+// ---- #138: the prove-it review is a spawn with a spawn file brief.mjs review filled -----------------------------------
+
+/** The value lines a review host's spawn file for #1 carries (brief.mjs review's labels), every one filled. */
+function reviewHostValues(h, { mode, tag, report, previous }) {
+  const st = h.state();
+  return [
+    `- mode: ${mode}\n`,
+    `- repo: ${resolve(h.repo)}\n`,
+    '- tracker: GitHub (o/r)\n',
+    `- ticket: #1; ticket face (the ticket text with its expansion blocks): ${resolve(h.W, 'tick', 'body', '1.md')}\n`,
+    '- status record: the comment on o/r#1 whose first line is `<!-- sorry-matt:status -->`\n',
+    `- acceptance snapshot: ${resolve(h.W, 'acceptance', '1.json')}; comparison: ${resolve(h.W, 'tick', 'against', `1-${tag}.json`)}\n`,
+    `- fixed point: ${LINE}\n`,
+    `- ticket branch: ${st.tickets['#1'].branch}\n`,
+    `- targeted checks: source=commands.md; node --test by ${report.meta.agent} → green (commit c-${report.meta.agent} (branch ${st.tickets['#1'].branch}); the agent's report: ${resolve(report.meta.agentReport)})\n`,
+    '- CI coverage: covered\n',
+    `- previous review block: ${previous}\n`,
+    '- reviewer: primary\n',
+    `- scratchpad: ${resolve(h.dir, 'wts', 'review', '1')}\n`,
+  ];
+}
+
+test('#138: a prove-it review is a foreground spawn whose spawn file brief.mjs review filled, at the initial review and the recheck', (t) => {
+  const h = world(t);
+  h.policy.review = (a) => (a.tickets[0] === '#1' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+  assert.equal(h.untilDone().then, 'done');
+  const reviews = h.log.filter((a) => a.step === 'review' && a.tickets[0] === '#1');
+  assert.deepEqual(reviews.map((a) => [a.kind, a.meta.mode]), [['spawn', 'initial'], ['spawn', 'recheck']], 'no review judge is handed to the host');
+  const collects = h.log.filter((a) => a.step === 'collect' && a.tickets[0] === '#1');
+  assert.deepEqual(collects.map((a) => a.meta.stage), ['implementing', 'fixing']);
+  for (const [k, a] of reviews.entries()) {
+    assert.deepEqual(
+      { type: a.spawn.subagent_type, background: a.spawn.background, description: a.spawn.description, fallback: a.spawn.fallback ?? null, outcomes: a.outcomes },
+      { type: 'general-purpose', background: false, description: 'review #1', fallback: null, outcomes: ['pass', 'fix', 'stuck'] },
+    );
+    assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck/);
+    // the list that first hands it out (a later batch) names what it waits for in that list
+    const first = h.wakes.flat().flatMap((o) => o.actions).find((x) => x.id === a.id);
+    const brief = h.log.find((x) => x.step === 'brief' && x.argv[2] === 'review' && first.after.includes(x.id));
+    assert.ok(brief, `${a.id} waits for brief.mjs review: ${first.after}`);
+    assert.ok(first.after.includes(`body:#1:review:${k + 1}`), 'and for the ticket face fetched again');
+    const file = readFileSync(briefOf(a), 'utf8');
+    assert.doesNotMatch(file, /\{[^{}]*\}/, 'no placeholder is left for the host');
+    assert.ok(file.startsWith('你是審查主持 agent：'), 'REVIEWER.md fixed rules first');
+    const expected = reviewHostValues(h, { mode: a.meta.mode, tag: k + 1, report: collects[k], previous: k ? 'in the status record' : 'none' });
+    for (const line of expected) assert.ok(file.includes(line), `${a.id}: ${JSON.stringify(line)} in\n${file.slice(file.lastIndexOf('\n---\n'))}`);
+  }
+  // the review host is recorded as an agent of the run with the role word review
+  const agents = Object.values(h.state().tick.agents).filter((x) => x.role === 'review');
+  assert.equal(agents.length, h.log.filter((a) => a.step === 'review').length);
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.kind, r.mode, r.verdict]), [['full', 'initial', 'fix'], ['full', 'recheck', 'pass']]);
+});
+
+test('#138: record green is refused (3) until the agent report the collect names holds a targeted checks line', (t) => {
+  const h = world(t);
+  let checked = 0;
+  h.policy.collect = (a) => {
+    if (a.meta.stage === 'implementing' && a.tickets[0] === '#1' && !checked) {
+      assert.ok(a.do.includes(a.meta.agentReport), `the collect names the report file: ${a.do}`);
+      const green = () => h.tick('record', h.path, a.id, '--outcome', 'green');
+      assert.equal(green().code, 3, 'no report file');
+      write(a.meta.agentReport, 'ticket: #1\ncommit: abc\n');
+      const r = green();
+      assert.equal(r.code, 3, 'a report without its targeted checks line');
+      assert.match(r.err, /targeted checks/);
+      assert.equal(h.state().tickets['#1'].stage, 'implementing', 'nothing moved');
+      checked += 1;
+    }
+    return { implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved' }[a.meta.stage];
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(checked, 1);
+});
+
+test('#138: a ticket in review with no agent report on file gets a judge to write it before the review spawn', (t) => {
+  const h = world(t);
+  const record = h.record;
+  h.record = (id, ...flags) => {
+    const r = record(id, ...flags);
+    const a = h.log.findLast((x) => x.id === id);
+    if (a?.step === 'collect' && a.tickets[0] === '#1' && a.meta.stage === 'implementing') rmSync(a.meta.agentReport); // lost, or a state from before #138
+    return r;
+  };
+  h.policy['agent-report'] = (a) => {
+    assert.equal(h.tick('record', h.path, a.id, '--outcome', 'written').code, 3, 'refused while the file is missing');
+    write(a.meta.agentReport, h.agentReport({ tickets: a.tickets, meta: { agent: 'a1' } }));
+    return 'written';
+  };
+  assert.equal(h.untilDone().then, 'done');
+  const judges = h.log.filter((a) => a.step === 'agent-report');
+  assert.deepEqual(judges.map((a) => a.tickets), [['#1']]);
+  const review = h.log.find((a) => a.step === 'review' && a.tickets[0] === '#1');
+  assert.ok(readFileSync(briefOf(review), 'utf8').includes(`the agent's report: ${resolve(judges[0].meta.agentReport)})`));
+});
+
+test('#138: Local Markdown: the status record is the ticket file in the ticket worktree', (t) => {
+  const h = world(t, { tracker: 'local' });
+  const seen = [];
+  const spawn = h.spawn;
+  h.spawn = (a) => {
+    if (a.step === 'review') seen.push({ a, file: readFileSync(briefOf(a), 'utf8'), wt: h.state().tickets[a.tickets[0]].assignment?.worktree });
+    return spawn(a);
+  };
+  assert.equal(h.untilDone().then, 'done');
+  const one = seen.find((x) => x.a.tickets[0] === h.ids[0]);
+  assert.equal(one.a.spawn.description, `review ${h.ids[0]}`);
+  assert.ok(one.file.includes('- tracker: Local Markdown\n'));
+  assert.ok(one.file.includes(`- status record: ${resolve(one.wt, TICKETS_DIR, h.ids[0])}\n`), one.file.slice(one.file.lastIndexOf('\n---\n')));
+});
+
 test('#128 D4: under review: minimal a fix agent reassigned after a timeout is pointed at the report file', (t) => {
   const h = world(t, { profile: { review: 'minimal' } });
   h.policy.review = (a) => (a.tickets[0] === '#1' && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
@@ -1200,13 +1319,14 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
   assert.deepEqual(only(strict, relaxed), [
     'assignment:expand', // expand: skip
     'brief:expand',
+    'brief:review', // review: minimal (no review host, so no spawn file from brief.mjs review, #138) …
     'ci-read', // ci: skip
     'ci-record',
     'collect:expanding',
     'deliver-line', // integrate: direct (no aggregate PR) …
     'gate', // … no finish gate (its assertions assume aggregate PRs and a CI read) …
-    'review:initial', // review: minimal (no prove-it judge) …
-    'review:recheck', // … and recheck: false
+    'review:full:initial', // … no prove-it review …
+    'review:full:recheck', // … and recheck: false
     'spawn:general-purpose:simplify', // simplify: false
     'spawn:sorry-matt:expander:expand',
     'stage:expanding',
@@ -1215,7 +1335,7 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
   assert.deepEqual(only(relaxed, strict), [
     'file-issue', // onUnfixed: file-issue
     'push', // integrate: direct (the base branch is pushed by the host, so the guard hook sees it)
-    'spawn:general-purpose:review', // review: minimal
+    'review:minimal:initial', // review: minimal
   ]);
   // integrate: direct merged into the base branch itself; the default into the line
   assert.equal(git(relaxed.h.repo, 'rev-list', '--first-parent', '--merges', '--count', 'main'), '2');
@@ -1225,6 +1345,7 @@ test('a relaxed profile drops exactly the actions it relaxes', (t) => {
 });
 
 function signature(a) {
+  if (a.step === 'review') return `review:${a.meta.kind}:${a.meta.mode}`; // the review host's spawn or the minimal reviewer's
   if (a.kind === 'spawn') return `spawn:${a.spawn.subagent_type}:${a.spawn.description.split(' ')[0]}`;
   if (a.kind === 'exec') {
     if (a.step === 'stage') return `stage:${a.argv[4]}`;
@@ -1233,7 +1354,6 @@ function signature(a) {
     return a.step;
   }
   if (a.step === 'collect') return `collect:${a.meta.stage}`;
-  if (a.step === 'review') return `review:${a.meta.mode}`;
   return a.step;
 }
 
@@ -1559,13 +1679,14 @@ test('#129: --reported goes to the first next of run only', (t) => {
   assert.ok(collected(), "a1's collect is recorded");
   // the same report again: the first next of run takes it as a duplicate, the later lists never see it
   const out = runOut(h, '--reported', 'a1');
-  // two lists: the acceptance check ran in the first; the review it leads to is listed by the next after it
-  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1']);
+  // three lists: the acceptance check and the ticket face ran in the first, the review's spawn file (#138) in the
+  // second; the review spawn they lead to is listed by the next after them
+  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1', 'body:#1:review:1', 'brief:#1:review-1']);
   assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
   assert.deepEqual(out.reports, [], 'the last list was not handed the report');
   // #147: the first list's take of it is still in the output, beside what that list ran
-  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], []]);
-  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1'], []]);
+  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], [], []]);
+  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1', 'body:#1:review:1'], ['brief:#1:review-1'], []]);
 });
 
 // ---- #147: run's output and use -----------------------------------------------------------------------------------------

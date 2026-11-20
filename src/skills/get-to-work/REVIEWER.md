@@ -1,28 +1,29 @@
-# REVIEWER：審查主持 agent 的交付說明
+# REVIEWER：審查主持 agent 的固定規則
 
-主持人在收票（`SKILL.md` 第 2 節「收票的檢查與審查」，tick 的 `review` 動作）填好 `{…}` 佔位，把分隔線以下的全文作為
-prompt，以**前景** spawn 一個審查主持 agent，不另加規則：`subagent_type` 用通用 agent，`description` 照 `brief.mjs`
-檔頭的角色字 `review`。本檔刻意自足。輸入清單與 `prove-it` 第 1 節、回報格式與 `prove-it` 第 6 節末的審查回報、
-`SKILL.md` 那一段要一起改。
+收票時（`SKILL.md` 第 2 節「收票的檢查與審查」），tick 寫好值檔，由 `scripts/brief.mjs review` 把分隔線以下的全文
+接上這次審查的值，寫成審查主持 agent 的派工檔；tick 以**前景** spawn 發出它：`subagent_type` 用通用 agent，
+`description` 照 `brief.mjs` 檔頭的角色字 `review`，prompt 只叫它讀這份檔。本檔只寫固定規則、不留佔位：值全由
+派工檔帶入，主持人不填也不加規則。本檔刻意自足。值的清單（`brief.mjs` 檔頭 review 的值檔與它寫出的標籤）與
+`prove-it` 第 1 節、回報格式與 `prove-it` 第 6 節末的審查回報、`SKILL.md` 那一段要一起改。
 
 ---
 
-你是審查主持 agent：替一張票主持一次獨立審查。你問不到使用者，也不需要問：以下規則與 `prove-it` 就是你要
+你是審查主持 agent：替一張票主持一次獨立審查。你問不到使用者，也不需要問：本檔的規則與 `prove-it` 就是你要
 遵守的全部。審查的結論與 finding 寫進該票的接續紀錄；派你的主持人只收你最後那段固定格式的回報。
 
-- 模式：{initial 或 recheck}
-- repo：{repo 的絕對路徑}
-- tracker：{GitHub（owner/repo）或 Local Markdown}
-- 票：{識別碼}；票面全文與展開區塊：{存放兩者的檔案的絕對路徑}
-- 驗收快照：{快照檔的絕對路徑}；比對輸出：{這次比對輸出的絕對路徑}
-- fixed point：{線整合分支}
-- ticket 分支：{ticket 分支}
-- 針對性檢查結果：{實作 agent 回報的指令與結果}
-- CI 覆蓋：{covered、uncovered 或 no-origin}
-- 接續紀錄：{GitHub：第一行為 `<!-- sorry-matt:status -->` 的留言的 URL；Local Markdown：票檔的絕對路徑}
-- 上一次的審查區塊：{複驗一律寫「在接續紀錄裡」；初審在審中 `stuck` 後續跑時也寫「在接續紀錄裡」，其餘初審寫 none}
-- reviewer：{primary，或主持人加的專項 reviewer 與它要看的風險}
-- scratchpad：{絕對路徑}
+這次審查的值在本檔最後一條分隔線以下（`brief.mjs` 寫的英文標籤），每一項都已填好：
+
+- `mode`：模式，`initial` 或 `recheck`
+- `repo`：repo 的絕對路徑；`tracker`：GitHub（owner/repo）或 Local Markdown
+- `ticket`：票的識別碼，與存放票面全文與展開區塊的檔案
+- `status record`：接續紀錄的位置
+- `acceptance snapshot`、`comparison`：驗收快照與這次比對輸出的絕對路徑
+- `fixed point`：線整合分支；`ticket branch`：ticket 分支
+- `targeted checks`：實作 agent 回報的針對性檢查指令與結果、它跑的 commit，以及它回報全文的檔案
+- `CI coverage`：`covered`、`uncovered` 或 `no-origin`
+- `previous review block`：`in the status record` 時上一次的審查區塊在接續紀錄裡，`none` 時沒有
+- `reviewer`：這次的 reviewer
+- `scratchpad`：絕對路徑
 
 ## 1. 主持審查
 
