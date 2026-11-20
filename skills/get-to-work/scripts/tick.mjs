@@ -3,15 +3,17 @@
 // files of the run directory, and says what the host does now: which agent reports to take and which to ignore,
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
-// The host runs the actions and writes each result back with `tick.mjs record`. tick spawns nothing, stops no
-// agent, runs no network call and changes no branch: those are the host's actions. No dependencies: runs on a bare
-// Node 20+ with git on PATH.
+// The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
+// exec actions but pushes. tick spawns nothing and stops no agent. `next` and `record` run no network call and change
+// no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh) and merge branches (integrate.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
 //                        [--repo <owner>/<repo>] [--ledger <ledger.md>] [--tickets-dir <repo-relative dir>]
 //                        [--worktrees <dir>] [--spec <identifier or path>]
 //   node tick.mjs next   <state> [--reported <agent id>]... [--now <UTC>]
+//   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //                        [--now <UTC>]
@@ -53,8 +55,8 @@
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
 //
 // A wake-up
-//   The host runs `next` (with `--reported` for each agent whose completion notice arrived), sends only the actions
-//   at batch 1 of the list, records each, and runs `next` again; the later batches are handed out again by the lists
+//   The host runs `run` (with `--reported` for each agent whose completion notice arrived; `next` when bash cannot be
+//   used), sends only the actions at batch 1 of the list, records each, and runs `run` again; the later batches are handed out again by the lists
 //   after it, once what they wait for is recorded (#128). It goes on until `then` is "end": the last action is then
 //   the wake-up's closing one (ledger narrative and the fallback wake-up), and recording it starts the next wake-up.
 //   `then` "done" means the run is over (the finish's wrap-up was recorded).
@@ -116,10 +118,26 @@
 //   hold; recording the same result twice changes nothing, a different result for a recorded action is refused.
 //   Output: { "format", "command": "record", "id", "applied": ["<state.mjs command run>"], "wakeup" }
 //
+// run
+//   `next`, then the exec actions at batch 1 of its list, in list order, each through deps.execute (`bash -c
+//   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
+//   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
+//   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
+//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
+//   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
+//   list carries its `failed` judge, which stops run; nothing is retried.
+//   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
+//   name>.log`, which the `failed` judge names.
+//   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
+//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run.
+//   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
+//   it is not, run exits 1 with nothing on stdout; what it recorded before stays.
+//
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
 //   "agents": { "<id>": { "tickets", "role", "type", "status": "current" | "collected" | "stopped", "at" } },
-//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"? } },
+//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
 //   "flags": { "<ticket>": {…} }, "red": { "<line>": { "sha", "at" } }, "failed": { "<line>": "<UTC>" },
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
@@ -137,11 +155,12 @@
 // Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
 // names them); tick's own plans and outputs go under its `tick/`.
 //
-// Exit codes: 0 output written; 1 the state, the ledger or git could not be read, or a state write failed;
-// 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs refusal).
+// Exit codes: 0 output written; 1 the state, the ledger or git could not be read, a state write failed, or (run) bash
+// could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
+// refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
@@ -430,10 +449,11 @@ function context(path, state, now, deps) {
     if (s === 'failed') {
       const fid = `failed:${a.id}`;
       if (c.done(fid)) return null; // settled by the host
+      const log = book.done[a.id].log;
       action = judge(
         fid,
         'failed',
-        `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
+        `\`${a.command ?? a.id}\` exited ${book.done[a.id].exit}. Read its error${log ? ` (tick.mjs run wrote it to ${log})` : ''}, put it right, and record retry (it is issued again) or settled (it is not needed any more).`,
         ['retry', 'settled'],
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
@@ -1749,6 +1769,7 @@ export function record(path, id, flags, now, deps) {
   }
   if (flags.value !== undefined) entry.value = flags.value;
   if (flags.agent !== undefined) entry.agent = flags.agent;
+  if (flags.log !== undefined) entry.log = flags.log; // tick.mjs run only: where the exec's error output went
   const seen = book.done[id];
   if (seen) {
     const same = seen.exit === entry.exit && seen.outcome === entry.outcome && seen.agent === entry.agent;
@@ -1965,6 +1986,68 @@ export function record(path, id, flags, now, deps) {
   return { format: FORMAT, command: 'record', id, applied, wakeup: book.wakeup };
 }
 
+// ---- run --------------------------------------------------------------------------------------------------------------
+
+/** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
+const runLog = (path, run, id) => join(dirname(path), run, 'tick', 'run', `${keyOf(id)}.log`);
+// An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
+const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
+const RUN_LISTS = 500;
+
+/**
+ * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
+ * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
+ * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
+ * and record: the clock moves while the execs run.
+ */
+export function run(path, reported, now, deps) {
+  const ran = [];
+  let out = next(path, reported, now(), deps);
+  for (let i = 0; ; i += 1) {
+    const first = out.actions.filter((a) => a.batch === 1);
+    const todo = first.filter(runnable);
+    for (const a of todo) {
+      const log = runLog(path, out.run, a.id);
+      deps.mkdir(dirname(log));
+      const { code } = deps.execute(a, log);
+      record(path, a.id, { exit: String(code), log }, now(), deps);
+      ran.push({ id: a.id, exit: code, log });
+    }
+    if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
+      const done = new Set(todo.map((a) => a.id));
+      return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran };
+    }
+    if (i >= RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
+    out = next(path, [], now(), deps);
+  }
+}
+
+/**
+ * The default exec seam of `run`: `bash -c <command>` with stderr (and stdout, which a `stdout` exec redirects in its
+ * command) written to `log`. bash must start, and on win32 be Git Bash, MSYS or Cygwin: WSL's bash flattens Windows
+ * paths. A bash that is not usable throws (exit 1) before anything runs.
+ */
+export function bashExecutor({ spawn = spawnSync, platform = process.platform } = {}) {
+  let checked = false;
+  return (a, log) => {
+    if (!checked) {
+      const p = spawn('bash', ['-c', 'uname -s'], { encoding: 'utf8' });
+      if (p.error || p.status !== 0) throw new Error(`bash could not be started (${p.error?.message ?? `uname -s exited ${p.status}`}): run the execs by hand`);
+      if (platform === 'win32' && !/MINGW|MSYS|CYGWIN/i.test(p.stdout ?? ''))
+        throw new Error(`the bash on PATH is not Git Bash, MSYS or Cygwin (uname -s: ${String(p.stdout ?? '').trim() || 'nothing'}), likely WSL's, which flattens Windows paths: put Git Bash first on PATH`);
+      checked = true;
+    }
+    const fd = openSync(log, 'w');
+    try {
+      const p = spawn('bash', ['-c', a.command], { stdio: ['ignore', fd, fd] });
+      if (p.error) throw new Error(`bash could not run ${a.id} (${p.error.message})`);
+      return { code: p.status ?? 1 };
+    } finally {
+      closeSync(fd);
+    }
+  };
+}
+
 // ---- setup ----------------------------------------------------------------------------------------------------------
 
 export function setup(path, flags, now) {
@@ -2044,12 +2127,14 @@ export function defaultDeps() {
       execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
     stateMain,
     clock: () => Date.now(),
+    execute: bashExecutor(), // run: (action, log file) => { code }
   };
 }
 
 const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
+  run: { reported: 'many', now: 'one' },
   record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', now: 'one' },
 };
 
@@ -2057,12 +2142,13 @@ const SPECS = {
 export function main(argv, deps = defaultDeps()) {
   try {
     const command = argv[0];
-    if (!(command in SPECS)) throw new UsageError('expected setup, next or record');
+    if (!(command in SPECS)) throw new UsageError('expected setup, next, run or record');
     const { flags, rest } = parseArgs(argv.slice(1), SPECS[command]);
     if (!rest.length) throw new UsageError(`${command} needs the state file first`);
     const path = resolve(rest[0]);
     if (flags.now !== undefined && (!TIME.test(flags.now) || Number.isNaN(Date.parse(flags.now)))) throw new UsageError(`--now: expected a UTC time like 2026-01-31T23:59:59Z`);
-    const now = flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const clock = () => flags.now ?? formatTime(Math.floor(deps.clock() / 1000) * 1000);
+    const now = clock();
     let out;
     if (command === 'setup') {
       if (rest.length !== 1) throw new UsageError('setup takes the state file and flags');
@@ -2070,6 +2156,9 @@ export function main(argv, deps = defaultDeps()) {
     } else if (command === 'next') {
       if (rest.length !== 1) throw new UsageError('next takes the state file and flags');
       out = next(path, flags.reported ?? [], now, deps);
+    } else if (command === 'run') {
+      if (rest.length !== 1) throw new UsageError('run takes the state file and flags');
+      out = run(path, flags.reported ?? [], clock, deps); // each list and record at its own time
     } else {
       if (rest.length !== 2) throw new UsageError('record takes the state file and one action id');
       out = record(path, rest[1], flags, now, deps);

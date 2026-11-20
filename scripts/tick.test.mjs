@@ -11,7 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
+import { main as tick, defaultDeps, bashExecutor } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
@@ -288,6 +288,26 @@ function world(t, { profile = null } = {}) {
     throw new Error('the wake-up did not end');
   };
   h.actions = (outs) => outs.flatMap((o) => o.actions);
+
+  /** `tick.mjs run`, its execs through the host's stand-in (h.exec) unless `execute` is given (#129). */
+  h.execute = null;
+  h.runTick = (...args) => tick(['run', path, ...args, '--now', h.iso()], { ...defaultDeps(), execute: h.execute ?? ((a) => ({ code: h.exec(a) })) });
+  /** One wake-up as SKILL.md has it with run: run, then the host does batch 1 of what is left, until end or done. */
+  h.runWake = ({ minutes = 5 } = {}) => {
+    h.now += minutes * 60_000;
+    const reports = h.reportsNext.splice(0);
+    const outs = [];
+    h.wakes.push(outs);
+    for (let i = 0; i < 400; i += 1) {
+      const r = h.runTick(...(i === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
+      assert.equal(r.code, 0, r.err);
+      const out = JSON.parse(r.out);
+      outs.push(out);
+      h.run(out.actions);
+      if (out.then !== 'tick') return outs;
+    }
+    throw new Error('the wake-up did not end');
+  };
   return h;
 }
 
@@ -857,3 +877,308 @@ function signature(a) {
   if (a.step === 'review') return `review:${a.meta.mode}`;
   return a.step;
 }
+
+// ---- #129: tick.mjs run ----------------------------------------------------------------------------------------------
+
+/** One `run` output, which must have exited 0 with nothing on stderr. */
+const runOut = (h, ...args) => {
+  const r = h.runTick(...args);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.err, '');
+  return JSON.parse(r.out);
+};
+const leftForHost = (a) => a.kind === 'exec' && a.step === 'push';
+
+test('#129: run checks its arguments as next does; with no exec to run it lists what next lists, and ran is []', (t) => {
+  const h = world(t);
+  for (const args of [['--bogus', 'x'], ['--reported'], ['extra.json']]) {
+    const r = h.runTick(...args);
+    assert.equal(r.code, 2, `${args.join(' ')}: ${r.err}`);
+    assert.equal(r.out, '');
+  }
+  const none = tick(['run'], { ...defaultDeps(), execute: () => assert.fail('nothing runs') });
+  assert.equal(none.code, 2);
+  assert.equal(none.out, '');
+  // an interrupted spawn: batch 1 is a spawn-check judge, so nothing runs and run lists what next lists
+  h.crashAfter = (a) => a.kind === 'spawn';
+  assert.throws(() => h.wake(), Crash);
+  h.crashAfter = null;
+  const plain = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(plain.actions.filter((a) => a.batch === 1).every((a) => a.kind !== 'exec'), 'batch 1 holds no exec');
+  h.execute = () => assert.fail('nothing runs');
+  const out = runOut(h);
+  assert.equal(out.format, 'sorry-matt/tick@1');
+  assert.equal(out.command, 'run');
+  assert.deepEqual(out.ran, []);
+  assert.deepEqual(ids(out.actions), ids(plain.actions));
+  for (const k of ['run', 'wakeup', 'now', 'profile', 'reports', 'reconcile', 'dispatch', 'wrote', 'fallback', 'then']) assert.ok(k in out, `${k} is in the output`);
+});
+
+test('#129: run goes from the dispatch point to the first implementation spawn, each exec recorded with its exit', (t) => {
+  const h = world(t);
+  const seen = [];
+  h.execute = (a) => {
+    seen.push(a.id);
+    return { code: h.exec(a) };
+  };
+  let out = null;
+  const ran = [];
+  const implement = (o) => o.actions.find((a) => a.kind === 'spawn' && a.batch === 1 && a.spawn.description.startsWith('implement '));
+  for (let i = 0; i < 20; i += 1) {
+    out = runOut(h);
+    ran.push(...out.ran);
+    if (implement(out)) break;
+    h.run(out.actions); // a judge on the way: the host settles it and runs run again
+  }
+  assert.ok(ran.length > 5, 'run ran the dispatch point');
+  assert.deepEqual(ran.map((x) => x.id), seen, 'in list order, each once');
+  const st = h.state();
+  for (const x of ran) {
+    assert.equal(st.tick.done[x.id].exit, x.exit, `${x.id} recorded with its exit`);
+    assert.equal(x.exit, 0);
+    assert.equal(dirname(x.log), join(h.W, 'tick', 'run'));
+    assert.ok(basename(x.log).endsWith('.log'));
+  }
+  assert.equal(new Set(ran.map((x) => x.log)).size, ran.length, 'one log per exec');
+  const left = new Set(ids(out.actions));
+  assert.ok(!out.ran.some((x) => left.has(x.id)), 'no exec it ran is still listed');
+  assert.ok(out.actions.filter((a) => a.batch === 1 && a.kind === 'exec').every(leftForHost), 'batch 1 holds no exec but a push');
+  const spawn = implement(out);
+  assert.ok(spawn, 'an implementation spawn');
+  assert.equal(spawn.spawn.subagent_type, 'sorry-matt:implementer');
+  assert.equal(stage(h, spawn.tickets[0]), 'implementing');
+});
+
+test('#129: a spawn at batch 1 stops run after that list; a spawn at batch 2 comes out at batch 1 as a spawn, never a spawn-check', (t) => {
+  const h = world(t);
+  h.acceptance['#2'] = { items: [], expansions: [] }; // #2's expansion spawn comes up while #1's chain still has execs
+  const mixed = []; // batch-1 execs run while a background spawn of the same list was at batch 1, not recorded
+  const late = new Set(); // background spawns listed behind an exec run
+  h.execute = (a) => {
+    const st = h.state().tick;
+    for (const [id, x] of Object.entries(st.issued)) {
+      if (x.kind !== 'spawn' || x.step !== 'spawn' || st.done[id]) continue;
+      if (x.batch === 1) mixed.push({ exec: a.id, spawn: id });
+      else late.add(id);
+    }
+    return { code: h.exec(a) };
+  };
+  const outs = [];
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) outs.push(...h.runWake());
+  assert.equal(outs.at(-1).then, 'done');
+  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  assert.ok(!outs.some((o) => o.actions.some((a) => a.step === 'spawn-check')), 'no output carries a spawn-check');
+  assert.ok(mixed.length, 'a list held a spawn and an exec at batch 1');
+  for (const m of mixed) {
+    const out = outs.find((o) => o.ran.some((x) => x.id === m.exec));
+    const spawn = out.actions.find((a) => a.id === m.spawn);
+    assert.equal(spawn?.kind, 'spawn', `${m.spawn} is listed as a spawn after ${m.exec} ran`);
+    assert.equal(spawn.batch, 1);
+    assert.ok(!out.actions.some((x) => x.id === m.exec), `${m.exec}, which run ran, is not listed beside it`);
+  }
+  assert.ok(late.size, 'a spawn was listed behind an exec');
+  for (const id of late) {
+    const out = outs.find((o) => o.actions.some((a) => a.id === id && a.batch === 1));
+    assert.ok(out, `${id} came out at batch 1`);
+    assert.equal(out.actions.find((a) => a.id === id).kind, 'spawn');
+  }
+  const spawned = h.log.filter((a) => a.kind === 'spawn' && a.step === 'spawn').map((a) => a.spawn.description).sort();
+  assert.deepEqual(spawned, ['expand #2', 'implement #1', 'implement #2'], 'each spawn once');
+});
+
+test('#129: an exit not in okExit is recorded once and run stops at its failed judge; an okExit exit other than 0 goes on', (t) => {
+  const h = world(t);
+  const exec = h.exec;
+  let failed = 0;
+  h.exec = (a) => {
+    if (a.step !== 'frontier') return exec(a);
+    failed += 1;
+    return 1;
+  };
+  let out = null;
+  for (let i = 0; i < 10 && !out?.actions.some((a) => a.step === 'failed'); i += 1) {
+    out = runOut(h);
+    if (!out.actions.some((a) => a.step === 'failed')) h.run(out.actions);
+  }
+  const judged = out.actions.find((a) => a.id === 'failed:frontier:r1');
+  assert.ok(judged && judged.kind === 'judge' && judged.batch === 1, 'the failed judge is listed');
+  const ran = out.ran.filter((x) => x.id === 'frontier:r1');
+  assert.equal(ran.length, 1, 'run did not retry it');
+  assert.equal(ran[0].exit, 1);
+  assert.equal(failed, 1);
+  assert.equal(h.state().tick.done['frontier:r1'].exit, 1, 'recorded as it exited');
+  assert.ok(judged.do.includes(ran[0].log), 'the judge names the log file');
+
+  // exit 4 of a conflicting merge is in okExit: recorded, and run goes on to the merge agent
+  const c = world(t);
+  c.work = (agent, tid) => {
+    const wt = c.state().tickets[tid].assignment?.worktree;
+    write(join(wt, 'same.txt'), `${tid}\n`);
+    git(wt, 'add', '-A');
+    git(wt, 'commit', '-q', '-m', `work on ${tid}`);
+    c.reportsNext.push(agent);
+  };
+  c.runWake();
+  c.policy['merge-agent'] = () => ({ outcome: 'spawned', agent: `a${++c.agents}` });
+  const outs = c.runWake();
+  const conflict = outs.flatMap((o) => o.ran).find((x) => x.id.startsWith('merge:') && x.exit === 4);
+  assert.ok(conflict, 'a merge exited 4');
+  assert.equal(c.state().tick.done[conflict.id].exit, 4);
+  const after = outs.find((o) => o.ran.includes(conflict));
+  assert.ok(after.actions.some((a) => a.step === 'merge-agent' && a.batch === 1), 'run went on to the list after it: the merge agent');
+  assert.ok(!after.actions.some((a) => a.step === 'failed'));
+});
+
+test('#129: run stops at then end without recording wakeup-end, and at then done', (t) => {
+  const h = world(t);
+  let out = null;
+  for (let i = 0; i < 20 && out?.then !== 'end'; i += 1) {
+    out = runOut(h);
+    if (out.then !== 'end') h.run(out.actions);
+  }
+  assert.equal(out.then, 'end');
+  const end = out.actions.at(-1);
+  assert.equal(end.step, 'wakeup-end');
+  const st = h.state().tick;
+  assert.equal(st.done[end.id], undefined, 'wakeup-end is left to the host');
+  assert.equal(st.wakeup, 1);
+  assert.equal(runOut(h).then, 'end', 'run again: the same end');
+  assert.equal(h.state().tick.wakeup, 1);
+  h.run(out.actions);
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.runWake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const done = runOut(h);
+  assert.equal(done.then, 'done');
+  assert.deepEqual(done.ran, []);
+});
+
+test('#129: run leaves a push to the host: integrate: direct lists push:main as an exec, and origin main is not pushed', (t) => {
+  const h = world(t, { profile: { integrate: 'direct' } });
+  let out = null;
+  const hasPush = (o) => o?.actions.some((a) => a.step === 'push');
+  for (let i = 0; i < 6 && !hasPush(out); i += 1) {
+    const outs = [];
+    h.now += 5 * 60_000;
+    const reports = h.reportsNext.splice(0);
+    for (let k = 0; k < 400; k += 1) {
+      out = runOut(h, ...(k === 0 ? reports.flatMap((x) => ['--reported', x]) : []));
+      outs.push(out);
+      if (hasPush(out)) break;
+      h.run(out.actions);
+      if (out.then !== 'tick') break;
+    }
+  }
+  assert.ok(hasPush(out), 'a list with a push');
+  const push = out.actions.find((a) => a.step === 'push');
+  const main = git(h.repo, 'rev-parse', 'main');
+  assert.equal(push.id, `push:main:@${main}`);
+  assert.equal(push.batch, 1);
+  assert.equal(push.kind, 'exec');
+  assert.ok(push.command.includes('push') && push.record.includes('--exit'));
+  assert.ok(!out.ran.some((x) => x.id === push.id), 'run did not run it');
+  assert.notEqual(git(h.repo, 'rev-parse', 'origin/main'), main, 'origin main is not pushed');
+  assert.equal(h.state().tick.done[push.id], undefined);
+});
+
+test('#129: run executes through bash, writing each redirect and each log', { skip: !BASH && 'no Git Bash / MSYS / Cygwin bash' }, (t) => {
+  const h = world(t);
+  // The programs are stubbed as shell functions; the command line itself, its cd and its redirect, run as written.
+  const STUBS = `node() { echo stub; echo stub-err >&2; }; gh() { echo stub; }; `;
+  const bash = bashExecutor();
+  const ranActions = [];
+  h.execute = (a, log) => {
+    ranActions.push(a);
+    return bash({ ...a, command: `${STUBS}${a.command}` }, log);
+  };
+  const out = runOut(h);
+  assert.ok(out.ran.length, 'something ran');
+  const done = h.state().tick.done;
+  const withStdout = ranActions.filter((a) => a.stdout && a.argv[0] === 'node');
+  const without = ranActions.filter((a) => !a.stdout && a.argv[0] === 'node');
+  assert.ok(withStdout.length && without.length, 'execs with and without a stdout file ran');
+  for (const a of ranActions) {
+    assert.equal(done[a.id].exit, 0, `${a.id} ran in bash`);
+    assert.ok(existsSync(done[a.id].log), `${a.id}: ${done[a.id].log} written`);
+  }
+  for (const a of withStdout) {
+    assert.equal(readFileSync(a.stdout, 'utf8'), 'stub\n', `${a.id}: the redirect wrote ${a.stdout}`);
+    assert.equal(readFileSync(done[a.id].log, 'utf8'), 'stub-err\n', `${a.id}: its stderr is in the log`);
+  }
+  for (const a of without) assert.equal(readFileSync(done[a.id].log, 'utf8'), 'stub\nstub-err\n', `${a.id}: stdout and stderr in the log`);
+});
+
+test('#129: a bash that is missing or is not Git Bash / MSYS / Cygwin on win32 ends run with exit 1; what was recorded stays', (t) => {
+  const h = world(t);
+  const log = join(h.dir, 'x.log');
+  const wsl = bashExecutor({ spawn: () => ({ status: 0, stdout: 'Linux\n' }), platform: 'win32' });
+  assert.throws(() => wsl({ id: 'x', command: 'true' }, log), /not Git Bash, MSYS or Cygwin/);
+  const missing = bashExecutor({ spawn: () => ({ error: new Error('spawnSync bash ENOENT'), status: null }) });
+  assert.throws(() => missing({ id: 'x', command: 'true' }, log), /bash could not be started/);
+  const calls = [];
+  const posix = bashExecutor({ spawn: (cmd, args) => (calls.push(args[1]), { status: args[1] === 'true' ? 3 : 0, stdout: 'Linux\n' }), platform: 'linux' });
+  assert.deepEqual(posix({ id: 'x', command: 'true' }, log), { code: 3 });
+  assert.deepEqual(calls, ['uname -s', 'true'], 'bash -c <command>, after one check');
+  h.execute = wsl;
+  const r = h.runTick();
+  assert.equal(r.code, 1);
+  assert.equal(r.out, '');
+  assert.match(r.err, /WSL/);
+  // the first exec runs and is recorded, then bash goes missing
+  let first = null;
+  h.execute = (a, file) => {
+    if (first) return missing(a, file);
+    first = a.id;
+    return { code: h.exec(a) };
+  };
+  const r2 = h.runTick();
+  assert.equal(r2.code, 1);
+  assert.equal(r2.out, '');
+  assert.equal(h.state().tick.done[first].exit, 0, `${first} stays recorded`);
+});
+
+test('#129: without --now, run reads the clock again for each list and each record', (t) => {
+  const h = world(t);
+  h.now += 5 * 60_000;
+  const start = h.iso();
+  // each exec takes a minute: the clock moves while run runs
+  const deps = {
+    ...defaultDeps(),
+    clock: () => h.now,
+    execute: (a) => {
+      h.now += 60_000;
+      return { code: h.exec(a) };
+    },
+  };
+  const r = tick(['run', h.path], deps);
+  assert.equal(r.code, 0, r.err);
+  const out = JSON.parse(r.out);
+  assert.ok(out.ran.length > 2, 'execs over more than one list');
+  const minute = (k) => new Date(Date.parse(start) + k * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const done = h.state().tick.done;
+  out.ran.forEach((x, k) => assert.equal(done[x.id].at, minute(k + 1), `${x.id} recorded at the time it ended`));
+  assert.equal(out.now, minute(out.ran.length), 'the last list is made at the time after the last exec');
+  assert.notEqual(out.now, start);
+});
+
+test('#129: --reported goes to the first next of run only', (t) => {
+  const h = world(t);
+  h.wake(); // a1 and a2 implement
+  h.reportsNext = [];
+  // a1's report comes: the host runs next, one list at a time, until a1's collect is recorded
+  h.now += 5 * 60_000;
+  const collected = () => h.log.some((a) => a.step === 'collect' && a.tickets.includes('#1'));
+  for (let i = 0; i < 40 && !collected(); i += 1) {
+    const r = h.tick('next', h.path, ...(i === 0 ? ['--reported', 'a1'] : []));
+    assert.equal(r.code, 0, r.err);
+    const out = JSON.parse(r.out);
+    if (i === 0) assert.deepEqual(out.reports.map((x) => [x.agent, x.why]), [['a1', 'current']]);
+    h.run(out.actions);
+  }
+  assert.ok(collected(), "a1's collect is recorded");
+  // the same report again: the first next of run takes it as a duplicate, the later lists never see it
+  const out = runOut(h, '--reported', 'a1');
+  // two lists: the acceptance check ran in the first; the review it leads to is listed by the next after it
+  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1']);
+  assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
+  assert.deepEqual(out.reports, [], 'the last list was not handed the report');
+});
