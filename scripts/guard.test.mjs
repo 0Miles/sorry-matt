@@ -881,7 +881,9 @@ test('a blocked call stays denied when the list cannot be written', () => {
 });
 
 test('an automatic state that is missing, unreadable or damaged is no automatic state', () => {
-  const damaged = ['', 'not json', '[]', 'null', '{"entered": "yes"}', '{"entered": {"reason": "no time"}}', '{"entered": {"at": "soon"}}', '{"blocked": [{"at": 1}]}'];
+  const damaged = ['', 'not json', '[]', 'null', '{"entered": "yes"}', '{"entered": {"reason": "no time"}}', '{"entered": {"at": "soon"}}', '{"blocked": [{"at": 1}]}',
+    // A time no Date can hold, or no reason: damaged too, not an entry in force.
+    '{"entered": {"at": 1e300, "reason": "r"}}', '{"entered": {"at": -1e300, "reason": "r"}}', '{"entered": {"at": 1e16, "reason": "r"}}', '{"entered": {"at": 1e300}}', '{"entered": {"at": 1}}', '{"entered": {"at": 1, "reason": 5}}'];
   for (const text of damaged) {
     withDir((home) => {
       mkdirSync(dirname(autoStateFile(home)), { recursive: true });
@@ -903,6 +905,15 @@ test('an automatic state that is missing, unreadable or damaged is no automatic 
     writeFileSync(autoStateFile(home), 'not json');
     assert.equal(decisionOf(decideWith(event(enterCommand(PLUGIN, 'away')), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 7 })), 'allow');
     assert.deepEqual(savedState(home), { entered: { at: 7, reason: 'away', by: 'agent', session: 's1' }, blocked: [] });
+  });
+  withDir((home) => {
+    // So can an entry whose time no Date can hold: the script enters and reports, with no RangeError.
+    mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+    writeFileSync(autoStateFile(home), '{"entered": {"at": 1e300, "reason": "r"}}');
+    const result = enter('away', { state: autoState(home), now: Date.UTC(2026, 10, 21) });
+    assert.equal(result.ok, true, result.text);
+    assert.match(result.text, /進入時間 2026-11-21T00:00:00\.000Z，原因：away/);
+    assert.deepEqual(savedState(home).entered, { at: Date.UTC(2026, 10, 21), reason: 'away', by: 'agent', session: null });
   });
 });
 
@@ -949,6 +960,36 @@ test('the entry line end to end: the hook process enters, and other sessions are
     assert.equal(guard('git status', 'b'), null);
     assert.deepEqual(savedState(home).blocked.map((b) => [b.session, b.subject]), [['a', 'npm publish'], ['b', 'rm -rf ~']]);
   });
+});
+
+test('every session is handed the entry line at start: filled in and run as it is, it is allowed and enters', () => {
+  const config = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
+  const entry = config.hooks.SessionStart.find((e) => e.hooks.some((h) => h.command.includes('hooks/unattended-intro.mjs')));
+  assert.equal(entry.matcher, undefined, 'on every SessionStart source: startup, resume, clear and compact');
+  assert.equal(entry.hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/hooks/unattended-intro.mjs"');
+
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    withDir((home) => {
+      // CLAUDE_PLUGIN_ROOT as Claude Code sets it for every hook: native separators, backslashes on Windows.
+      const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+      delete env.SORRY_MATT_GUARD;
+      delete env.SORRY_MATT_UNATTENDED;
+      const started = spawnSync(process.execPath, [join(root, 'hooks', 'unattended-intro.mjs')], { input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', cwd: CWD, session_id: 'a' }), encoding: 'utf8', env });
+      assert.equal(started.status, 0, started.stderr);
+      const handed = started.stdout.split(/\r?\n/).filter((l) => l.startsWith('node ') && l.endsWith('"<原因>"'));
+      assert.equal(handed.length, 1, started.stdout);
+      const command = handed[0].replace('<原因>', '使用者說要去開會');
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name, tool_input: { command }, cwd: CWD, session_id: 'a', permission_mode: 'default' }), encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'allow', `${tool_name} ${command}`);
+      assert.equal(savedState(home).entered.reason, '使用者說要去開會');
+      assert.equal(savedState(home).entered.session, 'a');
+      // With the guard off there is nothing to hand out.
+      const off = spawnSync(process.execPath, [join(root, 'hooks', 'unattended-intro.mjs')], { input: '{}', encoding: 'utf8', env: { ...env, SORRY_MATT_GUARD: 'off' } });
+      assert.equal(off.status, 0, off.stderr);
+      assert.equal(off.stdout, '');
+    });
+  }
 });
 
 test('hook processes writing the state at the same time lose nothing and leave no partial file', async () => {
@@ -1179,6 +1220,16 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
         assert.notEqual(decisionOf(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow', `${tool_name} ${JSON.stringify(command)}`);
       }
     }
+    // The handed-out prefix with no closing quote, or something else after the reason: neither shell runs it as the
+    // line (Bash: unexpected EOF; PowerShell: missing terminator), so it is not the line.
+    const [prefix] = enterCommand(PLUGIN, '\0').split('\0');
+    for (const command of [`${prefix}awayX`, `${prefix}away\u201d`, `${prefix}away\n`, `${prefix}away" `, `${prefix}away"x`]) {
+      for (const tool_name of ['Bash', 'PowerShell']) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, `${tool_name} ${JSON.stringify(command)}`);
+        assert.equal(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 }), null, `${tool_name} ${JSON.stringify(command)}`);
+      }
+    }
+    assert.equal(autoState(home).active(), false);
     // Windows PowerShell 5.1 reads even a quoted `--%` as the stop-parsing token and drops the reason; Bash does not.
     assert.equal(enterInvocation({ tool_name: 'PowerShell', tool_input: { command: enterCommand(PLUGIN, '--%') }, cwd: CWD }, PLUGIN), null);
     assert.equal(enterInvocation({ tool_name: 'Bash', tool_input: { command: enterCommand(PLUGIN, '--%') }, cwd: CWD }, PLUGIN), '--%');

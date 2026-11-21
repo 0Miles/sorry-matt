@@ -26,6 +26,17 @@ export const confirmCommand = (root, token) => `node "${join(root, 'hooks', 'con
 const enterScript = (root) => join(root, 'hooks', 'enter-unattended.mjs').replace(/\\/g, '/');
 export const enterCommand = (root, reason = '<原因>') => `node "${enterScript(root)}" "${reason}"`;
 
+/**
+ * What every session is told when it starts (unattended-intro.mjs, on SessionStart): the entry line for this hook's
+ * own plugin root, the only place the agent gets it from. The SessionStart and PreToolUse hooks get the same
+ * CLAUDE_PLUGIN_ROOT, so the printed line is the text enterInvocation lets through once `<原因>` is filled in.
+ */
+export const enterIntro = (root) => [
+  'sorry-matt guard：使用者說要離開，或提問得到的結果是使用者可能不在時，可以進入無人值守模式：把下面這一行的 <原因> 換成原因，其餘一字不改、單獨執行。',
+  enterCommand(root),
+  '原因裡不要有 "、$、反引號、反斜線或換行（PowerShell 下也不要有彎引號或 --%）；改過寫法、串接或換路徑的版本不會被認得，會照常跳確認框。進入後所有 session 需要使用者確認的動作都直接擋下、記進清單；只有使用者能解除。',
+].join('\n');
+
 const BYPASS = 'bypassPermissions';
 const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_GUARD=off 關掉這個 guard。）';
 

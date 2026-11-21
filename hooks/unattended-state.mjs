@@ -16,7 +16,9 @@ import { retrying, withLock, writeAtomic } from './budget.mjs';
 
 export const autoStateFile = (home = homedir()) => join(home, '.claude', 'sorry-matt-guard', 'unattended.json');
 
-const validEntry = (e) => !!e && typeof e === 'object' && !Array.isArray(e) && Number.isFinite(e.at);
+// An entry is usable only with a time a Date can hold (±8.64e15 ms) and a string reason; anything else is damage.
+const validEntry = (e) => !!e && typeof e === 'object' && !Array.isArray(e) &&
+  Number.isFinite(e.at) && !Number.isNaN(new Date(e.at).getTime()) && typeof e.reason === 'string';
 
 /** What the file holds. Throws when it is there but cannot be read; missing or damaged content is the empty state. */
 function loadStrict(path, read) {
