@@ -31,18 +31,20 @@ claude plugin validate .
 
   | 改到的檔 | 測試檔 |
   | --- | --- |
-  | `src/skills/get-to-work/scripts/acceptance.mjs` | `scripts/acceptance.test.mjs` |
+  | `src/skills/get-to-work/scripts/acceptance.mjs` | `scripts/acceptance.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` import 它的 `MARKER`） |
   | `src/skills/get-to-work/scripts/frontier.mjs` | `scripts/frontier.test.mjs` |
   | `src/skills/get-to-work/scripts/freeze.mjs` | `scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/merges.mjs`（沒有自己的測試檔） | `scripts/ci.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/integrate.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`ci.mjs`、`review-guide.mjs`、`integrate.mjs`、`tick.mjs` import 它，`freeze.mjs` import `ci.mjs`） |
   | `src/skills/get-to-work/scripts/ci.mjs` | `scripts/ci.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`freeze.mjs` import 它，`tick.mjs` import `freeze.mjs`） |
-  | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`、`scripts/tick.test.mjs`（prove-it 的 `tier.mjs` import 它，`scope.mjs` import `tier.mjs`，`tick.test.mjs` 實跑 `tier.mjs`） |
+  | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tier.test.mjs`、`scripts/tick.test.mjs`（`freeze.mjs` import 它；`tier.test.mjs` 比對 prove-it 的 `tier.mjs` 自帶的 `splitEntry` 與它切法相同；`tick.test.mjs` 實跑它） |
   | `src/skills/get-to-work/scripts/review-guide.mjs` | `scripts/review-guide.test.mjs` |
   | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs`、`scripts/brief.test.mjs` |
   | `src/skills/get-to-work/scripts/brief.mjs` | `scripts/brief.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` import 它） |
   | `src/skills/get-to-work/IMPLEMENTER.md`、`src/skills/get-to-work/EXPANDER.md` 與 dist 的同名檔（`brief.mjs` 填它們的佔位） | `scripts/brief.test.mjs` |
+  | `src/skills/get-to-work/REVIEWER.md` 與 dist 的同名檔（`brief.mjs review` 在 runtime 讀它的固定規則，檔裡有佔位就以 1 結束） | `scripts/brief.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` 以 `brief.mjs review` 產出審查主持 agent 的派工檔） |
   | `src/agents/implementer.md`、`src/agents/expander.md` 與 `agents/` 的同名檔（`brief.mjs` 把本文寫進通用 agent 的退回檔） | `scripts/brief.test.mjs`、`node scripts/check-structure.mjs` |
   | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/integrate.test.mjs` |
-  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`tier.mjs` import `overlap.mjs`） |
+  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs`、`scripts/tier.test.mjs`（`tier.test.mjs` import `overlap.mjs`） |
   | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`、`scripts/tick.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`，`tick.test.mjs` 實跑 `tier.mjs`） |
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs run` 以 `hooks/classify.mjs` 判斷哪些 exec 留給主持人） |
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它）、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的判級指令） |
