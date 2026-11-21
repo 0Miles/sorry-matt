@@ -5,7 +5,7 @@ the scan (`deadline.mjs scan`) and the extensions; every agent that comes here i
 already extended, or a progress fingerprint that could not be computed (the `judge` names the `error`).
 
 1. **Stop**: `TaskStop` the agent. If it had just finished, record `collected`; its report is taken as usual — a
-   review host agent's through the `collect` tick hands out in the next list, which records its verdict and the two
+   review host agent's through the `collect` tick hands out in the next list, which records its verdict and the
    counts of its `counts:` line.
 2. **Settle it**, the first case that applies winning; record the outcome in parentheses:
    - **The fingerprint could not be computed** (`error`): the worktree's state needs a human. No reassignment and no

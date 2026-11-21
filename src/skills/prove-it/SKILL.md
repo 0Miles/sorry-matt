@@ -425,12 +425,16 @@ Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agen
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
 
-`verdict`、`review`、`mode`、`tier` 與區塊裡的相同；`counts` 數的是區塊裡的條目，沒有寫 0。寫不進接續紀錄時
+`verdict`、`review`、`mode`、`tier` 與區塊裡的相同；`counts` 的前三個數的是區塊裡的條目，沒有寫 0。後四個數的是這一輪的
+裁決（#156，供事後回顧每個成立的 finding 花了多少）：`candidates` 是送去裁決的候選數（Finder、architect 與突變的候選），
+`confirmed` 與 `invalid` 是 verifier 判成立與不成立的數（pre-existing 與 spec 層級兩者都不算），`blocking` 是成立且
+blocking 的數。複驗沒有 Finder：`candidates`、`confirmed` 與 `blocking` 都數 Fix Verifier 回報的本輪新 finding，
+`invalid` 寫 0。寫不進接續紀錄時
 （tracker 拒絕、檔案被鎖），`verdict` 寫 `stuck`、`block` 寫你存下的區塊檔的路徑，原因寫寫入失敗的訊息。
 
 **結論定案時移除審查用 worktree。** `verdict` 是 `pass` 或 `stuck`，或這是第二次複驗（上一個區塊是

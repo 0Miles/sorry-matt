@@ -529,12 +529,17 @@ message is the following, six lines at most, with nothing added:
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
 
-`verdict`, `review`, `mode` and `tier` match the block; `counts` counts the block's entries, writing 0 for none. When
+`verdict`, `review`, `mode` and `tier` match the block; the first three `counts` count the block's entries, writing 0
+for none. The last four count this round's rulings (#156, so a retro can tell what each confirmed finding cost):
+`candidates` is the candidates sent for a ruling (from the Finders, the architect and mutation), `confirmed` and
+`invalid` the verifier's confirmed and invalid rulings (pre-existing and spec-level count as neither), `blocking` the
+confirmed, blocking ones. A recheck has no Finders: `candidates`, `confirmed` and `blocking` each count the Fix
+Verifier's new findings of this round, and `invalid` is 0. When
 the block cannot be written into the status record (the tracker refuses, the file is locked), `verdict` is `stuck`,
 `block` is the path of the block file you saved, and the reason is the write failure's message.
 

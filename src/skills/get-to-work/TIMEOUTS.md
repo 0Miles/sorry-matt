@@ -4,7 +4,7 @@
 來到這裡的 agent 都是要停下的 —— 沒有進展、已延長過，或進度指紋算不出來（`judge` 寫了 `error`）。
 
 1. **停下**：`TaskStop` 這個 agent。它若剛好已經結束，record `collected`，它的回報照常收；審查主持 agent 的回報由 tick
-   下一份清單發的 `collect` 收，照它的結論與 `counts:` 行的兩個計數記錄。
+   下一份清單發的 `collect` 收，照它的結論與 `counts:` 行的計數記錄。
 2. **依情況了結**，先符合的為準，record 括號裡的 outcome：
    - **進度指紋算不出來**（`error`）：worktree 的狀態要人處理，不改派，也不在同一個 worktree 再派送 —— 那裡算不出
      派送紀錄，沒有派送紀錄的派送不成立。實作中、修正中、審查中 → `awaiting-ruling`，原因寫那個 `error`；整併中 → 先照下面
