@@ -235,6 +235,9 @@ import { resolve } from 'node:path';
 import { UsageError, failure, run as exec, runIfEntry } from './cli.mjs';
 import { GATES, TARGETS, runGate } from './gates.mjs';
 
+// The sensitive paths of docs/agents/commands.md name each constant from FORMAT to COUNTERS and each function of
+// "the shape" and "the stage rules" below (#152): a change there makes prove-it's review tier full. A new constant
+// or function in those parts goes into that list too.
 export const FORMAT = 'sorry-matt/state@1';
 /** The review tiers of prove-it's tier.mjs (#139): a review records the one tick judged. */
 export const TIERS = ['light', 'standard', 'full'];

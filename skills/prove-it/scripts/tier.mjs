@@ -20,6 +20,19 @@
 //                         directory prefix, `*` matches within one path segment, `**/` any number of directories,
 //                         anything else the whole path. With no contract on either side, or `none` on both,
 //                         DEFAULT_SENSITIVE (CI, hooks and guards, release and deploy, permissions, migrations).
+//                         #152: an entry can name a symbol inside the files it matches, written as a predicted-files
+//                         list writes one (overlap.mjs): `path#symbol`, nested `path#outer#inner`, spaces around `#`
+//                         trimmed; a chain with an empty symbol is the whole path. Such an entry makes a path
+//                         sensitive only when a changed line of `git diff -U0` lies inside the symbol: a deleted line
+//                         in it on the old side (the merge-base) or an added line in it on head. Where the symbol is:
+//                         in .md/.markdown/.mdx the heading whose text is the symbol, to the line before the next
+//                         heading of its level or higher (an inner symbol: a deeper heading inside it); elsewhere a
+//                         line declaring it (a keyword such as function, class, const, def, fn, then the name; an
+//                         inner symbol may also be a member: `name(`, `name:`, `name =`), through the lines indented
+//                         deeper and the lines of any bracket it leaves open, trailing blank lines excluded; every
+//                         match counts. It fails safe, as touched: the symbol does not resolve on a side where the
+//                         file exists (renamed, removed, never there), or the change has no changed line (binary,
+//                         mode only).
 //          signatureChanged  a deleted line in a non-doc file is a declaration (DECLARATION: export, module.exports,
 //                         function, class, interface, type, enum, fn, def, func, a method with an access modifier,
 //                         a const bound to a function). Changing a signature deletes its old line; a body-only edit
@@ -206,6 +219,127 @@ export function parseNumstat(text) {
     });
 }
 
+// `path#outer#inner` -> { path, symbol: [outer, inner] }, spaces around `#` trimmed. A copy of get-to-work's
+// overlap.mjs splitEntry, kept here so prove-it loads on its own; tier.test.mjs checks the two split alike.
+export function splitEntry(text) {
+  const [path, ...rest] = String(text).split('#');
+  return { path, symbol: rest.map((s) => s.trim()) };
+}
+
+// A sensitive-path entry -> { re, symbol }: the path part as patternRegex reads it, the symbol chain as splitEntry
+// splits it ([] for the whole file). An entry with an empty symbol in its chain is read as its whole path.
+export function sensitiveEntry(text) {
+  const { path, symbol } = splitEntry(text);
+  return { re: patternRegex(path), symbol: symbol.some((s) => !s) ? [] : symbol };
+}
+
+// `git diff -U0 --no-renames` -> Map path -> { old: [line numbers], new: [line numbers] }: the lines each hunk deleted
+// from the old file and added to the new one. A path appears once a file header names it, hunks or not.
+export function changedLineNumbers(diffText) {
+  const out = new Map();
+  let at = null;
+  let names = {};
+  const entry = (path) => {
+    if (!out.has(path)) out.set(path, { old: [], new: [] });
+    return out.get(path);
+  };
+  for (const raw of diffText.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('diff --git ')) {
+      at = null;
+      names = {};
+    } else if (at === null && (line.startsWith('--- ') || line.startsWith('+++ '))) {
+      const source = line.slice(4).replace(/\t$/, '');
+      if (source !== '/dev/null') names[line[0] === '-' ? 'old' : 'new'] = unquote(source).replace(/^[ab]\//, '');
+      if (line.startsWith('+++ ')) at = entry(names.new ?? names.old);
+    } else if (at && line.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      if (!m) continue;
+      const [oldStart, oldCount, newStart, newCount] = [m[1], m[2] ?? '1', m[3], m[4] ?? '1'].map(Number);
+      for (let i = 0; i < oldCount; i += 1) at.old.push(oldStart + i);
+      for (let i = 0; i < newCount; i += 1) at.new.push(newStart + i);
+    }
+  }
+  return out;
+}
+
+const HEADING_FILES = ['.md', '.markdown', '.mdx'];
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const DECLARE_KEYWORDS = '(?:function\\*?|class|const|let|var|def|fn|func|interface|type|enum|struct|trait|module|namespace)';
+const DECLARE_MODIFIERS = '(?:(?:export|default|async|static|public|private|protected|internal|abstract|declare|final|override|unsafe|pub(?:\\([\\w:]+\\))?)\\s+)*';
+const MEMBER_MODIFIERS = '(?:(?:static|async|get|set|public|private|protected|readonly|override)\\s+)*';
+
+// Markdown: the heading whose text is the symbol, to the line before the next heading of its level or higher.
+function headingRanges(lines, name, [lo, hi], parentLevel) {
+  const headings = [];
+  let fenced = false;
+  for (let i = lo; i <= hi; i += 1) {
+    if (/^ {0,3}(```|~~~)/.test(lines[i])) fenced = !fenced;
+    const m = !fenced && /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/.exec(lines[i]);
+    if (m) headings.push({ at: i, level: m[1].length, text: m[2].trim() });
+  }
+  return headings
+    .filter((h) => h.level > parentLevel && h.text === name)
+    .map((h) => {
+      const next = headings.find((n) => n.at > h.at && n.level <= h.level);
+      return { range: [h.at, next ? next.at - 1 : hi], level: h.level };
+    });
+}
+
+// Code: a line declaring the symbol (a nested one may also be a member: a method, a key, a field), through the lines
+// indented deeper and any bracket it leaves open; trailing blank lines are not part of it.
+function declarationRanges(lines, name, [lo, hi], nested) {
+  const n = escapeRe(name);
+  const declares = [new RegExp(`^\\s*${DECLARE_MODIFIERS}${DECLARE_KEYWORDS}\\s+${n}(?![\\w$])`)];
+  if (nested) declares.push(new RegExp(`^\\s*${MEMBER_MODIFIERS}\\*?(['"]?)${n}\\1\\s*(?:\\(|:|=(?!=))`));
+  const indent = (l) => /^\s*/.exec(l)[0].length;
+  const depthOf = (l) => {
+    const bare = l.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '');
+    return (bare.match(/[{[(]/g) ?? []).length - (bare.match(/[}\])]/g) ?? []).length;
+  };
+  const out = [];
+  for (let s = lo; s <= hi; s += 1) {
+    if (!declares.some((re) => re.test(lines[s]))) continue;
+    let depth = Math.max(0, depthOf(lines[s]));
+    let end = s;
+    for (let i = s + 1; i <= hi; i += 1) {
+      const blank = lines[i].trim() === '';
+      if (!blank && depth === 0 && indent(lines[i]) <= indent(lines[s])) break;
+      if (!blank) end = i;
+      depth = Math.max(0, depth + depthOf(lines[i]));
+    }
+    out.push({ range: [s, end] });
+  }
+  return out;
+}
+
+// A file's text and a symbol chain -> the 1-based [first, last] line ranges of the innermost symbol, every place the
+// chain resolves (each inner one searched inside its outer one), or null when it resolves nowhere.
+export function symbolRanges(text, path, chain) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const headings = HEADING_FILES.some((ext) => path.toLowerCase().endsWith(ext));
+  let found = [{ range: [0, lines.length - 1], level: 0 }];
+  chain.forEach((name, k) => {
+    found = found.flatMap((f) =>
+      headings ? headingRanges(lines, name, f.range, f.level) : declarationRanges(lines, name, k === 0 ? f.range : [f.range[0] + 1, f.range[1]], k > 0),
+    );
+  });
+  return found.length ? found.map((f) => [f.range[0] + 1, f.range[1] + 1]) : null;
+}
+
+// Whether a change to `path` touches the symbol: a changed line inside it on either side. Fails safe, as touched:
+// a side where the file exists but the symbol does not resolve, or a change with no changed line (binary, mode).
+function touchesSymbol(path, chain, changed, fileAt) {
+  const lines = changed.get(path) ?? { old: [], new: [] };
+  const texts = { old: fileAt('old', path), new: fileAt('new', path) };
+  if ((lines.old.length === 0 && lines.new.length === 0) || (texts.old == null && texts.new == null)) return true;
+  return ['old', 'new'].some((side) => {
+    if (texts[side] == null) return false;
+    const ranges = symbolRanges(texts[side], path, chain);
+    return ranges === null || lines[side].some((n) => ranges.some(([a, b]) => n >= a && n <= b));
+  });
+}
+
 // `git diff -U0 --no-renames` -> [{ path, text }] for every deleted line, under the old path.
 export function deletedLines(diffText) {
   const out = [];
@@ -297,7 +431,9 @@ export function countLines(numstatText) {
 }
 
 // numstat: --no-renames -z (paths, old and new); counts: -M (line counts as a rename-aware diff reports them).
-export function collectSignals({ numstat, counts, diffText, base: baseContract, head: headContract, treePaths }) {
+// fileAt(side, path): the file's text on the old side (the merge-base the diff starts from) or the new side (head),
+// null where it does not exist; read only for changed paths a `path#symbol` entry matches.
+export function collectSignals({ numstat, counts, diffText, base: baseContract, head: headContract, treePaths, fileAt = () => null }) {
   const rows = parseNumstat(numstat);
   const paths = [...new Set(rows.map((r) => r.path))];
   const { added, deleted } = counts == null
@@ -305,14 +441,18 @@ export function collectSignals({ numstat, counts, diffText, base: baseContract, 
     : countLines(counts);
   const lists = [parseSensitive(baseContract), parseSensitive(headContract)].filter((l) => l && l.length > 0);
   const sensitiveSource = lists.length ? 'commands.md' : 'default';
-  const patterns = (lists.length ? [...new Set(lists.flat())] : DEFAULT_SENSITIVE).map(patternRegex);
+  const entries = (lists.length ? [...new Set(lists.flat())] : DEFAULT_SENSITIVE).map(sensitiveEntry);
+  const changed = changedLineNumbers(diffText);
+  const isSensitive = (p) =>
+    entries.some((e) => e.re.test(p) && e.symbol.length === 0) ||
+    entries.some((e) => e.re.test(p) && e.symbol.length > 0 && touchesSymbol(p, e.symbol, changed, fileAt));
   return {
     files: paths.length,
     added,
     deleted,
     changedLines: added + deleted,
     docsOnly: paths.length > 0 && paths.every(isDoc),
-    sensitive: paths.filter((p) => patterns.some((re) => re.test(p))).sort(),
+    sensitive: paths.filter(isSensitive).sort(),
     sensitiveSource,
     signatureChanged: deletedLines(diffText).some((d) => !isDoc(d.path) && DECLARATION.test(d.text)),
     ruleFiles: ruleFilesFor(treePaths, paths),
@@ -423,10 +563,11 @@ export function defaultDeps(cwd = process.cwd()) {
   };
 }
 
-function contractAt(deps, ref) {
-  const listed = deps.git(['ls-tree', '--full-tree', '--name-only', ref, '--', CONTRACT]).trim();
-  return listed === '' ? null : deps.git(['show', `${ref}:${CONTRACT}`]);
+function fileAt(deps, ref, path) {
+  const listed = deps.git(['ls-tree', '--full-tree', '--name-only', ref, '--', path]).trim();
+  return listed === '' ? null : deps.git(['show', `${ref}:${path}`]);
 }
+const contractAt = (deps, ref) => fileAt(deps, ref, CONTRACT);
 
 export function main(argv, deps = defaultDeps()) {
   try {
@@ -458,6 +599,7 @@ export function main(argv, deps = defaultDeps()) {
       }
     }
     const range = `${args.base}...${head}`;
+    const sides = { old: deps.git(['merge-base', args.base, head]).trim(), new: head };
     const signals = collectSignals({
       numstat: deps.git(['diff', '--numstat', '-z', '--no-renames', '--no-color', '--no-ext-diff', range]),
       counts: deps.git(['diff', '--numstat', '-M', '--no-color', '--no-ext-diff', range]),
@@ -465,6 +607,7 @@ export function main(argv, deps = defaultDeps()) {
       base: contractAt(deps, args.base),
       head: contractAt(deps, head),
       treePaths: deps.git(['ls-tree', '--full-tree', '-r', '--name-only', '-z', head]).split('\0').filter(Boolean),
+      fileAt: (side, path) => fileAt(deps, sides[side], path),
     });
     const report = { ...judgeTier(signals, args.thresholds), base: args.base, head };
     const ordered = { format: report.format, base: report.base, head: report.head, ...report };

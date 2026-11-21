@@ -23,7 +23,7 @@
 | `Targeted checks` | 怎麼把檢查縮到單一檔案或單一 package：指令的寫法，以及改到的檔對應哪些檢查。 |
 | `Coverage` | 產出 lcov 的指令，與 lcov 檔的位置。 |
 | `Failures only` | 這個專案只印失敗的行與結尾摘要的寫法。通過與否仍取檢查指令本身的結束代碼，在任何過濾之前取得。 |
-| `Sensitive paths` | 審查判級用的敏感路徑，一行一個 repo 相對路徑，目錄以 `/` 結尾：改動會影響權限、guard、CI、發布或部署的地方。 |
+| `Sensitive paths` | 審查判級用的敏感路徑，一行一個 repo 相對路徑，目錄以 `/` 結尾：改動會影響權限、guard、CI、發布或部署的地方。一行也可以寫成 `path#symbol`（寫法同預計檔案），只有碰到該 symbol 的改動才算敏感。 |
 
 **缺檔時。** `get-to-work` 的主持人在凍結票集前產生它（`get-to-work` 第 0 節）；其他 skill 不產生。讀取點
 —— 實作 agent 的針對性檢查、`prove-it` 的實跑、`get-to-work` 的本機驗證 —— 在沒有這份檔時照現況自己從
