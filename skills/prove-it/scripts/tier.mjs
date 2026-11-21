@@ -87,7 +87,6 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CAP } from './mutate.mjs';
-import { splitEntry } from '../../get-to-work/scripts/overlap.mjs';
 
 export const TIER_FORMAT = 'sorry-matt/tier@1';
 export const BATCH_FORMAT = 'sorry-matt/tier-batch@1';
@@ -220,7 +219,14 @@ export function parseNumstat(text) {
     });
 }
 
-// A sensitive-path entry -> { re, symbol }: the path part as patternRegex reads it, the symbol chain as overlap.mjs
+// `path#outer#inner` -> { path, symbol: [outer, inner] }, spaces around `#` trimmed. A copy of get-to-work's
+// overlap.mjs splitEntry, kept here so prove-it loads on its own; tier.test.mjs checks the two split alike.
+export function splitEntry(text) {
+  const [path, ...rest] = String(text).split('#');
+  return { path, symbol: rest.map((s) => s.trim()) };
+}
+
+// A sensitive-path entry -> { re, symbol }: the path part as patternRegex reads it, the symbol chain as splitEntry
 // splits it ([] for the whole file). An entry with an empty symbol in its chain is read as its whole path.
 export function sensitiveEntry(text) {
   const { path, symbol } = splitEntry(text);

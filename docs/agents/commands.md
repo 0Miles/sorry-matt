@@ -110,15 +110,69 @@ src/agents/
 .claude-plugin/
 scripts/check-structure.mjs
 scripts/check-vendored.mjs
-src/skills/get-to-work/scripts/state.mjs
-skills/get-to-work/scripts/state.mjs
+src/skills/get-to-work/scripts/state.mjs#FORMAT
+src/skills/get-to-work/scripts/state.mjs#TIERS
+src/skills/get-to-work/scripts/state.mjs#STAGES
+src/skills/get-to-work/scripts/state.mjs#TERMINAL
+src/skills/get-to-work/scripts/state.mjs#EDGES
+src/skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
+src/skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
+src/skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
+src/skills/get-to-work/scripts/state.mjs#profileOf
+src/skills/get-to-work/scripts/state.mjs#VERDICTS
+src/skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
+src/skills/get-to-work/scripts/state.mjs#COUNTERS
+src/skills/get-to-work/scripts/state.mjs#newUsage
+src/skills/get-to-work/scripts/state.mjs#newLine
+src/skills/get-to-work/scripts/state.mjs#newTicket
+src/skills/get-to-work/scripts/state.mjs#newState
+src/skills/get-to-work/scripts/state.mjs#checkAssignment
+src/skills/get-to-work/scripts/state.mjs#check
+src/skills/get-to-work/scripts/state.mjs#profileProblem
+src/skills/get-to-work/scripts/state.mjs#lastEntry
+src/skills/get-to-work/scripts/state.mjs#currentReview
+src/skills/get-to-work/scripts/state.mjs#currentReport
+src/skills/get-to-work/scripts/state.mjs#unfixedGate
+src/skills/get-to-work/scripts/state.mjs#queueFromReview
+src/skills/get-to-work/scripts/state.mjs#queueFromFix
+src/skills/get-to-work/scripts/state.mjs#stageGuard
+src/skills/get-to-work/scripts/state.mjs#transition
+skills/get-to-work/scripts/state.mjs#FORMAT
+skills/get-to-work/scripts/state.mjs#TIERS
+skills/get-to-work/scripts/state.mjs#STAGES
+skills/get-to-work/scripts/state.mjs#TERMINAL
+skills/get-to-work/scripts/state.mjs#EDGES
+skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
+skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
+skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
+skills/get-to-work/scripts/state.mjs#profileOf
+skills/get-to-work/scripts/state.mjs#VERDICTS
+skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
+skills/get-to-work/scripts/state.mjs#COUNTERS
+skills/get-to-work/scripts/state.mjs#newUsage
+skills/get-to-work/scripts/state.mjs#newLine
+skills/get-to-work/scripts/state.mjs#newTicket
+skills/get-to-work/scripts/state.mjs#newState
+skills/get-to-work/scripts/state.mjs#checkAssignment
+skills/get-to-work/scripts/state.mjs#check
+skills/get-to-work/scripts/state.mjs#profileProblem
+skills/get-to-work/scripts/state.mjs#lastEntry
+skills/get-to-work/scripts/state.mjs#currentReview
+skills/get-to-work/scripts/state.mjs#currentReport
+skills/get-to-work/scripts/state.mjs#unfixedGate
+skills/get-to-work/scripts/state.mjs#queueFromReview
+skills/get-to-work/scripts/state.mjs#queueFromFix
+skills/get-to-work/scripts/state.mjs#stageGuard
+skills/get-to-work/scripts/state.mjs#transition
 ```
 
 範圍是權限邊界、CI、plugin manifest 與 state 格式：`hooks/` 是需要確認的動作的 PreToolUse guard；`agents/` 與它的原稿
 `src/agents/` 的 `tools:` 決定 subagent 拿得到哪些工具（審查類沒有 Edit 與 Write）；`.github/workflows/` 是 CI，兩支
 `check-*.mjs` 是 CI 的檢查本身；`.claude-plugin/` 是 plugin 的 manifest；`state.mjs` 定義 run 的 state 格式與它的守門規則。
 一行也可以寫成 `path#symbol`（寫法同預計檔案，symbol 是函式、區塊或 markdown 標題，巢狀寫 `path#outer#inner`）：
-改動碰到該 symbol 才算敏感，同檔其他地方的改動依行數判（#152）。`state.mjs` 哪個 symbol 算 schema 還待裁決，
-在那之前整支都算。兩支 skill 其餘的腳本不在這裡：它們的改動依行數判審查分級。
+改動碰到該 symbol 才算敏感，同檔其他地方的改動依行數判（#152）。`state.mjs` 列的是它的「the shape」與「the stage
+rules」兩段：格式常數（`FORMAT` 到 `COUNTERS`，允許值的集合，含合併 profile 預設值的 `profileOf`）、建出與驗證 state 形狀的
+函式（`newUsage` 到 `check`），以及守門規則（`profileProblem` 到 `transition`，決定一張票沒過審查能不能進整合）。它的命令實作、檔案 IO 與參數解析
+依行數判。在這兩段新增常數或函式時，同時補進這裡。兩支 skill 其餘的腳本不在這裡：它們的改動依行數判審查分級。
 
 來源：`AGENTS.md`「結構」、`hooks/hooks.json`、`agents/*.md`、`.github/workflows/check.yml`、`.claude-plugin/plugin.json`。

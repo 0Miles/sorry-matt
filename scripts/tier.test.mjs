@@ -9,7 +9,8 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main, defaultDeps, patternRegex, parseSensitive, batchItems } from '../src/skills/prove-it/scripts/tier.mjs';
+import { main, defaultDeps, patternRegex, parseSensitive, batchItems, sensitiveEntry, symbolRanges, splitEntry } from '../src/skills/prove-it/scripts/tier.mjs';
+import { splitEntry as overlapSplitEntry } from '../src/skills/get-to-work/scripts/overlap.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../src/skills/prove-it/scripts/tier.mjs', import.meta.url));
 
@@ -156,13 +157,13 @@ test('a ticket cannot lower its own tier by editing the contract; a deleted or r
 });
 
 // #139: this repo's own contract. The sensitive paths are the permission boundary, CI, the plugin manifest and the
-// state format: a change to the state script or an agent definition is full however small; a change to any other
-// script of the two skills is judged by its line count.
-test("#139: this repo's contract: the state script and agent definitions are full; other skill scripts go by line count", (t) => {
-  const own = { 'docs/agents/commands.md': readFileSync(fileURLToPath(new URL('../docs/agents/commands.md', import.meta.url)), 'utf8') };
+// state format: a change to an agent definition is full however small; a change to any other script of the two
+// skills is judged by its line count (the state script's schema symbols: #152 below).
+const OWN_CONTRACT = readFileSync(fileURLToPath(new URL('../docs/agents/commands.md', import.meta.url)), 'utf8');
+const OWN_STATE = readFileSync(fileURLToPath(new URL('../src/skills/get-to-work/scripts/state.mjs', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
+test("#139: this repo's contract: agent definitions are full; other skill scripts go by line count", (t) => {
+  const own = { 'docs/agents/commands.md': OWN_CONTRACT };
   for (const path of [
-    'src/skills/get-to-work/scripts/state.mjs',
-    'skills/get-to-work/scripts/state.mjs',
     'src/agents/finder.md',
     'agents/implementer.md',
     'hooks/guard.mjs',
@@ -179,6 +180,45 @@ test("#139: this repo's contract: the state script and agent definitions are ful
     assert.deepEqual([small.tier, small.reasons, small.signals.sensitive], ['light', ['few-lines'], []], `${path}, 50 lines`);
     const larger = judge(repo(t, own, { [path]: lines(51) }));
     assert.deepEqual([larger.tier, larger.reasons], ['standard', ['default']], `${path}, 51 lines`);
+  }
+});
+
+// #152: this repo's contract names the state script's schema by symbol: the constants, the shape and the stage
+// rules. A change there is full however small; a change to the rest of the file (commands, IO, argument parsing)
+// goes by its line count. Both the src and the dist copy.
+test("#152: this repo's contract: the state script's schema symbols are full; the rest of it goes by line count", (t) => {
+  for (const path of ['src/skills/get-to-work/scripts/state.mjs', 'skills/get-to-work/scripts/state.mjs']) {
+    const own = { 'docs/agents/commands.md': OWN_CONTRACT, [path]: OWN_STATE };
+    for (const [what, from, to] of [
+      ['check', "need(isText(state.run), 'run', 'is not a run name');", "need(typeof state.run === 'string', 'run', 'is not a run name');"],
+      ['queueFromReview', "if (r.verdict === 'pass') return null;", "if (r.verdict !== 'stuck') return null;"],
+      ['EDGES', "delivered: ['stuck'],", "delivered: ['stuck', 'candidate'],"],
+      ['newTicket', '  sendBacks: 0,\n  fixRounds: 0,\n  reviews: [],', '  sendBacks: 0,\n  fixRounds: 1,\n  reviews: [],'],
+    ]) {
+      const out = judge(repo(t, own, { [path]: swap(OWN_STATE, from, to) }));
+      assert.deepEqual([out.tier, out.reasons, out.signals.sensitive], ['full', ['sensitive'], [path]], `${path}: ${what}`);
+    }
+    const marker = 'function parseArgs(argv, spec) {';
+    const small = judge(repo(t, own, { [path]: swap(OWN_STATE, marker, `${marker}\n  void 0;`) }));
+    assert.deepEqual([small.tier, small.reasons, small.signals.sensitive], ['light', ['few-lines'], []], `${path}: parseArgs, 1 line`);
+    const larger = judge(repo(t, own, { [path]: swap(OWN_STATE, marker, `${marker}\n${lines(51, '  void ')}`.trimEnd()) }));
+    assert.deepEqual([larger.tier, larger.reasons, larger.signals.sensitive], ['standard', ['default'], []], `${path}: parseArgs, 51 lines`);
+  }
+});
+
+test('#152: every state.mjs symbol the contract names resolves in the state script, src and dist alike', () => {
+  const entries = parseSensitive(OWN_CONTRACT).map(sensitiveEntry).filter((e) => e.symbol.length);
+  const dist = readFileSync(fileURLToPath(new URL('../skills/get-to-work/scripts/state.mjs', import.meta.url)), 'utf8');
+  for (const [path, text] of [['src/skills/get-to-work/scripts/state.mjs', OWN_STATE], ['skills/get-to-work/scripts/state.mjs', dist]]) {
+    const named = entries.filter((e) => e.re.test(path));
+    assert.ok(named.length >= 27, `${path}: ${named.length} symbols named`);
+    for (const e of named) assert.ok(symbolRanges(text, path, e.symbol), `${path}#${e.symbol.join('#')} does not resolve`);
+  }
+});
+
+test("#152: tier.mjs's own splitEntry splits as overlap.mjs's does", () => {
+  for (const text of ['a/b.mjs', 'a/b.mjs#f', 'a/b.mjs # f ', 'a.md#Outer#Inner', 'a.mjs#', 'a.mjs##x', '#x', '']) {
+    assert.deepEqual(splitEntry(text), overlapSplitEntry(text), JSON.stringify(text));
   }
 });
 
