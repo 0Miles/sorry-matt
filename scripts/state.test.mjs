@@ -444,6 +444,46 @@ test('integrate direct, ci skip, simplify false: delivery still needs its merge 
 
 // ---- assignments and resuming ------------------------------------------------------------------------------------
 
+test('#156: review records the finding counts and the tier reasons; without them both are null', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--tier', 'full', '--tier-reasons', 'sensitive,over-lines', '--findings', 'F1', '--candidates', '7', '--confirmed', '3', '--invalid', '4', '--blocking', '1');
+  r.ok('stage', 'fixing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass');
+  const reviews = r.state().tickets['#1'].reviews.map((x) => [x.mode, x.tierReasons, x.findingCounts]);
+  assert.deepEqual(reviews, [
+    ['initial', ['sensitive', 'over-lines'], { candidates: 7, confirmed: 3, invalid: 4, blocking: 1 }],
+    ['recheck', null, null],
+  ]);
+  // the four counts go together, each a whole number; the reasons go with the tier they explain
+  const bad = (args, re) => {
+    const out = r.cmd('review', '#1', '--mode', 'recheck', '--verdict', 'pass', ...args);
+    assert.equal(out.code, 2, args.join(' '));
+    assert.match(out.err, re);
+  };
+  bad(['--candidates', '1', '--confirmed', '1'], /--candidates, --confirmed, --invalid and --blocking go together/);
+  bad(['--candidates', '-1', '--confirmed', '0', '--invalid', '0', '--blocking', '0'], /--candidates: expected a whole number/);
+  bad(['--tier-reasons', 'default'], /--tier-reasons goes with --tier/);
+  assert.equal(r.state().tickets['#1'].reviews.length, 2, 'nothing more recorded');
+});
+
+test('#156: an extension counts on each ticket it covers; a ticket never extended has 0', (t) => {
+  const r = run(t);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=1', '--limit', '15', '--now', NOW]));
+  r.ok('add', '#1', '#2', '#3', '--line', LINE);
+  r.ok('stage', 'expanding', '#1', '#2');
+  r.ok('assign', '#1', '#2', '--record', rec, '--type', 'sorry-matt:expander');
+  r.ok('extend', '#1', '#2', '--deadline', '2026-03-10T12:30:00Z');
+  r.ok('release', '#1', '#2', '--stopped');
+  r.ok('assign', '#1', '--record', rec, '--type', 'sorry-matt:expander', '--reassign');
+  r.ok('extend', '#1', '--deadline', '2026-03-10T12:50:00Z');
+  const s = r.state();
+  assert.deepEqual(['#1', '#2', '#3'].map((id) => s.tickets[id].timeoutExtensions), [2, 1, 0]);
+  assert.equal(s.usage.timeoutExtensions, 2, 'one per agent');
+  assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
+});
+
 test('assignments, agent ids, extension, release and timeout reassignment', (t) => {
   const r = run(t);
   const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=1', '--limit', '15', '--now', NOW]));
@@ -503,6 +543,9 @@ test('#144: a line holds its own assignment (the ci-fix of a red light that maps
   const a = r.state().lines[LINE].assignment;
   assert.deepEqual([a.agentId, a.type, a.limit, a.deadline, a.extended], ['c1', 'general-purpose', 20, '2026-03-10T12:40:00Z', 'yes']);
   assert.equal(r.state().tickets['#1'].assignment, null, 'no ticket holds it');
+  // #156: a line's extension counts for the run only, on no line or ticket
+  assert.equal(r.state().lines[LINE].timeoutExtensions, undefined);
+  assert.equal(r.state().tickets['#1'].timeoutExtensions, 0);
   const res = r.ok('resume');
   assert.deepEqual(res.inFlight.map((x) => [x.id, x.tickets, x.line]), [['c1', [], LINE]]);
   r.ok('release', '--line', LINE, '--stopped');

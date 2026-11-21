@@ -8,7 +8,7 @@
 與 CI 相同的四條，依序跑，每條結束代碼 0 才算綠：
 
 ```bash
-node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs scripts/merge-gate.test.mjs
+node --test scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs scripts/merge-gate.test.mjs scripts/retro.test.mjs
 node scripts/check-structure.mjs
 node scripts/check-vendored.mjs
 claude plugin validate .
@@ -38,18 +38,19 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/ci.mjs` | `scripts/ci.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tick.test.mjs`（`freeze.mjs` import 它，`tick.mjs` import `freeze.mjs`） |
   | `src/skills/get-to-work/scripts/overlap.mjs` | `scripts/overlap.test.mjs`、`scripts/freeze.test.mjs`、`scripts/tier.test.mjs`、`scripts/tick.test.mjs`（`freeze.mjs` import 它；`tier.test.mjs` 比對 prove-it 的 `tier.mjs` 自帶的 `splitEntry` 與它切法相同；`tick.test.mjs` 實跑它） |
   | `src/skills/get-to-work/scripts/review-guide.mjs` | `scripts/review-guide.test.mjs` |
-  | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs`、`scripts/brief.test.mjs` |
+  | `src/skills/get-to-work/scripts/spawns.mjs` | `scripts/spawns.test.mjs`、`scripts/brief.test.mjs`、`scripts/retro.test.mjs`（`retro.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/retro.mjs` | `scripts/retro.test.mjs` |
   | `src/skills/get-to-work/scripts/brief.mjs` | `scripts/brief.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` import 它） |
   | `src/skills/get-to-work/IMPLEMENTER.md`、`src/skills/get-to-work/EXPANDER.md` 與 dist 的同名檔（`brief.mjs` 填它們的佔位） | `scripts/brief.test.mjs` |
   | `src/skills/get-to-work/REVIEWER.md` 與 dist 的同名檔（`brief.mjs review` 在 runtime 讀它的固定規則，檔裡有佔位就以 1 結束） | `scripts/brief.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs` 以 `brief.mjs review` 產出審查主持 agent 的派工檔） |
   | `src/agents/implementer.md`、`src/agents/expander.md` 與 `agents/` 的同名檔（`brief.mjs` 把本文寫進通用 agent 的退回檔） | `scripts/brief.test.mjs`、`node scripts/check-structure.mjs` |
   | `src/skills/get-to-work/scripts/ticket.mjs`（沒有自己的測試檔） | `scripts/frontier.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/integrate.test.mjs` |
-  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs`、`scripts/tier.test.mjs`（`tier.test.mjs` import `overlap.mjs`） |
+  | `src/skills/get-to-work/scripts/cli.mjs`（沒有自己的測試檔） | `scripts/acceptance.test.mjs`、`scripts/frontier.test.mjs`、`scripts/overlap.test.mjs`、`scripts/review-guide.test.mjs`、`scripts/brief.test.mjs`、`scripts/freeze.test.mjs`、`scripts/deadline.test.mjs`、`scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/merge-gate.test.mjs`、`scripts/tier.test.mjs`（`tier.test.mjs` import `overlap.mjs`）、`scripts/retro.test.mjs` |
   | `src/skills/prove-it/scripts/mutate.mjs` | `scripts/mutate.test.mjs`、`scripts/tier.test.mjs`、`scripts/scope.test.mjs`、`scripts/tick.test.mjs`（`tier.mjs` import 它，`scope.mjs` import `tier.mjs`，`tick.test.mjs` 實跑 `tier.mjs`） |
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/deploy-on-merge.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs`、`scripts/tick.test.mjs`（`tick.mjs run` 以 `hooks/classify.mjs` 判斷哪些 exec 留給主持人） |
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它）、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的判級指令） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs`、`scripts/tick.test.mjs`、`scripts/integrate.test.mjs`（`tick.mjs` import 它） |
-  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`（`verify.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/retro.test.mjs`（`verify.mjs`、`tick.mjs` 與 `retro.mjs` import 它） |
   | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs`、`scripts/tick.test.mjs`（它的重播實跑 `tick.mjs` 發下的指令） |
   | `src/skills/prove-it/scripts/scope.mjs` | `scripts/scope.test.mjs` |
   | `src/skills/prove-it/scripts/worktree.mjs` | `scripts/worktree.test.mjs` |
@@ -81,7 +82,7 @@ claude plugin validate .
 Node 內建的覆蓋率，產出 lcov 到指定的檔；測試檔清單可以縮到涵蓋改動行的那幾個：
 
 ```bash
-node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs scripts/merge-gate.test.mjs
+node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=<lcov 檔> scripts/checks.test.mjs scripts/guard.test.mjs scripts/deploy-on-merge.test.mjs scripts/frontier.test.mjs scripts/mutate.test.mjs scripts/acceptance.test.mjs scripts/overlap.test.mjs scripts/review-guide.test.mjs scripts/ci.test.mjs scripts/reread.test.mjs scripts/budget.test.mjs scripts/spawns.test.mjs scripts/deadline.test.mjs scripts/brief.test.mjs scripts/freeze.test.mjs scripts/end-run.test.mjs scripts/tier.test.mjs scripts/state.test.mjs scripts/verify.test.mjs scripts/worktree.test.mjs scripts/scope.test.mjs scripts/integrate.test.mjs scripts/gates.test.mjs scripts/tick.test.mjs scripts/merge-gate.test.mjs scripts/retro.test.mjs
 ```
 
 `<lcov 檔>` 放在 repo 之外。repo 沒有另裝覆蓋工具。
@@ -124,6 +125,7 @@ src/skills/get-to-work/scripts/state.mjs#profileOf
 src/skills/get-to-work/scripts/state.mjs#VERDICTS
 src/skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
 src/skills/get-to-work/scripts/state.mjs#COUNTERS
+src/skills/get-to-work/scripts/state.mjs#FINDING_COUNTS
 src/skills/get-to-work/scripts/state.mjs#newUsage
 src/skills/get-to-work/scripts/state.mjs#newLine
 src/skills/get-to-work/scripts/state.mjs#newTicket
@@ -151,6 +153,7 @@ skills/get-to-work/scripts/state.mjs#profileOf
 skills/get-to-work/scripts/state.mjs#VERDICTS
 skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
 skills/get-to-work/scripts/state.mjs#COUNTERS
+skills/get-to-work/scripts/state.mjs#FINDING_COUNTS
 skills/get-to-work/scripts/state.mjs#newUsage
 skills/get-to-work/scripts/state.mjs#newLine
 skills/get-to-work/scripts/state.mjs#newTicket
@@ -173,7 +176,7 @@ skills/get-to-work/scripts/state.mjs#transition
 `check-*.mjs` 是 CI 的檢查本身；`.claude-plugin/` 是 plugin 的 manifest；`state.mjs` 定義 run 的 state 格式與它的守門規則。
 一行也可以寫成 `path#symbol`（寫法同預計檔案，symbol 是函式、區塊或 markdown 標題，巢狀寫 `path#outer#inner`）：
 改動碰到該 symbol 才算敏感，同檔其他地方的改動依行數判（#152）。`state.mjs` 列的是它的「the shape」與「the stage
-rules」兩段：格式常數（`FORMAT` 到 `COUNTERS`，允許值的集合，含合併 profile 預設值的 `profileOf`）、建出與驗證 state 形狀的
+rules」兩段：格式常數（`FORMAT` 到 `FINDING_COUNTS`，允許值的集合，含合併 profile 預設值的 `profileOf`）、建出與驗證 state 形狀的
 函式（`newUsage` 到 `check`），以及守門規則（`profileProblem` 到 `transition`，決定一張票沒過審查能不能進整合）。它的命令實作、檔案 IO 與參數解析
 依行數判。在這兩段新增常數或函式時，同時補進這裡。兩支 skill 其餘的腳本不在這裡：它們的改動依行數判審查分級。
 

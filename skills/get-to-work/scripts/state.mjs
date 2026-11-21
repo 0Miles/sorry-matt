@@ -23,8 +23,9 @@
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
-//                           [--tier light|standard|full]
+//                           [--tier light|standard|full [--tier-reasons <reason>,<reason>]]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
+//                           [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //   node state.mjs merge    <state> <ticket> <merge sha>
 //   node state.mjs assign   <state> <ticket>... --record <record.json> --type <agent type> [--worktree <path>] [--reassign]
@@ -74,10 +75,15 @@
 //         "timeoutReassignments": { "implementing": <n>, "fixing": <n>, "expanding": <n>,
 //                                   "in-review": <n> },     // the review host (#143); missing in an older file: 0
 //         "sendBacks": <n>, "fixRounds": <n>,
+//         "timeoutExtensions": <n>,                        // extensions of the agents that covered the ticket
+//                                                          // (#156); missing in an older file
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
 //                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
+//                       "tierReasons": ["<tier.mjs reason>"] | null,    // its judge output's `reasons` (#156)
 //                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
+//                       "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // (#156)
 //                       "after": <history length when recorded> }],   // the counts of the review report (#142)
+//                                                          // tierReasons and findingCounts missing: an older file
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
 //                                                          // implementer's per-finding report (recheck: false)
 //         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
@@ -178,7 +184,10 @@
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
 //             tier the review was chosen by (none without it); `--findings` (with `fix`) lists the finding ids;
 //             `--observations` and `--pre-existing` are the report's counts of those two sections (default 0; a
-//             review recorded before #142 has neither). Adds one to usage `reviewRounds`.
+//             review recorded before #142 has neither). `--tier-reasons` (with `--tier`) are the reasons of the
+//             tier.mjs judge output it was chosen by; `--candidates`, `--confirmed`, `--invalid` and `--blocking` (all
+//             four or none) are the report's counts of the candidates, the verifier's confirmed and invalid rulings
+//             and the blocking findings (#156). Without them each is null. Adds one to usage `reviewRounds`.
 //   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
 //             the latest (fix) review exactly once.
 //   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
@@ -193,7 +202,8 @@
 //   agent     Fills the agent id of the current assignment. Refused without an assignment in flight, or when
 //             another id is already there.
 //   extend    Sets the deadline from `deadline.mjs scan`'s `extend` and `extended` to "yes"; refused when already
-//             extended. One call per agent, naming every ticket it covers: usage `timeoutExtensions` + 1.
+//             extended. One call per agent, naming every ticket it covers: usage `timeoutExtensions` + 1, and + 1 on
+//             each ticket named (#156).
 //   release   The agent reported or was stopped: deadline null. `--stopped` (one call per agent) adds one to
 //             usage `timeoutStops`. `agent`, `extend` and `release` take `--line` in place of tickets for a line's
 //             assignment.
@@ -235,7 +245,7 @@ import { resolve } from 'node:path';
 import { UsageError, failure, run as exec, runIfEntry } from './cli.mjs';
 import { GATES, TARGETS, runGate } from './gates.mjs';
 
-// The sensitive paths of docs/agents/commands.md name each constant from FORMAT to COUNTERS and each function of
+// The sensitive paths of docs/agents/commands.md name each constant from FORMAT to FINDING_COUNTS and each function of
 // "the shape" and "the stage rules" below (#152): a change there makes prove-it's review tier full. A new constant
 // or function in those parts goes into that list too.
 export const FORMAT = 'sorry-matt/state@1';
@@ -283,6 +293,8 @@ const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'gree
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];
 const COUNTERS = ['reviewRounds', 'fixRounds', 'fullVerifications', 'sendBacks', 'timeoutExtensions', 'timeoutStops', 'compactions'];
+/** A review's finding counts (#156), each a count of its report's `counts:` line. */
+export const FINDING_COUNTS = ['candidates', 'confirmed', 'invalid', 'blocking'];
 
 /** The command is well-formed but the state does not allow it: exit 3, state unchanged. */
 export class Refusal extends Error {}
@@ -352,6 +364,7 @@ const newTicket = (line) => ({
   snapshotSha256: null,
   assignment: null,
   timeoutReassignments: { implementing: 0, fixing: 0, expanding: 0, 'in-review': 0 },
+  timeoutExtensions: 0,
   sendBacks: 0,
   fixRounds: 0,
   reviews: [],
@@ -439,11 +452,14 @@ function check(state, bad) {
         isObject(r) && ['initial', 'recheck'].includes(r.mode) && ['pass', 'fix', 'stuck'].includes(r.verdict) && ['full', 'minimal'].includes(r.kind) &&
           (r.tier == null || TIERS.includes(r.tier)) &&
           isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))) &&
-          [r.observations, r.preExisting].every((n) => n === undefined || isCount(n)),
+          [r.observations, r.preExisting].every((n) => n === undefined || isCount(n)) &&
+          (r.tierReasons == null || (Array.isArray(r.tierReasons) && r.tierReasons.every(isText))) &&
+          (r.findingCounts == null || (isObject(r.findingCounts) && FINDING_COUNTS.every((k) => isCount(r.findingCounts[k])))),
         `${w}.reviews[${i}]`,
-        'is not { mode, verdict, kind, tier, findings, observations, preExisting, after }',
+        'is not { mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, after }',
       ),
     );
+    need(t.timeoutExtensions === undefined || isCount(t.timeoutExtensions), `${w}.timeoutExtensions`, 'is not a count');
     need(
       Array.isArray(t.fixReports) && t.fixReports.every((r) => isObject(r) && Array.isArray(r.fixed) && Array.isArray(r.unfixed) && isCount(r.after)),
       `${w}.fixReports`,
@@ -794,6 +810,8 @@ function importLedger(path, rest, flags, ctx) {
     if (!isObject(t) || !isText(t.line) || !isText(t.stage)) throw new UsageError(`seed: tickets.${id} needs line and stage`);
     state.lines[t.line] ??= newLine();
     const ticket = { ...newTicket(t.line), ...t };
+    // #156 F14: a seed that counted extensions for the run only stays that way; 0 would claim none for the ticket
+    if (!('timeoutExtensions' in t)) delete ticket.timeoutExtensions;
     ticket.timeoutReassignments = { ...newTicket().timeoutReassignments, ...(t.timeoutReassignments ?? {}) };
     ticket.reviews = (t.reviews ?? []).map((r) => ({ kind: 'full', tier: null, findings: null, at: ctx.now, after: 0, ...r }));
     ticket.fixReports = (t.fixReports ?? []).map((r) => ({ at: ctx.now, after: 0, ...r }));
@@ -952,11 +970,16 @@ function review(path, rest, flags, ctx) {
   if (findings !== null && verdict !== 'fix') throw new UsageError('--findings goes with --verdict fix');
   const observations = count(flags.observations ?? 0, '--observations');
   const preExisting = count(flags['pre-existing'] ?? 0, '--pre-existing');
+  if (flags['tier-reasons'] !== undefined && tier === null) throw new UsageError('--tier-reasons goes with --tier');
+  const tierReasons = flags['tier-reasons'] === undefined ? null : ids(flags['tier-reasons'], '--tier-reasons');
+  const given = FINDING_COUNTS.filter((k) => flags[k] !== undefined);
+  if (given.length && given.length < FINDING_COUNTS.length) throw new UsageError('--candidates, --confirmed, --invalid and --blocking go together');
+  const findingCounts = given.length ? Object.fromEntries(FINDING_COUNTS.map((k) => [k, count(flags[k], `--${k}`)])) : null;
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
     if (t.stage !== 'in-review') throw new Refusal(`${id}: a review is recorded only in in-review; it is ${t.stage}`);
-    t.reviews.push({ mode, verdict, kind, tier, findings, observations, preExisting, at: ctx.now, after: t.history.length });
+    t.reviews.push({ mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, at: ctx.now, after: t.history.length });
     state.usage.reviewRounds += 1;
     return { tickets: view(state, [id]) };
   });
@@ -1116,6 +1139,8 @@ function extend(path, rest, flags, ctx) {
     inFlight(holders);
     for (const { name, holder } of holders) if (holder.assignment.extended === 'yes') throw new Refusal(`${name}: the assignment was already extended once; stop it`);
     for (const { holder } of holders) Object.assign(holder.assignment, { deadline, extended: 'yes' });
+    // #156: a ticket keeps its own count (a line's agent is counted in usage only)
+    if (flags.line === undefined) for (const { holder } of holders) holder.timeoutExtensions = (holder.timeoutExtensions ?? 0) + 1;
     state.usage.timeoutExtensions += 1;
     return out();
   });
@@ -1266,7 +1291,7 @@ const COMMANDS = {
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
   set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
-  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reasons': 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
   assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],

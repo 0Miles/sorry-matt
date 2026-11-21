@@ -175,10 +175,12 @@ expansion, and wider after a send-back.
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
   report (six lines at most), and record its verdict with `--outcome` and the report's `counts:` line as
   `--observations <n> --pre-existing <n>` (both, 0 when there are none; with one missing the record is refused with
-  2). A minimal review reports blocking findings only and takes neither count.
+  2), and `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>` (#156: all four together, some of them
+  refused with 2; none when the report's `counts:` line has none of them). A minimal review reports blocking findings
+  only and takes none of these counts.
 - **The review's assignment record**: before the spawn tick writes the assignment record (`deadline.mjs record` in the
   ticket worktree with the `timeout-review` limit, then `state.mjs assign`), so the review host agent has a time limit
-  like every other agent. When its report comes back with the spawn, record `--agent`, `--outcome` and the two counts;
+  like every other agent. When its report comes back with the spawn, record `--agent`, `--outcome` and the counts above;
   when the Agent tool put it in the background and the spawn returned only an agent id, record `--agent` alone (the
   counts are refused with 2 there): it is in flight, tick scans its deadline and schedules the fallback wake-up all the
   same, and when its completion notice arrives you pass it to tick with `--reported`, and a `collect` records the

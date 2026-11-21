@@ -98,7 +98,14 @@ ticket's send-back count, each row pointing to its status record), **this run's 
 **lines that skipped the simplify pass** (the `wrap-up`'s `meta.simplifySkipped`, each with its reason; left out when
 there are none), and the list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and
 `byTicket` of `scripts/spawns.mjs <ledger directory>/<run>.counters.json`, attached as they are; with no counters file,
-or a non-zero exit, say this run has no spawn breakdown and why, never an estimate. Standalone, after the output change
+or a non-zero exit, say this run has no spawn breakdown and why, never an estimate. Then write each ticket of the run as
+one row of the cross-run retro record (#156):
+`scripts/retro.mjs record --state <state file> --counters <ledger directory>/<run>.counters.json --ledger <ledger file>`.
+It runs at the end of the run because Claude Code clears old transcripts from time to time: fetched later, the token
+counts may be gone. Of its output read only the exit code and `gaps` (each reason a token count is null). A non-zero exit does not
+block the finish: the closing summary says the run has no retro record and why. When `gaps` is not empty, one line of
+the closing summary says which token counts are null because of it. The report (`retro.mjs report`) is run by a person
+later, not here. Standalone, after the output change
 the ledger's first line to `<!-- sorry-matt:run ended -->`; when composed by `have-it-all-done`, leave it for its
 hand-off.
 
@@ -107,6 +114,6 @@ guide written from the `review-guide.mjs` output, with the size note first when 
 names its conflicted files and the base SHA tried and is left for a human to merge; every line has exactly one
 deliverable for a human to merge, or its merge was sent per the `merge-gate.mjs` decision and reported; the delivered
 tickets of every merged aggregate PR are closed, and where the keyword does not apply the human-work list has the
-closing commands; the output lists the reconciliation table, the authorization outcomes and the metrics (with the spawn
+closing commands; `retro.mjs record` has run, and on a non-zero exit the closing summary says why; the output lists the reconciliation table, the authorization outcomes and the metrics (with the spawn
 breakdown or why there is none), and the lines that skipped the simplify pass, with their reasons in the self-answer
 log; standalone, the ledger's first line is the ended marker.

@@ -141,10 +141,11 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
   固定點、ticket 分支、targeted checks 與它跑的 SHA、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
   發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
   記下結論，並照回報的 `counts:` 行帶 `--observations <n> --pre-existing <n>`（兩個都要帶，沒有就寫 0；少一個
-  record 以 2 拒絕）。minimal 審查只回報擋下整併的 finding，不帶這兩個計數。
+  record 以 2 拒絕），以及 `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>`（#156：四個一起帶，只帶
+  幾個以 2 拒絕；回報的 `counts:` 行沒有這四個時都不帶）。minimal 審查只回報擋下整併的 finding，這些計數都不帶。
 - **審查的派送紀錄**：spawn 之前 tick 先寫派送紀錄（`deadline.mjs record` 在 ticket worktree、時限
   `timeout-review`，再 `state.mjs assign`），審查主持 agent 和其他 agent 一樣有時限。回報隨 spawn 回來時，record
-  帶 `--agent`、`--outcome` 與兩個計數；Agent tool 把它放到背景、spawn 只回 agent id 時，record 只帶 `--agent`
+  帶 `--agent`、`--outcome` 與上面的計數；Agent tool 把它放到背景、spawn 只回 agent id 時，record 只帶 `--agent`
   （這時帶計數會以 2 拒絕）：它在途，tick 照樣掃時限、排 fallback 喚醒，完成通知來了以 `--reported` 交給 tick，由
   `collect` 記結論，同樣帶 `--observations <n> --pre-existing <n>`（少一個以 2 拒絕）。
 - **照回報落地**：`findings` 交集中修正。`observations` 或 `pre-existing` 不是 0 時，tick 發下一個 `observations`
