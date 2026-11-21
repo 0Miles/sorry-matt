@@ -117,7 +117,13 @@ export function parse(line, dialect = 'bash') {
       let j = i + 1;
       let text = '';
       while (j < line.length && line[j] !== '"') {
-        if (line[j] === escape && !cmd && j + 1 < line.length) {
+        const next = line[j + 1];
+        if (line[j] === escape && dialect === 'bash' && (next === '\n' || (next === '\r' && line[j + 2] === '\n'))) {
+          j += next === '\r' ? 3 : 2;
+        } else if (line[j] === escape && dialect === 'bash' && !['$', '`', '"', '\\'].includes(next)) {
+          // Bash keeps a backslash inside double quotes unless it escapes one of these: `"C:\a"` is `C:\a`.
+          text += line[j++];
+        } else if (line[j] === escape && !cmd && j + 1 < line.length) {
           text += line[j + 1];
           j += 2;
         } else if (line[j] === '$' && line[j + 1] === '(') {
