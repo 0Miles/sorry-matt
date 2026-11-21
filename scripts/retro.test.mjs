@@ -169,9 +169,19 @@ test('the tracker, repo and base come from the tick configuration when the state
   w.edit((s) => (s.tick = { config: { tracker: 'github', repo: 'x/y', base: 'main' } }));
   ok(w.record());
   assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['x/y', 'github', 'main'], 'not the origin remote');
-  w.edit((s) => (s.tick = { config: { tracker: 'local', repo: null, base: 'trunk' } }));
-  ok(w.record());
-  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), [null, 'local', 'trunk']);
+  w.edit((s) => (s.tick = { config: { tracker: 'local', repo: null, root: '/the/root', base: 'trunk' } }));
+  const dirs = [];
+  ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, git: (args, dir) => (dirs.push(dir), w.deps.git(args, dir)) }));
+  // #156 F13: a Local Markdown run still reads CI on its origin remote, the configured root's
+  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['o/r', 'local', 'trunk']);
+  assert.deepEqual(dirs, ['/the/root']);
+  const gh = (args) => {
+    if (args[0] === 'run') return JSON.stringify([{ conclusion: 'failure', createdAt: '2026-03-10T15:00:00Z' }]);
+    throw new Error(`no ${args[0]} on a local tracker`);
+  };
+  const e = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], { git: () => '', gh }))).groups[0].escaped;
+  assert.deepEqual(e.tickets.map((s) => [s.ticket, s.mentions, s.ciRed]), [['#1', 'unknown', true]]);
+  assert.deepEqual([e.delivered, e.escaped, e.unknown], [1, 1, 0]);
 });
 
 test('an older state without per-ticket extensions: null when the run had some, 0 when it had none', (t) => {

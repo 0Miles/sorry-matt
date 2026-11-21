@@ -27,7 +27,9 @@
 //           plugin version                     `.claude-plugin/plugin.json` in the nearest directory above this script
 //           tracker, repo, base                the state's tick configuration (`tick.mjs setup`); a state without
 //                                              one: no tracker, no base, and the repo from `git remote get-url
-//                                              origin` of the state's repository, as owner/repo
+//                                              origin` of the state's repository, as owner/repo. Under a Local
+//                                              Markdown tracker the repo (where CI is read) is the origin remote's
+//                                              of the configured root, else of the state's repository
 //         Tokens are only ever the `message.usage` of a transcript, one count per `message.id` (a message that is
 //         split over several lines counts once, its last line's usage). A ticket's agents are the counters entries
 //         whose description names it (spawns.mjs `ticketOf`); an agent's kind is the role word its description
@@ -408,15 +410,18 @@ export function record(flags, deps) {
   const config = state.tick?.config && typeof state.tick.config === 'object' ? state.tick.config : null;
   const tracker = typeof config?.tracker === 'string' ? config.tracker : null;
   const base = typeof config?.base === 'string' ? config.base : null;
-  let repo = null;
-  if (config) repo = tracker === 'github' && typeof config.repo === 'string' ? config.repo : null;
-  else {
+  const originRepo = (dir) => {
     try {
-      repo = repoOf(deps.git(['remote', 'get-url', 'origin'], dirname(statePath)));
+      return repoOf(deps.git(['remote', 'get-url', 'origin'], dir));
     } catch {
-      repo = null;
+      return null;
     }
-  }
+  };
+  // #156 F13: a Local Markdown run still has CI on its origin remote; its mentions stay unknown (tracker: local)
+  let repo = null;
+  if (!config) repo = originRepo(dirname(statePath));
+  else if (tracker === 'github') repo = typeof config.repo === 'string' ? config.repo : null;
+  else repo = originRepo(typeof config.root === 'string' ? config.root : dirname(statePath));
   const now = flags.now ?? new Date(deps.clock()).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const rows = rowsOf({ state, log, logReason, session, places, version: deps.version ?? pluginVersion(), repo, tracker, base, now });
 
