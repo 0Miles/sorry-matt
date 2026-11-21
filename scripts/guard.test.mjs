@@ -276,6 +276,8 @@ test('bash double quotes keep a backslash unless it escapes $, backtick, ", \\ o
   assert.deepEqual(argv('echo "a\\`b"'), [['echo', 'a`b']]);
   assert.deepEqual(argv('echo "a\\\nb"'), [['echo', 'ab']]);
   assert.deepEqual(argv('echo "a\\\r\nb"'), [['echo', 'ab']]);
+  // A lone CR is not a newline: the backslash and the CR are kept.
+  assert.deepEqual(argv('echo "a\\\rb"'), [['echo', 'a\\\rb']]);
   assert.deepEqual(argv('echo "\\n" "\\\'" "a\\""'), [['echo', '\\n', "\\'", 'a"']]);
   // Outside quotes a backslash still escapes whatever follows it.
   assert.deepEqual(argv('echo C:\\a\\b'), [['echo', 'C:ab']]);
