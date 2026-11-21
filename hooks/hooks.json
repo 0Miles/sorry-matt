@@ -1,5 +1,5 @@
 {
-  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; at every session start, hand the agent the one line that enters unattended mode; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
+  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; at every session start, hand the agent the one line that enters unattended mode; when the user sends a message in any session, end the automatic unattended state and hand the agent the list of what was blocked meanwhile; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
   "hooks": {
     "PreToolUse": [
       {
@@ -32,6 +32,20 @@
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/reread.mjs\"" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
         ]
       }
     ]
