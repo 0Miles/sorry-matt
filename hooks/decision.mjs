@@ -21,8 +21,10 @@ export const pluginRoot = (env = process.env) => env.CLAUDE_PLUGIN_ROOT || HOOK_
 // Forward slashes run in Bash, Git Bash and PowerShell alike, on Windows too.
 export const confirmCommand = (root, token) => `node "${join(root, 'hooks', 'confirm.mjs').replace(/\\/g, '/')}" ${token}`;
 
-// The one line that enters unattended mode. The reason is the agent's own words, as a single quoted argument.
-export const enterCommand = (root, reason = '<原因>') => `node "${join(root, 'hooks', 'enter-unattended.mjs').replace(/\\/g, '/')}" "${reason}"`;
+// The one line that enters unattended mode. The reason is the agent's own words, as a single quoted argument; the
+// guard lets through only this exact text (enterInvocation).
+const enterScript = (root) => join(root, 'hooks', 'enter-unattended.mjs').replace(/\\/g, '/');
+export const enterCommand = (root, reason = '<原因>') => `node "${enterScript(root)}" "${reason}"`;
 
 const BYPASS = 'bypassPermissions';
 const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_GUARD=off 關掉這個 guard。）';
@@ -97,11 +99,7 @@ const GUARD_TOUCH = /(^|[^\w.-])confirm(-state)?\.mjs\b|sorry-matt-guard/i;
 const INERT = new Set(['cat', 'type', 'get-content', 'gc', 'head', 'tail', 'less', 'more', 'jq', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'wc', 'bat', 'ls', 'dir', 'stat', 'test', '[', 'diff', 'git', 'gh', 'echo', 'printf', 'write-output', 'write-host']);
 
 // The same file whatever the spelling: Git Bash `/d/x`, doubled or back slashes, case, symlinks.
-// `exact` is for a match that grants something: no case-folding on any platform, so a case variant that names
-// another file (Linux, or a case-sensitive directory on Windows or macOS) is another path. The real path already
-// carries the case on disk, so the same file still matches under any spelling; only the drive letter, which has no
-// case of its own, is levelled. A path that is not there is compared as written.
-function samePath(a, b, cwd, exact = false) {
+function samePath(a, b, cwd) {
   const norm = (p) => {
     const path = resolve(cwd, process.platform === 'win32' ? p.replace(/^\/([a-z])\//i, '$1:/') : p);
     let real = path;
@@ -110,8 +108,7 @@ function samePath(a, b, cwd, exact = false) {
     } catch {
       // not there: compare the resolved spelling
     }
-    const slashed = real.replace(/\\/g, '/');
-    return exact ? slashed.replace(/^[a-z]:/, (drive) => drive.toUpperCase()) : slashed.toLowerCase();
+    return real.replace(/\\/g, '/').toLowerCase();
   };
   return norm(a) === norm(b);
 }
@@ -249,66 +246,34 @@ function park({ event, now, state, home }, reason) {
   return deny(`sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`);
 }
 
-// The entry line is answered with allow, so what is recognized here has to be exactly what the shell then runs.
-// It is matched as text, whole, and every word is a quoted literal neither shell expands or re-reads:
-//   node "<absolute path of the script, forward slashes>" "<reason>"      (or '<reason>')
-// - the script path is double-quoted and holds no `"`, `$`, backtick or backslash; the reason likewise, or it is
-//   single-quoted with no `'` in it
-// - only spaces and tabs stand between the words; nothing stands before `node` or after the reason
-const ENTER_TEXT = /^[ \t]*node[ \t]+"([^"$`\\]+)"[ \t]+(?:"([^"$`\\]*)"|'([^']*)')[ \t]*$/;
-// One line means one line: with a line break or any other control character in it (a tab aside), what the shell
-// runs is not what is read here.
-const CONTROL = /[\x00-\x08\x0a-\x1f\x7f\u0085\u2028\u2029]/;
-// PowerShell reads these as quotes too (U+2018–U+201B single, U+201C–U+201E double), so there a quoted word may end
-// where the pattern thinks it goes on.
-const POWERSHELL_QUOTES = /[\u2018-\u201e]/;
+// The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every
+// rewrite the guard tried to read through — another spelling of the path, other quotes, Git Bash's `/c/` — turned
+// out to be a line the shell runs differently, so nothing is parsed or resolved here: the command is the text
+// `enterCommand` hands out for this plugin root, byte for byte, and only the reason is the agent's own. Any other
+// spelling gets no allow and goes through the usual permission flow.
+// The path and the reason each have to stay one literal word in both shells inside double quotes: no `"`, `$`,
+// backtick or backslash, which Bash or PowerShell expand or escape there, and no control character, line break or
+// line separator, after which the shell runs something other than the one line read here.
+const NOT_LITERAL = /["$`\\\x00-\x1f\x7f\u0085\u2028\u2029]/;
+// PowerShell also reads these as quotes (U+2018–U+201B single, U+201C–U+201E double), so there a quoted word may end
+// early; and Windows PowerShell 5.1 takes even a quoted `--%` as the stop-parsing token and drops the argument.
+const NOT_LITERAL_POWERSHELL = /[\u2018-\u201e]|--%/;
+const literal = (text, tool) => !NOT_LITERAL.test(text) && !(tool === 'PowerShell' && NOT_LITERAL_POWERSHELL.test(text));
 
 /**
- * Whether the path word is a script path node opens as written: absolute, so it can be neither a node option (a word
- * starting with `-`) nor depend on the shell's directory, and with no `.`, `..` or empty segment, which `resolve`
- * folds away without asking the file system. On Windows it starts with a drive letter — or `/c/` under Bash, which
- * Git Bash hands to node as `C:/`; PowerShell reads a leading `/` as the current drive — and holds none of the
- * characters that name something other than a plain file (a stream, a device path, a wildcard).
- */
-export function plainScriptPath(path, tool, platform = process.platform) {
-  let rest;
-  if (platform === 'win32') {
-    const prefix = (tool === 'Bash' ? /^(?:[A-Za-z]:|\/[A-Za-z])\// : /^[A-Za-z]:\//).exec(path);
-    if (!prefix) return false;
-    rest = path.slice(prefix[0].length);
-    if (/[:*?<>|]/.test(rest)) return false;
-  } else {
-    if (!path.startsWith('/')) return false;
-    rest = path.slice(1);
-  }
-  // Windows drops trailing dots and spaces, so there "`.. `" is `..` too.
-  return rest.split('/').every((segment) => segment !== '' && !/^[. ]+$/.test(segment));
-}
-
-/**
- * The reason, when a shell call is the one line the guard hands out for entering unattended mode: a single
- * `node "<root>/hooks/enter-unattended.mjs" "<reason>"`, run on its own. null for everything else — chained,
- * rewritten, another path, an option in the path's place, an empty reason — which gets no special treatment.
- * The path has to be the script file itself, case included, and the guard's shell parser has to read the same
- * three words the pattern does.
+ * The reason, when a shell call is the one line the guard hands out for entering unattended mode: exactly
+ * `enterCommand(root, reason)`, run on its own, with a reason that is not blank. null for everything else —
+ * chained, rewritten, another spelling of the path, other quotes, spaces around it — which gets no special treatment.
  */
 export function enterInvocation(event, root = pluginRoot()) {
   const tool = event.tool_name;
   if (tool !== 'Bash' && tool !== 'PowerShell') return null;
-  const command = String(event.tool_input?.command || '');
-  if (CONTROL.test(command)) return null;
-  if (tool === 'PowerShell' && POWERSHELL_QUOTES.test(command)) return null;
-  const text = ENTER_TEXT.exec(command);
-  if (!text) return null;
-  const path = text[1];
-  const reason = text[2] ?? text[3];
-  if (reason.trim() === '' || !plainScriptPath(path, tool)) return null;
-  const segments = parse(command, tool === 'PowerShell' ? 'powershell' : 'bash');
-  const [seg] = segments;
-  const standard = segments.length === 1 && !seg.redirects.length && !seg.heredoc && seg.argv.length === 3 &&
-    seg.argv[0] === 'node' && seg.argv[1] === path && seg.argv[2] === reason &&
-    samePath(path, join(root, 'hooks', 'enter-unattended.mjs'), event.cwd || process.cwd(), true);
-  return standard ? reason.trim() : null;
+  const command = String(event.tool_input?.command ?? '');
+  const [before, after] = enterCommand(root, '\0').split('\0');
+  if (command.length <= before.length + after.length || !command.startsWith(before) || !command.endsWith(after)) return null;
+  const reason = command.slice(before.length, command.length - after.length);
+  if (reason.trim() === '' || !literal(reason, tool) || !literal(enterScript(root), tool)) return null;
+  return reason.trim();
 }
 
 /** Entering only makes the guard stricter, so it needs no prompt. The script records it again if this write fails. */
