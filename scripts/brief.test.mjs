@@ -287,7 +287,7 @@ test('the dist copy fills the English EXPANDER.md; a Local Markdown run names th
 });
 
 // #138: the review host agent's values, as tick writes them for a prove-it review.
-const REPORT = 'ticket: #72\ncommit: 0a1b2c3 (branch r1/72-widgets)\ntargeted checks: source=commands.md; node --test scripts/a.test.mjs → green\nstatus record: https://example.invalid/c/9\n';
+const REPORT = 'ticket: #72\ncommit: 0a1b2c3 (branch r1/72-widgets)\ntargeted checks: sha=0a1b2c3d4e5f; source=commands.md; node --test scripts/a.test.mjs → green\nstatus record: https://example.invalid/c/9\n';
 function reviewValues(dir, overrides = {}) {
   return {
     out: join(dir, 'review', '72-1.md'),
@@ -327,7 +327,8 @@ const reviewLines = (v, { mode = 'initial', previous = 'none' } = {}) => [
   `- acceptance snapshot: ${v.snapshot}; comparison: ${v.against}\n`,
   '- fixed point: r1/line-a\n',
   '- ticket branch: r1/72-widgets\n',
-  `- targeted checks: source=commands.md; node --test scripts/a.test.mjs → green (commit 0a1b2c3 (branch r1/72-widgets); the agent's report: ${v.checksReport})\n`,
+  `- targeted checks: sha=0a1b2c3d4e5f; source=commands.md; node --test scripts/a.test.mjs → green (commit 0a1b2c3 (branch r1/72-widgets); the agent's report: ${v.checksReport})\n`,
+  '- targeted checks ran at: 0a1b2c3d4e5f\n',
   '- CI coverage: covered\n',
   `- previous review block: ${previous}\n`,
   '- reviewer: primary\n',
@@ -393,6 +394,18 @@ test('#138: review refuses missing or malformed values (2) and a checks report w
     assert.equal(r.code, 1, typeof overrides === 'function' ? 'a report without a targeted checks line' : JSON.stringify(overrides));
     assert.equal(existsSync(r.values.out), false);
   }
+});
+
+// #140: the review reuses the targeted checks only at the SHA they ran at, so the spawn file names that SHA apart.
+test('#140: review names the SHA the targeted checks ran at, or that the report gives none', (t) => {
+  const r = runReview(t);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(r.brief.includes('- targeted checks ran at: 0a1b2c3d4e5f\n'), r.brief);
+  const ran = (line) =>
+    runReview(t, (dir) => ({ checksReport: put(dir, 'r.md', `ticket: #72\ncommit: 9f8e7d6\n${line}\n`) })).brief.match(/^- targeted checks ran at: (.*)$/m)?.[1];
+  assert.equal(ran('- **targeted checks**: `sha=9F8E7D6C5B4A3928` source=self-found; npm test → green'), '9f8e7d6c5b4a3928', 'markdown around the line, upper case');
+  assert.equal(ran('targeted checks: source=commands.md; npm test → green'), 'not reported: rerun them (prove-it section 3)', 'no sha= in the line');
+  assert.equal(ran('targeted checks: sha=xyz; npm test → green'), 'not reported: rerun them (prove-it section 3)', 'not a SHA');
 });
 
 // #139: tick judges the review tier before the review; prove-it takes it from the judge output instead of judging again.

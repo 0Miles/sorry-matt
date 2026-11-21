@@ -820,7 +820,7 @@ function ledgerText(rule, { marker = '<!-- sorry-matt:run active -->', session =
     7: 'none',
     8: '| ticket | stage |\n| --- | --- |',
     9: (budget ??
-      ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', '- `budget: timeout-fix 20`', 'budget: timeout-expand 15', 'budget: timeout-merge 15']
+      ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', '- `budget: timeout-fix 20`', 'budget: timeout-expand 15', 'budget: timeout-merge 15', 'budget: timeout-review 60']
     ).join('\n') + (session ? `\nsession: ${session}` : ''),
     10: `rule: ${rule}`,
   };
@@ -839,7 +839,7 @@ function ledgerWorld(t, env = { CLAUDE_CODE_SESSION_ID: 'sess-1' }) {
   return { w, rule, check };
 }
 
-test('ledger passes: the marker, ten fields with content, eight budget lines, this session, absolute rule files', (t) => {
+test('ledger passes: the marker, ten fields with content, nine budget lines, this session, absolute rule files', (t) => {
   const { rule, check } = ledgerWorld(t);
   passes(check(ledgerText(rule)), ['marker', 'fields', 'budget-limits', 'stage-limits', 'session', 'rule-files']);
   passes(check(`﻿${ledgerText(rule)}`), ['marker']);
@@ -866,14 +866,17 @@ test('ledger fails on fields: a field missing, empty, or out of order', (t) => {
 
 test('ledger fails on budget-limits: a limit line is missing', (t) => {
   const { rule, check } = ledgerWorld(t);
-  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15'];
+  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15', 'budget: timeout-review 60'];
   failsOnly(check(ledgerText(rule, { budget })), 'budget-limits', /no budget: hours/);
 });
 
 test('ledger fails on stage-limits: a stage time limit line is missing', (t) => {
   const { rule, check } = ledgerWorld(t);
-  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15'];
+  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-review 60'];
   failsOnly(check(ledgerText(rule, { budget })), 'stage-limits', /no budget: timeout-merge/);
+  // #143: the review host agent's time limit is a stage time limit too
+  const noReview = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15'];
+  failsOnly(check(ledgerText(rule, { budget: noReview })), 'stage-limits', /no budget: timeout-review/);
 });
 
 test('ledger fails on session: the session line is another session, or missing while one is known', (t) => {

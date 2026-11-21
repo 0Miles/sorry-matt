@@ -271,7 +271,8 @@ plugin's hooks read only the first line (a BOM aside). Ten fields:
      review or fix rounds), `budget: hours 12`, `budget: no-progress 3`. `spawns` and `rounds` are rewritten per
      section 4 once the ticket count is known.
    - **Stage time limits**: the same format, in minutes: `budget: timeout-implement 30`, `budget: timeout-fix 20`
-     (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`.
+     (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`, `budget: timeout-review 60`
+     (the review host agent).
    - **Usage and the stop reason** are the state's `usage` and `stop`. The spawn count comes from
      `<run>.counters.json`, which the hook writes; read it, never write it. When you ask the user something, add the
      seconds from sending to the answer to the waiting time with `state.mjs usage --wait`. Token counts are unknown

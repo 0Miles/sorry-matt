@@ -105,6 +105,7 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     agentOf: {}, // agent id → { tickets, role }
     silent: new Set(), // agents that do no work and never report
     crashAfter: null, // (action) => true to stop right after running it, before recording
+    reviewBackground: false, // #143: the prove-it review host's spawn comes back without its report
     policy: {},
     // #139: what an agent's work changes, per ticket: { path, lines }. The default is a code file of 60 lines, which
     // tier.mjs judges standard (a prove-it review); 50 lines or fewer is light (a minimal review under review: full).
@@ -246,7 +247,10 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
   };
 
   const DEFAULTS = {
-    collect: (a) => ({ implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved', 'ci-fix': 'fixed' })[a.meta.stage] ?? 'logged',
+    collect: (a) =>
+      a.meta.stage === 'in-review'
+        ? (h.policy.review ?? DEFAULTS.review)(a) // #143: the report of a review host that went to the background
+        : ({ implementing: 'green', expanding: 'reported', fixing: 'fixed', integrating: 'resolved', 'ci-fix': 'fixed' })[a.meta.stage] ?? 'logged',
     review: () => 'pass',
     'agent-report': (a) => {
       write(a.meta.agentReport, h.agentReport({ tickets: a.tickets, meta: { agent: 'the-last-agent' } }));
@@ -281,6 +285,8 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     if (a.step === 'collect' && a.meta.agentReport && ['green', 'fixed'].includes(r.outcome)) write(a.meta.agentReport, h.agentReport(a));
     const flags = ['--outcome', r.outcome];
     for (const k of ['value', 'findings', 'fixed', 'unfixed', 'agent']) if (r[k] !== undefined) flags.push(`--${k}`, r[k]);
+    // #142 × #143: the report of a review host that went to the background carries its `counts:` line, as at the spawn
+    if (a.step === 'collect' && a.meta.stage === 'in-review') flags.push('--observations', String(r.observations ?? 0), '--pre-existing', String(r.preExisting ?? 0));
     return flags;
   };
   /** The implementation (or fix) agent's report as agents/implementer.md section 5 has it. */
@@ -291,6 +297,8 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     const agent = `a${++h.agents}`;
     const role = a.spawn.description.split(' ')[0];
     h.agentOf[agent] = { tickets: a.tickets, role };
+    // #143: the Agent tool put the review host in the background: the host records the agent alone, its report comes later
+    if (a.step === 'review' && a.meta.kind === 'full' && h.reviewBackground) return { agent, flags: ['--agent', agent] };
     if (a.step === 'review') {
       const r = (h.policy.review ?? DEFAULTS.review)(a);
       const v = typeof r === 'string' ? { outcome: r } : r;
@@ -340,6 +348,9 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
             }
             h.reportsNext.push(r.agent);
           } else if (r.agent && h.agentOf[r.agent].role === 'ci-fix') h.fixLine(r.agent);
+          else if (r.agent && h.agentOf[r.agent].role === 'review') {
+            if (!h.silent.has(r.agent)) h.reportsNext.push(r.agent); // a review host commits nothing (#143)
+          }
           else if (r.agent) h.work(r.agent, a.tickets[0]);
         }
       } else {
@@ -1268,7 +1279,8 @@ test('#142: a prove-it review is recorded with both counts; a minimal review tak
   let checked = 0;
   h.policy.review = (a) => {
     if (!checked++) {
-      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n>$/);
+      // #143: the template also says how a review host the Agent tool put in the background is recorded
+      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> {3}\(in the background: --agent <agent id> alone\)$/);
       for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
         const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', ...missing);
         assert.equal(r.code, 2, `without ${missing.length ? 'one' : 'both'}`);
@@ -1350,6 +1362,179 @@ test('#138: Local Markdown: the status record is the ticket file in the ticket w
   assert.equal(one.a.spawn.description, `review ${h.ids[0]}`);
   assert.ok(one.file.includes('- tracker: Local Markdown\n'));
   assert.ok(one.file.includes(`- status record: ${resolve(one.wt, TICKETS_DIR, h.ids[0])}\n`), one.file.slice(one.file.lastIndexOf('\n---\n')));
+});
+
+const reviewSpawns = (h, id = '#1') => distinct(h.log).filter((a) => a.kind === 'spawn' && a.step === 'review' && a.tickets[0] === id);
+
+test('#143: the review spawn comes with an assignment record; a review host in the background is in flight, with a fallback wake-up, until its report', (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  h.wake();
+  const w2 = h.wake();
+  const [review] = reviewSpawns(h);
+  assert.ok(review, 'the review host is spawned');
+  // the assignment record comes before the spawn: deadline.mjs record in the ticket worktree with the review limit
+  const first = h.wakes.flat().flatMap((o) => o.actions).find((x) => x.id === review.id);
+  const assign = h.log.find((x) => x.step === 'assignment' && x.argv.includes('assign') && first.after.includes(x.id));
+  assert.ok(assign, `the review spawn waits for its assignment: ${first.after}`);
+  assert.deepEqual(assign.tickets, ['#1']);
+  const rec = h.log.find((x) => x.step === 'assignment' && x.tickets[0] === '#1' && basename(x.argv[1]) === 'deadline.mjs' && x.stdout === assign.argv[assign.argv.indexOf('--record') + 1]);
+  assert.ok(rec, 'deadline.mjs record writes the record the assign reads');
+  assert.equal(rec.argv[rec.argv.indexOf('--limit') + 1], '60', 'timeout-review, 60 minutes by default');
+  // in flight: the assignment is the review host's, it is a current agent, and the wake-up ends with a fallback
+  const st = h.state();
+  const a = st.tickets['#1'].assignment;
+  const agent = Object.keys(h.agentOf).find((x) => h.agentOf[x].role === 'review' && h.agentOf[x].tickets[0] === '#1');
+  assert.deepEqual([a.agentId, a.type, a.limit, a.extended], [agent, 'general-purpose', 60, 'no']);
+  assert.equal(Date.parse(a.deadline) - Date.parse(a.assigned), 60 * 60_000);
+  assert.equal(st.tick.agents[agent].status, 'current', 'not marked collected at the spawn record');
+  assert.equal(stage(h, '#1'), 'in-review');
+  assert.equal(st.tickets['#1'].reviews.length, 0);
+  assert.equal(w2.at(-1).then, 'end');
+  assert.equal(w2.at(-1).actions.at(-1).step, 'wakeup-end');
+  const deadlines = [st.tickets['#1'].assignment.deadline, st.tickets['#2'].assignment.deadline].sort();
+  assert.equal(w2.at(-1).fallback?.deadline, deadlines[0], 'the fallback wake-up waits for the earliest review deadline');
+  // its report arrives: a collect with the review's outcomes, the verdict recorded, the assignment released
+  const w3 = h.wake();
+  const collect = h.actions(w3).find((x) => x.step === 'collect' && x.meta?.agent === agent);
+  assert.ok(collect, 'the review host report is collected');
+  assert.deepEqual([collect.meta.stage, collect.outcomes], ['in-review', ['pass', 'fix', 'stuck']]);
+  assert.match(collect.record, /--outcome pass\|fix\|stuck/);
+  const after = h.state();
+  assert.equal(after.tick.agents[agent].status, 'collected');
+  assert.deepEqual(after.tickets['#1'].reviews.map((r) => [r.kind, r.mode, r.verdict]), [['full', 'initial', 'pass']]);
+  assert.equal(stage(h, '#1'), 'delivered');
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(reviewSpawns(h).length, 1, 'one review spawn: in flight it is not issued again');
+});
+
+test('#143: a review host that returns its report in the foreground is recorded at once: named on the assignment, released, collected', (t) => {
+  const h = world(t);
+  h.wake();
+  h.wake();
+  const [review] = reviewSpawns(h);
+  const done = h.state().tick.done[review.id];
+  const st = h.state();
+  assert.equal(st.tickets['#1'].assignment.agentId, done.agent);
+  assert.equal(st.tickets['#1'].assignment.deadline, null, 'released with the verdict');
+  assert.equal(st.tick.agents[done.agent].status, 'collected');
+  assert.equal(st.usage.timeoutStops, 0);
+});
+
+test('#142 × #143: a review host in the background brings its counts with the collect: above 0 they get the observations judge; with one missing the collect is refused (2)', (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  // the spawn's record of a host in the background has no report yet: the counts are refused there
+  const spawn = h.spawn;
+  let spawned = 0;
+  h.spawn = (a) => {
+    const r = spawn(a);
+    if (a.step === 'review' && a.tickets[0] === '#1' && !spawned++) {
+      const bad = h.tick('record', h.path, a.id, '--agent', r.agent, '--observations', '1', '--pre-existing', '0');
+      assert.equal(bad.code, 2, 'counts with --agent alone');
+      assert.match(bad.err, /background/);
+    }
+    return r;
+  };
+  let checked = 0;
+  h.policy.review = (a) => {
+    if (a.tickets[0] !== '#1') return 'pass';
+    assert.equal(a.step, 'collect', 'in the background the verdict comes by the collect');
+    if (!checked++) {
+      assert.match(a.record, /--outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n>$/);
+      assert.match(a.do, /--observations <n> --pre-existing <n>/);
+      for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
+        const r = h.tick('record', h.path, a.id, '--outcome', 'pass', ...missing);
+        assert.equal(r.code, 2, `without ${missing.length ? 'one' : 'both'}`);
+        assert.match(r.err, /--observations <n> --pre-existing <n>/);
+      }
+      const st = h.state();
+      assert.equal(st.tickets['#1'].reviews.length, 0, 'nothing recorded');
+      assert.equal(st.tickets['#1'].assignment.agentId, a.meta.agent, 'still in flight');
+    }
+    return { outcome: 'pass', observations: 2, preExisting: 1 };
+  };
+  const filed = [];
+  h.policy.observations = (a) => {
+    filed.push(a);
+    return { outcome: 'filed', value: '#90' };
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(spawned, 1);
+  assert.equal(checked, 1);
+  assert.equal(stage(h, '#1'), 'delivered');
+  // the counts are on the review the collect recorded, and they brought the one raw ticket
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.kind, r.mode, r.verdict, r.observations, r.preExisting]), [['full', 'initial', 'pass', 2, 1]]);
+  assert.deepEqual(h.state().tickets['#2'].reviews.map((r) => [r.observations, r.preExisting]), [[0, 0]]);
+  assert.deepEqual(filed.map((a) => [a.id, a.tickets]), [['observations:#1:1', ['#1']]]);
+  assert.match(filed[0].do, /2 observations and 1 pre-existing/);
+  const steps = h.log.map((a) => a.step);
+  assert.ok(steps.lastIndexOf('observations') < steps.indexOf('wrap-up'));
+});
+
+test('#143: a review host past its time limit is found by the deadline scan; the first stop reassigns the review, the second marks it stuck', (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  h.wake();
+  h.wake();
+  const [first] = reviewSpawns(h);
+  const agent1 = h.state().tickets['#1'].assignment.agentId;
+  h.silent.add(agent1);
+  h.reportsNext = h.reportsNext.filter((x) => x !== agent1);
+  // not overdue yet: no timeout
+  const w3 = h.wake({ minutes: 30 });
+  assert.ok(!h.actions(w3).some((x) => x.step === 'timeout' && x.tickets[0] === '#1'));
+  assert.ok(w3.at(-1).fallback, 'still in flight: a fallback wake-up');
+  // overdue, no progress: the timeout judge, by TIMEOUTS.md; reassign gives a new review spawn with --reassign
+  const timeouts = [];
+  h.policy.timeout = (a) => {
+    timeouts.push(a);
+    if (!a.do.includes('already reassigned once')) return 'reassign';
+    // stuck as SEND-BACK.md marks it: the worktree and the ticket branch removed
+    const t1 = h.state().tickets['#1'];
+    git(h.repo, 'worktree', 'remove', '--force', t1.assignment.worktree);
+    git(h.repo, 'branch', '-D', t1.branch);
+    return 'stuck';
+  };
+  h.wake({ minutes: 31 });
+  assert.equal(timeouts.length, 1);
+  assert.deepEqual([timeouts[0].tickets, timeouts[0].meta.stage, timeouts[0].meta.agent], [['#1'], 'in-review', agent1]);
+  assert.ok(!timeouts[0].outcomes.includes('send-back'), 'no send back from in-review');
+  assert.match(timeouts[0].do, /reassign/);
+  const reviews = reviewSpawns(h);
+  assert.equal(reviews.length, 2, 'the review is handed out again');
+  assert.notEqual(reviews[1].id, first.id);
+  assert.ok(h.log.some((x) => x.step === 'assignment' && x.tickets[0] === '#1' && x.argv.includes('--reassign')));
+  const st = h.state();
+  assert.equal(st.tickets['#1'].timeoutReassignments['in-review'], 1);
+  assert.equal(st.usage.timeoutStops, 1);
+  const agent2 = st.tickets['#1'].assignment.agentId;
+  assert.notEqual(agent2, agent1);
+  assert.equal(st.tick.agents[agent1].status, 'stopped');
+  // the second one is silent too: stuck
+  h.silent.add(agent2);
+  h.reportsNext = h.reportsNext.filter((x) => x !== agent2);
+  h.wake({ minutes: 61 });
+  assert.equal(timeouts.length, 2);
+  assert.match(timeouts[1].do, /already reassigned once: stuck/);
+  assert.equal(stage(h, '#1'), 'stuck');
+  assert.equal(reviewSpawns(h).length, 2);
+});
+
+test('#143: a review host that had already finished when its timeout came is collected: its report is taken as a review', (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  h.wake();
+  h.wake();
+  const agent = h.state().tickets['#1'].assignment.agentId;
+  h.reportsNext = h.reportsNext.filter((x) => x !== agent); // the notice never came
+  h.policy.timeout = () => 'collected';
+  h.wake({ minutes: 61 });
+  const collect = h.log.find((x) => x.step === 'collect' && x.meta?.agent === agent);
+  assert.ok(collect, 'its report is collected after the timeout judge');
+  assert.equal(h.state().tickets['#1'].reviews.at(-1)?.verdict, 'pass');
+  assert.equal(h.state().usage.timeoutStops, 0, 'not stopped');
+  assert.equal(h.untilDone().then, 'done');
 });
 
 test('#128 D4: under review: minimal a fix agent reassigned after a timeout is pointed at the report file', (t) => {
@@ -1925,14 +2110,15 @@ test('#129: --reported goes to the first next of run only', (t) => {
   assert.ok(collected(), "a1's collect is recorded");
   // the same report again: the first next of run takes it as a duplicate, the later lists never see it
   const out = runOut(h, '--reported', 'a1');
-  // three lists: the acceptance check, the review tier (#139) and the ticket face ran in the first, the review's spawn
-  // file (#138) in the second; the review spawn they lead to is listed by the next after them
-  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1', 'tier:#1:1', 'body:#1:review:1', 'brief:#1:review-1']);
+  // the lists: the acceptance check, the review tier (#139) and the ticket face ran in the first; the review's spawn
+  // file (#138) and its deadline record (#143) in the second, its assignment (#143) in the third; the review spawn they
+  // lead to is listed by the next after them
+  assert.deepEqual(out.ran.map((x) => x.id), ['against:#1:1', 'tier:#1:1', 'body:#1:review:1', 'brief:#1:review-1', 'rec:review:#1:1', 'assign:review:#1:1']);
   assert.ok(out.actions.some((a) => a.step === 'review' && a.tickets[0] === '#1' && a.batch === 1), 'the list after the exec');
   assert.deepEqual(out.reports, [], 'the last list was not handed the report');
   // #147: the first list's take of it is still in the output, beside what that list ran
-  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], [], []]);
-  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1', 'tier:#1:1', 'body:#1:review:1'], ['brief:#1:review-1'], []]);
+  assert.deepEqual(out.lists.map((l) => l.reports.map((x) => [x.agent, x.why])), [[['a1', 'duplicate']], [], [], []]);
+  assert.deepEqual(out.lists.map((l) => l.ran), [['against:#1:1', 'tier:#1:1', 'body:#1:review:1'], ['brief:#1:review-1', 'rec:review:#1:1'], ['assign:review:#1:1'], []]);
 });
 
 // ---- #147: run's output and use -----------------------------------------------------------------------------------------
@@ -2325,4 +2511,37 @@ test('#139: under review: minimal every ticket gets the minimal review, whatever
     assert.deepEqual(reviewsOf(h, id).map((a) => a.meta.kind), ['minimal'], id);
     assert.deepEqual(recorded(h, id), [['minimal', null, 'initial', 'pass']], id);
   }
+});
+
+// ---- #139 × #142 × #143: the review tier picks the review; the counts and the assignment record go with it -------------
+
+test("#139 × #142 × #143: a light ticket's minimal review takes no counts and has no assignment record; a standard ticket's review host in the background is recorded by its collect, with its tier and counts", (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  h.change['#1'] = { lines: 10 }; // a few lines of code: light
+  let checked = 0;
+  h.policy.review = (a) => {
+    if (a.tickets[0] === '#1' && !checked++) {
+      assert.equal(a.meta.kind, 'minimal');
+      assert.doesNotMatch(a.record, /--observations/);
+      const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', '--observations', '1', '--pre-existing', '0');
+      assert.equal(r.code, 2, 'a minimal review takes no counts');
+      assert.match(r.err, /minimal/);
+    }
+    return a.tickets[0] === '#2' ? { outcome: 'pass', observations: 1, preExisting: 0 } : 'pass';
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.equal(checked, 1);
+  // #1, light: the minimal review in the foreground, no assignment record or time limit, no counts
+  assert.ok(!h.log.some((a) => /^(rec|assign):review:#1:/.test(a.id)), 'no assignment record for the minimal review');
+  assert.ok(!h.log.some((a) => a.step === 'collect' && a.meta?.stage === 'in-review' && a.tickets[0] === '#1'));
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => [r.kind, r.tier, r.observations, r.preExisting]), [['minimal', 'light', 0, 0]]);
+  // #2, standard: the prove-it review with its assignment record; its host went to the background and its collect
+  // recorded the review with the tier its spawn was chosen by, and the counts
+  assert.ok(h.log.some((a) => a.id.startsWith('rec:review:#2:')) && h.log.some((a) => a.id.startsWith('assign:review:#2:')));
+  const collect = h.log.find((a) => a.step === 'collect' && a.meta?.stage === 'in-review' && a.tickets[0] === '#2');
+  assert.ok(collect, "#2's review host is collected");
+  assert.equal(collect.meta.tier, 'standard');
+  assert.deepEqual(h.state().tickets['#2'].reviews.map((r) => [r.kind, r.tier, r.observations, r.preExisting]), [['full', 'standard', 1, 0]]);
+  assert.deepEqual(distinct(h.log).filter((a) => a.step === 'observations').map((a) => a.id), ['observations:#2:1']);
 });

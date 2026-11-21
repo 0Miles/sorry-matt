@@ -47,6 +47,11 @@ them points at a file or section you cannot read.
   contract is not none, read that file, narrow the checks per its "Targeted checks" and read output per its
   "Failures only"; when it is none, or the file's "Targeted checks" reads `none`, find the commands yourself from
   the manifest and the CI configuration and report the source as `self-found`.
+- **Report the SHA your targeted checks ran at.** Run the last round of targeted checks after every change is
+  committed, on a clean working tree, and report the commit they ran at (`git rev-parse HEAD` at that moment, all 40
+  characters). If you commit again after that, run them again: the review reuses your results only when that SHA
+  equals the head it reviews and reruns them itself otherwise, so a report whose SHA does not match was run for
+  nothing.
 - **Shrink command output before you read it:** from test, build and lint output, read only the failing lines and
   the closing summary into context; when everything is green, keep only the summary line. When the contract has
   a "Failures only", use its form. To keep the full output,
@@ -110,7 +115,7 @@ Fifteen lines at most. No diffs or full test logs — give paths:
 ```
 ticket: <identifier>
 commit: <sha> (branch <branch>)
-targeted checks: source=<commands.md | self-found>; <command> → <result>, …
+targeted checks: sha=<the SHA the targeted checks ran at>; source=<commands.md | self-found>; <command> → <result>, …
 status record: <location>
 acceptance: <per criterion ✅ / ❌ / awaiting ruling, briefly>
 run-level self-answers: <answers whose cost to reverse crosses tickets, or none>
@@ -119,6 +124,6 @@ human work: <or none>
 ```
 
 Done when: the work is committed to the ticket branch; the targeted checks are green, or the red is stated in the
-report; the acceptance criteria in the ticket text and the expansion block are unchanged, and every criterion that
+report; the report's `targeted checks` line carries the SHA the last targeted checks ran at; the acceptance criteria in the ticket text and the expansion block are unchanged, and every criterion that
 could not be met is reported as awaiting ruling or stuck; the status record is written current; the report follows
 the format above.

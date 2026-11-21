@@ -217,7 +217,7 @@ force-push 一般分支、clone、套件安裝、讀寫憑證檔、權限指令�
      `budget: spawns 200`、`budget: rounds 40`（派票點次數，不是審查或修正的輪）、`budget: hours 12`、
      `budget: no-progress 3`。`spawns` 與 `rounds` 在票數確定時照第 4 節改寫。
    - **階段時限**：同樣格式，單位分鐘：`budget: timeout-implement 30`、`budget: timeout-fix 20`（含紅燈修正）、
-     `budget: timeout-expand 15`、`budget: timeout-merge 15`。
+     `budget: timeout-expand 15`、`budget: timeout-merge 15`、`budget: timeout-review 60`（審查主持 agent）。
    - **用量與停止原因**在 state 的 `usage` 與 `stop`。spawn 數取自 hook 寫的 `<run>.counters.json`，只讀不寫。
      向使用者提問時，從送出到收到回答的秒數以 `state.mjs usage --wait` 加進等人時間。token 數除非執行環境自己
      提供，一律標為未知，不以耗時或 agent 數量推算。

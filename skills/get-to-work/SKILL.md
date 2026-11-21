@@ -162,16 +162,25 @@ expansion, and wider after a send-back.
 - **Review method**: before the review tick hands out an exec that judges the **review tier** with `prove-it`'s
   `tier.mjs judge` (once per initial review; a recheck and a retry after stuck keep it), then picks the review method
   by the profile's `review`: under `review: minimal` always the minimal review; under `review: full` light gets the
-  minimal review — its report file, its `--kind minimal` record and its freshness check, as they are — and standard
-  and full get the prove-it review below, with the review tier in its spawn file. You do not judge the tier yourself.
+  minimal review — its report file, its `--kind minimal` record and its freshness check, as they are; its record
+  takes no counts, and it has no assignment record or time limit — and standard and full get the prove-it review
+  below, with the review tier in its spawn file and the counts and assignment record of the two items below. You do
+  not judge the tier yourself.
 - **Independent review**: tick writes a values file and `brief.mjs review` turns it into the review host agent's
   spawn file — the fixed rules of the sibling [`REVIEWER.md`](REVIEWER.md) followed by this review's values (repo,
-  tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI
-  coverage, review tier, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
+  tracker, ticket face, status record, acceptance snapshot, comparison, fixed point, ticket branch, targeted checks and the
+  SHA they ran at, CI coverage, review tier, and for a recheck the previous review block) — then hands you a foreground spawn. Send it as the action
   says, filling in no value and adding no rule. It calls `prove-it`; you never load `prove-it`, take only its review
   report (six lines at most), and record its verdict with `--outcome` and the report's `counts:` line as
   `--observations <n> --pre-existing <n>` (both, 0 when there are none; with one missing the record is refused with
   2). A minimal review reports blocking findings only and takes neither count.
+- **The review's assignment record**: before the spawn tick writes the assignment record (`deadline.mjs record` in the
+  ticket worktree with the `timeout-review` limit, then `state.mjs assign`), so the review host agent has a time limit
+  like every other agent. When its report comes back with the spawn, record `--agent`, `--outcome` and the two counts;
+  when the Agent tool put it in the background and the spawn returned only an agent id, record `--agent` alone (the
+  counts are refused with 2 there): it is in flight, tick scans its deadline and schedules the fallback wake-up all the
+  same, and when its completion notice arrives you pass it to tick with `--reported`, and a `collect` records the
+  verdict, again with `--observations <n> --pre-existing <n>` (refused with 2 when one is missing).
 - **Act on the report**: `findings` go to the batched fix. When `observations` or `pre-existing` is not 0, tick hands
   you an `observations` judge: read only those two parts of the review block, file one raw ticket for them ("Filing
   along the way") and record it with `--value <issue id>`. When a later review of the same ticket (a recheck, a retry)
