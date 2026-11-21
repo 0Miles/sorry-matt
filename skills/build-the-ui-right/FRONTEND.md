@@ -77,8 +77,17 @@ fall in two or more scopes, take the line whose `Scope` covers every using file,
 path when several do. When no line covers every using file, do not put the component in any package's shared
 directory, and do not put one shared copy in each: each using file handles it inside its own scope as a new
 component used on a single page under the **new-component bar**, and the report's **`ui.md` mismatches** gets
-one entry, "cross-package shared component has no home", with the using files' paths. When the `Shared
-components` table has a
+one entry, "cross-package shared component has no home", with the using files' paths.
+When a new component that two or more pages or features will use has a chosen `New shared components` line
+that reads "None" (whether chosen per file, chosen as the line whose `Scope` covers every using file, or handled
+as "None" because the file is inside no `Scope`), handle it the same way as the previous rule: do not put it in
+any shared directory, and do not create a shared directory yourself; each using file handles it as a new
+component used on a single page under the **new-component bar**; and the report's **`ui.md` mismatches** gets
+one entry naming which line it is (`New shared components: None` in the `Conventions` section, with its `Scope`
+when it has one) and the using files' paths. For a file handled as "None", being inside no `Scope` and having no
+home fold into this one entry; do not write a second one. In this case `ui.md` is not changed: add no row to the
+`Shared components` table, fill in no location for `New shared components`, and add no `Scope` column. When the
+`Shared components` table has a
 `Scope` column, only the rows whose `Scope` covers the file's path are candidates for that file. In the steps
 below and in `actually-look-at-the-ui`, the `Tokens` section, its `Location` line, and the `New shared
 components` line all mean the entry chosen for that file.
@@ -206,8 +215,11 @@ A new component that two or more pages or features will use also meets the other
 
 - Put it where the `New shared components` line of the `Conventions` section says; when its using files fall
   in two or more scopes, which line to take, and what to do when no line covers every using file, follow the
-  prerequisite.
+  prerequisite. When the chosen line reads "None", there is no location to put it in; follow the prerequisite.
 - Add what that same line requires, such as a barrel export, types, or a story.
+
+When the chosen line reads "None", or no line covers every using file, neither of these two applies: each using
+file handles it as a new component used on a single page, per the prerequisite.
 
 A new component used on a single page sits beside that page, stays out of `ui.md`, and is not bound by the last
 two.
@@ -223,7 +235,10 @@ When `ui.md` and the source conflict, the source wins. A skill that changes code
      same commit; the component is not committed on its own first: the `Shared components` table only holds
      components two or more pages use, so the row is not true until the pages use it. When the table
      has no `Scope` column and the new component cannot be used from every package, the same commit adds the
-     column and fills in each existing row's own scope.
+     column and fills in each existing row's own scope. A component handled per the prerequisite as a new
+     component used on a single page, because its chosen `New shared components` line reads "None" or no line
+     covers every using file, is not an added shared component and does not belong here: `ui.md` is not changed,
+     and its mismatch goes into the report per the prerequisite.
    - Introducing, upgrading, or removing a component library, or changing how it is loaded.
    - Reusing an existing component that so far only another page used: in the component choice table it is
      "reused", with its file path as the location; when this change makes two or more pages or features use it,
@@ -241,7 +256,7 @@ rung N" with its rationale, or "new" with the knowledge it brings and why existi
 HTML element is "reused", with the location written "native `<tag>`" (for example "native `<p>`"), and does not go
 through the **new-component bar**; a **page-local component** is "reused", with its file path as the location;
 `ui.md` matches this change, or is explicitly recorded as needing no update; and every mismatch found along the
-way is written into the report one by one, or "none" is stated.
+way, and every mismatch the prerequisite requires, is written into the report one by one, or "none" is stated.
 
 ## State matrix
 
