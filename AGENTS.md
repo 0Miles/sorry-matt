@@ -433,6 +433,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 報告檔(minimal reviewer 的) | report file |
 | agent 回報(實作或修正 agent 交回的) | agent report |
 | 針對性檢查結果 | targeted-check results |
+| 回顧紀錄（`retro.mjs` 的跨 run 總表） | retro record |
 
 ## 外部語義來源
 
