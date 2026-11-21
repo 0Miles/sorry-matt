@@ -76,7 +76,7 @@
 //                                   "in-review": <n> },     // the review host (#143); missing in an older file: 0
 //         "sendBacks": <n>, "fixRounds": <n>,
 //         "timeoutExtensions": <n>,                        // extensions of the agents that covered the ticket
-//                                                          // (#156); missing: never extended, or an older file
+//                                                          // (#156); missing in an older file
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
 //                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
 //                       "tierReasons": ["<tier.mjs reason>"] | null,    // its judge output's `reasons` (#156)
@@ -366,6 +366,7 @@ const newTicket = (line) => ({
   timeoutReassignments: { implementing: 0, fixing: 0, expanding: 0, 'in-review': 0 },
   sendBacks: 0,
   fixRounds: 0,
+  timeoutExtensions: 0,
   reviews: [],
   fixReports: [],
   unfixedIssue: null,

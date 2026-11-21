@@ -468,7 +468,7 @@ test('#156: review records the finding counts and the tier reasons; without them
   assert.equal(r.state().tickets['#1'].reviews.length, 2, 'nothing more recorded');
 });
 
-test('#156: an extension counts on each ticket it covers; a ticket never extended has none', (t) => {
+test('#156: an extension counts on each ticket it covers; a ticket never extended has 0', (t) => {
   const r = run(t);
   const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=1', '--limit', '15', '--now', NOW]));
   r.ok('add', '#1', '#2', '#3', '--line', LINE);
@@ -479,7 +479,7 @@ test('#156: an extension counts on each ticket it covers; a ticket never extende
   r.ok('assign', '#1', '--record', rec, '--type', 'sorry-matt:expander', '--reassign');
   r.ok('extend', '#1', '--deadline', '2026-03-10T12:50:00Z');
   const s = r.state();
-  assert.deepEqual(['#1', '#2', '#3'].map((id) => s.tickets[id].timeoutExtensions), [2, 1, undefined]);
+  assert.deepEqual(['#1', '#2', '#3'].map((id) => s.tickets[id].timeoutExtensions), [2, 1, 0]);
   assert.equal(s.usage.timeoutExtensions, 2, 'one per agent');
   assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
 });
@@ -543,6 +543,9 @@ test('#144: a line holds its own assignment (the ci-fix of a red light that maps
   const a = r.state().lines[LINE].assignment;
   assert.deepEqual([a.agentId, a.type, a.limit, a.deadline, a.extended], ['c1', 'general-purpose', 20, '2026-03-10T12:40:00Z', 'yes']);
   assert.equal(r.state().tickets['#1'].assignment, null, 'no ticket holds it');
+  // #156: a line's extension counts for the run only, on no line or ticket
+  assert.equal(r.state().lines[LINE].timeoutExtensions, undefined);
+  assert.equal(r.state().tickets['#1'].timeoutExtensions, 0);
   const res = r.ok('resume');
   assert.deepEqual(res.inFlight.map((x) => [x.id, x.tickets, x.line]), [['c1', [], LINE]]);
   r.ok('release', '--line', LINE, '--stopped');

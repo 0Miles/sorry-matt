@@ -25,23 +25,30 @@
 //                                              defaults to `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`;
 //                                              every `<slug>` directory is searched
 //           plugin version                     `.claude-plugin/plugin.json` in the nearest directory above this script
-//           repo                               `git remote get-url origin` of the state's repository, as owner/repo
+//           tracker, repo, base                the state's tick configuration (`tick.mjs setup`); a state without
+//                                              one: no tracker, no base, and the repo from `git remote get-url
+//                                              origin` of the state's repository, as owner/repo
 //         Tokens are only ever the `message.usage` of a transcript, one count per `message.id` (a message that is
 //         split over several lines counts once, its last line's usage). A ticket's agents are the counters entries
 //         whose description names it (spawns.mjs `ticketOf`); an agent's kind is the role word its description
 //         starts with (spawns.mjs ROLES), else its spawns.mjs category. An agent with no id or no transcript has
-//         `tokens: null` and a `reason`; so has every kind and host sum it would be part of. Nothing is estimated
+//         `tokens: null` and a `reason`; so has every kind and host sum it would be part of. An agent whose
+//         description names no ticket of the run (`simplify <line>`, `ci-fix <line>`, `merge <line>`, the agents
+//         those spawn) is the run's: `runAgents`, the same on every row of the run. Nothing is estimated
 //         from time or agent counts (ASKING.md section 7, field 9). The host's tokens are those of its transcript's
 //         messages from the run's start to `--now`; they are the run's, not a ticket's, and are the same on every row
 //         of the run.
 //         A row (format "sorry-matt/retro@1"; fields are only ever added, never renamed):
 //           { "format", "run", "ticket", "recorded": "<UTC>", "started": "<UTC>", "repo": "<owner/repo>" | null,
-//             "line": "<integration branch>", "endState": "<stage>", "pluginVersion": "<x.y.z>" | null,
+//             "tracker": "github" | "local" | null, "base": "<base branch>" | null,
+//             "line": "<integration branch>", "endState": "<stage>", "reason": <the ticket's reason> | null,
+//             "pluginVersion": "<x.y.z>" | null,
 //             "profile": { <the effective profile> }, "models": ["<model id>"],
 //             "agents": [{ "id", "kind", "type", "description", "at", "models": [], "tokens": <tokens> | null,
 //                          "reason"? }],
 //             "byKind": { "<kind>": { "spawns": <n>, "tokens": <tokens> | null, "reason"? } },
 //             "host": { "session": <id> | null, "models": [], "tokens": <tokens> | null, "reason"? },
+//             "runAgents": [<as agents>],                  // the run's agents that name no ticket
 //             "tier": "light" | "standard" | "full" | null,   // of the last initial review
 //             "tierReasons": [<tier.mjs reason>] | null, "verdict": "pass" | "fix" | "stuck" | null,   // last review
 //             "reviews": [{ "mode", "kind", "verdict", "tier", "tierReasons", "findingCounts", "findings": <n> | null,
@@ -49,7 +56,7 @@
 //             "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // summed over the
 //                                                          // reviews that recorded them; null: none did
 //             "sendBacks", "fixRounds", "timeoutExtensions": <n> | null,   // null: an older state that counted
-//                                                          // extensions for the run only
+//                                                          // extensions for the run only, and had some
 //             "timeoutReassignments": <n>, "stageSeconds": { "<stage>": <seconds> },   // from the stage history;
 //                                                          // the time before a ticket's first move is not known
 //             "merges": ["<sha>"], "mergeSha": "<sha>" | null, "deliveredAt": "<UTC>" | null }
@@ -62,27 +69,35 @@
 //                             sorry-matt:implementer), fix (fix, ci-fix), review (review, finder, architect, verifier,
 //                             fix-verifier and their sorry-matt: types), merge, simplify, other. `total` is the sum of
 //                             the four token fields; agents with no tokens are counted in `unknownAgents`, not
-//                             estimated
+//                             estimated. A run's `runAgents` count once in each group that has a row of the run
 //           reviewToImplement review total over implement + fix total; null when the latter is 0
 //           byTier            per review tier: `confirmed` (the confirmed rulings of every review: a minimal review's
-//                             findings count as confirmed), `reviewTokens` (the review stage of the tier's tickets),
+//                             findings count as confirmed), `reviewTokens` (the review stage of the tier's tickets
+//                             whose every review has a known count; the others are counted in `unknownCounts`),
 //                             `tokensPerConfirmed` (null with no confirmed finding), and `zeroConfirmedShare`, the
 //                             share of initial reviews with a known count of 0 confirmed
-//           escaped           for each delivered ticket: newer tickets on the tracker whose title or body names it
-//                             (`#N`) or one of its merge SHAs (7 characters or more), whether a commit reverts a merge
-//                             SHA (`This reverts commit <sha>` in `git log --all` of `--repo`, default the current
-//                             directory; a ticket that went from delivered to stuck counts as reverted), and whether
-//                             a CI run of its integration branch failed after its delivery. What cannot be read (`gh`
-//                             missing or failing, no GitHub repo, `git` failing) is "unknown"; the report goes on.
+//           escaped           for each delivered ticket: newer tickets on the GitHub tracker whose title or body names
+//                             it (`#N`) or one of its merge SHAs (7 characters or more), whether a commit reverts a
+//                             merge SHA (`This reverts commit <sha>` in `git log --all` of `--repo`, default the
+//                             current directory; a ticket that went from delivered to stuck for its own red light
+//                             counts as reverted, one stuck as `upstream reverted:` is looked up like any other), and
+//                             whether a CI run failed after its delivery on the branch it was merged into (its
+//                             integration branch, the base branch under `integrate: direct`). What cannot be read
+//                             (`gh` missing or failing, a Local Markdown tracker or no GitHub repo, `git` failing) is
+//                             "unknown"; the report goes on.
 //         Output: a Markdown table per group; with `--json`, { "format": "sorry-matt/retro-report@1", "since", "by",
-//                 "rows", "groups": [{ "key", "tickets", "tokensByStage", "unknownAgents", "reviewToImplement",
+//                 "rows", "groups": [{ "key", "tickets", "runs", "tokensByStage", "unknownAgents", "reviewToImplement",
 //                 "byTier", "escaped": { "delivered", "escaped", "unknown", "tickets": [...] } }] }.
 //
 // The rows cannot say that one way is better than another: runs have no control group and tickets differ in size.
 // They show outliers — a kind of ticket that always gets the full tier and never a confirmed finding — and every row
 // carries its plugin version and models so that rows of different rules or models are not compared as one.
 //
-// Exit codes: 0 done; 1 a file could not be read or written, or is not what it should be (the state, the retro file);
+// record takes `<retro>.lock` around its read and rewrite of the retro file (state.mjs withLock), so two runs that
+// record at once both keep their rows.
+//
+// Exit codes: 0 done; 1 a file could not be read or written, or is not what it should be (the state, the retro file),
+// or the lock could not be taken;
 // 2 bad arguments.
 import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -90,7 +105,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
 import { ROLES, category, ticketOf } from './spawns.mjs';
-import { PROFILE_DEFAULTS, STAGES } from './state.mjs';
+import { PROFILE_DEFAULTS, STAGES, withLock } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
 export const RECORD_FORMAT = 'sorry-matt/retro-record@1';
@@ -277,18 +292,21 @@ function reviewRow(r) {
 }
 
 /** The rows of one run: one per ticket of its state. */
-export function rowsOf({ state, log, logReason, session, places, version, repo, now }) {
+export function rowsOf({ state, log, logReason, session, places, version, repo, tracker = null, base = null, now }) {
   const started = state.usage?.started ?? state.created;
   const host = hostUsage(places, session, started, now);
   const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
-  const agents = log.map((e) => ({ entry: e, kind: kindOf(e), ticket: ticketOf(e.description) }));
+  const agents = log.map((entry) => {
+    const ticket = ticketOf(entry.description);
+    const u = agentUsage(places, entry);
+    return {
+      ticket: ticket && ticket in state.tickets ? ticket : null,
+      agent: { id: entry.id ?? null, kind: kindOf(entry), type: entry.type ?? null, description: entry.description ?? null, at: entry.at ?? null, models: u.models, tokens: u.tokens, ...(u.reason ? { reason: u.reason } : {}) },
+    };
+  });
+  const runAgents = agents.filter((a) => a.ticket === null).map((a) => a.agent);
   return Object.entries(state.tickets).map(([id, t]) => {
-    const mine = agents
-      .filter((a) => a.ticket === id)
-      .map(({ entry, kind }) => {
-        const u = agentUsage(places, entry);
-        return { id: entry.id ?? null, kind, type: entry.type ?? null, description: entry.description ?? null, at: entry.at ?? null, models: u.models, tokens: u.tokens, ...(u.reason ? { reason: u.reason } : {}) };
-      });
+    const mine = agents.filter((a) => a.ticket === id).map((a) => a.agent);
     const byKind = {};
     for (const a of mine) {
       const k = (byKind[a.kind] ??= { spawns: 0, tokens: zero(), reasons: [] });
@@ -318,8 +336,11 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
       recorded: now,
       started,
       repo,
+      tracker,
+      base,
       line: t.line,
       endState: t.stage,
+      reason: t.reason ?? null,
       pluginVersion: version,
       profile,
       models: [...new Set(mine.flatMap((a) => a.models))].sort(),
@@ -327,6 +348,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
       byKind: mine.length || !logReason ? byKind : null,
       ...(logReason && !mine.length ? { byKindReason: logReason } : {}),
       host,
+      runAgents,
       tier: initial?.tier ?? null,
       tierReasons: initial?.tierReasons ?? null,
       verdict: reviews.at(-1)?.verdict ?? null,
@@ -382,33 +404,44 @@ export function record(flags, deps) {
   const env = deps.env ?? process.env;
   const projects = resolve(flags.projects ?? (env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, 'projects') : join(deps.home ?? homedir(), '.claude', 'projects')));
   const places = ledgerReason ? { reason: ledgerReason, hosts: [], dirs: [] } : sessionPlaces(projects, session);
+  // the tracker and base the run was set up with (tick.mjs setup); an older state: the origin remote's repo
+  const config = state.tick?.config && typeof state.tick.config === 'object' ? state.tick.config : null;
+  const tracker = typeof config?.tracker === 'string' ? config.tracker : null;
+  const base = typeof config?.base === 'string' ? config.base : null;
   let repo = null;
-  try {
-    repo = repoOf(deps.git(['remote', 'get-url', 'origin'], dirname(statePath)));
-  } catch {
-    repo = null;
+  if (config) repo = tracker === 'github' && typeof config.repo === 'string' ? config.repo : null;
+  else {
+    try {
+      repo = repoOf(deps.git(['remote', 'get-url', 'origin'], dirname(statePath)));
+    } catch {
+      repo = null;
+    }
   }
   const now = flags.now ?? new Date(deps.clock()).toISOString().replace(/\.\d{3}Z$/, 'Z');
-  const rows = rowsOf({ state, log, logReason, session, places, version: deps.version ?? pluginVersion(), repo, now });
+  const rows = rowsOf({ state, log, logReason, session, places, version: deps.version ?? pluginVersion(), repo, tracker, base, now });
 
   const retro = resolve(flags.retro ?? join(dirname(dirname(statePath)), 'retro.jsonl'));
-  const kept = [];
-  let replaced = 0;
-  for (const line of readRetro(retro)) {
-    let row = null;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      row = null;
+  // #156: under the lock, so a run recording at the same time is not lost between this read and the rename
+  const replaced = withLock(retro, () => {
+    const kept = [];
+    let n = 0;
+    for (const line of readRetro(retro)) {
+      let row = null;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        row = null;
+      }
+      if (row?.format === FORMAT && row.run === state.run) n += 1;
+      else kept.push(line);
     }
-    if (row?.format === FORMAT && row.run === state.run) replaced += 1;
-    else kept.push(line);
-  }
-  writeAtomic(retro, [...kept, ...rows.map((r) => JSON.stringify(r))].map((l) => `${l}\n`).join(''));
+    writeAtomic(retro, [...kept, ...rows.map((r) => JSON.stringify(r))].map((l) => `${l}\n`).join(''));
+    return n;
+  });
   const gaps = new Set();
   for (const r of rows) {
     if (r.byKindReason) gaps.add(r.byKindReason);
-    for (const a of r.agents) if (a.reason) gaps.add(a.reason);
+    for (const a of [...r.agents, ...r.runAgents]) if (a.reason) gaps.add(a.reason);
     if (r.host.reason) gaps.add(r.host.reason);
   }
   return { format: RECORD_FORMAT, command: 'record', retro, run: state.run, rows: rows.length, replaced, gaps: [...gaps] };
@@ -428,7 +461,7 @@ function escapes(row, look) {
   if (!row.deliveredAt) return null;
   const shas = (row.merges ?? []).filter((s) => typeof s === 'string' && s.length >= 7);
   let mentions = UNKNOWN;
-  const issues = row.repo ? look.issues(row.repo) : null;
+  const issues = row.repo && row.tracker !== 'local' ? look.issues(row.repo) : null;
   if (issues) {
     const num = /^#(\d+)$/.exec(row.ticket)?.[1];
     const names = (text) =>
@@ -438,13 +471,16 @@ function escapes(row, look) {
       .filter((i) => `#${i.number}` !== row.ticket && Date.parse(i.createdAt) > Date.parse(row.deliveredAt) && names(`${i.title ?? ''}\n${i.body ?? ''}`))
       .map((i) => `#${i.number}`);
   }
-  let reverted = row.endState === 'stuck' ? true : UNKNOWN;
+  // stuck after delivery for its own red light is its revert; `upstream reverted:` is another ticket's
+  const upstream = /^upstream reverted:/.test(String(row.reason ?? ''));
+  let reverted = row.endState === 'stuck' && !upstream ? true : UNKNOWN;
   if (reverted !== true) {
     const bodies = look.log();
     if (bodies !== null) reverted = shas.some((s) => new RegExp(`This reverts commit ${s}`).test(bodies));
   }
   let ciRed = UNKNOWN;
-  const runs = row.repo && row.line ? look.runs(row.repo, row.line) : null;
+  const branch = row.profile?.integrate === 'direct' ? row.base : row.line;
+  const runs = row.repo && branch ? look.runs(row.repo, branch) : null;
   if (runs) ciRed = runs.some((r) => r.conclusion === 'failure' && Date.parse(r.createdAt) > Date.parse(row.deliveredAt));
   const escaped = (Array.isArray(mentions) && mentions.length > 0) || reverted === true || ciRed === true;
   const unknown = !escaped && [mentions, reverted, ciRed].includes(UNKNOWN);
@@ -473,21 +509,26 @@ function lookups(deps, repoDir) {
 function summarize(key, rows, look) {
   const tokensByStage = Object.fromEntries(REPORT_STAGES.map((s) => [s, zero()]));
   let unknownAgents = 0;
-  for (const r of rows)
-    for (const a of r.agents ?? []) {
-      if (a.tokens) addTokens(tokensByStage[stageOf(a.kind)], a.tokens);
-      else unknownAgents += 1;
-    }
+  // a run's own agents count once in the group, whichever of its rows brings them
+  const runs = new Map();
+  for (const r of rows) if (!runs.has(r.run)) runs.set(r.run, r.runAgents ?? []);
+  for (const a of [...rows.flatMap((r) => r.agents ?? []), ...[...runs.values()].flat()]) {
+    if (a.tokens) addTokens(tokensByStage[stageOf(a.kind)], a.tokens);
+    else unknownAgents += 1;
+  }
   for (const s of REPORT_STAGES) tokensByStage[s].total = totalOf(tokensByStage[s]);
   const implement = tokensByStage.implement.total + tokensByStage.fix.total;
   const byTier = {};
   for (const r of rows) {
     const tier = r.tier ?? 'none';
-    const b = (byTier[tier] ??= { tickets: 0, reviews: 0, confirmed: 0, reviewTokens: 0, initialKnown: 0, initialZero: 0 });
+    const b = (byTier[tier] ??= { tickets: 0, reviews: 0, confirmed: 0, reviewTokens: 0, unknownCounts: 0, initialKnown: 0, initialZero: 0 });
     b.tickets += 1;
-    b.reviewTokens += (r.agents ?? []).filter((a) => a.tokens && stageOf(a.kind) === 'review').reduce((n, a) => n + totalOf(a.tokens), 0);
+    const confirmedOf = (v) => (v.findingCounts ? v.findingCounts.confirmed : v.kind === 'minimal' ? (v.findings ?? 0) : null);
+    // #156: a ticket with a review of unknown count spent review tokens on findings no one counted: left out
+    if ((r.reviews ?? []).some((v) => confirmedOf(v) === null)) b.unknownCounts += 1;
+    else b.reviewTokens += (r.agents ?? []).filter((a) => a.tokens && stageOf(a.kind) === 'review').reduce((n, a) => n + totalOf(a.tokens), 0);
     for (const v of r.reviews ?? []) {
-      const confirmed = v.findingCounts ? v.findingCounts.confirmed : v.kind === 'minimal' ? (v.findings ?? 0) : null;
+      const confirmed = confirmedOf(v);
       if (confirmed === null) continue;
       b.reviews += 1;
       b.confirmed += confirmed;
@@ -507,6 +548,7 @@ function summarize(key, rows, look) {
   return {
     key,
     tickets: rows.length,
+    runs: runs.size,
     tokensByStage,
     unknownAgents,
     reviewToImplement: implement ? tokensByStage.review.total / implement : null,
@@ -520,11 +562,11 @@ const fmt = (n) => (n === null || n === undefined ? UNKNOWN : typeof n === 'numb
 function markdown(out) {
   const lines = [`# Retro report${out.since ? ` since ${out.since}` : ''}${out.by ? ` by ${out.by}` : ''}`, '', `${out.rows} rows.`, ''];
   for (const g of out.groups) {
-    lines.push(`## ${g.key}`, '', `${g.tickets} tickets; review / implement + fix tokens: ${fmt(g.reviewToImplement)}; agents with no tokens: ${g.unknownAgents}`, '');
+    lines.push(`## ${g.key}`, '', `${g.tickets} tickets of ${g.runs} runs; review / implement + fix tokens: ${fmt(g.reviewToImplement)}; agents with no tokens: ${g.unknownAgents}`, '');
     lines.push('| stage | input | output | cache write | cache read | total |', '| --- | ---: | ---: | ---: | ---: | ---: |');
     for (const [s, t] of Object.entries(g.tokensByStage)) if (t.total) lines.push(`| ${s} | ${t.input} | ${t.output} | ${t.cacheWrite} | ${t.cacheRead} | ${t.total} |`);
-    lines.push('', '| tier | tickets | reviews | confirmed | review tokens | tokens per confirmed | zero-confirmed share |', '| --- | ---: | ---: | ---: | ---: | ---: | ---: |');
-    for (const [tier, b] of Object.entries(g.byTier)) lines.push(`| ${tier} | ${b.tickets} | ${b.reviews} | ${b.confirmed} | ${b.reviewTokens} | ${fmt(b.tokensPerConfirmed)} | ${fmt(b.zeroConfirmedShare)} |`);
+    lines.push('', '| tier | tickets | reviews | confirmed | review tokens | unknown counts | tokens per confirmed | zero-confirmed share |', '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |');
+    for (const [tier, b] of Object.entries(g.byTier)) lines.push(`| ${tier} | ${b.tickets} | ${b.reviews} | ${b.confirmed} | ${b.reviewTokens} | ${b.unknownCounts} | ${fmt(b.tokensPerConfirmed)} | ${fmt(b.zeroConfirmedShare)} |`);
     lines.push('', `Escaped: ${g.escaped.escaped} of ${g.escaped.delivered} delivered (${g.escaped.unknown} unknown).`, '');
     if (g.escaped.tickets.length) {
       lines.push('| run | ticket | named by | reverted | CI red after |', '| --- | --- | --- | --- | --- |');

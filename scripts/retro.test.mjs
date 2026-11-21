@@ -4,11 +4,12 @@
 // summed by hand from the fixture transcripts below, not recomputed the way the script does.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { main } from '../src/skills/get-to-work/scripts/retro.mjs';
+import { main, transcriptUsage } from '../src/skills/get-to-work/scripts/retro.mjs';
 import { main as state } from '../src/skills/get-to-work/scripts/state.mjs';
 
 const RUN = 'run-1';
@@ -16,6 +17,7 @@ const LINE = 'run-1/line-a';
 const SNAP = 'a'.repeat(64);
 const SHA1 = '1'.repeat(40);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const SCRIPT = fileURLToPath(new URL('../src/skills/get-to-work/scripts/retro.mjs', import.meta.url));
 
 function scratch(t) {
   const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-retro-'));
@@ -41,8 +43,8 @@ const msg = (id, usage, { model = 'claude-test-1', at = '2026-03-10T12:30:00Z' }
  * with transcripts; #2 an implementer with no transcript and a fix agent with no id; one simplify agent names no
  * ticket.
  */
-function world(t, { session = 's-1' } = {}) {
-  const dir = scratch(t);
+function world(t, { session = 's-1', run: RUN = 'run-1', dir = scratch(t) } = {}) {
+  const LINE = `${RUN}/line-a`;
   const runs = join(dir, 'common', 'sorry-matt', 'runs');
   const statePath = join(runs, `${RUN}.state.json`);
   const S = (cmd, now, ...args) => {
@@ -86,6 +88,7 @@ function world(t, { session = 's-1' } = {}) {
   write(join(sessionDir, 'subagents', 'agent-a1.jsonl'), jsonl([msg('m1', [1, 10, 100, 1000]), msg('m1', [1, 10, 100, 1000]), '{"cut off', msg('m1', [1, 10, 100, 1000]), msg('m2', [2, 20, 200, 2000]), { type: 'user', message: { role: 'user', content: 'x' } }]));
   write(join(sessionDir, 'subagents', 'agent-a2.jsonl'), jsonl([msg('r1', [5, 50, 500, 5000]), msg('r1', [5, 50, 500, 5000])]));
   write(join(sessionDir, 'subagents', 'agent-a3.jsonl'), jsonl([msg('f1', [7, 70, 700, 7000], { model: 'claude-test-2' })]));
+  write(join(sessionDir, 'subagents', 'agent-a6.jsonl'), jsonl([msg('s1', [1, 2, 3, 4])]));
   // the host: one message before the run started (another run in the same session) is not this run's
   write(join(projects, 'D--code-repo', 's-1.jsonl'), jsonl([msg('h0', [9, 9, 9, 9], { at: '2026-03-09T00:00:00Z' }), msg('h1', [4, 40, 400, 4000]), msg('h1', [4, 40, 400, 4000])]));
 
@@ -103,7 +106,13 @@ function world(t, { session = 's-1' } = {}) {
   const retro = join(dir, 'common', 'sorry-matt', 'retro.jsonl');
   const record = (...extra) => main(['record', '--state', statePath, '--counters', counters, '--ledger', ledger, '--projects', projects, '--now', '2026-03-10T14:00:00Z', ...extra], deps);
   const rows = () => readFileSync(retro, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  return { dir, statePath, counters, ledger, projects, retro, record, rows, deps };
+  /** Changes the state file by hand: a field an older state lacks, or the tick configuration. */
+  const edit = (fn) => {
+    const s = JSON.parse(readFileSync(statePath, 'utf8'));
+    fn(s);
+    writeFileSync(statePath, JSON.stringify(s));
+  };
+  return { dir, statePath, counters, ledger, projects, retro, record, rows, deps, edit, run: RUN };
 }
 
 const ok = (r) => {
@@ -136,6 +145,63 @@ test('record writes one row per ticket with the tokens of each agent, one count 
   // the host: only this run's messages, h1 once; the same on every row of the run
   assert.deepEqual(one.host, { session: 's-1', models: ['claude-test-1'], tokens: { input: 4, output: 40, cacheWrite: 400, cacheRead: 4000 } });
   assert.deepEqual(two.host, one.host);
+});
+
+test('a message split over several lines counts once, with the usage of its last line', () => {
+  const u = transcriptUsage(jsonl([msg('x', [1, 5, 0, 0]), msg('x', [1, 500, 0, 0]), msg('y', [2, 20, 0, 0])]));
+  assert.deepEqual(u.tokens, { input: 3, output: 520, cacheWrite: 0, cacheRead: 0 });
+  assert.equal(u.messages, 2);
+});
+
+test("the agents that name no ticket of the run are the run's, on every row, and in the report's stages", (t) => {
+  const w = world(t);
+  ok(w.record());
+  const [one, two] = w.rows();
+  assert.deepEqual(one.runAgents.map((a) => [a.id, a.kind, a.tokens]), [['a6', 'simplify', { input: 1, output: 2, cacheWrite: 3, cacheRead: 4 }]]);
+  assert.deepEqual(two.runAgents, one.runAgents);
+  const g = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], w.deps))).groups[0];
+  assert.deepEqual(g.tokensByStage.simplify, { input: 1, output: 2, cacheWrite: 3, cacheRead: 4, total: 10 }, 'counted once for the run');
+  assert.equal(g.runs, 1);
+});
+
+test('the tracker, repo and base come from the tick configuration when the state has one', (t) => {
+  const w = world(t);
+  w.edit((s) => (s.tick = { config: { tracker: 'github', repo: 'x/y', base: 'main' } }));
+  ok(w.record());
+  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['x/y', 'github', 'main'], 'not the origin remote');
+  w.edit((s) => (s.tick = { config: { tracker: 'local', repo: null, base: 'trunk' } }));
+  ok(w.record());
+  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), [null, 'local', 'trunk']);
+});
+
+test('an older state without per-ticket extensions: null when the run had some, 0 when it had none', (t) => {
+  const w = world(t);
+  w.edit((s) => {
+    for (const x of Object.values(s.tickets)) delete x.timeoutExtensions;
+    s.usage.timeoutExtensions = 2;
+  });
+  ok(w.record());
+  assert.deepEqual(w.rows().map((r) => r.timeoutExtensions), [null, null]);
+  w.edit((s) => (s.usage.timeoutExtensions = 0));
+  ok(w.record());
+  assert.deepEqual(w.rows().map((r) => r.timeoutExtensions), [0, 0]);
+});
+
+test('two runs recording into one retro file at the same time both keep their rows', async (t) => {
+  const dir = scratch(t);
+  const a = world(t, { run: 'run-a', dir: join(dir, 'a') });
+  const b = world(t, { run: 'run-b', dir: join(dir, 'b') });
+  const shared = join(dir, 'retro.jsonl');
+  const go = (w) =>
+    new Promise((done, fail) => {
+      const p = spawn(process.execPath, [SCRIPT, 'record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--retro', shared, '--now', '2026-03-10T14:00:00Z'], { stdio: 'ignore' });
+      p.on('error', fail);
+      p.on('exit', (code) => (code === 0 ? done() : fail(new Error(`record exited ${code}`))));
+    });
+  await Promise.all(Array.from({ length: 12 }, (_, i) => go(i % 2 ? a : b)));
+  const runs = readFileSync(shared, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l).run);
+  assert.deepEqual([runs.filter((r) => r === 'run-a').length, runs.filter((r) => r === 'run-b').length], [2, 2]);
+  assert.equal(existsSync(`${shared}.lock`), false, 'no lock left');
 });
 
 test('record keeps the review, counts, stage times and merge of each ticket', (t) => {
@@ -190,14 +256,15 @@ test('without a session line, or without a counters file, the sums are null with
 test('recording the same run again replaces its rows; other runs and lines that are not rows stay', (t) => {
   const w = world(t);
   const other = JSON.stringify({ format: 'sorry-matt/retro@1', run: 'run-0', ticket: '#9' });
-  write(w.retro, `${other}\nnot json\n`);
+  const later = JSON.stringify({ format: 'sorry-matt/retro@2', run: RUN, ticket: '#1' }); // a format this version does not write
+  write(w.retro, `${other}\nnot json\n${later}\n`);
   assert.equal(JSON.parse(ok(w.record())).replaced, 0);
   const out = JSON.parse(ok(w.record()));
   assert.deepEqual([out.rows, out.replaced], [2, 2]);
   const lines = readFileSync(w.retro, 'utf8').split('\n').filter(Boolean);
-  assert.equal(lines.length, 4);
-  assert.deepEqual(lines.slice(0, 2), [other, 'not json']);
-  assert.deepEqual(lines.slice(2).map((l) => [JSON.parse(l).run, JSON.parse(l).ticket]), [[RUN, '#1'], [RUN, '#2']]);
+  assert.equal(lines.length, 5);
+  assert.deepEqual(lines.slice(0, 3), [other, 'not json', later]);
+  assert.deepEqual(lines.slice(3).map((l) => [JSON.parse(l).run, JSON.parse(l).ticket]), [[RUN, '#1'], [RUN, '#2']]);
 });
 
 test('record and report refuse what they cannot use: exit 1 for an unreadable state or retro file, 2 for bad arguments', (t) => {
@@ -247,19 +314,22 @@ test('report: tokens by stage, review over implement + fix, and per tier the tok
     row({ ticket: '#1', tier: 'full', agents: [{ kind: 'implement', tokens: tokens(1, 10, 100, 1000) }, { kind: 'review', tokens: tokens(2, 20, 200, 2000) }, { kind: 'sorry-matt:verifier', tokens: tokens(1, 1, 1, 1) }], reviews: [review('initial', 2), review('recheck', 0)] }),
     row({ ticket: '#2', tier: 'full', agents: [{ kind: 'fix', tokens: tokens(0, 0, 0, 1000) }, { kind: 'finder', tokens: null, reason: 'x' }], reviews: [review('initial', 0)] }),
     row({ ticket: '#3', tier: 'light', agents: [{ kind: 'review', tokens: tokens(0, 0, 0, 500) }], reviews: [{ mode: 'initial', kind: 'minimal', verdict: 'pass', findingCounts: null, findings: null }] }),
+    // a prove-it review recorded without its counts: its tokens bought findings no one counted
+    row({ ticket: '#4', tier: 'full', agents: [{ kind: 'review', tokens: tokens(0, 0, 0, 2000) }], reviews: [{ mode: 'initial', kind: 'full', verdict: 'pass', findingCounts: null, findings: null }] }),
   ];
   const [g] = reportOf(t, rows).groups;
   assert.equal(g.key, 'all');
-  assert.equal(g.tickets, 3);
+  assert.equal(g.tickets, 4);
   assert.deepEqual(g.tokensByStage.implement, { input: 1, output: 10, cacheWrite: 100, cacheRead: 1000, total: 1111 });
   assert.deepEqual(g.tokensByStage.fix, { input: 0, output: 0, cacheWrite: 0, cacheRead: 1000, total: 1000 });
-  assert.deepEqual(g.tokensByStage.review, { input: 3, output: 21, cacheWrite: 201, cacheRead: 2501, total: 2726 });
+  assert.deepEqual(g.tokensByStage.review, { input: 3, output: 21, cacheWrite: 201, cacheRead: 4501, total: 4726 });
   assert.equal(g.unknownAgents, 1);
-  assert.equal(g.reviewToImplement, 2726 / 2111);
-  // full: 2222 + 4 review tokens of #1 (#2's finder has none) for 2 confirmed; one of its two initial reviews found none
-  assert.deepEqual(g.byTier.full, { tickets: 2, reviews: 3, confirmed: 2, reviewTokens: 2226, tokensPerConfirmed: 1113, zeroConfirmedShare: 0.5 });
+  assert.equal(g.reviewToImplement, 4726 / 2111);
+  // full: 2222 + 4 review tokens of #1 (#2's finder has none) for 2 confirmed; one of its two counted initial reviews
+  // found none; #4's review has no count, so neither its review nor its 2000 tokens are in the tier's figures
+  assert.deepEqual(g.byTier.full, { tickets: 3, reviews: 3, confirmed: 2, reviewTokens: 2226, unknownCounts: 1, tokensPerConfirmed: 1113, zeroConfirmedShare: 0.5 });
   // light: a minimal review that found nothing counts as zero confirmed; no finding, so no tokens per finding
-  assert.deepEqual(g.byTier.light, { tickets: 1, reviews: 1, confirmed: 0, reviewTokens: 500, tokensPerConfirmed: null, zeroConfirmedShare: 1 });
+  assert.deepEqual(g.byTier.light, { tickets: 1, reviews: 1, confirmed: 0, reviewTokens: 500, unknownCounts: 0, tokensPerConfirmed: null, zeroConfirmedShare: 1 });
 });
 
 test('report --by groups the rows by version, model, tier or profile; --since drops older runs', (t) => {
@@ -317,6 +387,27 @@ test('report: escaped defects from newer tickets naming the ticket or its merge,
     ['#4', 'unknown', true, 'unknown'],
   ]);
   assert.deepEqual([none.escaped, none.unknown], [2, 2]);
+});
+
+test("report: CI of the base branch under integrate: direct; an upstream revert is not the ticket's; a local tracker has no mentions to read", (t) => {
+  const at = '2026-03-10T13:00:00Z';
+  const rows = [
+    row({ ticket: '#1', merges: ['1'.repeat(40)], deliveredAt: at, profile: { review: 'full', integrate: 'direct' }, base: 'main' }),
+    row({ ticket: '#2', endState: 'stuck', reason: 'upstream reverted: #9 (abc1234)', merges: ['2'.repeat(40)], deliveredAt: at }),
+    row({ ticket: '#3', tracker: 'local', merges: ['3'.repeat(40)], deliveredAt: at }),
+  ];
+  const gh = (args) => {
+    if (args[0] === 'issue') return JSON.stringify([{ number: 7, title: 'broke #3', body: '', createdAt: '2026-03-11T00:00:00Z' }]);
+    if (args[0] === 'run') return JSON.stringify(args.includes('main') ? [{ conclusion: 'failure', createdAt: '2026-03-10T14:00:00Z' }] : []);
+    throw new Error(args.join(' '));
+  };
+  const e = reportOf(t, rows, [], { gh, git: () => 'nothing reverted\n' }).groups[0].escaped;
+  assert.deepEqual(e.tickets.map((s) => [s.ticket, s.mentions, s.reverted, s.ciRed]), [
+    ['#1', [], false, true],
+    ['#2', [], false, false],
+    ['#3', 'unknown', false, false],
+  ]);
+  assert.deepEqual([e.escaped, e.unknown], [1, 1]);
 });
 
 test('report without --json writes a Markdown table per group, unknown where a value is missing', (t) => {
