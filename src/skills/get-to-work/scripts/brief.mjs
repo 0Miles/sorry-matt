@@ -6,11 +6,14 @@
 // `agents/expander.md` two levels up from this skill's directory (`sorry-matt:implementer`, `sorry-matt:expander`).
 // Beside the spawn file it writes the general-purpose fallback: the definition's body below its frontmatter (with
 // `${CLAUDE_PLUGIN_ROOT}` replaced by the plugin's directory) followed by the same values, for a session where the
-// agent type is not available. It spawns nothing and calls no tracker. No dependencies: runs on a bare Node 20+.
+// agent type is not available. The review host agent has no agent type: its spawn file is REVIEWER.md's fixed rules
+// followed by the values (review below). It spawns nothing and calls no tracker. No dependencies: runs on a bare
+// Node 20+.
 //
 // Usage
 //   node brief.mjs implement <values.json>
 //   node brief.mjs expand <values.json>
+//   node brief.mjs review <values.json>
 //   node brief.mjs description <role> <target> [<target> …]
 //
 // The spawn `description` (the one source of this rule; the skill prose that repeats it is to point here instead)
@@ -24,7 +27,10 @@
 //                branch when the red light maps to no ticket
 //     merge      the merge agent; its target is the ticket, or the line's integration branch for the merge that
 //                syncs the base when the run finishes
-//     review     the review host agent, spawned in the foreground at close-out to host prove-it for the ticket
+//     review     the review host agent, spawned in the foreground at close-out to host prove-it for the ticket (its
+//                spawn file from `review` below), and the minimal reviewer of review: minimal
+//     simplify   the simplify agent, spawned in the foreground at the finish; its target is the line's integration
+//                branch
 //   prove-it's finder, architect, verifier and fix-verifier, which the review host spawns, are named by prove-it's own
 //   rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
@@ -65,6 +71,36 @@
 //     "tickets": [{ "id": "#75" | "<path>/03-x.md", "line": "<integration branch>", "bodyFile": "<file>" }] }
 //   Each ticket's `line` is one of `lines`.
 //
+// review — the review host agent's spawn file (#138): REVIEWER.md below its `---` rule (the fixed rules; it has no
+//   placeholders), a `---` rule, then this review's values under English labels, each one filled in. tick writes the
+//   values file at close-out and spawns a general-purpose agent with it in the foreground (prove-it review).
+//   values.json:
+//   { "out":          "<file to write the spawn file to>",
+//     "mode":         "initial" | "recheck",
+//     "root":         "<absolute path of the repo working tree>",         // label `repo`
+//     "tracker":      "github" | "local",
+//     "repo":         "<owner>/<repo>",                                    // with "github" only
+//     "ticket":       "#72" | "<path>/03-x.md",
+//     "bodyFile":     "<the ticket face: the ticket text with its expansion blocks>",   // must exist
+//     "statusRecord": "<where the status record is>",
+//     "snapshot":     "<the acceptance snapshot>",                         // must exist
+//     "against":      "<acceptance.mjs --against output of this review>", // must exist; label `comparison`
+//     "fixedPoint":   "<the line's integration branch>",
+//     "branch":       "<ticket branch>",
+//     "checksReport": "<file holding the implementation (or fix) agent's report of the round under review>",
+//     "ci":           "covered" | "uncovered" | "no-origin",              // label `CI coverage`
+//     "previous":     true | false,   // the previous review block is in the status record; a recheck always has it
+//     "reviewer":     "primary" | "<the reviewer and the risk it looks at>",
+//     "scratchpad":   "<absolute path>",
+//     "tier":         "<prove-it's tier.mjs judge output>" | null }   // #139, label `review tier`: the tier and
+//                                                    // that file, which prove-it then reads instead of judging;
+//                                                    // null: none given, prove-it judges it (section 1)
+//   The `targeted checks` value is the report's `targeted checks:` line (agents/implementer.md section 5), with its
+//   `commit:` line when there is one and the report's path; a report without that line is no implementation agent's
+//   report (exit 1). The label after it, `targeted checks ran at` (#140), is the SHA that line's `sha=` names (7 to 40
+//   hex digits, lower-cased), or `not reported: rerun them (prove-it section 3)`: prove-it reuses the checks only
+//   at the head it reviews. A key added here is a label added to the values and a line to REVIEWER.md's value list.
+//
 // Every key above is required; `null` is how a value says none. Files are read as UTF-8; a byte order mark is
 // dropped and CRLF line ends read as LF. A value of several lines has its following lines indented under the list
 // item it fills. The output files are written with LF line ends and no trailing whitespace; their directory is
@@ -79,12 +115,15 @@
 //     "agentType": "sorry-matt:implementer" | "sorry-matt:expander",            // the Agent call's subagent_type
 //     "fallback": "<absolute path of the general-purpose fallback>",
 //     "fallbackPrompt": "Read <fallback> in full and follow it." }             // with subagent_type general-purpose
+//   review: the same fields, "kind": "review", "agentType": "general-purpose", "fallback": null, "fallbackPrompt": null
 //   description:
 //   { "format": "sorry-matt/brief@1", "kind": "description", "role": "<role word>", "description": "merge #72" }
 //
 // Exit codes: 0 output written; 1 a file is missing or unreadable, the snapshot is not an acceptance snapshot, a
-// definition file has no frontmatter, or a template's placeholders are not the ones this script fills (the template
-// and the script changed apart); nothing is written; 2 bad arguments, or a value missing or malformed.
+// definition file has no frontmatter, a review's checks report has no `targeted checks:` line or its tier file is not
+// tier.mjs judge output, or a template's
+// placeholders are not the ones this script fills (REVIEWER.md: any placeholder at all; the template and the script
+// changed apart); nothing is written; 2 bad arguments, or a value missing or malformed.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,7 +131,7 @@ import { UsageError, failure, runIfEntry } from './cli.mjs';
 import { ticketOf } from './spawns.mjs';
 
 export const FORMAT = 'sorry-matt/brief@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review'];
+export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'simplify'];
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PLUGIN_ROOT = join(SKILL_DIR, '..', '..');
 /** The agent type each spawn file is for, and its definition file's name under `<plugin>/agents/`. */
@@ -122,7 +161,7 @@ export function description(role, targets) {
   if (!ROLES.includes(role)) throw new UsageError(`unknown role word ${JSON.stringify(role)}; one of ${ROLES.join(', ')}`);
   if (!targets.length) throw new UsageError(`${role} needs a target`);
   if (role !== 'expand' && targets.length !== 1) throw new UsageError(`${role} takes one target, got ${targets.length}`);
-  const branchAllowed = role === 'ci-fix' || role === 'merge';
+  const branchAllowed = role === 'ci-fix' || role === 'merge' || role === 'simplify';
   const names = targets.map((target) => {
     const name = ticketName(target);
     if (name) return name;
@@ -264,6 +303,97 @@ function expand(values) {
   return { out, kind: 'expand', role: 'expand', desc, filled };
 }
 
+/** REVIEWER.md below its `---` rule: the review host's fixed rules. A placeholder there means it changed apart from this script. */
+export function rules(templatePath) {
+  const template = read(templatePath);
+  const rule = template.search(/^---$/m);
+  if (rule < 0) throw new Error(`${templatePath} has no --- rule`);
+  const body = template.slice(rule + 3).replace(/^\n+/, '').replace(/\s+$/, '').replace(/[ \t]+$/gm, '');
+  const left = body.match(PLACEHOLDER);
+  if (left) throw new Error(`${templatePath} has the placeholder ${left[0]}, and review fills none: the template and the script changed apart`);
+  return body;
+}
+
+/** The value of a report's `<name>: <value>` line (markdown list marks, quotes and code ticks around it allowed), or null. */
+export function reportField(text, name) {
+  return new RegExp(`^[\\s>*\`-]*${name}[\\s*\`]*:[\\s*\`]*(\\S.*?)\\s*$`, 'im').exec(String(text).replace(/\r\n/g, '\n'))?.[1] ?? null;
+}
+
+/**
+ * The `targeted checks:` line of an implementation agent's report (agents/implementer.md section 5), with its commit,
+ * and the SHA it says they ran at (its `sha=`, lower case; #140), null when it gives none.
+ */
+export function targetedChecks(reportPath) {
+  const report = read(reportPath);
+  const checks = reportField(report, 'targeted checks');
+  if (!checks) throw new Error(`${reportPath} has no \`targeted checks:\` line: it is not an implementation agent's report`);
+  const commit = reportField(report, 'commit');
+  const sha = /(?:^|[\s;`*(])sha=([0-9a-f]{7,40})(?![0-9a-z])/i.exec(checks)?.[1]?.toLowerCase() ?? null;
+  return { text: `${checks} (${commit ? `commit ${commit}; ` : ''}the agent's report: ${resolve(reportPath)})`, sha };
+}
+
+export const CI_COVERAGE = ['covered', 'uncovered', 'no-origin'];
+export const TIER_FORMAT = 'sorry-matt/tier@1';
+
+/** #139: the review tier of prove-it's `tier.mjs judge` output (format sorry-matt/tier@1), which tick ran before the review. */
+function judgedTier(path) {
+  if (!existsSync(path)) throw new Error(`${path} does not exist`);
+  const judged = readJson(path);
+  if (judged?.format !== TIER_FORMAT || !['light', 'standard', 'full'].includes(judged.tier)) throw new Error(`${path} is not ${TIER_FORMAT} output with a tier`);
+  return judged.tier;
+}
+
+function review(values) {
+  const out = need(values, 'out');
+  const mode = need(values, 'mode', (v) => v === 'initial' || v === 'recheck', '"initial" or "recheck"');
+  const root = need(values, 'root', absolute, 'an absolute path');
+  const tracker = need(values, 'tracker', (v) => v === 'github' || v === 'local', '"github" or "local"');
+  const repo = tracker === 'github' ? need(values, 'repo', (v) => /^[^/\s]+\/[^/\s]+$/.test(v), '<owner>/<repo>') : null;
+  const ticket = need(values, 'ticket');
+  const bodyFile = need(values, 'bodyFile');
+  const statusRecord = need(values, 'statusRecord');
+  const snapshot = need(values, 'snapshot');
+  const against = need(values, 'against');
+  const fixedPoint = need(values, 'fixedPoint');
+  const branch = need(values, 'branch');
+  const checksReport = need(values, 'checksReport');
+  const ci = need(values, 'ci', (v) => CI_COVERAGE.includes(v), CI_COVERAGE.join(', '));
+  const previous = need(values, 'previous', (v) => typeof v === 'boolean', 'true or false');
+  if (mode === 'recheck' && !previous) throw new UsageError('a recheck always has the previous review block: previous must be true');
+  const reviewer = need(values, 'reviewer');
+  const scratchpad = need(values, 'scratchpad', absolute, 'an absolute path');
+  const tierFile = need(values, 'tier', orNull(text), 'a file path or null');
+  const desc = description('review', [ticket]);
+
+  for (const file of [bodyFile, snapshot, against]) if (!existsSync(file)) throw new Error(`${file} does not exist`);
+  const checks = targetedChecks(checksReport);
+  const tier = tierFile === null ? 'none given: judge it yourself (prove-it section 1)' : `${judgedTier(tierFile)} (tier.mjs judge output: ${resolve(tierFile)})`;
+  const filled = [
+    rules(join(SKILL_DIR, 'REVIEWER.md')),
+    '---',
+    [
+      "Spawn values: this review's values, every one filled in. The rules above are all you follow.",
+      '',
+      `- mode: ${mode}`,
+      `- repo: ${root}`,
+      `- tracker: ${trackerText(tracker, repo)}`,
+      `- ticket: ${ticket}; ticket face (the ticket text with its expansion blocks): ${resolve(bodyFile)}`,
+      `- status record: ${statusRecord}`,
+      `- acceptance snapshot: ${resolve(snapshot)}; comparison: ${resolve(against)}`,
+      `- fixed point: ${fixedPoint}`,
+      `- ticket branch: ${branch}`,
+      `- targeted checks: ${checks.text}`,
+      `- targeted checks ran at: ${checks.sha ?? 'not reported: rerun them (prove-it section 3)'}`,
+      `- CI coverage: ${ci}`,
+      `- previous review block: ${previous ? 'in the status record' : 'none'}`,
+      `- reviewer: ${reviewer}`,
+      `- scratchpad: ${scratchpad}`,
+      `- review tier: ${tier}`,
+    ].join('\n'),
+  ].join('\n\n');
+  return { out, kind: 'review', role: 'review', desc, filled: `${filled.replace(/[ \t]+$/gm, '')}\n` };
+}
+
 export function main(argv) {
   try {
     const [kind, ...rest] = argv;
@@ -272,10 +402,19 @@ export function main(argv) {
       if (!role) throw new UsageError('description needs a role word and a target');
       return { code: 0, out: JSON.stringify({ format: FORMAT, kind, role, description: description(role, targets) }, null, 2) + '\n', err: '' };
     }
-    if (kind !== 'implement' && kind !== 'expand') throw new UsageError('expected implement, expand or description');
+    if (!['implement', 'expand', 'review'].includes(kind)) throw new UsageError('expected implement, expand, review or description');
     if (rest.length !== 1) throw new UsageError(`${kind} takes one argument, the values file`);
     const values = readJson(rest[0]);
     if (!values || typeof values !== 'object' || Array.isArray(values)) throw new UsageError(`${rest[0]} must hold a JSON object`);
+    if (kind === 'review') {
+      const { out, role, desc, filled } = review(values);
+      const brief = resolve(out);
+      mkdirSync(dirname(brief), { recursive: true });
+      writeFileSync(brief, filled);
+      // the review host is a general-purpose agent: there is no agent type to fall back from
+      const result = { format: FORMAT, kind, role, brief, description: desc, prompt: `Read ${brief} in full and follow it.`, agentType: 'general-purpose', fallback: null, fallbackPrompt: null };
+      return { code: 0, out: JSON.stringify(result, null, 2) + '\n', err: '' };
+    }
     const { out, role, desc, filled } = kind === 'implement' ? implement(values) : expand(values);
     const body = definitionBody(join(PLUGIN_ROOT, 'agents', DEFINITIONS[kind]), resolve(PLUGIN_ROOT));
     const brief = resolve(out);

@@ -292,11 +292,11 @@ test('a profile cannot carry confirmations or budget limits', (t) => {
   assert.equal(existsSync(r.path), false);
 });
 
-test('review minimal: a minimal review passes; no review still blocks; the default needs a full one', (t) => {
+test('review minimal: a minimal review passes; no review still blocks; the default needs a prove-it review', (t) => {
   const strict = run(t);
   at(strict, '#1', 'in-review');
   strict.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal');
-  strict.refused(/needs a full review \(profile review: full\); the latest is minimal/, 'stage', 'queued', '#1');
+  strict.refused(/needs a prove-it review \(profile review: full\), or a minimal review of a ticket whose review tier is light; the latest is a minimal review$/m, 'stage', 'queued', '#1');
 
   const r = run(t);
   r.ok('profile', '--review', 'minimal');
@@ -304,6 +304,48 @@ test('review minimal: a minimal review passes; no review still blocks; the defau
   r.refused(/queued needs a review recorded/, 'stage', 'queued', '#1');
   r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal');
   r.ok('stage', 'queued', '#1');
+});
+
+test('#139: under review: full a minimal review recorded with tier light lets the ticket queue; one of another tier does not', (t) => {
+  const light = run(t);
+  at(light, '#1', 'in-review');
+  const out = light.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal', '--tier', 'light');
+  assert.deepEqual(out.tickets['#1'].reviews.map((x) => [x.kind, x.tier, x.verdict]), [['minimal', 'light', 'pass']]);
+  light.ok('stage', 'queued', '#1');
+
+  for (const tier of ['standard', 'full']) {
+    const r = run(t);
+    at(r, '#1', 'in-review');
+    r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal', '--tier', tier);
+    r.refused(new RegExp(`or a minimal review of a ticket whose review tier is light; the latest is a minimal review \\(review tier ${tier}\\)`), 'stage', 'queued', '#1');
+  }
+  // a prove-it review records its tier too; without --tier it is null
+  const full = run(t);
+  at(full, '#1', 'in-review');
+  assert.equal(full.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'standard').tickets['#1'].reviews[0].tier, 'standard');
+  const none = run(t);
+  at(none, '#1', 'in-review');
+  assert.equal(none.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass').tickets['#1'].reviews[0].tier, null);
+  assert.equal(none.cmd('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'huge').code, 2);
+});
+
+test('#142: review records the observations and pre-existing counts; without them both are 0', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--findings', 'F1', '--observations', '2', '--pre-existing', '1');
+  r.ok('stage', 'fixing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass');
+  const counts = r.state().tickets['#1'].reviews.map((x) => [x.mode, x.observations, x.preExisting]);
+  assert.deepEqual(counts, [['initial', 2, 1], ['recheck', 0, 0]]);
+  for (const bad of ['-1', 'two', '1.5']) {
+    const out = r.cmd('review', '#1', '--mode', 'recheck', '--verdict', 'pass', '--observations', bad);
+    assert.equal(out.code, 2, `--observations ${bad}`);
+    assert.match(out.err, /--observations: expected a whole number/);
+  }
+  const out = r.cmd('review', '#1', '--mode', 'recheck', '--verdict', 'pass', '--pre-existing', 'x');
+  assert.equal(out.code, 2);
+  assert.match(out.err, /--pre-existing: expected a whole number/);
 });
 
 test('fixRounds 1: one fix round passes; a second is refused', (t) => {
@@ -424,7 +466,54 @@ test('assignments, agent ids, extension, release and timeout reassignment', (t) 
   assert.equal(s.usage.timeoutExtensions, 1);
   assert.equal(s.usage.timeoutStops, 1);
   r.ok('add', '#3', '--line', LINE);
-  r.refused(/a timeout reassignment is for implementing, fixing, expanding; it is candidate/, 'assign', '#3', '--record', rec, '--type', 'x', '--reassign');
+  r.refused(/a timeout reassignment is for implementing, fixing, expanding, in-review; it is candidate/, 'assign', '#3', '--record', rec, '--type', 'x', '--reassign');
+});
+
+test('#143: a review host is reassigned once for a timeout in in-review; a state from before the count reads it as 0', (t) => {
+  const r = run(t);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--worktree', process.cwd(), '--limit', '60', '--now', NOW]));
+  at(r, '#1', 'in-review');
+  assert.equal(r.state().tickets['#1'].timeoutReassignments['in-review'], 0, 'a new ticket counts in-review too');
+  // a state written before in-review was counted: the key is missing, and the file still loads
+  const s = r.state();
+  delete s.tickets['#1'].timeoutReassignments['in-review'];
+  writeFileSync(r.path, JSON.stringify(s));
+  r.ok('assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  r.ok('agent', '#1', '--id', 'rv1');
+  r.ok('release', '#1', '--stopped');
+  r.ok('assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd(), '--reassign');
+  assert.equal(r.state().tickets['#1'].timeoutReassignments['in-review'], 1);
+  r.ok('release', '#1', '--stopped');
+  r.refused(/already reassigned for a timeout in in-review/, 'assign', '#1', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd(), '--reassign');
+});
+
+test('#144: a line holds its own assignment (the ci-fix of a red light that maps to no ticket)', (t) => {
+  const r = run(t);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--worktree', process.cwd(), '--limit', '20', '--now', NOW]));
+  r.ok('add', '#1', '--line', LINE);
+  assert.equal(r.state().lines[LINE].assignment, null, 'a new line holds no assignment');
+  r.refused(/not an integration branch of this run/, 'assign', '--line', 'run-1/nowhere', '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  assert.equal(r.cmd('assign', '#1', '--line', LINE, '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd()).code, 2, 'tickets or a line, not both');
+  r.refused(/no assignment in flight/, 'agent', '--line', LINE, '--id', 'c1');
+  r.ok('assign', '--line', LINE, '--record', rec, '--type', 'general-purpose', '--worktree', process.cwd());
+  r.ok('agent', '--line', LINE, '--id', 'c1');
+  r.refused(/already belongs to c1/, 'agent', '--line', LINE, '--id', 'c2');
+  r.ok('extend', '--line', LINE, '--deadline', '2026-03-10T12:40:00Z');
+  r.refused(/already extended once/, 'extend', '--line', LINE, '--deadline', '2026-03-10T12:50:00Z');
+  const a = r.state().lines[LINE].assignment;
+  assert.deepEqual([a.agentId, a.type, a.limit, a.deadline, a.extended], ['c1', 'general-purpose', 20, '2026-03-10T12:40:00Z', 'yes']);
+  assert.equal(r.state().tickets['#1'].assignment, null, 'no ticket holds it');
+  const res = r.ok('resume');
+  assert.deepEqual(res.inFlight.map((x) => [x.id, x.tickets, x.line]), [['c1', [], LINE]]);
+  r.ok('release', '--line', LINE, '--stopped');
+  r.refused(/no assignment in flight/, 'release', '--line', LINE);
+  const s = r.state();
+  assert.equal(s.lines[LINE].assignment.deadline, null);
+  assert.equal(s.usage.timeoutExtensions, 1);
+  assert.equal(s.usage.timeoutStops, 1);
+  // an expansion record is for tickets only
+  const ex = r.file('ex.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--limit', '15', '--now', NOW]));
+  assert.equal(r.cmd('assign', '--line', LINE, '--record', ex, '--type', 'general-purpose').code, 2);
 });
 
 test('resume rebuilds the open tickets, their agents and a deadline scan plan from the state file alone', (t) => {

@@ -457,7 +457,7 @@ test('review fails on queued-review: the passing review was not a full one under
   w.edit((s) => {
     s.tickets['#1'].reviews[0].kind = 'minimal';
   });
-  failsOnly(w.check('review'), 'queued-review', /needs a full review/);
+  failsOnly(w.check('review'), 'queued-review', /needs a prove-it review/);
 });
 
 // ---- merged --------------------------------------------------------------------------------------------------------
@@ -657,6 +657,20 @@ test('wake-end fails on fallback-wake: an agent is in flight and no background s
   failsOnly(w.check('wake-end'), 'fallback-wake', /agents are in flight \(#1\)/);
 });
 
+test("#144: wake-end fails on fallback-wake while a line's ci-fix agent is in flight with no background sleep", (t) => {
+  const w = world(t, { origin: true });
+  const lwt = line(w);
+  w.git('push', '-q', 'origin', LINE);
+  w.ok('add', '#1', '--line', LINE);
+  const out = deadline(['record', '--worktree', lwt, '--limit', '20', '--now', NOW]);
+  assert.equal(out.code, 0, out.err);
+  w.ok('assign', '--line', LINE, '--record', w.file('rec-line.json', out.out), '--type', 'general-purpose', '--worktree', lwt);
+  w.ok('agent', '--line', LINE, '--id', 'c1');
+  failsOnly(w.check('wake-end'), 'fallback-wake', new RegExp(`agents are in flight \\(${LINE}\\)`));
+  w.ok('usage', '--sleep-task', 'task-1');
+  passes(w.check('wake-end'), ['fallback-wake']);
+});
+
 test('wake-end fails on pushed: a line with a merge was never pushed', (t) => {
   const w = world(t, { origin: true });
   const lwt = line(w);
@@ -806,7 +820,7 @@ function ledgerText(rule, { marker = '<!-- sorry-matt:run active -->', session =
     7: 'none',
     8: '| ticket | stage |\n| --- | --- |',
     9: (budget ??
-      ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', '- `budget: timeout-fix 20`', 'budget: timeout-expand 15', 'budget: timeout-merge 15']
+      ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', '- `budget: timeout-fix 20`', 'budget: timeout-expand 15', 'budget: timeout-merge 15', 'budget: timeout-review 60']
     ).join('\n') + (session ? `\nsession: ${session}` : ''),
     10: `rule: ${rule}`,
   };
@@ -825,7 +839,7 @@ function ledgerWorld(t, env = { CLAUDE_CODE_SESSION_ID: 'sess-1' }) {
   return { w, rule, check };
 }
 
-test('ledger passes: the marker, ten fields with content, eight budget lines, this session, absolute rule files', (t) => {
+test('ledger passes: the marker, ten fields with content, nine budget lines, this session, absolute rule files', (t) => {
   const { rule, check } = ledgerWorld(t);
   passes(check(ledgerText(rule)), ['marker', 'fields', 'budget-limits', 'stage-limits', 'session', 'rule-files']);
   passes(check(`﻿${ledgerText(rule)}`), ['marker']);
@@ -852,14 +866,17 @@ test('ledger fails on fields: a field missing, empty, or out of order', (t) => {
 
 test('ledger fails on budget-limits: a limit line is missing', (t) => {
   const { rule, check } = ledgerWorld(t);
-  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15'];
+  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15', 'budget: timeout-review 60'];
   failsOnly(check(ledgerText(rule, { budget })), 'budget-limits', /no budget: hours/);
 });
 
 test('ledger fails on stage-limits: a stage time limit line is missing', (t) => {
   const { rule, check } = ledgerWorld(t);
-  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15'];
+  const budget = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-review 60'];
   failsOnly(check(ledgerText(rule, { budget })), 'stage-limits', /no budget: timeout-merge/);
+  // #143: the review host agent's time limit is a stage time limit too
+  const noReview = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15'];
+  failsOnly(check(ledgerText(rule, { budget: noReview })), 'stage-limits', /no budget: timeout-review/);
 });
 
 test('ledger fails on session: the session line is another session, or missing while one is known', (t) => {

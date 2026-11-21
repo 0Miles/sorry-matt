@@ -28,7 +28,16 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 3. 為每張票寫預計檔案（第 2 節「預計檔案」）。
 4. 寫計畫檔跑 `scripts/freeze.mjs`：前置檢查、他線佔用、排除、**合線**與候選順序都由它算。`preflight.ok` 是
    false 就照 `checks` 修好重跑；腳本看不到的佔用（本 session 已知的其他 session）寫進計畫檔的 `held`。
-   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。
+   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）。
+   **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結。CI 來自 git remote，與票放在哪無關：Local Markdown
+   也讀（`gh` 在 repo 裡由 remote 認出 GitHub repo）；repo 沒有 `origin` 時沒有 CI 可讀，`ci` 是 null，不是警告。
+   `warning` 是 true（基底紅，或 CI 讀不到）時：
+   - 由 `have-it-all-done` 組合時照 ledger 第 2 欄裁決點的選擇走；第 2 欄沒有這題（裁決點時基底不紅）就代答
+     「繼續」，記進自答清單。
+   - 獨立執行時，紅就在這裡問使用者「繼續，或先修基底」（`ASKING.md` 第 2 節 (a)，建議「繼續」，寫明每條線的
+     CI 都會帶著這個紅），答案記進 ledger 第 2 欄；讀不到就代答「繼續」，連同錯誤訊息記進自答清單。
+   - 「先修基底」：不凍結。基底的紅燈（分支、SHA、`ci.failed` 的 run id）進人工作業清單，初始票全數標待裁決，
+     解除條件是基底轉綠。「繼續」：基底帶進來的紅由紅燈處置判為對不到票（[`RED-LIGHT.md`](RED-LIGHT.md) 第 2 點）。
 5. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
    沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，再對每條線跑
    `scripts/integrate.mjs line-init`。
@@ -41,7 +50,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 **硬護欄**：初始票集一經凍結便不再擴張；執行期間新發現或新開的票只作為背景。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票有發布出處、tracker 原生識別與 blocker map；被排除的票都有
-佔用來源與解除條件；`check freeze` 通過；獨立執行時兩行 `budget:` 已依凍結票數寫定。
+佔用來源與解除條件；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`check freeze` 通過；獨立執行時
+兩行 `budget:` 已依凍結票數寫定。
 
 ## 1. 用 tick 推進流水線
 
@@ -55,15 +65,33 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 每次喚醒：
 
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`，每個送來完成通知的 agent 加一個
-   `--reported <agent id>`。收不收它的回報由 tick 判。`run` 反覆跑 `next`，把每份清單 batch 1 的 exec（`push`
-   除外）依序在 bash 跑完並 record，直到 batch 1 還剩 spawn、judge、ask 或 `push`，或 `then` 是 `end`／`done`。
-   輸出是剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔）。`run` 以 1 結束、訊息說 bash
-   不能用時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
+   `--reported <agent id>`。收不收它的回報由 tick 判。`run` 反覆跑 `next`，把每份清單 batch 1 的 exec 依序在 bash
+   跑完並 record，直到 batch 1 還剩 spawn、judge、ask 或留給你的 exec，或 `then` 是 `end`／`done`。留給你的 exec
+   由 plugin 的 guard hook 的動作分類決定，不看步驟名稱：guard 會要求確認的（例如推到受保護分支）才留下。輸出是
+   剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔；被訊號殺掉的另有 `signal`，結束代碼記成
+   128 加訊號編號，不算正常結束），`lists` 依序列出它做過的每份清單的 `reports`、`reconcile`、`dispatch`、`wrote`
+   與從那份清單跑的 exec：較早清單收下的回報、對帳與寫出的檔都從這裡讀，不只看最後一份。`run` 以 1 結束、訊息說
+   bash 不能用或 guard hook 的分類載不到時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
+
+   Bash tool 把 `run` 移到背景時，等它結束、讀到它的輸出，才處理清單。**背景化的 `run` 結束前不可再開一個**
+   `run`，也不跑 `next` 或 `record`：兩者會搶寫同一份 state 檔。
+
+   `run` 非零結束時，stdout 仍是 JSON：`ran` 與 `lists` 是停下前已跑且已記錄的，`blocked` 是它停在哪個 exec
+   （停在 `next` 時是 null）。`blocked.at` 是 `execute` 時那個 exec 沒跑完、什麼都沒記；是 `record` 時它已經跑過
+   （結束代碼是 `blocked.exit`，副作用已發生），記錄失敗。tick 在記錄前就記下它跑過，之後的 `run` 只補記、不重跑
+   （state 檔整個寫不進去時記不下來）。這次 `run` 交出的清單沒送到你手上，裡面 batch 1 的 spawn 不算已發出，之後
+   照常發下。`run` 以 **3** 結束是 `blocked` 的 record 被拒：
+   - 不手改 state。照 `error` 的訊息處理拒絕的原因，和 `record` 被拒時一樣，不換一種寫法硬寫。
+   - 處理好後再跑 `run`：它以 `blocked.exit` 補記 `blocked`，不再跑一次（`error` 說它已經記錄過時，沒有要補記的）。
+   - 處理不了的拒絕是裁決點，照第 3 節問。
+
+   輸出的 `do` 也寫著這段處置。
 2. 照 `actions` 做，但一份清單只送出 `batch` 為 1 的動作，在同一回合一起送出。每做完一個就跑它 `record` 欄的
    指令。較後的 batch 這次不做：前面的動作 record 後，它們會在之後的清單再發下來（tick 只把 batch 1 的背景 spawn
    當成已發出）。沒做的不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
-   - **exec**：`run` 已代跑。留在清單裡的 exec 是 `push`，留給你推，guard hook 才看得到：在 bash（Windows 是
-     Git Bash）照抄 `command`，以結束代碼 record。不在 `okExit` 的結束代碼會在下一份清單變成要你處理的 `failed`
+   - **exec**：`run` 已代跑。留在清單裡的 exec 是 guard hook 會要求確認的，留給你跑，guard 才看得到：在 bash
+     （Windows 是 Git Bash）照抄 `command`，以結束代碼 record。帶 `ran` 的 exec 已經跑過、只是沒記成：不再跑，
+     照 `note` 處理後跑它 `record` 欄的指令（已帶結束代碼）。不在 `okExit` 的結束代碼會在下一份清單變成要你處理的 `failed`
      judge，`run` 跑的 exec 由它的 `do` 指名 log 檔。
    - **spawn**：Agent tool 照 `spawn` 欄原樣送出，不另加規則：實作與展開 agent 的固定規則在 plugin 的 agent 定義檔
      （`sorry-matt:implementer`、`sorry-matt:expander`），派工檔的值已由 `scripts/brief.mjs` 填好，`description` 的
@@ -79,7 +107,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 `record` 以 3 結束是拒絕：結果不合 state 的守門，照訊息處理，不換一種寫法硬寫。
 
 完成判準：每次喚醒都跑 `run`（bash 不能用時是 `next`）到 `end` 或 `done`；每份清單只送出 batch 1 的動作；
-`run` 留下的每個做了的動作都照它的 `record` 回寫；state 檔沒有被手改。
+`run` 留下的每個做了的動作都照它的 `record` 回寫；同一時間只有一個 `run` 在跑；`run` 以 3 結束後，拒絕的原因
+處理好才再跑 `run`；state 檔沒有被手改。
 
 ## 2. tick 留給你的判斷
 
@@ -89,23 +118,46 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 `sorry-matt/runs/<run>/files/<ticket>.txt`。來源依序：票面、展開區塊與驗收項點名的路徑；票面點名的模組、skill、
 指令、設定鍵或識別字以 `git grep -l` 與 `git ls-files` 找到的定義與主要使用處；repo 規則檔（`AGENTS.md`、
 `CLAUDE.md` 這類）要求一起改的檔，例如翻譯版。目錄只在票面點名整個目錄時寫，什麼都推不出來才寫 `/`。
+**寫到 symbol**：票面或驗收項把改動限定在檔內某個函式、區塊或 markdown 標題時，那一行寫成 `path#symbol`（標題照原文寫，
+不帶前面的 `#`）；巢狀的從最外層寫起，`path#外層#內層`。同一路徑的兩張票都寫了 symbol，且沒有一方的 symbol 鏈是另一方
+的開頭時，不算重疊、凍結時不合線；任一方只寫路徑，照舊以整檔判斷。git 看得到的佔用（其他 worktree、分支、PR）一律是
+整檔；在途的票改到它以 symbol 預計的檔，只佔那些 symbol。拿不準改動會不會跑出 symbol 就寫整檔：猜錯的代價是整併時
+的衝突與退回重做。路徑本身不能含 `#`，`/` 不帶 symbol。
 **索引檔留在清單外**：每張票各加一行的檔 —— 詞彙表、索引表、CI 的測試清單、README 的表格、manifest 的陣列 ——
 列進去會讓所有票互斥，兩張票各加一行的衝突由整併 agent 兩邊都保留。清單只加不減：展開時補、退回重做時加寬。
 
 ### 收票的檢查與審查
 
-- **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。
-- **獨立審查**：填好同層 [`REVIEWER.md`](REVIEWER.md) 的佔位，以前景 spawn 一個審查主持 agent。它呼叫
-  `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報。CI 覆蓋填 `no-origin`（沒有 `origin`）、
-  `uncovered`（已定案為 CI 不涵蓋整合分支）或 `covered`。
-- **照回報落地**：`findings` 交集中修正；`observations` 或 `pre-existing` 不是 0 時只讀審查區塊的這兩段，合開
-  一張 raw ticket（「期間開票」）。一張票預設只有這一位 reviewer；只有具體風險才加專項 reviewer，指名風險並記進
-  自答清單，「再看一遍比較保險」不是風險。
+- **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。記 green（複驗前的
+  修正輪記 fixed）之前，先把它回報的全文原樣寫進 collect 指名的檔：審查的派工檔從那裡取 targeted checks，
+  沒寫就記不進去。
+- **審查方式**：審查前 tick 先發一個 exec，以 `prove-it` 的 `tier.mjs judge` 判**審查分級**（每次初審判一次，
+  複驗與 stuck 後的 retry 沿用同一個），再依流程設定 `review` 決定審查方式：`review: minimal` 一律走 minimal
+  審查；`review: full` 下 light 走 minimal 審查 —— 沿用它的報告檔、`--kind minimal` 記錄與新鮮度檢查，record
+  不帶計數，也沒有派送紀錄與時限 —— standard 與 full 走下面的 prove-it 審查，審查分級寫進派工檔，計數與派送紀錄
+  照下面兩項。你不自己判級。
+- **獨立審查**：tick 寫好值檔，由 `brief.mjs review` 產出審查主持 agent 的派工檔 —— 同層
+  [`REVIEWER.md`](REVIEWER.md) 的固定規則接上這次的值（repo、tracker、票面檔、接續紀錄、驗收快照、比對輸出、
+  固定點、ticket 分支、targeted checks 與它跑的 SHA、CI 覆蓋、審查分級，複驗時另含前次審查區塊）—— 再交給你一個前景 spawn。你照動作
+  發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
+  記下結論，並照回報的 `counts:` 行帶 `--observations <n> --pre-existing <n>`（兩個都要帶，沒有就寫 0；少一個
+  record 以 2 拒絕）。minimal 審查只回報擋下整併的 finding，不帶這兩個計數。
+- **審查的派送紀錄**：spawn 之前 tick 先寫派送紀錄（`deadline.mjs record` 在 ticket worktree、時限
+  `timeout-review`，再 `state.mjs assign`），審查主持 agent 和其他 agent 一樣有時限。回報隨 spawn 回來時，record
+  帶 `--agent`、`--outcome` 與兩個計數；Agent tool 把它放到背景、spawn 只回 agent id 時，record 只帶 `--agent`
+  （這時帶計數會以 2 拒絕）：它在途，tick 照樣掃時限、排 fallback 喚醒，完成通知來了以 `--reported` 交給 tick，由
+  `collect` 記結論，同樣帶 `--observations <n> --pre-existing <n>`（少一個以 2 拒絕）。
+- **照回報落地**：`findings` 交集中修正。`observations` 或 `pre-existing` 不是 0 時，tick 發下一個 `observations`
+  judge，要你只讀審查區塊的這兩段，開一張 raw ticket（「期間開票」），以 `--value <issue id>` 記下；同一張票之後
+  的審查（複驗、retry）再帶出的，tick 發下的 judge 指名那張 raw ticket，新項目補進去，不另開，記別的 id 會被拒絕
+  （3）。這個 judge 不擋這張票：審查的結論照常往下走。派工檔的 reviewer 是 `primary`；專項 reviewer 由
+  `prove-it` 依審查分級自己加（`full` 級的 `architecture`）。
 
 ### 集中修正
 
 把審查區塊的位置交回保有 context 的原 agent，要它讀每則 finding 的 `summary`、`evidence` 與 `fix` 原文，一輪
-關上全部；主持人不轉述。`review: minimal` 時沒有審查區塊：交回原 agent 的是 reviewer 報告檔
+關上全部；主持人不轉述。`review: minimal` 時，以及 `review: full` 下審查分級 light 的票，走的是 minimal 審查，
+沒有審查區塊：交回原 agent 的是 reviewer 報告檔
 （`tick/review/<ticket key>-<tag>.report.md`）的路徑，不是審查區塊的位置，它讀報告裡每則 finding 的原文。輪數上限由
 state 守。
 
@@ -123,8 +175,9 @@ merge commit 裡，不改寫 ticket 分支。它逐塊回報取捨，你記進�
 
 ### 期間開票
 
-範圍外的 bug、前置重構、技術債、根因落在範圍外的偶發紅燈，以及審查的 `observations` 與 `pre-existing`（一張票合開
-一張，逐則列出位置、一句話與證據路徑，複驗帶出的補進同一張），只建立 raw ticket，連回來源：
+範圍外的 bug、前置重構、技術債、根因落在範圍外的偶發紅燈，以及審查的 `observations` 與 `pre-existing`（tick 的
+`observations` judge 發下時才做：一張票合開一張，逐則列出位置、一句話與證據路徑，複驗帶出的補進同一張），只建立
+raw ticket，連回來源：
 
 - **GitHub**：`gh issue create`，不加 `ready-for-agent`；body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：依 tracker 慣例建下一個未使用編號的 ticket 檔，`Status` 設為 `needs-triage`，commit 到
@@ -137,8 +190,8 @@ merge commit 裡，不改寫 ticket 分支。它逐塊回報取捨，你記進�
 `judge` 的 `reference` 指到下列檔案時全文讀取並照做：紅燈處置 [`RED-LIGHT.md`](RED-LIGHT.md)、超時處置
 [`TIMEOUTS.md`](TIMEOUTS.md)、退回重做與標卡住 [`SEND-BACK.md`](SEND-BACK.md)、收官 [`FINISH.md`](FINISH.md)。
 
-完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的票都有一張 raw ticket；加了專項 reviewer
-的票都指名了風險；每個衝突解法只在 merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來源連結，
+完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的票都有一張 raw ticket；每個衝突解法只在
+merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來源連結，
 沒有混入凍結票集。
 
 ## 3. 裁決與停止

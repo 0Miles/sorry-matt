@@ -4,9 +4,11 @@
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
 // The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
-// exec actions but pushes. tick spawns nothing and stops no agent. `next` and `record` run no network call and change
-// no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh) and merge branches (integrate.mjs).
-// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
+// exec actions but those the guard hook would ask about. tick spawns nothing and stops no agent. `next` and `record`
+// run no network call and change no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh)
+// and merge branches (integrate.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash and the plugin's
+// hooks/classify.mjs).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
@@ -16,7 +18,7 @@
 //   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
-//                        [--now <UTC>]
+//                        [--observations <n>] [--pre-existing <n>] [--now <UTC>]
 //
 // setup writes the run's configuration into the state file once at the freeze (again to change it; the bookkeeping
 // below is kept). `--repo` is required with github, `--tickets-dir` (where the ticket files are, e.g.
@@ -39,15 +41,18 @@
 //   The target of a line is its integration branch, or the base branch under profile `integrate: direct`.
 //
 // The profile (state.mjs `profile`) trims the list; the host never learns of the steps left out:
-//   review: minimal  one reviewer `spawn` (foreground, description `review <ticket>`, the role word of brief.mjs)
-//                    instead of the review host's `judge`, with a brief tick writes: the ticket text's file (fetched
+//   review: minimal  every ticket gets the minimal review, and no review tier is judged (below): one reviewer `spawn`
+//                    (foreground, description `review <ticket>`, the role word of brief.mjs) instead of the review
+//                    host's spawn (below), with a brief tick writes: the ticket text's file (fetched
 //                    again first on GitHub; the spawn waits for it), the acceptance source (the snapshot's `items`, or
 //                    the ticket text as expand: skip has it below), blocking findings only, `verdict: pass | fix`, the
 //                    full report written to `tick/review/<ticket key>-<tag>.report.md` beside the brief and also
 //                    returned. `record review:…` is refused (3) when that file is missing or empty with
 //                    `--outcome fix`, or, when it is there, its `verdict:` line is missing or not the outcome, or it
-//                    was written before the review spawn was last issued (`issued.<id>.at`; an interrupted round's
-//                    file): the host writes the report returned this round there verbatim. The fix round (send, the
+//                    was written before this round's review spawn was first issued (`issued.<id>.at`, written once
+//                    per round: the initial review, each recheck and each retry; the same spawn handed out again by
+//                    one more `next` keeps it; an interrupted round's file): the host writes the report returned this
+//                    round there verbatim. The fix round (send, the
 //                    note of a new agent), file-issue and mark-stuck name that file as the findings' source, not the
 //                    status record's review block
 //   recheck: false   after a fix round, the fix report leads straight to queued (or to the issue for unfixed ones)
@@ -56,8 +61,57 @@
 //                    given `acceptance: ticket-text`, so the spawn file says the ticket text is the acceptance); one
 //                    with criteria (the ticket's own, or a previous run's expansion block) keeps them: `criteria`
 //   ci: skip         no CI read and no local verification, in the pipeline or at the finish
-//   simplify: false  no simplify pass at the finish
+//   simplify: false  no simplify agent at the finish. Otherwise each line's finish starts with one simplify `spawn`
+//                    (foreground, general-purpose, description `simplify <line>`, the role word of brief.mjs) with a
+//                    brief tick writes under `tick/simplify/`: the integration worktree, the line's whole diff, and the
+//                    rule to judge first (skip only documentation, only deletions, only configuration or data files,
+//                    or no new logic; simplify new or rewritten logic that may hold a duplicate implementation, a
+//                    reusable function, a branch or a layer of indirection that can go; when unsure, simplify; no
+//                    line-count threshold). The agent reports applied (one commit `refactor: simplify <line>`), none
+//                    or skipped, with a one-line reason; the wrap-up lists the skipped lines and their reasons
+//                    (`meta.simplifySkipped`) for the closing summary and the self-answer log
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
+//
+// The review tier picks the review (#139)
+//   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
+//   point> --head <ticket branch>` in the repo (step `tier`, stdout `tick/tier/<ticket key>-<k>.json`, k the number
+//   of the initial review). It is judged at each initial review; a recheck, and a retry after stuck, keep the tier of
+//   the initial review they follow. light gets the minimal review as review: minimal has it (its report file, its
+//   `--kind minimal` record, its freshness check); standard and full get the prove-it review below, with that output
+//   as the values file's `tier`. An output that cannot be read counts as full, with `tier` null: prove-it judges it.
+//   The review is recorded with `--tier` (state.mjs review; for a review host that went to the background, by its
+//   collect): under review: full a minimal review lets the ticket queue only with tier light. A light ticket's minimal
+//   review is a minimal review throughout: its record takes no counts (#142), and it has no assignment record or time
+//   limit (#143); those go with the prove-it review.
+//
+// The review (#138)
+//   A ticket in review whose review is the prove-it review gets the review host agent: an exec of `brief.mjs review` with the values
+//   file tick writes (`tick/review/<ticket key>-<tag>.values.json`: mode, repo, tracker, ticket face, status record,
+//   acceptance snapshot, comparison, fixed point, ticket branch, targeted checks, CI coverage, previous review block,
+//   reviewer, scratchpad, review tier — their keys in the header of brief.mjs), then a foreground `spawn` (step `review`,
+//   general-purpose, description `review <ticket>`, outcomes pass | fix | stuck) whose prompt is to read that spawn
+//   file: nothing is left for the host to fill in, and the diff and the review's output stay with the review host.
+//   Record it with `--agent`, `--outcome` (`--findings` with fix) and the counts of its report's `counts:` line,
+//   `--observations <n> --pre-existing <n>` (#142: both required, exit 2 without; a minimal reviewer's record takes
+//   neither, exit 2 with either). The targeted checks come from the report of the
+//   round under review: the collect of an implementation round (and of a fix round a recheck follows) names
+//   `tick/report/<ticket key>-<assigned>.md`, and record green / fixed is refused (3) until that file holds the
+//   report with its `targeted checks:` line. A ticket in review with no such file on record (a timeout's collected
+//   report, a state from before) gets an `agent-report` judge to write it first, refused the same way. The status
+//   record is the host's `state.mjs set --status-record` when there is one, else the ticket's comment that starts with
+//   `<!-- sorry-matt:status -->` (GitHub) or the ticket file in the ticket worktree (Local Markdown); the scratchpad
+//   is `<worktrees>/review/<ticket key>`; the reviewer is primary.
+//   The review host has an assignment record like every other agent (#143): before its spawn, `deadline.mjs record` in
+//   the ticket worktree with the `timeout-review` limit and `state.mjs assign` (`--reassign` for the review handed out
+//   again after a timeout, its tag ending `-t`). Recorded with `--outcome` (it returned its report), the assignment is
+//   named, released and the agent collected at once. Recorded with `--agent` alone (the Agent tool put it in the
+//   background), it is in flight: the ticket gets no other review action, the deadline scan covers it and the
+//   wake-up ends with the fallback wake-up; its completion notice (`--reported`) brings a `collect` (stage in-review,
+//   outcomes pass | fix | stuck, `--findings` with fix) that records the review, with `--observations <n>
+//   --pre-existing <n>` as for the spawn (#142: both required, exit 2 without; the record of a spawn that went to the
+//   background takes neither, exit 2 with either). An overdue one is a `timeout` judge
+//   per TIMEOUTS.md: reassign once (in-review counts in `timeoutReassignments`), then stuck; awaiting-ruling; or
+//   collected, which leaves it in flight and brings the collect next.
 //
 // A wake-up
 //   The host runs `run` (with `--reported` for each agent whose completion notice arrived; `next` when bash cannot be
@@ -75,12 +129,43 @@
 //   (deadline.mjs progress; a stop ends the dispatching for good), CI per line, frontier.mjs, stalled tickets to
 //   awaiting ruling, acceptance per candidate (expansion for those with no criteria), the snapshot, predicted
 //   files, overlap.mjs, and a ticket branch, brief and implementation agent for each `start` ticket.
+//   A line on local verification (no `origin`, or settled as CI not covering it) has no CI read and no local
+//   verification at a dispatch point: its full suite runs once, at the finish (#141). When that is red, the
+//   earliest-red scan runs before the red-light judge: the line's integration SHAs (the ticket merges the state
+//   records, in first-parent order) are verified one at a time from the oldest, each in a detached worktree
+//   `<worktrees>/<line-slug>-at-<sha12>` (git worktree add, verify.mjs, git worktree remove --force), until one is
+//   red; the judge names that SHA (meta.earliestRed), or the tip when none is red. A fix round's new tip is
+//   verified before anything else; a green record at the tip ends the red light.
+//
+// Observations and pre-existing (#142)
+//   A review recorded with observations or pre-existing above 0 (state.mjs keeps both counts on the review) gets a
+//   `judge` (step `observations`, id `observations:<ticket>:<review number>`, outcome `filed` with `--value <issue
+//   id>`): read only those two sections of its review block and file one raw ticket (SKILL.md, Filing along the way).
+//   It does not hold the ticket up: the verdict's stage move is in the same list. One judge per such review, in review
+//   order, the next handed out once the one before is recorded; once a raw ticket is on file for the ticket (tick's
+//   flag `observationsIssue`), the judge names it, the new items go into it, and `filed` with another id is refused
+//   (3). The wrap-up waits for the filings in its list.
+//
+// A red light that maps to no ticket (#144)
+//   The `red-light` judge (RED-LIGHT.md) has the outcome `unmatched` while the line has a fix round left (two per red
+//   episode): the host writes the failing lines to the file the judge's `meta.failure` names (record is refused, 3,
+//   while it is missing or empty) and records it. tick then hands out the line's ci-fix: `deadline.mjs record` in the
+//   integration worktree with the `timeout-fix` limit, `state.mjs assign --line` (the assignment record is the line's,
+//   `lines[<line>].assignment`), and a background general-purpose spawn, description `ci-fix <line>`, whose brief tick
+//   writes to `tick/ci-fix/` (the worktree, the red SHA, the failing lines, the round; commit with no ticket id, no
+//   push). While that assignment is in flight the line gets no red-light judge, push or CI read, and the finish waits
+//   for it; the deadline scan covers it and gives the fallback wake-up. Its report is a `collect` (fixed | blocked);
+//   an overdue stop is a `timeout` judge (stopped | failed | collected) per TIMEOUTS.md. Either way the round is over:
+//   a new commit is pushed and read as any tip is; no new commit (blocked, or stopped and reset to the assignment's
+//   HEAD) brings the red-light judge again at the same SHA (id suffix `:r<round>`). With both rounds used the judge has
+//   no `unmatched`: record failed.
 //
 // Output of next (stdout, JSON, format "sorry-matt/tick@1"; fields are only ever added, never renamed)
 //   { "format": "sorry-matt/tick@1", "command": "next", "run": "<run>", "wakeup": <n>, "now": "<UTC>",
 //     "profile": { ...the effective profile },
 //     "reports":   [{ "agent": "<id>", "accepted": true | false, "tickets": [<ticket>],
-//                     "why": "current" | "duplicate" | "superseded" | "stopped" | "unknown" }],
+//                     "why": "current" | "duplicate" | "superseded" | "stopped" | "unknown",
+//                     "line"?: "<integration branch>" }],       // a line's ci-fix agent: no tickets
 //     "reconcile": [{ "ticket" | "line": "<id>", "state": "<what the state says>", "git": "<what git says>",
 //                     "follow": "git" | "ruling" }],
 //     "dispatch":  null | { "round": <n>, "reasons": ["<why>"], "closed": true | false },
@@ -97,6 +182,8 @@
 //     "record": "<the record command to run afterwards, with <placeholders>>",
 //     exec:  "argv": [...], "command": "<one POSIX shell line>", "stdout": "<file>" | null, "cwd": "<dir>" | null,
 //            "okExit": [0, …]             // run it in bash (Git Bash on Windows); record its exit code
+//            "ran": { "exit", "signal"?, "log" }, "note"   // only on one `run` ran and could not record (#146): do
+//                                         // not run it again; its `record` line carries the exit
 //     spawn: "spawn": { "subagent_type", "description", "prompt", "background": true | false,
 //                       "fallback": { "subagent_type": "general-purpose", "prompt" } }   // implement and expand only
 //            when `subagent_type` (sorry-matt:implementer, sorry-matt:expander) is not an available agent type, the
@@ -110,12 +197,15 @@
 //   (everything it waited for done) and still not recorded means the host was interrupted between the spawn and its
 //   record: it comes back as a `judge` (step "spawn-check": is that agent running? `spawned` with `--agent`, or
 //   `none` to have the spawn issued again), never as a second spawn. One listed at a later batch was never handed
-//   out, and is issued again as the same spawn. A foreground spawn (the minimal reviewer) ends with the host's turn,
-//   so it is issued again as it is.
+//   out, and is issued again as the same spawn. A foreground spawn (the review host, the minimal reviewer, the
+//   simplify agent) ends with the host's turn, so it is issued again as it is.
 //
 // record
 //   Writes back one action's result. exec: `--exit <code>` (an exit not in `okExit` makes the next list carry a
-//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`).
+//   `judge` to settle the failure). spawn: `--agent <id>` (the reviewer spawn also `--outcome` and `--findings`, and the
+//   prove-it review `--observations` and `--pre-existing`, all of which the prove-it review host's leaves out when it
+//   went to the background: its collect takes them instead; the simplify spawn also `--outcome applied|none|skipped`
+//   and `--value <one-line reason>`).
 //   judge and ask: `--outcome <one of outcomes>`, with what the outcome needs: `--agent` for a spawn the judge did,
 //   `--value` for a reason, an issue id or a task id, `--findings` with a review's fix, `--fixed` / `--unfixed` with
 //   a fix report under `recheck: false`, `--type` when the spawn had to use another agent type. The state writes
@@ -128,22 +218,52 @@
 //   <command>`) and recorded with its exit code by the same path as `record --exit`; then `next` again, but only when
 //   batch 1 held nothing but such execs and `then` is "tick". `--reported` goes to the first `next` only. Without
 //   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
-//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or a push, or whose `then`
-//   is "end" or "done": the host's actions. It records no wakeup-end. A push (an exec with step `push`) is never run: the host runs it with
-//   its own Bash tool, so the guard hook sees the `git push`. An exit not in `okExit` is recorded as it is; the next
-//   list carries its `failed` judge, which stops run; nothing is retried.
+//   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or an exec left to the host,
+//   or whose `then` is "end" or "done": the host's actions. It records no wakeup-end. An exec is left to the host when
+//   the guard hook's classification (hooks/classify.mjs, `classify` on the Bash call of its `command`) gives it a
+//   verdict, whatever its step: the host runs it with its own Bash tool, so the guard sees it (a push to a protected
+//   branch is; a push of a line is not, and run pushes it). Without that classification (the plugin's hooks are not
+//   two levels above this skill) run runs no exec: exit 1, as without bash. An exit not in `okExit` is recorded as it
+//   is; the next list carries its `failed` judge, which stops run; nothing is retried. An exec killed by a signal
+//   is no normal end: it is recorded as 128 + the signal number (no `okExit` holds it) and its log says so.
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
 //   name>.log`, which the `failed` judge names.
+//   Each exec is kept as run (`tick.ran`) before its record: when the record fails, `next` lists it first with `ran`,
+//   and the next `run` records it with that exit without running it again (unless the state could not be written at
+//   all). Its own lists' batch-1 spawns count as handed out only once run returns the list: when run fails, the
+//   next list hands them out again as spawns, not as spawn-checks.
 //   Output: the last `next` output with "command": "run", its `actions` less the execs run (batches are not
-//   renumbered), plus "ran": [{ "id", "exit", "log" }] in the order run.
+//   renumbered), plus "ran": [{ "id", "exit", "signal"?, "log" }] in the order run, and "lists": one entry per list made, in
+//   order, the last being the output's own: [{ "now", "reports", "reconcile", "dispatch", "wrote", "ran": ["<id run
+//   from that list>"] }] (#147): what an earlier list took, reconciled, dispatched and wrote is not lost.
+//   A non-zero exit after run started (exit 1: an error; 3: a refusal; 2: a usage error from record or next) still
+//   prints JSON on stdout, the message on stderr as ever:
+//   { "format", "command": "run", "exit": <code>, "error": "<message>", "ran": [...], "lists": [...],
+//     "blocked": null | { "id", "step", "at": "execute" | "record", "exit": <code> | null, "log", "record" },
+//     "do": "<what to do>" }                                  // "do" only with exit 3 at blocked's record
+//   `ran` and `lists` are what it ran and recorded before it stopped. `blocked` is the exec it stopped at (null when
+//   it stopped in `next`): at "execute", it did not finish running and nothing of it is recorded; at "record", it ran
+//   (`exit`, side effects included) and its record failed. Exit 3 is `record` refused at blocked: do not edit the
+//   state; settle what `error` says as for a refused record, then run `run` again, which records blocked with its
+//   exit and does not run it again (nothing is left to record when `error` says it is already recorded); a refusal
+//   that cannot be settled is a ruling point.
 //   bash must start, and on win32 be Git Bash, MSYS or Cygwin (`uname -s`): WSL's bash flattens Windows paths. When
-//   it is not, run exits 1 with nothing on stdout; what it recorded before stays.
+//   it is not, run exits 1, `blocked` at "execute" of its first exec; what it recorded before stays.
+//
+// Flags
+//   A flag's value is the token after it, unless that token is missing or starts with `--`: `--reported --now <UTC>`
+//   is "--reported needs a value" (exit 2), never `--now` taken as an agent id. A value starting with one dash (`-1`)
+//   is a value.
 //
 // The bookkeeping lives in the state file under `tick` (state.mjs keeps keys it does not know), written only by
 // this script: { "format", "config", "wakeup", "inbox": [agent ids reported, not yet taken],
-//   "agents": { "<id>": { "tickets", "role", "type", "status": "current" | "collected" | "stopped", "at" } },
-//   "issued": { "<action id>": {…} }, "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
-//   "flags": { "<ticket>": {…} }, "red": { "<line>": { "sha", "at" } }, "failed": { "<line>": "<UTC>" },
+//   "agents": { "<id>": { "tickets", "line"?, "role", "type", "status": "current" | "collected" | "stopped", "at" } },
+//   "issued": { "<action id>": {…, "held"?: true} },   // held: a batch-1 spawn of a list run has not returned (#146)
+//   "done": { "<action id>": { "at", "exit"?, "outcome"?, "value"?, "log"? } },
+//   "ran": { "<action id>": { "exit", "signal"?, "log", "at", "argv", "stdout", "cwd" } },  // run ran it, not recorded
+//   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
+//   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
+//                                                  "failure" } } },     // the ci-fix of a red light with no ticket
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
@@ -158,33 +278,56 @@
 // `failed` judge, and the host puts right what the gate's output lists before retry.
 //
 // Files: the run directory is `<state dir>/<run>/` (`acceptance/`, `files/`, `overlap/`, `sendback/` as SKILL.md
-// names them); tick's own plans and outputs go under its `tick/`.
+// names them); tick's own plans and outputs go under its `tick/`. On GitHub the ticket face every spawn file embeds is
+// `tick/body/<n>.md`: tick writes it from `gh issue view --json title,body,comments` (saved beside it as
+// `tick/body/<n>.json`): the title, the body, the comments, then the expansion blocks. In Local Markdown it is the
+// ticket file itself.
 //
 // Exit codes: 0 output written; 1 the state, the ledger or git could not be read, a state write failed, or (run) bash
 // could not be used; 2 bad arguments; 3 refused (record of an action not issued, an outcome not allowed, a state.mjs
 // refusal).
 // On 1, 2 or 3 nothing is written to stdout.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
-import { description as roleDescription, fallbackPath, AGENT_TYPES } from './brief.mjs';
+import { description as roleDescription, fallbackPath, AGENT_TYPES, reportField } from './brief.mjs';
+import { MARKER } from './acceptance.mjs';
 
 export const FORMAT = 'sorry-matt/tick@1';
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const SKILL = dirname(SCRIPTS);
 const SELF = join(SCRIPTS, 'tick.mjs');
 const js = (name) => join(SCRIPTS, name);
+// prove-it's tier.mjs (#139): tick judges the review tier before the review, from this skill's sibling.
+const TIER_SCRIPT = resolve(SKILL, '..', 'prove-it', 'scripts', 'tier.mjs');
+const TIERS = ['light', 'standard', 'full'];
 // `agents/<name>.md` is a plugin agent definition, two levels up from this skill (src: src/agents; dist: agents).
 const doc = (file, part) => ({
   path: file === 'ASKING.md' ? resolve(SKILL, '..', 'have-it-all-done', 'ASKING.md') : file.startsWith('agents/') ? resolve(SKILL, '..', '..', file) : join(SKILL, file),
   part,
 });
+
+// The guard hook's classification (hooks/classify.mjs, its `classify`): `run` leaves to the host each exec it gives a
+// verdict (#146). The plugin's hooks are two levels above this skill (dist: <plugin>/hooks; src: the repo's hooks/).
+// It cannot be one static import (src and dist sit at different depths), so it is loaded here; null when it is not
+// there or does not load, and then `run` runs no exec (exit 1, as without bash).
+const PLUGIN = resolve(SKILL, '..', '..');
+export const GUARD_FILE = join(basename(PLUGIN) === 'src' ? dirname(PLUGIN) : PLUGIN, 'hooks', 'classify.mjs');
+let GUARD = null;
+let GUARD_WHY = 'it is not there';
+try {
+  if (existsSync(GUARD_FILE)) GUARD = (await import(pathToFileURL(GUARD_FILE).href)).classify ?? null;
+  if (existsSync(GUARD_FILE)) GUARD_WHY = GUARD ? null : 'it exports no classify';
+} catch (e) {
+  GUARD_WHY = `it did not load: ${e.message}`;
+}
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -197,6 +340,7 @@ export const LIMIT_DEFAULTS = Object.freeze({
   'timeout-fix': 20,
   'timeout-expand': 15,
   'timeout-merge': 15,
+  'timeout-review': 60,
 });
 // The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
 const BUDGET_LINE = /^\s*(?:[-*+]\s+)?(?:`\s*)?budget:\s*(?:`\s*)?([a-z][a-z-]*)\s+(\d+)\s*(?:`\s*)?$/;
@@ -358,6 +502,10 @@ export const OPERATIONS = {
   gate: (c, { gate, after = [] }) => exec(`gate:${gate}`, 'gate', ['node', js('state.mjs'), 'check', c.path, gate, '--repo', c.cfg.root], { after }),
 };
 
+/** A line on local verification: no `origin`, or settled as CI not covering it. Its full suite runs once, at the finish. */
+const onLocal = (c, L) => !c.git.hasOrigin || L.ciNotCovering !== null;
+const localReason = (c) => (c.git.hasOrigin ? 'ci-not-covering' : 'no-origin');
+
 /**
  * Local verification of `sha` on `line` through verify.mjs: true while it is under way this wake-up, false once the
  * SHA has a record or verify.mjs found the worktree not at the SHA (exit 5: the line keeps its last result; a later
@@ -366,6 +514,8 @@ export const OPERATIONS = {
 function localVerify(c, line, sha, reason, wt, final = false) {
   const tag = `${final ? 'final-' : ''}w${c.book.wakeup}`;
   if (c.state.lines[line].local.some((x) => x.sha === sha)) return false;
+  // red lines and the finish both verify a new tip: one verification of a SHA per list
+  if (c.actions.some((a) => a.step === 'verify-local' && a.line === line && a.argv.includes(sha))) return true;
   const first = OPERATIONS.verifyLocal(c, { line, sha, reason, wt, tag });
   if (!c.done(first.id)) return c.emit(first) !== null;
   const exit = c.book.done[first.id].exit;
@@ -466,10 +616,10 @@ function context(path, state, now, deps) {
         a.reference ?? [doc('SKILL.md', 'section 1 (the loop)')],
         { tickets: a.tickets, line: a.line, meta: { of: a.id } },
       );
-    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
+    } else if (a.kind === 'spawn' && a.spawn?.background && book.issued[a.id] && !book.issued[a.id].held && (book.issued[a.id].batch ?? 1) === 1 && (a.after ?? []).every((x) => !x || c.done(x))) {
       // Handed out before in batch 1, runnable then, never recorded: the host was interrupted between spawn and
       // record. A spawn listed at a later batch was not handed out: the host sends batch 1 only (#128). An entry from
-      // before batches were kept counts as handed out.
+      // before batches were kept counts as handed out. One `held` is of a list `run` made and never returned (#146).
       const k = book.spawnChecks?.[a.id] ?? 0;
       action = judge(
         `spawn-check:${a.id}:${k}`,
@@ -480,6 +630,12 @@ function context(path, state, now, deps) {
         { tickets: a.tickets, line: a.line, meta: { of: a.id }, needs: { agent: 'the agent id, with spawned' } },
       );
     }
+    if (s === 'open' && a.kind === 'exec' && book.ran?.[a.id]) {
+      // `run` ran it and its record failed (#146): it is listed to be recorded, not run again
+      const { exit, signal, log } = book.ran[a.id];
+      const r = { exit, ...(signal ? { signal } : {}), log };
+      action = { ...a, ran: r, note: `It already ran (exit ${r.exit}${r.signal ? `, killed by ${r.signal}` : ''}; output in ${r.log}) and its record failed: do not run it again. Settle what refused the record, then run its record line (tick.mjs run does that itself).` };
+    }
     if (!c.actions.some((x) => x.id === action.id)) {
       action.after = (action.after ?? []).filter((x) => x && c.actions.some((y) => y.id === x));
       c.actions.push(action);
@@ -489,7 +645,8 @@ function context(path, state, now, deps) {
   return c;
 }
 
-const limitFor = (c, stage) => c.limits[{ implementing: 'timeout-implement', fixing: 'timeout-fix', expanding: 'timeout-expand', integrating: 'timeout-merge' }[stage]];
+const limitFor = (c, stage) =>
+  c.limits[{ implementing: 'timeout-implement', fixing: 'timeout-fix', expanding: 'timeout-expand', integrating: 'timeout-merge', 'in-review': 'timeout-review' }[stage]];
 
 // ---- steps ----------------------------------------------------------------------------------------------------------
 
@@ -500,6 +657,23 @@ function syncAgents(c) {
     if (!a || !a.agentId) continue;
     const known = (c.book.agents[a.agentId] ??= { tickets: [], role: null, type: a.type, status: 'current', at: a.assigned });
     if (!known.tickets.includes(id)) known.tickets.push(id);
+  }
+  for (const [line, L] of Object.entries(c.state.lines)) {
+    const a = L.assignment;
+    if (a?.agentId) c.book.agents[a.agentId] ??= { tickets: [], line, role: 'ci-fix', type: a.type, status: 'current', at: a.assigned };
+  }
+}
+
+/**
+ * An exec `run` ran whose record failed (#146): listed first, as it was issued, to be recorded with the exit it had
+ * (c.emit marks it `ran`), never run again; also when nothing else would list it again (its side effect, say, settled
+ * what issued it).
+ */
+function stepRan(c) {
+  for (const [id, r] of Object.entries(c.book.ran ?? {})) {
+    const x = c.book.issued[id];
+    if (!x || x.kind !== 'exec' || c.status(id) !== 'open') continue;
+    c.emit(exec(id, x.step, r.argv ?? [], { stdout: r.stdout ?? null, cwd: r.cwd ?? null, okExit: x.okExit ?? [0], tickets: x.tickets ?? [], line: x.line ?? null }));
   }
 }
 
@@ -513,10 +687,27 @@ function stepTips(c) {
   }
 }
 
+/**
+ * #138: where the report of an implementation or fix round a review follows is kept, one file per assignment: the
+ * review's spawn file takes its `targeted checks:` line from there (brief.mjs review).
+ */
+const agentReportFile = (c, id, assigned) => c.tick('report', `${keyOf(id)}-${String(assigned).replace(/[-:]/g, '')}.md`);
+const keepReport = (file, outcome) =>
+  `first write the report it returned, verbatim, to ${file} (the review's spawn file takes its targeted checks line from there; record ${outcome} is refused without it), then `;
+/** An agent report a review can be given: its file holds a `targeted checks:` line (agents/implementer.md section 5). */
+function agentReportOk(deps, file) {
+  try {
+    return !!file && deps.exists(file) && reportField(deps.read(file), 'targeted checks') !== null;
+  } catch {
+    return false;
+  }
+}
+
 const COLLECT = {
   implementing: {
     outcomes: ['green', 'red', 'blocked'],
-    what: (ids) => `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
+    what: (ids, report) =>
+      `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: ${keepReport(report, 'green')}on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
     reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
   },
   expanding: {
@@ -526,8 +717,16 @@ const COLLECT = {
   },
   fixing: {
     outcomes: ['fixed', 'blocked'],
-    what: (ids) => `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
+    what: (ids, report) =>
+      `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: ${report ? keepReport(report, 'fixed') : ''}on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
     reference: [doc('SKILL.md', 'section 2, Batched fix')],
+  },
+  'in-review': {
+    // #143: the review host went to the background; its report comes with its completion notice
+    outcomes: ['pass', 'fix', 'stuck'],
+    what: (ids) =>
+      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck, with the counts of its \`counts:\` line, --observations <n> --pre-existing <n> (both, 0 when there are none).`,
+    reference: [doc('REVIEWER.md', 'section 2, the review report'), doc('SKILL.md', 'section 2, Close-out checks and review')],
   },
   integrating: {
     outcomes: ['resolved', 'unresolved'],
@@ -540,6 +739,24 @@ function stepReports(c) {
   const { book, state } = c;
   const keep = [];
   for (const agent of book.inbox) {
+    const held = Object.entries(state.lines).find(([, L]) => L.assignment?.agentId === agent && L.assignment.deadline !== null);
+    if (held) {
+      // the ci-fix agent of a red light that maps to no ticket (#144)
+      const [line, L] = held;
+      c.reports.push({ agent, accepted: true, tickets: [], line, why: 'current' });
+      keep.push(agent);
+      c.emit(
+        judge(
+          `collect:${agent}@${L.assignment.assigned}`,
+          'collect',
+          `Take the ci-fix agent's report for ${line} (its summary and evidence paths, not the diff) into the run's self-answer log. fixed: it committed a fix on ${line} (tick pushes it and reads CI next); blocked: it committed nothing, with --value <what blocks it>. Either way the round is counted.`,
+          ['fixed', 'blocked'],
+          [doc('RED-LIGHT.md', 'step 4 (no ticket matched)')],
+          { line, meta: { agent, stage: 'ci-fix' } },
+        ),
+      );
+      continue;
+    }
     const current = Object.entries(state.tickets).filter(([, t]) => t.assignment?.agentId === agent && t.assignment.deadline !== null);
     if (current.length) {
       const ids = current.map(([id]) => id);
@@ -558,8 +775,25 @@ function stepReports(c) {
         );
         continue;
       }
+      if (t0.stage === 'in-review') {
+        // #143: a review host that went to the background reports here; its verdict is recorded as a review, with
+        // the review tier its spawn was chosen by (#139)
+        const tier = c.flag(ids[0]).reviewTier;
+        const a = judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, {
+          tickets: ids,
+          line: t0.line,
+          meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full', ...(tier ? { tier } : {}) },
+        });
+        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>`;
+        c.emit(a);
+        continue;
+      }
       const needs = t0.stage === 'fixing' && !c.profile.recheck ? { fixed: 'the finding ids it fixed', unfixed: 'the ones still open' } : null;
-      c.emit(judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta: { agent, stage: t0.stage }, needs }));
+      // #138: the report of a round a review follows, kept for that review's spawn file (one file per assignment)
+      const reviewed = t0.stage === 'implementing' || (t0.stage === 'fixing' && c.profile.recheck);
+      const agentReport = reviewed ? agentReportFile(c, ids[0], t0.assignment.assigned) : null;
+      const meta = { agent, stage: t0.stage, ...(agentReport ? { agentReport } : {}) };
+      c.emit(judge(id, 'collect', spec.what(ids, agentReport), spec.outcomes, spec.reference, { tickets: ids, line: t0.line, meta, needs }));
       continue;
     }
     const known = book.agents[agent];
@@ -598,32 +832,99 @@ function stepRed(c) {
     if (lastLocal?.result === 'red' && !book.red[line]) book.red[line] = { sha: lastLocal.sha, at: c.now };
     const red = book.red[line];
     if (!red) continue;
+    const target = c.target(line);
+    const tip = c.git.ref(target);
+    // A line on local verification: the earliest-red scan records older SHAs too, so only its tip's record counts.
+    const local = c.profile.ci !== 'skip' && tip && target === line && onLocal(c, L);
+    const tipLocal = local ? L.local.find((x) => x.sha === tip) : undefined;
     const greenCi = L.ci?.verdict === 'green' && L.ci.sha !== red.sha;
-    const greenLocal = lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
+    const greenLocal = local ? tipLocal?.result === 'green' && tip !== red.sha : lastLocal?.result === 'green' && lastLocal.sha !== red.sha;
     if (greenCi || greenLocal || book.failed[line]) {
       delete book.red[line];
       continue;
     }
-    const target = c.target(line);
-    const tip = c.git.ref(target);
-    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
-    c.emit(
-      judge(
-        `red-light:${line}@${latestRed}`,
-        'red-light',
-        `${line} is red at ${latestRed}. Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds).`,
-        ['handled', 'reverted', 'failed'],
-        [doc('RED-LIGHT.md', 'all of it')],
-        { line },
-      ),
-    );
-    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target));
+    const fix = red.ciFix ?? null;
+    const held = L.assignment && L.assignment.deadline !== null ? L.assignment : null;
+    // A ci-fix agent works in the integration worktree: no judge, no push and no CI read until it reports or is stopped.
+    if (held) {
+      if (!held.agentId && fix) ciFixDispatch(c, line, target, red);
       continue;
     }
+    if (fix?.status === 'pending') {
+      ciFixDispatch(c, line, target, red);
+      continue;
+    }
+    if (local) {
+      if (!tipLocal) localVerify(c, line, tip, localReason(c), c.git.wtOf(target), true); // a fix moved the tip: the finish's verification of it comes first
+      else {
+        const scan = earliestRedScan(c, line, tip);
+        if (scan.done) c.emit(redLightJudge(c, line, L, red, tip, scan));
+      }
+      continue;
+    }
+    const latestRed = L.ci?.verdict === 'red' ? L.ci.sha : lastLocal?.result === 'red' ? lastLocal.sha : red.sha;
+    c.emit(redLightJudge(c, line, L, red, latestRed));
+    if (c.profile.ci === 'skip' || !tip || target !== line) continue;
     ciRead(c, line, target, tip, `w${book.wakeup}`, false);
   }
+}
+
+/**
+ * The red-light judge of one round at `sha`; on a line on local verification it names the scan's earliest red SHA.
+ * A ci-fix round that ended with no new commit (blocked, or stopped and reset) is judged again at the same SHA (#144).
+ */
+function redLightJudge(c, line, L, red, sha, scan = null) {
+  const tip = c.git.ref(c.target(line));
+  const fix = red.ciFix ?? null;
+  const again = fix?.status === 'ended' && tip && tip === L.assignment?.fingerprint?.head ? `:r${fix.round}` : '';
+  const used = fix?.round ?? 0;
+  const failure = c.tick('ci-fix', `${slugOf(line)}-${red.sha.slice(0, 12)}-${used + 1}.failure.md`);
+  const found = scan
+    ? ` Each integration SHA was verified locally from the oldest: the earliest red SHA ${scan.sha}${scan.sha === sha ? ' (no integration SHA is red: the red came in after the last of them)' : ''}; ci.mjs earliest-red on the per-SHA records finds the same.`
+    : '';
+  return judge(
+    `red-light:${line}@${sha}${again}`,
+    'red-light',
+    `${line} is red at ${sha}${again ? ` (fix round ${used} ended with no new commit)` : ''}.${found} Read RED-LIGHT.md in full and do its red-light handling for this round (earliest red SHA, mapping to a ticket, the fix or the revert). Record handled while a fix round is under way, reverted after a revert, failed when the line failed verification (no ticket matched after two rounds). ${
+      used < 2
+        ? `When it maps to no ticket, write the failing lines to ${failure} and record unmatched: tick spawns the ci-fix agent for round ${used + 1} of 2.`
+        : 'The two fix rounds of a red light that maps to no ticket are used: when it still maps to no ticket, record failed.'
+    }`,
+    ['handled', 'reverted', 'failed', ...(used < 2 ? ['unmatched'] : [])],
+    [doc('RED-LIGHT.md', 'all of it')],
+    { line, after: scan?.after ?? [], meta: { round: used + 1, sha, failure, ...(scan ? { earliestRed: scan.sha } : {}) } },
+  );
+}
+
+/**
+ * The earliest red SHA of a red line on local verification (#141). Its integration SHAs — the ticket merges the state
+ * records on it, in first-parent order — are verified one at a time from the oldest, each in a detached worktree of
+ * its own (`<worktrees>/<line-slug>-at-<sha12>`, removed once the SHA has its record), until one is red: that one is
+ * the earliest red SHA. A SHA with a record is not verified again. None red: the red came in after the last of them
+ * (a host commit, the simplify pass or the base sync), and the earliest red SHA is the tip.
+ * Returns { done: false } while a verification is under way, else { done: true, sha, after }: `after` holds the
+ * worktree removals still in this list, which the red-light judge waits for.
+ */
+function earliestRedScan(c, line, tip) {
+  const L = c.state.lines[line];
+  const recorded = new Set(Object.values(c.state.tickets).flatMap((t) => (c.target(t.line) === line ? t.merges.map((m) => m.sha) : [])));
+  const removing = [];
+  for (const { sha } of c.git.merges(tip).reverse()) {
+    if (!recorded.has(sha)) continue;
+    const wt = join(c.cfg.worktrees, `${slugOf(line)}-at-${sha.slice(0, 12)}`);
+    const add = `earliest-red-add:${line}@${sha}`;
+    const rec = L.local.find((x) => x.sha === sha);
+    if (!rec) {
+      if (!c.emit(exec(add, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'add', '-q', '--detach', wt, sha], { line }))) localVerify(c, line, sha, localReason(c), wt);
+      return { done: false };
+    }
+    if (c.done(add)) {
+      const rm = c.emit(exec(`earliest-red-remove:${line}@${sha}`, 'earliest-red', ['git', '-C', c.cfg.root, 'worktree', 'remove', '--force', wt], { line }));
+      if (rm) removing.push(rm);
+    }
+    if (rec.result === 'red') return { done: true, sha, after: removing };
+  }
+  return { done: true, sha: tip, after: removing };
 }
 
 /** Push when the remote lags, read CI at `tip` and record it. Returns true while that is still to be done. */
@@ -642,6 +943,65 @@ function ciRead(c, line, target, tip, tag, dispatch) {
   return true;
 }
 
+/**
+ * The ci-fix of a red light that maps to no ticket (#144): the assignment record on the line (deadline.mjs record in
+ * the integration worktree, then state.mjs assign --line), then a general-purpose agent with the brief tick writes.
+ * Ids carry the episode's first red SHA and the round, so a later red episode on the same line dispatches anew.
+ */
+function ciFixDispatch(c, line, target, red) {
+  const fix = red.ciFix;
+  const wt = resolve(c.git.wtOf(target) ?? c.cfg.root);
+  const key = `${line}@${red.sha.slice(0, 12)}:${fix.round}`;
+  const tag = `${slugOf(line)}-${red.sha.slice(0, 12)}-${fix.round}`;
+  const rec = c.tick('rec', `ci-fix-${tag}.json`);
+  const r1 = c.emit(exec(`rec:ci-fix:${key}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', wt, '--limit', String(c.limits['timeout-fix'])], { stdout: rec, line }));
+  const r2 = c.emit(exec(`assign:ci-fix:${key}`, 'assignment', stateArgv(c, 'assign', '--line', line, '--record', rec, '--type', 'general-purpose', '--worktree', wt), { line, after: [r1] }));
+  const brief = c.tick('ci-fix', `${tag}.md`);
+  const commands = join(wt, 'docs', 'agents', 'commands.md');
+  c.write(
+    brief,
+    [
+      `# ci-fix ${line}`,
+      '',
+      `You fix a red light on the integration branch ${target} that maps to no ticket. You cannot ask anyone; this is all of your brief.`,
+      '',
+      `- Integration worktree: ${wt} (branch ${target}). Work and commit only there, on that branch.`,
+      `- Red at ${fix.sha}. The failing lines: ${fix.failure}.`,
+      `- Fix round ${fix.round} of at most 2.${fix.round > 1 ? ' The previous round ended without turning the line green (blocked, stopped at its time limit, or CI still red); start from the worktree as it is now.' : ''}`,
+      `- Project command contract: ${c.deps.exists(commands) ? `${commands}: run its Targeted checks for what failed and read the output as its Failures only says` : 'none: find the checks that cover the failure from the manifest and the CI settings'}. Take pass or fail from the command's own exit status, before any filter; read only the failing lines and the summary.`,
+      '- Find the cause in the failing lines and fix it. Do not weaken or skip a test or a check to get green.',
+      '- Commit the fix on that branch. The subject carries no ticket id (no `#N`, no ticket file name); the body says what failed and what the fix changed; no `Closes` or `Fixes`.',
+      '- Do not push, open a PR, or touch another branch or worktree: tick pushes the fix and reads CI once you report.',
+      '- Do nothing that needs the user\'s confirmation (a push, a release or a deploy, a message to anyone outside, a write to settings that change how Claude Code behaves, deleting anything outside the worktree): list it under human work.',
+      '- When you cannot fix it, commit nothing and say what blocks it.',
+      '',
+      'Report in at most 10 lines:',
+      '',
+      '```',
+      `line: ${line}`,
+      'commit: <sha> | none',
+      'targeted checks: <command> → <result>, …',
+      'cause: <one sentence>',
+      'blocked: <what blocks it> | none',
+      'human work: <what only a person can do> | none',
+      '```',
+      '',
+    ].join('\n'),
+  );
+  c.emit({
+    id: `ci-fix:${key}`,
+    kind: 'spawn',
+    step: 'ci-fix',
+    tickets: [],
+    line,
+    after: [r2],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('ci-fix', [line]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: true },
+    reference: [doc('RED-LIGHT.md', 'step 4 (no ticket matched)')],
+    meta: { round: fix.round },
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`ci-fix:${key}`)} --agent <agent id>`,
+  });
+}
+
 /** deadline.mjs scan over the named agents in flight; extensions are exec, stops are TIMEOUTS.md judges. */
 function stepTimeouts(c) {
   const { state, book } = c;
@@ -655,6 +1015,11 @@ function stepTimeouts(c) {
       continue;
     }
     agents.set(a.agentId, { id: a.agentId, tickets: [id], stage: t.stage, a });
+  }
+  for (const [line, L] of Object.entries(state.lines)) {
+    const a = L.assignment;
+    if (!a || a.deadline === null || !a.agentId || agents.has(a.agentId)) continue;
+    agents.set(a.agentId, { id: a.agentId, tickets: [], line, stage: 'ci-fix', a });
   }
   const plan = [];
   let pending = false;
@@ -695,6 +1060,10 @@ function stepTimeouts(c) {
   if (!pending) c.fallback = scan.fallback;
   for (const result of scan.agents) {
     const { x } = plan.find((p) => p.entry.id === result.id);
+    if (x.stage === 'ci-fix') {
+      ciFixTimeout(c, x, result);
+      continue;
+    }
     const t = state.tickets[x.tickets[0]];
     if (result.action === 'extend') {
       c.emit(exec(`extend:${x.id}@${x.a.assigned}`, 'extend', stateArgv(c, 'extend', ...x.tickets, '--deadline', result.deadline), { tickets: x.tickets, line: t.line }));
@@ -713,14 +1082,39 @@ function stepTimeouts(c) {
         judge(
           `timeout:${x.id}@${x.a.assigned}`,
           'timeout',
-          `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md step 3 (${hint}); write the timeout handling into the status record (step 4). Record the branch taken; collected when it had already finished (its report is then taken).`,
-          ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
-          [doc('TIMEOUTS.md', 'steps 3 and 4')],
+          `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it (TIMEOUTS.md step 1) and settle it by step 2 (${hint}); write the timeout handling into the status record (step 3). Record the branch taken; collected when it had already finished (its report is then taken).`,
+          x.stage === 'in-review' ? ['reassign', 'stuck', 'awaiting-ruling', 'collected'] : ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
+          [doc('TIMEOUTS.md', 'steps 1 to 3')],
           { tickets: x.tickets, line: t.line, meta: { agent: x.id, stage: x.stage, hint } },
         ),
       );
     }
   }
+}
+
+/** A line's ci-fix agent in the deadline scan: extended once on progress, else stopped; a stop is a fix round. */
+function ciFixTimeout(c, x, result) {
+  const { a, line } = x;
+  if (result.action === 'extend') {
+    c.emit(exec(`extend:${x.id}@${a.assigned}`, 'extend', stateArgv(c, 'extend', '--line', line, '--deadline', result.deadline), { line }));
+    return;
+  }
+  if (result.action !== 'stop' && !result.error) return;
+  const round = c.book.red[line]?.ciFix?.round ?? 1;
+  const reset = `\`git -C ${q(a.worktree)} reset --hard ${a.fingerprint.head}\``;
+  const hint = result.error
+    ? `the fingerprint could not be computed (${result.error}): ${reset}, then record failed (the line failed verification)`
+    : `${reset} (the assignment's HEAD), then record stopped: it counts as fix round ${round} of 2`;
+  c.emit(
+    judge(
+      `timeout:${x.id}@${a.assigned}`,
+      'timeout',
+      `${x.id} (ci-fix of ${line}, a red light that maps to no ticket) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md (red-light fix): ${hint}. Write the timeout handling into the run's self-answer log. collected when it had already finished (its report is then taken and the round still counts).`,
+      ['stopped', 'failed', 'collected'],
+      [doc('TIMEOUTS.md', 'steps 1 to 3 (red-light fix)')],
+      { line, meta: { agent: x.id, stage: 'ci-fix', hint } },
+    ),
+  );
 }
 
 function acceptanceArgv(c, id, t, extra = []) {
@@ -740,16 +1134,50 @@ function implementerOf(c, id) {
 }
 
 /**
- * The file holding a ticket's full text, and the exec that fetches it (null when there is none to wait for): the
- * ticket file in Local Markdown; on GitHub `tick/body/<n>.md`, fetched once, or once more under the id suffix `again`
- * (a review reads the ticket as it is then).
+ * The file holding a ticket's full text (its ticket face), and the exec that fetches it (null when there is none to
+ * wait for): the ticket file in Local Markdown; on GitHub `tick/body/<n>.md`, which tick writes from the JSON
+ * `gh issue view --json title,body,comments` left in `tick/body/<n>.json` (ticketFace). It is fetched once, or once
+ * more under the id suffix `again`: an expansion fetches under its own, so the implementation agent's fetch comes after
+ * the expansion and carries its block; a review reads the ticket as it is then.
  */
 function bodyFile(c, id, t, after, again = null) {
   if (c.cfg.tracker === 'local') return { file: join(c.git.wtOf(c.target(t.line)) ?? c.cfg.root, c.ticketPath(id)), id: null };
   const file = c.tick('body', `${keyOf(id)}.md`);
+  const raw = c.tick('body', `${keyOf(id)}.json`);
   const eid = again ? `body:${id}:${again}` : `body:${id}`;
-  if (c.done(eid) && c.deps.exists(file)) return { file, id: null };
-  return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--comments'], { stdout: file, tickets: [id], after })) };
+  if (c.done(eid)) {
+    if (c.deps.exists(raw)) c.write(file, ticketFace(c.deps.read(raw)));
+    return { file, id: null };
+  }
+  return { file, id: c.emit(exec(eid, 'body', ['gh', 'issue', 'view', numOf(id), '--repo', c.cfg.repo, '--json', 'title,body,comments'], { stdout: raw, tickets: [id], after })) };
+}
+
+/**
+ * A GitHub ticket's face, from `gh issue view --json title,body,comments`: `# <title>`, the body, the comments under
+ * `## Comments` (each `### <author> (<created>)`), then the expansion blocks under `## sorry-matt expansion` — the
+ * comments whose first non-blank line is the marker (acceptance.mjs's rule), the way a Local Markdown ticket file
+ * holds them. A section with nothing in it is left out. Output that is not that JSON is kept as it is.
+ */
+function ticketFace(text) {
+  let issue;
+  try {
+    issue = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (!isObject(issue)) return text;
+  const str = (v) => (typeof v === 'string' ? v.replace(/\r\n/g, '\n').trim() : '');
+  const comments = Array.isArray(issue.comments) ? issue.comments.filter(isObject) : [];
+  const isBlock = (x) => str(x.body).split('\n').find((l) => l.trim())?.trim() === MARKER;
+  const parts = [`# ${str(issue.title) || '(no title)'}`, str(issue.body) || '(no body)'];
+  const said = comments.filter((x) => !isBlock(x));
+  if (said.length) {
+    parts.push('## Comments');
+    for (const x of said) parts.push(`### ${str(x.author?.login) || 'unknown'}${str(x.createdAt) ? ` (${str(x.createdAt)})` : ''}`, str(x.body) || '(empty)');
+  }
+  const blocks = comments.filter(isBlock);
+  if (blocks.length) parts.push('## sorry-matt expansion', ...blocks.map((x) => str(x.body)));
+  return `${parts.join('\n\n')}\n`;
 }
 
 /**
@@ -903,7 +1331,7 @@ const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
 /** Findings still open with no fix round left: a raw issue (onUnfixed: file-issue) or stuck. */
 function unfixed(c, id, t, what) {
   if (c.profile.onUnfixed === 'file-issue' && t.unfixedIssue) return stageTo(c, id, t, 'queued');
-  // review: minimal: the open findings are in the reviewer's report; a full review's are in the status record's review block
+  // review: minimal: the open findings are in the reviewer's report; a prove-it review's are in the status record's review block
   const report = c.flag(id).report;
   if (c.profile.onUnfixed === 'file-issue') {
     return c.emit(
@@ -930,13 +1358,18 @@ function unfixed(c, id, t, what) {
   );
 }
 
+/** The review a ticket in in-review is due: a recheck when it came back from a fix round, else the initial one. */
+const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial');
+
 function stepInReview(c, id, t) {
   const k = t.history.filter((h) => h.to === 'in-review').length;
-  const mode = t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial';
+  const mode = reviewMode(t);
   const flag = c.flag(id);
   let cr = currentReview(t);
   const retrying = cr?.verdict === 'stuck' && flag.retryReviews === t.reviews.length;
   if (retrying) cr = null;
+  // #143: the review host is in flight (it went to the background): its report, or the deadline scan, comes first
+  if (!cr && t.assignment?.deadline && t.assignment.agentId) return;
   if (cr) {
     if (cr.verdict === 'pass') return stageTo(c, id, t, 'queued');
     if (cr.verdict === 'fix') {
@@ -954,7 +1387,8 @@ function stepInReview(c, id, t) {
       ),
     );
   }
-  const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}`;
+  // a review handed out again after its host timed out (#143) is a new review: its own ids and spawn file
+  const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}${flag.redispatch?.reassign ? '-t' : ''}`;
   const against = c.tick('against', `${keyOf(id)}-${tag}.json`);
   const ag = c.emit(
     exec(`against:${id}:${tag}`, 'acceptance-check', acceptanceArgv(c, id, t, ['--against', c.snapshot(id), '--sha', t.snapshotSha256 ?? '<sha256>']), {
@@ -965,7 +1399,10 @@ function stepInReview(c, id, t) {
       line: t.line,
     }),
   );
-  if (c.profile.review === 'minimal') {
+  // #139: under review: full the review tier picks the review; it is judged first, once per initial review
+  const tier = c.profile.review === 'full' ? reviewTier(c, id, t) : null;
+  if (tier === undefined) return void bodyFile(c, id, t, [], `review:${tag}`); // the ticket face is fetched meanwhile
+  if (c.profile.review === 'minimal' || tier.tier === 'light') {
     const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
     const report = c.tick('review', `${keyOf(id)}-${tag}.report.md`); // the fix round's findings come from here
     const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
@@ -998,23 +1435,159 @@ function stepInReview(c, id, t) {
       tickets: [id],
       line: t.line,
       after: [ag, body.id],
-      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
+      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
-      meta: { mode, kind: 'minimal', report },
+      meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}) },
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
     });
   }
-  return c.emit(
-    judge(
-      `review:${id}:${tag}`,
-      'review',
-      `Review ${id}, mode ${mode}: fill REVIEWER.md (the ticket's id and text with its expansion block, the snapshot ${c.snapshot(id)}, the comparison ${against}, the fixed point ${c.target(t.line)}, the ticket branch ${t.branch}, the targeted-check result, the line's CI coverage${mode === 'recheck' ? ', the previous review block: in the status record' : ''}) and spawn the review host agent in the foreground with description \`${roleDescription('review', [id])}\`. Take only its review report. Record its verdict, with fix also --findings <the finding ids>.`,
-      ['pass', 'fix', 'stuck'],
-      [doc('REVIEWER.md', 'the brief below the rule'), doc('SKILL.md', 'section 2, Close-out checks and review')],
-      { tickets: [id], line: t.line, after: [ag], meta: { mode, kind: 'full' } },
-    ),
+  return proveItReview(c, id, t, { mode, tag, against, ag, previous: mode === 'recheck' || retrying, tier });
+}
+
+/**
+ * #139: the review tier of the ticket's current review, from prove-it's `tier.mjs judge` on the fixed point and the
+ * ticket branch, run in the repo: undefined while it is being judged; else { tier, file }, `file` null when its output
+ * could not be read (the tier is then taken as full, and prove-it judges it itself). It is judged at each initial
+ * review (an implementation round's); a recheck, and a retry after stuck, keep the tier of the initial review they
+ * follow, so a ticket's review does not change kind between its rounds.
+ */
+function reviewTier(c, id, t) {
+  const entries = t.history.filter((h) => h.to === 'in-review');
+  const k = entries.findLastIndex((h) => h.from !== 'fixing') + 1 || entries.length;
+  const file = c.tick('tier', `${keyOf(id)}-${k}.json`);
+  const argv = ['node', TIER_SCRIPT, 'judge', '--base', c.target(t.line), '--head', t.branch];
+  if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
+  const out = readJsonFile(c.deps, file);
+  return TIERS.includes(out?.tier) ? { tier: out.tier, file } : { tier: 'full', file: null };
+}
+
+/**
+ * The status record's place, as prove-it section 1 names it: the host's own note of it (state.mjs set
+ * --status-record), else on GitHub the ticket's comment that starts with the status marker, in Local Markdown the
+ * ticket file in the ticket worktree (the implementation agent keeps it there, on the ticket branch).
+ */
+function statusRecordOf(c, id, t) {
+  if (t.statusRecord) return t.statusRecord;
+  if (c.cfg.tracker === 'github') return `the comment on ${c.cfg.repo}#${numOf(id)} whose first line is \`<!-- sorry-matt:status -->\``;
+  const wt = c.git.wtOf(t.branch);
+  return wt ? resolve(wt, c.ticketPath(id)) : `the ticket file ${c.ticketPath(id)} on ${t.branch}`;
+}
+
+/** The line's CI coverage for prove-it (brief.mjs review's `ci`): no-origin, uncovered (settled as CI not covering it), or covered. */
+const ciCoverage = (c, t) => (!c.git.hasOrigin ? 'no-origin' : c.state.lines[t.line]?.ciNotCovering ? 'uncovered' : 'covered');
+
+/**
+ * The prove-it review (#138): brief.mjs review writes the review host's spawn file from the values tick writes here —
+ * every one filled, none left to the host — and the review host is spawned with it in the foreground, so the diff
+ * and its output stay out of the host's context. The values file is `tick/review/<key>-<tag>.values.json`; a value
+ * a later ticket adds is a key there and in brief.mjs review. Without a usable agent report (a state from before the
+ * report was kept, or a timeout's collected report) a judge has it written first.
+ */
+function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
+  const flag = c.flag(id);
+  if (!agentReportOk(c.deps, flag.agentReport)) {
+    const file = flag.agentReport ?? c.tick('report', `${keyOf(id)}-review-${tag}.md`);
+    return c.emit(
+      judge(
+        `agent-report:${id}:${tag}`,
+        'agent-report',
+        `${id} is to be reviewed, but its implementation (or fix) agent's report is not on file. Write the latest report that agent returned for ${id}, verbatim, to ${file} (the review's spawn file takes its targeted checks line from there), and record written.`,
+        ['written'],
+        [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
+        { tickets: [id], line: t.line, after: [ag], meta: { agentReport: file } },
+      ),
+    );
+  }
+  const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+  const values = c.tick('review', `${keyOf(id)}-${tag}.values.json`);
+  const out = c.tick('review', `${keyOf(id)}-${tag}.md`);
+  c.write(
+    values,
+    `${JSON.stringify(
+      {
+        out,
+        mode,
+        root: c.cfg.root,
+        tracker: c.cfg.tracker,
+        ...(c.cfg.tracker === 'github' ? { repo: c.cfg.repo } : {}),
+        ticket: id,
+        bodyFile: body.file,
+        statusRecord: statusRecordOf(c, id, t),
+        snapshot: c.snapshot(id),
+        against,
+        fixedPoint: c.target(t.line),
+        branch: t.branch,
+        checksReport: flag.agentReport,
+        ci: ciCoverage(c, t),
+        previous,
+        reviewer: 'primary',
+        scratchpad: join(c.cfg.worktrees, 'review', keyOf(id)),
+        tier: tier?.file ?? null,
+      },
+      null,
+      2,
+    )}\n`,
   );
+  const b = c.emit(exec(`brief:${id}:review-${tag}`, 'brief', ['node', js('brief.mjs'), 'review', values], { stdout: c.tick('review', `${keyOf(id)}-${tag}.json`), tickets: [id], line: t.line, after: [ag, body.id] }));
+  // #143: the assignment record, as for any agent: deadline.mjs record in the ticket worktree with timeout-review,
+  // then state.mjs assign (--reassign when the previous review host timed out); the spawn's record names the agent
+  const wt = resolve(t.assignment?.worktree ?? c.git.wtOf(t.branch) ?? c.cfg.root);
+  const rec = c.tick('rec', `${keyOf(id)}-review-${tag}.json`);
+  const r1 = c.emit(exec(`rec:review:${id}:${tag}`, 'assignment', ['node', js('deadline.mjs'), 'record', '--worktree', wt, '--limit', String(limitFor(c, 'in-review'))], { stdout: rec, tickets: [id], line: t.line }));
+  const r2 = c.emit(
+    exec(`assign:review:${id}:${tag}`, 'assignment', stateArgv(c, 'assign', id, '--record', rec, '--type', 'general-purpose', '--worktree', wt, ...(flag.redispatch?.reassign ? ['--reassign'] : [])), {
+      tickets: [id],
+      line: t.line,
+      after: [r1],
+    }),
+  );
+  return c.emit({
+    id: `review:${id}:${tag}`,
+    kind: 'spawn',
+    step: 'review',
+    tickets: [id],
+    line: t.line,
+    after: [b, ag, body.id, r2],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
+    reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
+    outcomes: ['pass', 'fix', 'stuck'],
+    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}) },
+    // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>   (in the background: --agent <agent id> alone)`,
+  });
+}
+
+/**
+ * #142: a review whose report counts observations or pre-existing gets a judge to file them as one raw ticket per
+ * ticket (SKILL.md, Filing along the way). It does not hold the ticket up: the review's conclusion goes on beside it.
+ * One judge per such review, in review order: a later one is handed out once the earlier is recorded, and names
+ * the raw ticket that one filed, which its new items join.
+ */
+function stepObservations(c) {
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    const at = t.reviews.findIndex((r, i) => (r.observations ?? 0) + (r.preExisting ?? 0) > 0 && !c.done(`observations:${id}:${i + 1}`));
+    if (at < 0) continue;
+    const r = t.reviews[at];
+    const o = r.observations ?? 0;
+    const counts = `${o} observation${o === 1 ? '' : 's'} and ${r.preExisting ?? 0} pre-existing`;
+    const where = `the \`observations\` and \`pre-existing\` sections of its ${r.mode} review block (review ${at + 1}) in ${statusRecordOf(c, id, t)}`;
+    const issue = c.flag(id).observationsIssue;
+    const how =
+      c.cfg.tracker === 'github'
+        ? '`gh issue create` without `ready-for-agent`, the body polished by ASKING section 6'
+        : `the next unused ticket file in ${c.cfg.ticketsDir} with Status needs-triage, committed to ${t.line} (pushed before this wake-up ends when there is an origin)`;
+    const what = issue
+      ? `${id}'s ${r.mode} review reports ${counts}. Read only ${where}; add the items not already in ${issue} to it (location, one sentence, evidence path each) — the same raw ticket, not another. Record filed with --value ${issue}.`
+      : `${id}'s ${r.mode} review reports ${counts}. Read only ${where}, and file one raw ticket listing each item (location, one sentence, evidence path), linked to the status record: ${how}. It stays outside the frozen ticket set. Record filed with --value <issue id>.`;
+    c.emit(
+      judge(`observations:${id}:${at + 1}`, 'observations', what, ['filed'], [doc('SKILL.md', 'section 2, Filing along the way'), doc('ASKING.md', 'section 6')], {
+        tickets: [id],
+        line: t.line,
+        needs: { value: 'issue id' },
+      }),
+    );
+  }
 }
 
 function stepFixing(c, id, t) {
@@ -1302,12 +1875,10 @@ function dispatchSteps(c, d) {
     if (profile.ci === 'skip') break;
     const target = c.target(line);
     if (target !== line) continue; // state.mjs records CI per line; under direct only the base's own line has it
+    if (L.assignment?.deadline) continue; // its ci-fix agent is at work in the integration worktree (#144)
     const tip = c.git.ref(target);
     if (!tip) continue;
-    if (!c.git.hasOrigin || L.ciNotCovering) {
-      if (localVerify(c, line, tip, c.git.hasOrigin ? 'ci-not-covering' : 'no-origin', c.git.wtOf(target))) waiting = true;
-      continue;
-    }
+    if (onLocal(c, L)) continue; // a line without CI is verified once, at the finish (#141)
     if (c.git.remote(target) === null) continue; // never pushed: not read
     if (ciRead(c, line, target, tip, `r${r}`, true)) {
       waiting = true;
@@ -1503,7 +2074,7 @@ function createDispatch(c, id, t, title) {
 function expandDispatch(c, r, group, { reassign = false } = {}) {
   const { state } = c;
   const ids = group.map((x) => x.id);
-  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], []));
+  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], [], `expand:r${r}`));
   const lines = [...new Set(ids.map((id) => c.target(state.tickets[id].line)))];
   const values = c.tick('brief', `expand-r${r}.values.json`);
   const out = c.tick('brief', `expand-r${r}.md`);
@@ -1581,13 +2152,20 @@ function stepFinish(c) {
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
   if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
   if (gates.some(Boolean)) return;
+  const skipped = simplifySkipped(c);
   c.emit(
     judge(
       'wrap-up',
       'wrap-up',
-      `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone. Record done.`,
+      `Every line is through the finish. Read FINISH.md and do what is left after the lines' delivery: the cleanup (clean-it-up), the merge where authority allows${profile.integrate === 'direct' ? ' (integrate: direct — the tickets are on the base branch already; there is no aggregate PR)' : ' (merge queue included)'}, closing tickets, the final output with the reconciliation table, run metrics and spawn breakdown, and the ledger's ended marker when standalone.${
+        skipped.length ? ` Lines that skipped the simplify pass: write each reason into the self-answer log and list the lines in the closing summary — ${skipped.map((x) => `${x.line}: ${x.reason}`).join('; ')}.` : ''
+      } Record done.`,
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
+      {
+        after: c.actions.filter((a) => a.step === 'observations').map((a) => a.id), // #142: the raw tickets are filed first
+        ...(skipped.length ? { meta: { simplifySkipped: skipped } } : {}),
+      },
     ),
   );
 }
@@ -1599,8 +2177,8 @@ function finishLine(c, line, target) {
   const wt = git.wtOf(target) ?? c.cfg.root;
   const merged = Object.values(state.tickets).some((t) => c.target(t.line) === target && t.merges.length);
   if (!merged) return true; // nothing was integrated: nothing to deliver
-  if (profile.simplify && c.emit(judge(`simplify:${line}`, 'simplify', `Simplify pass on ${line}: call the Skill tool with simplify in ${wt}; commit the applied fixes as one commit without a ticket id (none: no commit); log the rejected ones in the self-answer log. Record done.`, ['done'], [doc('FINISH.md', 'step 1 (simplify pass)')], { line })))
-    return false;
+  if (L.assignment?.deadline) return false; // its ci-fix agent is at work in the integration worktree (#144)
+  if (profile.simplify && simplifySpawn(c, line, target, wt)) return false;
   if (profile.integrate !== 'direct' && !L.base) {
     const baseRef = git.hasOrigin ? `origin/${c.cfg.base}` : c.cfg.base;
     if (git.hasOrigin && c.emit(exec(`fetch:${line}`, 'sync-base', ['git', '-C', wt, 'fetch', 'origin', c.cfg.base], { line }))) return false;
@@ -1637,6 +2215,71 @@ function finishLine(c, line, target) {
   return !c.emit(
     judge(`deliver-line:${line}`, 'deliver-line', `Deliver ${line} as FINISH.md says: ${c.cfg.tracker === 'github' ? 'review-guide.mjs, then the aggregate PR with the per-ticket guide' : 'keep the integration branch, record its name and tip, remove the integration worktree'}. Record done.`, ['done'], [doc('FINISH.md', 'delivering each line')], { line }),
   );
+}
+
+/**
+ * The simplify agent of one line (#153), a foreground spawn with a brief tick writes: it judges from the line's whole
+ * change whether to simplify, and reports applied, none or skipped with a one-line reason. Null once recorded.
+ */
+function simplifySpawn(c, line, target, wt) {
+  const { state, cfg, profile, git } = c;
+  const id = `simplify:${line}`;
+  if (c.done(id)) return null;
+  // The line's whole change: from the base under aggregate-pr; under direct, from before the run's first merge.
+  const first = Object.values(state.tickets)
+    .filter((t) => c.target(t.line) === target)
+    .flatMap((t) => t.merges)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
+  const fork = profile.integrate === 'direct' ? `${first.sha}^1` : git.hasOrigin ? `origin/${cfg.base}` : cfg.base;
+  const brief = c.tick('simplify', `${slugOf(line)}.md`);
+  c.write(
+    brief,
+    [
+      `# Simplify ${line}`,
+      '',
+      `You are the simplify agent of one integration line at the run's finish. You cannot ask anyone; this is all of your brief.`,
+      '',
+      `- Worktree: ${wt} (branch ${target}). Work and commit only there; do not push.`,
+      `- The line's whole change: \`git diff ${fork}...${target}\`, run in the worktree (\`--stat\` first).`,
+      '',
+      'First judge from that change whether it needs a simplify pass:',
+      '- Skip it when the change is only documentation, only deletions, only configuration or data files, or adds no new logic.',
+      '- Do it when the change adds or rewrites logic that may hold a duplicate implementation, a reusable function it does not use, or a branch or a layer of indirection that can go.',
+      '- When unsure, simplify. There is no line-count threshold: judge by what changed, not by how much.',
+      '',
+      `To simplify, call the Skill tool with \`simplify\` in the worktree, on the line's change above. Commit the fixes you apply as one commit with the subject \`refactor: simplify ${line}\` and no ticket id; its body lists each fix applied, and each fix you rejected with one line on why. With no fix to apply, commit nothing.`,
+      '',
+      'Reply with these two lines and nothing else:',
+      '',
+      '```text',
+      'outcome: applied | none | skipped',
+      'reason: <one line>',
+      '```',
+      '',
+      'applied: you committed fixes. none: you simplified and found no fix to apply. skipped: you judged that no simplify pass is needed and did not call simplify.',
+      '',
+    ].join('\n'),
+  );
+  return c.emit({
+    id,
+    kind: 'spawn',
+    step: 'simplify',
+    tickets: [],
+    line,
+    after: [],
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('simplify', [line]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
+    reference: [doc('FINISH.md', 'step 1 (simplify pass)')],
+    outcomes: ['applied', 'none', 'skipped'],
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(id)} --agent <agent id> --outcome applied|none|skipped --value <one-line reason>`,
+  });
+}
+
+/** The lines whose simplify agent skipped the pass, with its reason, in the state's line order. */
+function simplifySkipped(c) {
+  return Object.keys(c.state.lines)
+    .map((line) => ({ line, d: c.book.done[`simplify:${line}`] }))
+    .filter(({ d }) => d?.outcome === 'skipped')
+    .map(({ line, d }) => ({ line, reason: d.value }));
 }
 
 /** The full verification at the line's latest SHA; true once it has a conclusion (or the line failed). */
@@ -1682,6 +2325,7 @@ const EXEC_REFERENCE = {
   'ci-branch': { path: js('state.mjs'), part: 'header (ci: --branch-runs)' },
   'ci-watch': doc('FINISH.md', 'step 3 (full verification)'),
   'sync-base': doc('FINISH.md', 'step 2 (sync the base)'),
+  'earliest-red': { path: SELF, part: 'header (a red line on local verification: the earliest-red scan)' },
 };
 
 function batches(actions) {
@@ -1695,7 +2339,7 @@ function batches(actions) {
 function recordLine(c, a) {
   if (a.record) return a.record;
   const head = `node ${q(SELF)} record ${q(c.path)} ${q(a.id)}`;
-  if (a.kind === 'exec') return `${head} --exit <exit code>`;
+  if (a.kind === 'exec') return `${head} --exit ${a.ran ? a.ran.exit : '<exit code>'}`;
   const extra = [];
   if (a.needs?.agent) extra.push('--agent <agent id>');
   if (a.needs?.value) extra.push(`--value <${a.needs.value}>`);
@@ -1703,15 +2347,17 @@ function recordLine(c, a) {
   return `${head} --outcome ${a.outcomes.join('|')}${extra.length ? ` ${extra.join(' ')}` : ''}`;
 }
 
-export function next(path, reported, now, deps) {
+export function next(path, reported, now, deps, { hold = false } = {}) {
   const state = load(path);
   const c = context(path, state, now, deps);
+  c.hold = hold; // run's own lists: their batch-1 spawns are handed out only when run returns the list (#146)
   const { book } = c;
   for (const id of reported) if (!book.inbox.includes(id)) book.inbox.push(id);
   syncAgents(c);
   if (book.finished) {
     return finish(c, 'done');
   }
+  stepRan(c);
   stepTips(c);
   stepReports(c);
   stepRed(c);
@@ -1723,6 +2369,7 @@ export function next(path, reported, now, deps) {
     else if (t.stage === 'implementing') stepImplementing(c, id, t);
     else if (t.stage === 'expanding') stepExpanding(c, id, t);
   }
+  stepObservations(c);
   stepExpandReassign(c);
   stepIntegration(c);
   stepDispatch(c);
@@ -1761,8 +2408,11 @@ function finish(c, then) {
       ...(a.okExit ? { okExit: a.okExit } : {}),
       ...(a.outcomes ? { outcomes: a.outcomes } : {}),
       ...(a.meta ? { meta: a.meta } : {}),
-      // a minimal reviewer's spawn: when it was last issued, so record can tell this round's report from an older one
-      ...(a.meta?.report ? { at: c.now } : {}),
+      // a minimal reviewer's spawn: when its round was first issued, so record can tell this round's report from an
+      // older one. Each round (the initial review, each recheck, each retry) is an action id of its own; the same id
+      // handed out again before it is recorded keeps its time, so a report written before one more `next` counts.
+      ...(a.meta?.report ? { at: book.issued[a.id]?.at ?? c.now } : {}),
+      ...(c.hold && a.kind === 'spawn' && a.batch === 1 ? { held: true } : {}),
     };
   }
   // Every exec's stdout lands in a directory that exists, later batches' included: the command is a plain redirect.
@@ -1791,9 +2441,9 @@ function finish(c, then) {
 // ---- record -----------------------------------------------------------------------------------------------------------
 
 /**
- * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than the review
- * spawn was last issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the file, since the
- * fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
+ * review: minimal: the reviewer's report file, when there is one, is this round's (written no earlier than this
+ * round's review spawn was first issued, `issuedAt`) and its `verdict:` line says the outcome recorded; fix needs the
+ * file, since the fix round reads its findings from it. Refused (3) otherwise. A pass with no file at all goes on.
  */
 function checkReport(file, outcome, issuedAt, deps) {
   let held = '';
@@ -1810,7 +2460,7 @@ function checkReport(file, outcome, issuedAt, deps) {
   if (verdict !== outcome) throw new Refused(`${file} says verdict: ${verdict}, not ${outcome}: record the verdict the report holds, or ${redo}`);
   const mtime = issuedAt ? deps.stat(file).mtimeMs : null; // an entry from before tick kept the time has none
   if (mtime !== null && mtime < Date.parse(issuedAt))
-    throw new Refused(`${file} was written ${formatTime(mtime)}, before this review spawn was last issued (${issuedAt}): it is an older round's report; ${redo}`);
+    throw new Refused(`${file} was written ${formatTime(mtime)}, before this round's review spawn was first issued (${issuedAt}): it is an older round's report; ${redo}`);
 }
 
 export function record(path, id, flags, now, deps) {
@@ -1826,7 +2476,9 @@ export function record(path, id, flags, now, deps) {
     entry.exit = Number(flags.exit);
   } else {
     const allowed = issued.outcomes ?? [];
-    if (issued.kind === 'spawn' && !allowed.length) {
+    // #143: a prove-it review host the Agent tool put in the background is recorded by its agent alone
+    const inBackground = issued.step === 'review' && issued.kind === 'spawn' && issued.meta?.kind === 'full' && outcome === null;
+    if (issued.kind === 'spawn' && (!allowed.length || inBackground)) {
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
     } else if (!allowed.includes(outcome)) throw new UsageError(`${id}: --outcome must be one of ${allowed.join(', ')}`);
     if (outcome !== null) entry.outcome = outcome;
@@ -1865,6 +2517,10 @@ export function record(path, id, flags, now, deps) {
   };
   const meta = issued.meta ?? {};
   const tickets = issued.tickets ?? [];
+  const reissue = (x) => {
+    delete book.done[x];
+    if (book.ran) delete book.ran[x];
+  };
   // A spawn's agent fills the assignment of its tickets (a spawn falling back to another type re-records it).
   const spawned = (tids) => {
     const pending = flag(tids[0]).pending;
@@ -1885,11 +2541,68 @@ export function record(path, id, flags, now, deps) {
     }
   };
 
+  // A line's ci-fix agent (#144): its agent id on the line's assignment, the round dispatched.
+  const ciFixSpawned = (line, agent) => {
+    const a = live().lines[line]?.assignment;
+    if (a?.deadline && a.agentId !== agent) S('agent', '--line', line, '--id', agent);
+    book.agents[agent] = { tickets: [], line, role: 'ci-fix', type: flags.type ?? 'general-purpose', status: 'current', at: now };
+    const fix = book.red[line]?.ciFix;
+    if (fix) fix.status = 'dispatched';
+  };
+  // An agent's report taken (or the agent stopped): its status on the books, and it leaves the inbox.
+  const takeAgent = (agent, status = 'collected') => {
+    if (book.agents[agent]) book.agents[agent].status = status;
+    book.inbox = book.inbox.filter((x) => x !== agent);
+  };
+  const ciFixEnded = (line, agent, status, stopped = false) => {
+    if (live().lines[line]?.assignment?.deadline) S('release', '--line', line, ...(stopped ? ['--stopped'] : []));
+    takeAgent(agent, status);
+    const fix = book.red[line]?.ciFix;
+    if (fix) fix.status = 'ended';
+  };
+  // #142: a prove-it review's verdict comes with its report's two counts, by whichever path it comes (#143: the spawn,
+  // or the collect of a review host that went to the background); a minimal reviewer reports blocking findings only.
+  const reviewCounts = (full, withVerdict) => {
+    const given = [flags.observations, flags['pre-existing']].filter((x) => x !== undefined).length;
+    if (!full && given) throw new UsageError(`${id}: a minimal review reports blocking findings only; record it without --observations and --pre-existing`);
+    if (full && !withVerdict && given)
+      throw new UsageError(`${id}: a review host in the background has no report yet: record --agent alone; its collect takes --observations and --pre-existing`);
+    if (full && withVerdict && given < 2)
+      throw new UsageError(`${id}: record the review with the counts of its report's \`counts:\` line: --observations <n> --pre-existing <n>`);
+    for (const k of ['observations', 'pre-existing'])
+      if (flags[k] !== undefined && !/^\d+$/.test(flags[k])) throw new UsageError(`--${k}: expected a whole number, 0 or more, got ${JSON.stringify(flags[k])}`);
+    return given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : [];
+  };
+  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once, with
+  // its report's counts (#142) and the review tier it was chosen by (#139).
+  const reviewEnded = (tid, agent, mode, verdict, counts, tier) => {
+    release([tid]);
+    takeAgent(agent);
+    const t = ticket(tid);
+    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
+      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(tier ? ['--tier', tier] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+    }
+  };
+
   switch (issued.step) {
     case 'collect': {
+      if (meta.stage === 'ci-fix') {
+        ciFixEnded(issued.line, meta.agent, 'collected');
+        break;
+      }
+      if (meta.stage === 'in-review') {
+        // #143: the report of a review host that went to the background, with its counts as for the spawn (#142)
+        reviewEnded(tickets[0], meta.agent, meta.mode, outcome, reviewCounts(true, true), meta.tier);
+        break;
+      }
+      // #138: a round a review follows hands its report over first (checked before anything is written)
+      if (meta.agentReport && ((meta.stage === 'implementing' && outcome === 'green') || (meta.stage === 'fixing' && outcome === 'fixed'))) {
+        if (!agentReportOk(deps, meta.agentReport))
+          throw new Refused(`${meta.agentReport} holds no agent report with a \`targeted checks:\` line: write the report ${meta.agent} returned there, verbatim, and record ${outcome} again`);
+        for (const tid of tickets) flag(tid).agentReport = meta.agentReport;
+      }
       release(tickets);
-      if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
-      book.inbox = book.inbox.filter((x) => x !== meta.agent);
+      takeAgent(meta.agent);
       const [tid] = tickets;
       if (meta.stage === 'implementing') {
         if (outcome === 'green') stageIf(tid, 'in-review');
@@ -1914,11 +2627,16 @@ export function record(path, id, flags, now, deps) {
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
       spawned(tickets);
       break;
+    case 'ci-fix':
+      if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
+      ciFixSpawned(issued.line, flags.agent);
+      break;
     case 'spawn-check': {
       const of = meta.of;
       if (outcome === 'spawned') {
         if (!flags.agent) throw new UsageError(`${id}: record spawned with --agent <its id>`);
-        spawned(book.issued[of]?.tickets ?? tickets);
+        if (book.issued[of]?.step === 'ci-fix') ciFixSpawned(book.issued[of].line, flags.agent);
+        else spawned(book.issued[of]?.tickets ?? tickets);
         book.done[of] = { at: now, agent: flags.agent };
       } else {
         book.spawnChecks = { ...(book.spawnChecks ?? {}), [of]: (book.spawnChecks?.[of] ?? 0) + 1 };
@@ -1957,6 +2675,8 @@ export function record(path, id, flags, now, deps) {
     case 'review': {
       const [tid] = tickets;
       const t = ticket(tid);
+      // #142: a prove-it review is recorded with its report's two counts (#143: not while its host is in the background)
+      const counts = reviewCounts(meta.kind !== 'minimal', outcome !== null);
       if (meta.report) {
         checkReport(meta.report, outcome, issued.at, deps); // review: minimal
         flag(tid).report = meta.report;
@@ -1965,11 +2685,33 @@ export function record(path, id, flags, now, deps) {
         if (!flags.agent) throw new UsageError(`${id}: record the reviewer with --agent <agent id>`);
         book.agents[flags.agent] = { tickets, role: 'review', type: 'general-purpose', status: 'collected', at: now };
       }
+      if (meta.kind === 'full') {
+        // #143: the review host holds the assignment tick recorded before the spawn; with no outcome it is in flight
+        named(tickets, flags.agent);
+        book.agents[flags.agent].status = 'current';
+        delete flag(tid).redispatch;
+        // #139: a host that went to the background is recorded by its collect, with this spawn's tier
+        if (meta.tier) flag(tid).reviewTier = meta.tier;
+        else delete flag(tid).reviewTier;
+        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome, counts, meta.tier);
+        break;
+      }
       if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []));
+        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
       }
       break;
     }
+    case 'agent-report':
+      if (!agentReportOk(deps, meta.agentReport))
+        throw new Refused(`${meta.agentReport} holds no agent report with a \`targeted checks:\` line: write the latest report of ${tickets[0]}'s implementation or fix agent there, verbatim, and record written again`);
+      flag(tickets[0]).agentReport = meta.agentReport;
+      break;
+    case 'simplify':
+      // the simplify agent's report (#153): applied, none or skipped, and a one-line reason (the wrap-up lists skipped)
+      if (!flags.agent) throw new UsageError(`${id}: record the simplify agent with --agent <agent id>`);
+      if (typeof flags.value !== 'string' || !flags.value.trim() || /[\r\n]/.test(flags.value)) throw new UsageError(`${id}: record the agent's reason with --value <one line>`);
+      book.agents[flags.agent] = { tickets: [], role: 'simplify', type: 'general-purpose', status: 'collected', at: now };
+      break;
     case 'review-stuck':
       if (outcome === 'retry') flag(tickets[0]).retryReviews = ticket(tickets[0]).reviews.length;
       else if (outcome === 'awaiting-ruling') stageIf(tickets[0], 'awaiting-ruling', flags.value ?? 'the review was stopped by the budget');
@@ -1978,6 +2720,15 @@ export function record(path, id, flags, now, deps) {
     case 'mark-stuck':
       stageIf(tickets[0], 'stuck', flags.value ?? 'findings still open after the fix rounds');
       break;
+    case 'observations': {
+      // #142: one raw ticket per ticket; a later review's items go into it
+      if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
+      const f = flag(tickets[0]);
+      if (f.observationsIssue && f.observationsIssue !== flags.value)
+        throw new Refused(`${id}: ${tickets[0]}'s observations and pre-existing go to ${f.observationsIssue}, the raw ticket filed for its earlier review; add the new items there and record filed with --value ${f.observationsIssue}`);
+      f.observationsIssue = flags.value;
+      break;
+    }
     case 'file-issue':
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
       if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
@@ -1987,6 +2738,16 @@ export function record(path, id, flags, now, deps) {
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
       break;
     case 'timeout': {
+      if (meta.stage === 'ci-fix') {
+        ciFixEnded(issued.line, meta.agent, outcome === 'collected' ? 'collected' : 'stopped', true);
+        if (outcome === 'failed') book.failed[issued.line] = now;
+        break;
+      }
+      if (meta.stage === 'in-review' && outcome === 'collected') {
+        // #143: the review host had finished: its report is taken by the collect the next list gives (a verdict)
+        if (!book.inbox.includes(meta.agent)) book.inbox.push(meta.agent);
+        break;
+      }
       release(tickets, true);
       if (book.agents[meta.agent]) book.agents[meta.agent].status = 'stopped';
       const [tid] = tickets;
@@ -1996,6 +2757,7 @@ export function record(path, id, flags, now, deps) {
       else if (outcome === 'send-back') stageIf(tid, 'candidate', flags.value ?? 'the merge agent timed out: sent back');
       else if (outcome === 'collected') {
         if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
+        if (meta.stage === 'implementing' || meta.stage === 'fixing') delete flag(tid).agentReport; // #138: an earlier round's report is not this one's; the review has it written
         if (meta.stage === 'implementing') stageIf(tid, 'in-review');
         else if (meta.stage === 'expanding') for (const x of tickets) stageIf(x, 'candidate');
         else if (meta.stage === 'fixing') stageIf(tid, 'in-review');
@@ -2004,6 +2766,19 @@ export function record(path, id, flags, now, deps) {
     }
     case 'red-light':
       if (outcome === 'failed') book.failed[issued.line] = now;
+      else if (outcome === 'unmatched') {
+        // RED-LIGHT step 4: no ticket matched; tick dispatches the ci-fix agent with the failing lines the host wrote
+        const red = book.red[issued.line];
+        if (!red) throw new Refused(`${id}: ${issued.line} is not red any more`);
+        let failure = '';
+        try {
+          failure = deps.read(meta.failure);
+        } catch {
+          failure = '';
+        }
+        if (!failure.trim()) throw new Refused(`${id}: write the failing lines to ${meta.failure} first (the failure output the ci-fix agent reads), then record unmatched`);
+        red.ciFix = { round: meta.round, status: 'pending', sha: meta.sha, failure: meta.failure };
+      }
       break;
     case 'verify-local':
       // verify.mjs wrote the per-SHA record itself; a conclusion at the finish is one full verification
@@ -2011,12 +2786,12 @@ export function record(path, id, flags, now, deps) {
       break;
     case 'merge-check':
     case 'sync-base':
-      if (outcome === 'retry') delete book.done[id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`];
+      if (outcome === 'retry') reissue(id.startsWith('merge-check:') ? id.replace('merge-check:', 'merge:') : `sync:${issued.line}`);
       else if (outcome === 'stuck' || outcome === 'awaiting-ruling') stageIf(tickets[0], outcome, flags.value ?? 'the merge failed');
       else if (outcome === 'unresolved') book.flags[`line:${issued.line}`] = { unsynced: flags.value ?? meta.baseSha };
       break;
     case 'failed':
-      if (outcome === 'retry') delete book.done[meta.of];
+      if (outcome === 'retry') reissue(meta.of);
       break;
     case 'wakeup-end':
       book.wakeup += 1;
@@ -2034,6 +2809,7 @@ export function record(path, id, flags, now, deps) {
       break;
   }
   if (outcome !== 'retry') book.done[id] = entry; // a retry issues the same thing again
+  if (book.ran) delete book.ran[id]; // recorded: what run kept of it is spent (#146)
   update(path, now, (s) => {
     s.tick = book;
     return {};
@@ -2045,35 +2821,89 @@ export function record(path, id, flags, now, deps) {
 
 /** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
 const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
-// An exec `run` leaves to the host: a push, so the guard hook sees the `git push` in the host's own tool call.
-const runnable = (a) => a.kind === 'exec' && a.step !== 'push';
+/**
+ * Whether `run` leaves an exec to the host: the guard hook gives its command a verdict (an action needing
+ * confirmation), so it must run in the host's own tool call where the guard sees it (#146). The guard's own
+ * classification decides, not the step: a push of a line runs here, a push to a protected branch does not. A
+ * classification that throws leaves it to the host, as the guard fails closed.
+ */
+function leftToHost(a, classify) {
+  try {
+    return classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
+  } catch {
+    return true;
+  }
+}
 const RUN_LISTS = 500;
+/** What the host does when `run` exits 3 (#147, #146): the `do` of its output. */
+const RUN_REFUSED =
+  'blocked ran (its exit is blocked.exit and its side effects happened) and its record was refused: tick or a state.mjs guard said no. tick kept that it ran: it is not run again. Do not edit the state by hand. Settle what `error` says as for a refused record (a refusal is a verdict; do not write it another way), then run `run` again: it records blocked with its exit without running it (when `error` says it is already recorded, nothing is left to record). A refusal you cannot settle is a ruling point: ask.';
+
+/** Keeps that `run` ran an exec, before its record (#146): an exec whose record fails is recorded later, not run again. */
+function markRan(path, a, result, now) {
+  update(path, now, (s) => {
+    (s.tick.ran ??= {})[a.id] = { ...result, at: now, argv: a.argv, stdout: a.stdout ?? null, cwd: a.cwd ?? null };
+    return {};
+  });
+}
 
 /**
- * `next` again and again: each list's batch-1 execs (push aside) run through deps.execute in list order, each
- * recorded with its exit code as `record --exit` does; `next` runs again only while batch 1 held nothing else and
- * `then` is "tick". The output is the last list less the execs run, plus `ran`. `now` is read again for each `next`
- * and record: the clock moves while the execs run.
+ * `next` again and again: each list's batch-1 execs (those the guard hook classifies aside) run through deps.execute
+ * in list order, each kept as run and recorded with its exit code as `record --exit` does; `next` runs again only
+ * while batch 1 held nothing else and `then` is "tick". An exec an earlier run ran and could not record is recorded,
+ * not run. The output is the last list less the execs run, plus `ran`; its batch-1 spawns count as handed out only
+ * once it is returned. `now` is read again for each `next` and record: the clock moves while the execs run.
  */
 export function run(path, reported, now, deps) {
   const ran = [];
-  let out = next(path, reported, now(), deps);
-  for (let i = 0; ; i += 1) {
-    const first = out.actions.filter((a) => a.batch === 1);
-    const todo = first.filter(runnable);
-    for (const a of todo) {
-      const log = runLog(path, out.run, a.id);
-      deps.mkdir(dirname(log));
-      const { code } = deps.execute(a, log);
-      record(path, a.id, { exit: String(code), log }, now(), deps);
-      ran.push({ id: a.id, exit: code, log });
+  const lists = []; // each list's own reports, reconcile, dispatch and wrote, with the ids run from it (#147)
+  let blocked = null;
+  try {
+    let out = null;
+    for (let i = 0; ; i += 1) {
+      if (i > RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
+      out = next(path, i === 0 ? reported : [], now(), deps, { hold: true });
+      const list = { now: out.now, reports: out.reports, reconcile: out.reconcile, dispatch: out.dispatch, wrote: out.wrote, ran: [] };
+      lists.push(list);
+      const first = out.actions.filter((a) => a.batch === 1);
+      const todo = [];
+      for (const a of first.filter((x) => x.kind === 'exec')) {
+        if (!a.ran && !deps.classify) {
+          blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
+          throw new Error(`the guard hook's classification ${GUARD_FILE} cannot be used (${GUARD_WHY ?? 'none was given'}): run next and the execs by hand`);
+        }
+        if (a.ran || !leftToHost(a, deps.classify)) todo.push(a);
+      }
+      for (const a of todo) {
+        let result = a.ran; // ran before, its record failed: record it, do not run it again
+        blocked = { id: a.id, step: a.step, at: result ? 'record' : 'execute', exit: result?.exit ?? null, log: result?.log ?? runLog(path, out.run, a.id), record: a.record };
+        if (!result) {
+          deps.mkdir(dirname(blocked.log));
+          const { code, signal } = deps.execute(a, blocked.log);
+          result = { exit: code, ...(signal ? { signal } : {}), log: blocked.log };
+          Object.assign(blocked, { at: 'record', exit: code });
+          markRan(path, a, result, now());
+        }
+        record(path, a.id, { exit: String(result.exit), log: result.log }, now(), deps);
+        ran.push({ id: a.id, exit: result.exit, ...(result.signal ? { signal: result.signal } : {}), log: result.log });
+        list.ran.push(a.id);
+        blocked = null;
+      }
+      if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
+        const done = new Set(todo.map((a) => a.id));
+        // returned to the host now: its batch-1 spawns are handed out (a spawn-check if they go unrecorded)
+        const held = first.filter((a) => a.kind === 'spawn').map((a) => a.id);
+        if (held.length)
+          update(path, now(), (s) => {
+            for (const id of held) if (s.tick.issued[id]) delete s.tick.issued[id].held;
+            return {};
+          });
+        return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran, lists };
+      }
     }
-    if (out.then !== 'tick' || !first.length || todo.length !== first.length) {
-      const done = new Set(todo.map((a) => a.id));
-      return { ...out, command: 'run', actions: out.actions.filter((a) => !done.has(a.id)), ran };
-    }
-    if (i >= RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-    out = next(path, [], now(), deps);
+  } catch (e) {
+    e.run = { ran, blocked, lists }; // what main prints beside the error: what ran, and where run stopped
+    throw e;
   }
 }
 
@@ -2107,6 +2937,13 @@ export function bashExecutor({ spawn = spawnSync, platform = process.platform } 
     try {
       const p = spawn('bash', ['-c', a.command], { stdio: ['ignore', fd, fd] });
       if (p.error) throw new Error(`bash could not run ${a.id} (${p.error.message})`);
+      if (p.status === null && p.signal) {
+        // killed, not ended (#146): 128 + the signal number, as a shell reports it, which no okExit holds
+        writeSync(fd, `
+tick.mjs run: killed by ${p.signal}, not a normal end
+`);
+        return { code: 128 + (osConstants.signals[p.signal] ?? 0), signal: p.signal };
+      }
       return { code: p.status ?? 1 };
     } finally {
       closeSync(fd);
@@ -2171,7 +3008,8 @@ function parseArgs(argv, spec) {
     }
     const name = a.slice(2);
     if (!(name in spec)) throw new UsageError(`unknown flag ${a}`);
-    if (i + 1 >= argv.length) throw new UsageError(`${a} needs a value`);
+    // the next token is the value unless it is missing or is a flag itself (`--reported --now …`); `-1` is a value
+    if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw new UsageError(`${a} needs a value`);
     const value = argv[(i += 1)];
     if (spec[name] === 'many') (flags[name] ??= []).push(value);
     else if (name in flags) throw new UsageError(`${a} is given twice`);
@@ -2194,7 +3032,8 @@ export function defaultDeps() {
       execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }),
     stateMain,
     clock: () => Date.now(),
-    execute: bashExecutor(), // run: (action, log file) => { code }
+    execute: bashExecutor(), // run: (action, log file) => { code, signal? }
+    classify: GUARD, // run: the guard hook's classification of an exec's command, or null when it is not there
   };
 }
 
@@ -2202,7 +3041,7 @@ const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
   run: { reported: 'many', now: 'one' },
-  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', now: 'one' },
+  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', now: 'one' },
 };
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.
@@ -2232,9 +3071,13 @@ export function main(argv, deps = defaultDeps()) {
     }
     return { code: 0, out: `${JSON.stringify(out, null, 2)}\n`, err: '' };
   } catch (e) {
-    if (e instanceof Refused) return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
-    if (e?.constructor?.name === 'Refusal') return { code: 3, out: '', err: `tick: refused: ${e.message}\n` };
-    return failure('tick', e);
+    const refused = e instanceof Refused || e?.constructor?.name === 'Refusal';
+    const r = refused ? { code: 3, out: '', err: `tick: refused: ${e.message}\n` } : failure('tick', e);
+    if (!e?.run) return r;
+    // run stopped part way (#147): what it ran and recorded, the exec it stopped at, and, for a refusal, what to do
+    const out = { format: FORMAT, command: 'run', exit: r.code, error: r.err.replace(/^tick: (refused: )?/, '').replace(/\nusage: see the header of tick\.mjs\n$/, '').trim(), ...e.run };
+    if (r.code === 3 && e.run.blocked?.at === 'record') out.do = RUN_REFUSED;
+    return { ...r, out: `${JSON.stringify(out, null, 2)}\n` };
   }
 }
 

@@ -286,6 +286,146 @@ test('the dist copy fills the English EXPANDER.md; a Local Markdown run names th
     assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
 });
 
+// #138: the review host agent's values, as tick writes them for a prove-it review.
+const REPORT = 'ticket: #72\ncommit: 0a1b2c3 (branch r1/72-widgets)\ntargeted checks: sha=0a1b2c3d4e5f; source=commands.md; node --test scripts/a.test.mjs → green\nstatus record: https://example.invalid/c/9\n';
+function reviewValues(dir, overrides = {}) {
+  return {
+    out: join(dir, 'review', '72-1.md'),
+    mode: 'initial',
+    root: join(dir, 'repo'),
+    tracker: 'github',
+    repo: 'acme/widgets',
+    ticket: '#72',
+    bodyFile: put(dir, 'body.md', '# Widgets\n\nbody'),
+    statusRecord: 'the comment on acme/widgets#72 whose first line is `<!-- sorry-matt:status -->`',
+    snapshot: put(dir, 'snap.json', githubSnapshot),
+    against: put(dir, 'against.json', { ...githubSnapshot, check: { changed: false } }),
+    fixedPoint: 'r1/line-a',
+    branch: 'r1/72-widgets',
+    checksReport: put(dir, 'report.md', REPORT),
+    ci: 'covered',
+    previous: false,
+    reviewer: 'primary',
+    scratchpad: join(dir, 'scratch', '72'),
+    tier: null,
+    ...overrides,
+  };
+}
+const runReview = (t, overrides, entry = main) => {
+  const dir = scratch(t);
+  const values = reviewValues(dir, typeof overrides === 'function' ? overrides(dir) : overrides);
+  const r = parse(entry(['review', put(dir, 'values.json', values)]));
+  return { ...r, dir, values, brief: r.code === 0 ? readFileSync(r.json.brief, 'utf8') : null };
+};
+/** The value lines of a review spawn file: every one filled, none left to the host (#138). */
+const reviewLines = (v, { mode = 'initial', previous = 'none' } = {}) => [
+  `- mode: ${mode}\n`,
+  `- repo: ${v.root}\n`,
+  '- tracker: GitHub (acme/widgets)\n',
+  `- ticket: #72; ticket face (the ticket text with its expansion blocks): ${v.bodyFile}\n`,
+  '- status record: the comment on acme/widgets#72 whose first line is `<!-- sorry-matt:status -->`\n',
+  `- acceptance snapshot: ${v.snapshot}; comparison: ${v.against}\n`,
+  '- fixed point: r1/line-a\n',
+  '- ticket branch: r1/72-widgets\n',
+  `- targeted checks: sha=0a1b2c3d4e5f; source=commands.md; node --test scripts/a.test.mjs → green (commit 0a1b2c3 (branch r1/72-widgets); the agent's report: ${v.checksReport})\n`,
+  '- targeted checks ran at: 0a1b2c3d4e5f\n',
+  '- CI coverage: covered\n',
+  `- previous review block: ${previous}\n`,
+  '- reviewer: primary\n',
+  `- scratchpad: ${v.scratchpad}\n`,
+  '- review tier: none given: judge it yourself (prove-it section 1)\n',
+];
+
+test('#138: review writes the review host spawn file: REVIEWER.md fixed rules, then every value of this review', (t) => {
+  const r = runReview(t);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(
+    { kind: r.json.kind, role: r.json.role, description: r.json.description, agentType: r.json.agentType, brief: r.json.brief },
+    { kind: 'review', role: 'review', description: 'review #72', agentType: 'general-purpose', brief: r.values.out },
+  );
+  assert.equal(r.json.prompt, `Read ${r.values.out} in full and follow it.`);
+  assert.equal(r.json.fallback, null, 'the review host is a general-purpose agent: no fallback');
+  // the fixed rules first (REVIEWER.md below its rule, without the maintainer header), then the values
+  assert.ok(r.brief.startsWith('你是審查主持 agent：替一張票主持一次獨立審查。'), r.brief.slice(0, 80));
+  assert.doesNotMatch(r.brief, /brief\.mjs review` 把/);
+  assert.ok(r.brief.includes('## 1. 主持審查') && r.brief.includes('<!-- sorry-matt:review-report -->'));
+  const values = r.brief.slice(r.brief.lastIndexOf('\n---\n'));
+  for (const line of reviewLines(r.values)) assert.ok(values.includes(line), `has ${JSON.stringify(line)} in\n${values}`);
+  assert.doesNotMatch(r.brief, LEFTOVER, 'no placeholder is left');
+  assert.doesNotMatch(r.brief, /\r|[ \t]$/m, 'LF line ends, no trailing whitespace');
+});
+
+test('#138: a recheck names the previous review block; Local Markdown names its tracker', (t) => {
+  const r = runReview(t, { mode: 'recheck', previous: true });
+  assert.equal(r.code, 0, r.err);
+  for (const line of reviewLines(r.values, { mode: 'recheck', previous: 'in the status record' })) assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+  // an initial review resuming after a mid-review stuck also has it
+  const resumed = runReview(t, { previous: true });
+  assert.ok(resumed.brief.includes('- mode: initial\n') && resumed.brief.includes('- previous review block: in the status record\n'));
+  const local = runReview(t, (dir) => ({ tracker: 'local', repo: undefined, ticket: '.scratch/f/issues/03-a.md', statusRecord: join(dir, 'repo', '.scratch/f/issues/03-a.md') }));
+  assert.equal(local.code, 0, local.err);
+  assert.equal(local.json.description, 'review 03-a.md');
+  assert.ok(local.brief.includes('- tracker: Local Markdown\n'));
+  assert.ok(local.brief.includes(`- status record: ${local.values.statusRecord}\n`));
+});
+
+test('#138: the dist copy writes the English REVIEWER.md rules with the same values', (t) => {
+  const r = runReview(t, { mode: 'recheck', previous: true }, distMain);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(r.brief.startsWith('You are the review host agent: you host one independent review of one ticket.'), r.brief.slice(0, 80));
+  assert.ok(r.brief.includes('## 1. Host the review'));
+  for (const line of reviewLines(r.values, { mode: 'recheck', previous: 'in the status record' })) assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+});
+
+test('#138: review refuses missing or malformed values (2) and a checks report with no targeted checks line (1)', (t) => {
+  for (const key of ['out', 'mode', 'root', 'tracker', 'repo', 'ticket', 'bodyFile', 'statusRecord', 'snapshot', 'against', 'fixedPoint', 'branch', 'checksReport', 'ci', 'previous', 'reviewer', 'scratchpad', 'tier']) {
+    const dir = scratch(t);
+    const values = reviewValues(dir);
+    delete values[key];
+    const r = main(['review', put(dir, 'values.json', values)]);
+    assert.equal(r.code, 2, `review without ${key}`);
+    assert.match(r.err, new RegExp(`missing ${key}`));
+    assert.equal(existsSync(values.out), false);
+  }
+  for (const overrides of [{ mode: 'final' }, { root: 'relative' }, { scratchpad: 'relative' }, { ci: 'maybe' }, { previous: 'yes' }, { mode: 'recheck', previous: false }, { tracker: 'jira' }, { ticket: 'my ticket.md' }, { reviewer: '' }])
+    assert.equal(runReview(t, overrides).code, 2, JSON.stringify(overrides));
+  for (const overrides of [(dir) => ({ checksReport: put(dir, 'r.md', 'ticket: #72\ncommit: abc\n') }), { bodyFile: '/no/such/body.md' }, { against: '/no/such/against.json' }, { checksReport: '/no/such/report.md' }]) {
+    const r = runReview(t, overrides);
+    assert.equal(r.code, 1, typeof overrides === 'function' ? 'a report without a targeted checks line' : JSON.stringify(overrides));
+    assert.equal(existsSync(r.values.out), false);
+  }
+});
+
+// #140: the review reuses the targeted checks only at the SHA they ran at, so the spawn file names that SHA apart.
+test('#140: review names the SHA the targeted checks ran at, or that the report gives none', (t) => {
+  const r = runReview(t);
+  assert.equal(r.code, 0, r.err);
+  assert.ok(r.brief.includes('- targeted checks ran at: 0a1b2c3d4e5f\n'), r.brief);
+  const ran = (line) =>
+    runReview(t, (dir) => ({ checksReport: put(dir, 'r.md', `ticket: #72\ncommit: 9f8e7d6\n${line}\n`) })).brief.match(/^- targeted checks ran at: (.*)$/m)?.[1];
+  assert.equal(ran('- **targeted checks**: `sha=9F8E7D6C5B4A3928` source=self-found; npm test → green'), '9f8e7d6c5b4a3928', 'markdown around the line, upper case');
+  assert.equal(ran('targeted checks: source=commands.md; npm test → green'), 'not reported: rerun them (prove-it section 3)', 'no sha= in the line');
+  assert.equal(ran('targeted checks: sha=xyz; npm test → green'), 'not reported: rerun them (prove-it section 3)', 'not a SHA');
+});
+
+// #139: tick judges the review tier before the review; prove-it takes it from the judge output instead of judging again.
+test('#139: review names the review tier and the judge output it comes from; a file that is not tier.mjs output is refused (1)', (t) => {
+  const judged = (tier) => ({ format: 'sorry-matt/tier@1', base: 'r1/line-a', head: 'r1/72-widgets', tier, reasons: ['default'], finders: [] });
+  for (const tier of ['standard', 'full']) {
+    const r = runReview(t, (dir) => ({ tier: put(dir, 'tier.json', judged(tier)) }));
+    assert.equal(r.code, 0, r.err);
+    const line = `- review tier: ${tier} (tier.mjs judge output: ${r.values.tier})\n`;
+    assert.ok(r.brief.includes(line), `has ${JSON.stringify(line)}`);
+    assert.ok(!r.brief.includes('- review tier: none'));
+  }
+  for (const overrides of [{ tier: '/no/such/tier.json' }, (dir) => ({ tier: put(dir, 'tier.json', { format: 'other' }) }), (dir) => ({ tier: put(dir, 'tier.json', judged('huge')) })]) {
+    const r = runReview(t, overrides);
+    assert.equal(r.code, 1, r.err);
+    assert.equal(existsSync(r.values.out), false);
+  }
+  assert.equal(runReview(t, { tier: 3 }).code, 2);
+});
+
 test('a missing required value exits 2 and writes nothing', (t) => {
   for (const key of ['out', 'snapshot', 'worktree', 'branch', 'integration', 'bodyFile', 'sendBackFile', 'acceptance']) {
     const dir = scratch(t);
@@ -356,6 +496,7 @@ test('description builds every role word, and spawns.mjs reads back the role and
     [['merge', 'r1/line-a'], 'merge r1/line-a', null],
     [['review', '#72'], 'review #72', '#72'],
     [['review', '03-add-login.md'], 'review 03-add-login.md', '03-add-login.md'],
+    [['simplify', 'r1/line-a'], 'simplify r1/line-a', null], // #153: the simplify agent works on the line
   ];
   for (const [args, expected, ticket] of cases) {
     const r = parse(main(['description', ...args]));
@@ -364,7 +505,7 @@ test('description builds every role word, and spawns.mjs reads back the role and
     assert.equal(category({ type: 'general-purpose', description: expected }), args[0]);
     assert.equal(ticketOf(expected), ticket);
   }
-  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', '#73'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words'], ['review', 'r1/line-a'], ['review', '#72', '#73']])
+  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', '#73'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words'], ['review', 'r1/line-a'], ['review', '#72', '#73'], ['simplify'], ['simplify', 'two words'], ['simplify', 'r1/line-a', 'r1/line-b']])
     assert.equal(main(['description', ...args]).code, 2, JSON.stringify(args));
 });
 
@@ -396,6 +537,13 @@ test('a template whose placeholders changed apart from the script exits 1 and wr
   assert.equal(r.code, 1);
   assert.match(r.err, /changed apart/);
   assert.equal(existsSync(values.out), false);
+  // #138: REVIEWER.md holds fixed rules only; a placeholder there is one the host would have to fill
+  put(skill, 'REVIEWER.md', readFileSync(join(root, 'src/skills/get-to-work/REVIEWER.md'), 'utf8') + '\n- scratchpad: {absolute path}\n');
+  const rv = reviewValues(dir);
+  const r2 = copy.main(['review', put(dir, 'review-values.json', rv)]);
+  assert.equal(r2.code, 1, r2.err);
+  assert.match(r2.err, /changed apart/);
+  assert.equal(existsSync(rv.out), false);
 });
 
 // A copy of the plugin's layout: the scripts under skills/get-to-work/scripts, the src templates beside them, and

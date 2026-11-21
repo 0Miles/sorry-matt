@@ -231,6 +231,58 @@ test('run: a red baseline mutates nothing', (t) => {
   assert.equal(readFileSync(join(dir, 'lib.js'), 'utf8'), lib);
 });
 
+// #140: a command that counts its own runs in runs.log, then runs check.js
+const counted = (dir) => {
+  writeFileSync(join(dir, 'counted.js'), "require('fs').appendFileSync('runs.log', 'x\\n'); require('./check.js');\n");
+  return () => (existsSync(join(dir, 'runs.log')) ? readFileSync(join(dir, 'runs.log'), 'utf8').split('\n').filter(Boolean).length : 0);
+};
+const runCounted = (dir, ...extra) =>
+  main(['run', '--base', 'main', '--plan', 'plan.json', '--ledger', 'ledger.json', '--cmd', 'node counted.js', ...extra], defaultDeps(dir));
+
+test('run --green-at: the command green at HEAD is the baseline, so only the mutants run', (t) => {
+  const { dir } = project(t);
+  const runs = counted(dir);
+  const head = gitIn(dir)('rev-parse', 'HEAD').trim();
+  writePlan(dir, [NEGATE2, RETURN5]);
+  const { code, out, err } = runCounted(dir, '--green-at', head.slice(0, 10));
+  assert.equal(code, 0, err);
+  const report = JSON.parse(out);
+  assert.equal(report.baseline, 'green');
+  assert.equal(report.baselineSource, 'reused');
+  assert.equal(report.greenAt, head);
+  assert.deepEqual(report.results.map((r) => [r.line, r.outcome]), [[2, 'killed'], [5, 'survived']]);
+  assert.equal(runs(), 2, 'two mutants, no baseline run');
+});
+
+test('run --green-at: a SHA that is not HEAD does not stand in for the baseline; it runs', (t) => {
+  const { dir } = project(t);
+  const runs = counted(dir);
+  const base = gitIn(dir)('rev-parse', 'main').trim();
+  writePlan(dir, [NEGATE2]);
+  const { code, out, err } = runCounted(dir, '--green-at', base);
+  assert.equal(code, 0, err);
+  const report = JSON.parse(out);
+  assert.equal(report.baselineSource, 'ran');
+  assert.equal(report.greenAt, undefined);
+  assert.match(report.greenAtIgnored, /is not HEAD/);
+  assert.equal(runs(), 2, 'the baseline and one mutant');
+
+  writePlan(dir, [RETURN5]);
+  const unknown = JSON.parse(runCounted(dir, '--green-at', 'no-such-ref').out);
+  assert.equal(unknown.baselineSource, 'ran');
+  assert.match(unknown.greenAtIgnored, /no-such-ref/);
+});
+
+test('run without --green-at runs its own baseline, as before', (t) => {
+  const { dir } = project(t);
+  const runs = counted(dir);
+  writePlan(dir, [NEGATE2]);
+  const report = JSON.parse(runCounted(dir).out);
+  assert.equal(report.baselineSource, 'ran');
+  assert.equal(report.greenAtIgnored, undefined);
+  assert.equal(runs(), 2);
+});
+
 test('run: a timeout counts as killed and is reported as such', (t) => {
   const { dir } = project(t);
   const deps = defaultDeps(dir);

@@ -5,9 +5,19 @@
 
 每條線先過**線級的三道關**，順序固定：
 
-1. **精簡**：在整合 worktree 呼叫 Skill tool 帶入 `simplify`，對整條線累積的改動做一次品質收斂 —— 復用、簡化、
-   效率、抽象層級。跨票的重複只有整併之後才看得見，所以在這裡做一次。套用的修法收成**一個獨立 commit**（subject
-   如 `refactor: simplify <整合分支>`，不帶票 ID；沒有修法就不 commit），退掉的修法記進自答清單。
+1. **精簡**：對整條線累積的改動做一次品質收斂 —— 復用、簡化、效率、抽象層級。跨票的重複只有整併之後才看得見，
+   所以在這裡做一次。你不自己呼叫 `simplify`，整條線的 diff 也不進你的 context：tick 發一個前景 spawn
+   （`general-purpose`，`description` 照 `brief.mjs` 檔頭是 `simplify <整合分支>`），派工檔由 tick 寫好。照發，
+   只收它回的兩行。精簡 agent 先依整條線的改動判斷要不要精簡：
+   - 只改文件、只有刪除、只改設定或資料檔、沒有新增邏輯時**跳過精簡**，不呼叫 `simplify`。
+   - 有新增或改寫的邏輯，且可能有重複實作、可復用函式、可拿掉的分支或間接層時要做。
+   - 拿不準時要做。不設行數門檻：看改了什麼，不看改了多少。
+
+   要做時它在整合 worktree 呼叫 Skill tool 帶入 `simplify`。套用的修法收成**一個獨立 commit**（subject
+   `refactor: simplify <整合分支>`，不帶票 ID；body 列出套用的修法，與每個退掉的修法及一行理由），沒有修法就不
+   commit。它回報三種結果之一並附一行理由，你以 `--outcome` 與 `--value` 記錄：`applied`（有 commit）、`none`
+   （做了、沒有修法）、`skipped`（判斷不需要、沒有呼叫 `simplify`）。`skipped` 的線由 tick 在收尾的 `wrap-up`
+   列出：理由寫進自答清單，線列進結尾摘要。流程設定 `simplify: false` 時整步不做，不派任何 agent。
 2. **併入基底**：把最新的基底尖端合併進整合分支，綠燈要跑在最新基底上才算數。衝突交給整併 agent，判準照
    [`SKILL.md`](SKILL.md) 第 2 節「合併衝突」：一邊是這條線（各票票面與 commit message），另一邊是基底
    （`git log --format=%B <merge-base>..<併入的基底 ref>`），目標是讓線的意圖落在最新基底上；`description` 照
@@ -15,7 +25,9 @@
    檔案與嘗試的基底 SHA，交付一律留給人合併。
 3. **完整驗證**：整合分支最新 SHA 的結果才有效 —— 他票整併、衝突解法、紅燈修正、精簡與併入基底都會讓較早的綠燈
    過期。紅就走 [`RED-LIGHT.md`](RED-LIGHT.md)。報告寫出驗證的 SHA、來源（CI，或本機與原因；本機時另寫
-   `verify.mjs` 輸出的 `source`）與併入的基底 SHA；未併入的線照樣驗證未併入的樹。
+   `verify.mjs` 輸出的 `source`）與併入的基底 SHA；未併入的線照樣驗證未併入的樹。CI 不涵蓋整合分支或沒有
+   `origin` 的線，全套只在這裡本機驗證一次：審查只跑受影響範圍，整併後也不驗。紅時 tick 從線上最舊的整併 SHA
+   起逐一本機驗證，第一個紅的就是最早的紅 SHA，再發下紅燈處置。
 
 接著依模式交付每條線：
 
@@ -56,13 +68,13 @@
 
 **最終輸出**：每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源、涵蓋全部初始
 票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄）、**本 run 的計量與預算**（state 的
-`usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄），以及期間新開的 raw tickets 清單並
-請使用者執行 `/triage`。分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與
-`byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。獨立執行時，
+`usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄）、**跳過精簡的線**（`wrap-up` 的
+`meta.simplifySkipped`，每條附理由；沒有就不列），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
+分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。獨立執行時，
 輸出後把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
 
 完成判準：精簡的修法與併入基底各是自己的 commit；總 PR body 有依 `review-guide.mjs` 輸出寫的逐票導覽，
 `size.over` 為 true 時開頭有門檻提醒；未併入的線寫明衝突檔案與嘗試的基底 SHA，並留給人合併；每條線恰有一項
 可供人合併的交付，或已依 `merge-gate.mjs` 的決定送出合併並回報；已合併的總 PR，其完成票都已關閉，關鍵字不生效的
-在人工作業清單有關票指令；輸出列出了對帳表、需授權動作的結果與計量（含分段計量或沒有的原因）；獨立執行時 ledger
-第一行已是 ended 標記。
+在人工作業清單有關票指令；輸出列出了對帳表、需授權動作的結果與計量（含分段計量或沒有的原因），以及跳過精簡的線，
+其理由在自答清單；獨立執行時 ledger 第一行已是 ended 標記。

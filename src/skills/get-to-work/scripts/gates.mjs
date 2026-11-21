@@ -56,8 +56,8 @@
 //     pushed             (as in integrated, for every line with a recorded merge or already on `origin`: a line
 //                        is first pushed at its first integration)
 //     assignment         (as in dispatch)
-//     fallback-wake      while any assignment is in flight, a background sleep task is recorded (`usage
-//                        --sleep-task`).
+//     fallback-wake      while any assignment is in flight (a ticket's, a review host's included, or a line's), a
+//                        background sleep task is recorded (`usage --sleep-task`).
 //   stopped                    The run stopped on a limit and the undispatched tickets were set aside.
 //     stop-recorded      the state has a stop with the limits that stopped it.
 //     no-dispatch-after-stop  no ticket entered expanding or implementing at or after the stop.
@@ -80,7 +80,8 @@
 //                        `<!-- sorry-matt:run ended -->`, with nothing before it.
 //     fields             the ten fields `## 1.` … `## 10.` appear once each, in order, each with content.
 //     budget-limits      field 9 has `budget: spawns|rounds|hours|no-progress <integer>`.
-//     stage-limits       field 9 has `budget: timeout-implement|timeout-fix|timeout-expand|timeout-merge <integer>`.
+//     stage-limits       field 9 has `budget: timeout-implement|timeout-fix|timeout-expand|timeout-merge|timeout-review
+//                        <integer>`.
 //     session            when CLAUDE_CODE_SESSION_ID is set, the ledger's first `session:` line is that id.
 //     rule-files         field 10 has at least one `rule: <path>` line; every one is an absolute path to a file.
 //   Ledger lines take hooks/runs.mjs's line shape: an optional list bullet, optional backticks.
@@ -96,7 +97,7 @@ const AGENT_STAGES = ['expanding', 'implementing', 'fixing'];
 const SNAPSHOT_STAGES = ['implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered'];
 const QUEUED_ON = ['queued', 'integrating', 'delivered'];
 const LIMITS = ['spawns', 'rounds', 'hours', 'no-progress'];
-const STAGE_LIMITS = ['timeout-implement', 'timeout-fix', 'timeout-expand', 'timeout-merge'];
+const STAGE_LIMITS = ['timeout-implement', 'timeout-fix', 'timeout-expand', 'timeout-merge', 'timeout-review'];
 const MERGE_SUBJECT = /^Merge branch '([^']+)'(?: into \S.*)?$/;
 const MARKER = { active: '<!-- sorry-matt:run active -->', ended: '<!-- sorry-matt:run ended -->' };
 
@@ -409,7 +410,9 @@ const gates = {
     pushed(r, g, Object.keys(state.lines).filter((branch) => merged(branch) || (g.hasOrigin() && g.originHead(branch).sha)));
     assignments(r, state);
     const fail = r.check('fallback-wake');
-    const inFlight = Object.entries(state.tickets).filter(([, t]) => t.assignment && t.assignment.deadline !== null).map(([id]) => id);
+    const held = (x) => x?.assignment && x.assignment.deadline !== null;
+    // a ticket's agent, or a line's (the ci-fix of a red light that maps to no ticket)
+    const inFlight = [...Object.entries(state.tickets), ...Object.entries(state.lines)].filter(([, x]) => held(x)).map(([id]) => id);
     if (inFlight.length && state.usage.sleepTask === null) fail('usage', `agents are in flight (${inFlight.join(', ')}) and no fallback wake-up is recorded (usage --sleep-task)`);
   },
 

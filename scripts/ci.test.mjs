@@ -139,9 +139,52 @@ test('verdict: output that is not a run list is a failed query too', () => {
   assert.ok(r.json.error);
 });
 
+// --- base ------------------------------------------------------------------------------------------------------
+
+// Runs `base` against a gh that answers `api` with `api` (a SHA, or a function) and `run list` with `rows`.
+function baseOf(argv, { api = `${SHA}\n`, rows = [] } = {}) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'api') return typeof api === 'function' ? api() : api;
+    return typeof rows === 'function' ? rows() : JSON.stringify(rows);
+  };
+  const r = main(['base', ...argv], { ...defaultDeps(), gh });
+  return { ...r, json: r.out ? JSON.parse(r.out) : null, calls };
+}
+
+test('base: reads the latest SHA of the base branch, then judges its runs like verdict', () => {
+  const rows = [done('failure'), done('success')];
+  const r = baseOf(['--repo', 'acme/app', 'origin/main'], { rows });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.calls, [
+    ['api', 'repos/acme/app/commits/main', '--jq', '.sha'],
+    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/app'],
+  ]);
+  assert.deepEqual([r.json.command, r.json.branch, r.json.sha, r.json.verdict, r.json.failed], ['base', 'main', SHA, 'red', [rows[0].databaseId]]);
+});
+
+test('base: without --repo gh resolves the repository of the current directory', () => {
+  const r = baseOf(['main'], { rows: [done('success')] });
+  assert.equal(r.calls[0][1], 'repos/{owner}/{repo}/commits/main');
+  assert.deepEqual([r.json.verdict, r.json.failed], ['green', []]);
+});
+
+test('base: a failed SHA lookup is query-failed with no SHA, exits 0, and reads no runs', () => {
+  for (const api of [ghFailure('HTTP 404: Branch not found\n'), () => 'not a sha\n']) {
+    const r = baseOf(['main'], { api });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual([r.json.sha, r.json.verdict], [null, 'query-failed']);
+    assert.ok(r.json.error);
+    assert.equal(r.calls.length, 1);
+  }
+  const runsFail = baseOf(['main'], { rows: ghFailure('HTTP 502\n') });
+  assert.deepEqual([runsFail.json.sha, runsFail.json.verdict, runsFail.json.error], [SHA, 'query-failed', 'HTTP 502']);
+});
+
 test('bad arguments exit 2', () => {
   const deps = { ...defaultDeps(), gh: () => assert.fail('gh must not be called') };
-  for (const argv of [[], ['nope'], ['verdict'], ['verdict', 'line'], ['verdict', 'line', SHA, 'extra'], ['verdict', '--bogus', 'line', SHA], ['verdict', 'line', SHA, '--repo'], ['earliest-red'], ['earliest-red', 'a.json', 'b.json']]) {
+  for (const argv of [[], ['nope'], ['verdict'], ['verdict', 'line'], ['verdict', 'line', SHA, 'extra'], ['verdict', '--bogus', 'line', SHA], ['verdict', 'line', SHA, '--repo'], ['base'], ['base', 'main', 'extra'], ['base', 'main', '--repo'], ['earliest-red'], ['earliest-red', 'a.json', 'b.json']]) {
     const r = main(argv, deps);
     assert.equal(r.code, 2, JSON.stringify(argv));
     assert.match(r.err, /^ci: .*\nusage: see the header of ci\.mjs\n$/);
@@ -362,6 +405,105 @@ test('earliest-red: with no earlier green on a line with CI, the lower bound is 
   assert.deepEqual(j.lowerBound, { sha: r.git('merge-base', 'origin/line', 'main'), kind: 'merge-base' });
   assert.equal(j.lowerBound.sha, r.base);
   assert.deepEqual(j.tickets, ['#11']);
+});
+
+// A `gh` that answers per branch: the line's run list, or the base's runs of one commit (`--commit` filters on
+// GitHub's side, so the fake does it too).
+function ciByBranch(line, base) {
+  const calls = [];
+  const lineCi = fakeCi(line);
+  const baseCi = fakeCi(base);
+  const gh = (args) => {
+    calls.push(args);
+    const branch = args[args.indexOf('--branch') + 1];
+    if (branch === 'line') return lineCi.gh(args);
+    const commit = args.includes('--commit') ? args[args.indexOf('--commit') + 1] : null;
+    return JSON.stringify(baseCi.rows.filter((r) => r.headSha === commit));
+  };
+  return { gh, calls, lineRows: lineCi.rows, baseRows: baseCi.rows };
+}
+
+test('earliest-red: with no green on the line and the base already red at the merge base, the red maps to no ticket', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  r.push();
+  r.git('update-ref', 'refs/remotes/origin/main', 'main');
+  const ci = ciByBranch({ [m11]: ['failure'], [m13]: ['failure'] }, { [r.base]: ['failure', 'success'] });
+  const res = earliestRed(r, { base: 'origin/main', tickets: [T11, T13] }, ci.gh);
+  assert.equal(res.code, 0, res.err);
+  const j = res.json;
+  assert.equal(j.earliestRed, m11);
+  assert.deepEqual(j.lowerBound, { sha: r.base, kind: 'merge-base' });
+  // The base brought the red in: no ticket on the line is blamed, so none is fixed twice and reverted.
+  assert.deepEqual(j.tickets, []);
+  assert.equal(j.unmatched, true);
+  // The stretch's merges are still listed, with the tickets they belong to.
+  assert.deepEqual(j.merges.map((m) => [m.sha, m.tickets]), [[m11, ['#11']]]);
+  const failed = ci.baseRows.find((x) => x.conclusion === 'failure');
+  assert.deepEqual(j.baseCi, {
+    branch: 'main',
+    sha: r.base,
+    verdict: 'red',
+    error: null,
+    runs: entry(r.base, 'red', 'ci', ci.baseRows).runs,
+    failed: [failed.databaseId],
+  });
+  assert.deepEqual(ci.calls, [
+    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
+    ['run', 'list', '--branch', 'main', '--commit', r.base, '--limit', '100', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
+  ]);
+});
+
+test('earliest-red: with no green on the line and the base green (or unread) at the merge base, the tickets stay as they were', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  r.push();
+  const line = { [m11]: ['failure'], [m13]: ['failure'] };
+
+  const green = earliestRed(r, { tickets: [T11, T13] }, ciByBranch(line, { [r.base]: ['success'] }).gh).json;
+  assert.equal(green.earliestRed, m11);
+  assert.deepEqual(green.lowerBound, { sha: r.base, kind: 'merge-base' });
+  assert.deepEqual(green.tickets, ['#11']);
+  assert.equal(green.unmatched, false);
+  assert.equal(green.baseCi.verdict, 'green');
+  assert.equal(green.baseCi.branch, 'main');
+  assert.deepEqual(green.baseCi.failed, []);
+
+  // No run on the base, or a failed query: nothing says the base was red, so nothing changes.
+  const none = earliestRed(r, { tickets: [T11, T13] }, ciByBranch(line, {}).gh).json;
+  assert.deepEqual(none.tickets, ['#11']);
+  assert.equal(none.baseCi.verdict, 'no-run');
+  let n = 0;
+  const lineOnly = ciByBranch(line, {}).gh;
+  const flaky = (args) => ((n += 1) === 1 ? lineOnly(args) : ghFailure('HTTP 502\n')());
+  const failedQuery = earliestRed(r, { tickets: [T11, T13] }, flaky).json;
+  assert.deepEqual(failedQuery.tickets, ['#11']);
+  assert.equal(failedQuery.unmatched, false);
+  assert.deepEqual(failedQuery.baseCi, { branch: 'main', sha: r.base, verdict: 'query-failed', error: 'HTTP 502', runs: [], failed: [] });
+});
+
+test('earliest-red: the base is not read when the line has a green, has no red, or is on local verification', (t) => {
+  const r = buildRepo(t);
+  const m11 = r.ticket('run/11-a');
+  const m13 = r.ticket('run/13-c');
+  r.push();
+  const greenFirst = ciByBranch({ [m11]: ['success'], [m13]: ['failure'] }, { [r.base]: ['failure'] });
+  const j = earliestRed(r, { tickets: [T11, T13] }, greenFirst.gh).json;
+  assert.deepEqual(j.tickets, ['#13']);
+  assert.equal(j.baseCi, null);
+  assert.equal(greenFirst.calls.length, 1);
+
+  const noRed = ciByBranch({ [m13]: ['success'] }, { [r.base]: ['failure'] });
+  assert.equal(earliestRed(r, { tickets: [T11, T13] }, noRed.gh).json.baseCi, null);
+  assert.equal(noRed.calls.length, 1);
+
+  const local = ciByBranch({}, { [r.base]: ['failure'] });
+  const l = earliestRed(r, { ci: false, tickets: [T11, T13], local: [`local: line ${m13} red no-origin`] }, local.gh).json;
+  assert.deepEqual(l.tickets, ['#11', '#13']);
+  assert.equal(l.baseCi, null);
+  assert.deepEqual(local.calls, []);
 });
 
 test('earliest-red: a line on local verification uses only the ledger records, walks the local branch and never calls gh', (t) => {

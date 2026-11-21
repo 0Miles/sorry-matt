@@ -28,7 +28,7 @@ say reads `none`.
 | `Targeted checks` | How to narrow the checks to a single file or a single package: the command form, and which checks go with which changed files. |
 | `Coverage` | The command that produces lcov, and where the lcov file lands. |
 | `Failures only` | This project's way to print only the failing lines and the closing summary. Pass or fail is still the check command's own exit code, taken before any filtering. |
-| `Sensitive paths` | The sensitive paths review grading uses, one repo-relative path per line, directories ending in `/`: places where a change affects permissions, guards, CI, releases or deploys. |
+| `Sensitive paths` | The sensitive paths review grading uses, one repo-relative path per line, directories ending in `/`: places where a change affects permissions, guards, CI, releases or deploys. A line can also be `path#symbol` (written as in predicted files); only a change that touches that symbol is sensitive. |
 
 **When the file is missing.** The `get-to-work` host generates it before freezing the ticket set (`get-to-work`
 section 0); no other skill generates it. The readers — the implementation agent's targeted checks, the `prove-it`
@@ -271,7 +271,8 @@ plugin's hooks read only the first line (a BOM aside). Ten fields:
      review or fix rounds), `budget: hours 12`, `budget: no-progress 3`. `spawns` and `rounds` are rewritten per
      section 4 once the ticket count is known.
    - **Stage time limits**: the same format, in minutes: `budget: timeout-implement 30`, `budget: timeout-fix 20`
-     (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`.
+     (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`, `budget: timeout-review 60`
+     (the review host agent).
    - **Usage and the stop reason** are the state's `usage` and `stop`. The spawn count comes from
      `<run>.counters.json`, which the hook writes; read it, never write it. When you ask the user something, add the
      seconds from sending to the answer to the waiting time with `state.mjs usage --wait`. Token counts are unknown

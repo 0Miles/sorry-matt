@@ -10,23 +10,35 @@
 // a line never spans repositories):
 //   {
 //     "repo":     "<working tree>",                 // optional; default the current directory
+//     "base":     "<base branch>",                  // the branch the lines merge into, e.g. "main"; needed
 //     "frontier": "<frontier output file>" | { ...frontier.mjs output... },   // format sorry-matt/frontier@1
 //     "files":    { "#11": "<predicted-files list>", ... },                   // one per open ticket
 //     "ignore":   ["<worktree path>" | "<branch>" | "#<pr>"],                // optional holders to leave out
 //     "held":     [{ "id": "<who>", "files": "<predicted-files list>", "release": "<condition>" }]  // optional
 //   }
 //   Relative paths are relative to the plan file. `frontier` is the output of frontier.mjs for the whole frozen
-//   set, run without --line; its `tracker` and `source` decide the GitHub checks and which repository's pull
-//   requests are read. A predicted-files list is the format overlap.mjs reads: one repo-relative path per line,
-//   `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
-//   under it. Every ticket whose state is "open" needs a list; lists of other tickets are ignored. `held` is
+//   set, run without --line; its `tracker` and `source` decide the GitHub checks, which repository's pull
+//   requests are read, and how the base's CI is read. A predicted-files list is the format overlap.mjs reads:
+//   one repo-relative path per line, `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
+//   under it, and `path#symbol` (`path#outer#inner` when nested) narrows it to a function, block or markdown
+//   heading of that file. Overlap is overlap.mjs's: two entries on the same path that both name a symbol
+//   overlap only when one symbol chain starts with the other; an entry without a symbol is the whole file.
+//   Every ticket whose state is "open" needs a list; lists of other tickets are ignored. `held` is
 //   what git cannot see (another session the host knows of), with its own release condition.
 //
 // What it computes
 //   preflight  `git-repo`: the repo is a git working tree with a commit on HEAD. `clean`: `git status
 //              --porcelain` prints nothing. With tracker "github" also `gh-auth`: `gh auth status` exits 0, and
 //              `repo-match`: one of the repo's remotes points at the frontier's `source` (owner/repo, any host,
-//              case-insensitive). When a check fails, `ok` is false and everything below is null.
+//              case-insensitive). Then, whichever the tracker, `base-ci`: `ci.mjs base` on the plan's `base` —
+//              the CI of the base's latest SHA on GitHub. The CI comes from the git remote, not from where the
+//              tickets live: with tracker "github" it is read from the frontier's `source` (`--repo`); with
+//              tracker "local", gh runs in the repo without `--repo` and finds the GitHub repository from its
+//              remotes (a remote gh does not know as GitHub is query-failed), and a repo with no `origin` remote
+//              has no CI to read: `base-ci` is then no warning, with `ci` null, and gh is not called. `base-ci`
+//              never fails (`ok` is always true): when that verdict is red or query-failed its `warning` is true
+//              and the freeze goes on (what the host does with a warning is in SKILL.md, freeze step 4); any other
+//              verdict is no warning. When a check fails, `ok` is false and everything below is null.
 //   held       Files other work is changing, each holder with a release condition:
 //              - every other worktree of the repo (not bare, not prunable): `git diff --name-only --no-renames
 //                <merge-base of HEAD and its HEAD>` inside it (committed, staged, unstaged) plus its untracked
@@ -36,9 +48,10 @@
 //              - with tracker "github", every open pull request of `source` whose head is not the current branch:
 //                its files as `gh pr list --json files` returns them;
 //              - the plan's `held` entries.
+//              Git, worktree and PR holders hold whole files; only a `held` entry's list can name symbols.
 //              A holder named in `ignore` (a worktree by path or by its branch, a branch, a PR as `#n`) is left
 //              out; holders with no file are not listed.
-//   excluded   Open tickets whose predicted paths overlap a held path (one path covers the other). They leave
+//   excluded   Open tickets whose predicted entries overlap a held entry, in the sense above. They leave
 //              the frozen set; the host records them as awaiting ruling with the holders and release conditions.
 //   stalled    Open tickets left in the set that can no longer become ready because of an exclusion, in
 //              frontier.mjs's terms: "blocked-external" (an in-set blocker was excluded) or "blocked-upstream"
@@ -58,8 +71,11 @@
 //     "tracker":    "github" | "local",
 //     "source":     "<owner>/<repo>" | "<git-ref>" | "worktree",
 //     "repo":       "<top level of the working tree>" | null,
-//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match",
+//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match" | "base-ci",
 //                                              "ok": true, "detail": "..." }] },
+//                   // base-ci also has "warning": true | false and "ci": ci.mjs base's output without format and
+//                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed }), or null when a local
+//                   // tracker's repo has no origin
 //     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
 //                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
 //     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
@@ -70,7 +86,7 @@
 //     "candidates": [{ "id": "#5", "line": "#5", "unlocks": 2 }]
 //   }
 //   `held` through `candidates` are null when the preflight fails. Paths are sorted, `/` is the whole
-//   repository; lines, their tickets and members follow the frontier's ticket order.
+//   repository, an entry that names a symbol is written `path#symbol`; lines, their tickets and members follow the frontier's ticket order.
 //
 // Exit codes: 0 output written (read `preflight.ok`); 1 a list, git or gh read failed after the preflight;
 // 2 bad arguments or plan.
@@ -78,12 +94,12 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { UsageError, canonical, failure, runIfEntry } from './cli.mjs';
-import { overlaps, parseList } from './overlap.mjs';
+import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
+import { baseVerdict } from './ci.mjs';
 
 export const FORMAT = 'sorry-matt/freeze@1';
 const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
 
-const display = (p) => (p === '' ? '/' : p);
 const uniqueSorted = (xs) => [...new Set(xs)].sort();
 const z = (out) => out.split('\0').filter(Boolean);
 const detail = (e) => (e.stderr && String(e.stderr).trim()) || e.message;
@@ -152,6 +168,9 @@ export function readPlan(path, read, cwd = process.cwd()) {
   }
   const hostHeld = plan.held ?? [];
   if (!Array.isArray(hostHeld)) throw new UsageError(`${path}: held is an array`);
+  const base = plan.base ?? null;
+  if (base !== null && (typeof base !== 'string' || !base)) throw new UsageError(`${path}: base is a non-empty string`);
+  if (!base) throw new UsageError(`${path}: a plan needs base, the branch the lines merge into`);
   const held = hostHeld.map((h, i) => {
     if (!h || typeof h.id !== 'string' || !h.id) throw new UsageError(`${path}: held[${i}] has no id`);
     if (typeof h.files !== 'string' || !h.files) throw new UsageError(`${path}: held ${h.id} has no files list`);
@@ -159,7 +178,7 @@ export function readPlan(path, read, cwd = process.cwd()) {
     const file = resolve(dir, h.files);
     return { id: h.id, files: parseList(read(file), file), release: h.release };
   });
-  return { repo, frontier, predicted, ignore, held };
+  return { repo, frontier, predicted, ignore, held, base };
 }
 
 // ---------- preflight ----------
@@ -170,7 +189,7 @@ export function remoteSlug(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
-export function preflight({ repo, tracker, source }, { git, gh }) {
+export function preflight({ repo, tracker, source, base }, { git, gh }) {
   const checks = [];
   let top = null;
   try {
@@ -211,8 +230,32 @@ export function preflight({ repo, tracker, source }, { git, gh }) {
           : { name: 'repo-match', ok: false, detail: `no remote points at ${source}; remotes: ${urls.join(', ') || 'none'}` },
       );
     }
+    checks.push(baseCheck(baseVerdict({ base, repo: source }, gh)));
+  } else if (top) {
+    // The base's CI comes from the git remote, not the tracker: gh, run in the repository, finds the GitHub
+    // repository from its remotes. No `origin`: no CI to read (the lines go on local verification, as in tick).
+    let origin = true;
+    try {
+      git(top, ['remote', 'get-url', 'origin']);
+    } catch {
+      origin = false;
+    }
+    checks.push(
+      origin
+        ? baseCheck(baseVerdict({ base, cwd: top }, gh))
+        : { name: 'base-ci', ok: true, warning: false, detail: `${base}: the repository has no origin remote, no CI to read`, ci: null },
+    );
   }
   return { top, result: { ok: checks.every((c) => c.ok), checks } };
+}
+
+// A red base, or one whose CI could not be read, is a warning: `ok` stays true and the freeze goes on.
+function baseCheck(v) {
+  const { format: _f, command: _c, ...ci } = v;
+  const at = `${v.branch} ${v.sha ?? '(latest SHA unknown)'}`;
+  if (v.verdict === 'red') return { name: 'base-ci', ok: true, warning: true, detail: `${at} is red; failed runs: ${v.failed.join(', ') || 'none listed'}`, ci };
+  if (v.verdict === 'query-failed') return { name: 'base-ci', ok: true, warning: true, detail: `${at}: CI could not be read (${v.error})`, ci };
+  return { name: 'base-ci', ok: true, warning: false, detail: `${at} is ${v.verdict}${v.reason ? ` (${v.reason})` : ''}`, ci };
 }
 
 // ---------- held files ----------
@@ -296,14 +339,15 @@ const pathsOverlapping = (mine, theirs) => mine.filter((p) => theirs.some((q) =>
 export function freezeTickets({ frontier, predicted, held }) {
   const order = new Map(frontier.tickets.map((t, i) => [t.id, i]));
   const byOrder = (a, b) => order.get(a) - order.get(b);
-  const asPaths = (files) => files.map((f) => (f === '/' ? '' : f));
+  // Held files as entries: git reports whole files; only a host-known holder's list can name symbols.
+  const entries = (h) => h.files.map((f) => (h.source === 'host' ? parseEntry(f) : whole(f)));
 
-  // Exclusion: an open ticket whose predicted paths overlap a held path.
+  // Exclusion: an open ticket whose predicted entries overlap a held one.
   const excluded = [];
   for (const t of frontier.tickets) {
     if (t.state !== 'open') continue;
     const hits = held
-      .map((h) => ({ with: h.id, source: h.source, paths: pathsOverlapping(predicted.get(t.id), asPaths(h.files)).map(display), release: h.release }))
+      .map((h) => ({ with: h.id, source: h.source, paths: pathsOverlapping(predicted.get(t.id), entries(h)).map(display), release: h.release }))
       .filter((h) => h.paths.length);
     if (hits.length) excluded.push({ id: t.id, overlaps: hits });
   }
@@ -347,10 +391,10 @@ export function freezeTickets({ frontier, predicted, held }) {
       if (baseLine.get(a) === baseLine.get(b)) continue;
       const pa = predicted.get(a);
       const pb = predicted.get(b);
-      const paths = uniqueSorted([...pathsOverlapping(pa, pb), ...pathsOverlapping(pb, pa)]);
+      const paths = uniqueSorted([...pathsOverlapping(pa, pb), ...pathsOverlapping(pb, pa)].map(display));
       if (!paths.length) continue;
       union(a, b);
-      joins.push({ tickets: [a, b], paths: paths.map(display) });
+      joins.push({ tickets: [a, b], paths });
     }
   }
   const groups = new Map();
@@ -371,7 +415,7 @@ export function freezeTickets({ frontier, predicted, held }) {
         id,
         members: [...members].sort(byOrder),
         tickets: ids,
-        files: uniqueSorted(ids.flatMap((t) => predicted.get(t) ?? [])).map(display),
+        files: uniqueSorted(ids.flatMap((t) => (predicted.get(t) ?? []).map(display))),
         joins: joins.filter((j) => ids.includes(j.tickets[0])),
       };
     });
@@ -390,7 +434,7 @@ export function freezeTickets({ frontier, predicted, held }) {
 
 export function freeze(plan, deps) {
   const { frontier } = plan;
-  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source }, deps);
+  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source, base: plan.base }, deps);
   const out = { format: FORMAT, tracker: frontier.tracker, source: frontier.source, repo: top, preflight: result };
   if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null };
   const held = heldFiles({ top, tracker: frontier.tracker, source: frontier.source, ignore: plan.ignore, hostHeld: plan.held }, deps);
@@ -398,11 +442,11 @@ export function freeze(plan, deps) {
 }
 
 export function defaultDeps() {
-  const exec = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exec = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
   return {
     read: (p) => readFileSync(p, 'utf8'),
     git: (cwd, args) => exec('git', ['-C', cwd, ...args]),
-    gh: (args) => exec('gh', args),
+    gh: (args, cwd) => exec('gh', args, cwd), // cwd: a local tracker's base CI, which gh reads from the repository's remotes
   };
 }
 

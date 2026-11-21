@@ -29,10 +29,15 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
   `from: original` 來自原票，`from: expansion` 是展開時補上的，附 `by`、`run`、`round`。
 - **fixed point**：線整合分支。
 - **待審 ref**：ticket 分支。
-- **針對性檢查結果**：實作 agent 回報的指令與結果。只用來確認是綠的；實跑的指令由審查方自己選（第 3 節）。
+- **針對性檢查結果**：實作 agent 回報的指令、結果與它跑的 SHA（派工檔的 `targeted checks` 與 `targeted checks ran at`；
+  後者是 `not reported` 時等於沒有 SHA）。開審前確認它是綠的；`light` 與 `standard` 在 SHA 等於審查 head 時沿用它當
+  實跑與突變基準，其餘情況審查方自己跑（第 3 節）。
 - **CI 覆蓋**：這條線的整合分支整併後有沒有 CI 跑全套 —— `covered`、`uncovered`（呼叫方已定案為 CI 不涵蓋整合
-  分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。
+  分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。它只寫進 `live run` 行，
+  不改實跑範圍（第 3 節）。
 - **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
+- **審查分級**：呼叫方審查前已判好的審查分級，與它來自的判級指令輸出檔（`tier.mjs judge` 的 JSON）。給了就照那份
+  輸出，不再自己判；沒給（`none given`）時由你判（下方）。
 - **接續紀錄**：該票接續紀錄的位置 —— GitHub 是第一行為 `<!-- sorry-matt:status -->` 的那則留言，Local Markdown
   是票檔。審查區塊寫在這裡（第 6 節）。
 - **上一次的審查區塊**：複驗一律有，初審在審中 `stuck` 排除後續跑（第 5 節）時也有：就是接續紀錄裡現在那個
@@ -66,8 +71,9 @@ git -C <repo> diff <fixed point>...<ticket 分支> > <scratchpad>/review-<票>.d
 這類凍結寫法），為 false 時沿用既有安裝。不加相依、不下載新工具 —— 審查不改這張票的 diff 與 repo 相依。
 新檔行號一律取自 `git show <ticket 分支>:<path>`。
 
-**審查分級**在這裡由 diff 判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 的數量與各自的
-lens、verifier 與 Fix Verifier 的合批方式和突變上限。在審查用 worktree 的根目錄執行**判級指令**：
+**審查分級**一張票判一次，寫進審查區塊的 `tier`，整張票（含複驗）沿用。它決定 finder 的數量與各自的
+lens、verifier 與 Fix Verifier 的合批方式和突變上限。呼叫方給了審查分級時，你不判：把它給的判級指令輸出檔原樣
+複製到下方判級指令寫輸出的位置（`>` 後的那個檔），以下各節都讀這份。沒給時，在審查用 worktree 的根目錄執行**判級指令**：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <ticket 分支> > <scratchpad>/review-<票>-tier.json 2> <scratchpad>/review-<票>-tier.err
@@ -84,8 +90,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 判級指令以非 0 結束時，`tier` 當成 `full`，`finders` 當成 `[["line-by-line","deleted-behaviour"],["cross-file"],["acceptance","conventions"]]`，
 突變上限 10，`reviewers` 當成 `["primary","architecture"]`，第 4、7 節用 `--tier full`；`<scratchpad>/review-<票>-tier.err` 的路徑補進接續紀錄的「證據路徑」欄。
 
-完成判準：輸入齊全；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
-審查用 worktree 由 `worktree.mjs open` 開在 ticket 分支尖端，相依依 `install` 處理，diff 已存檔；`tier` 取自判級指令的輸出，或在它失敗時是 `full`。
+完成判準：輸入齊全，含針對性檢查跑的 SHA 或它沒有回報；不成立的前提已輸出 `stuck` 並停止；驗收被改過時已記下 `acceptance` finding；
+審查用 worktree 由 `worktree.mjs open` 開在 ticket 分支尖端，相依依 `install` 處理，diff 已存檔；`tier` 取自呼叫方給的判級輸出，
+沒給時取自判級指令的輸出，或在它失敗時是 `full`。
 
 ## 2. Finder：平行找候選
 
@@ -94,7 +101,9 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" judge --base <fixed point> --head <t
 刪除行不派被刪除的行為，沒有規則檔涵蓋改動檔不派 repo 慣例，簽章沒變時跨檔案契約併入逐行。
 
 本 skill 的 finder、architect（下方）、verifier（第 4 節）與 Fix Verifier（第 7 節）一律由你以前景派送：你在自己的
-回合裡等它們全部回來才往下，而你本身也是呼叫方以前景派出的。`get-to-work` 不給審查設時限，前提就是這一條。
+回合裡等它們全部回來才往下。呼叫方以前景 spawn 你，但 Agent tool 可能把你放到背景：這時呼叫方等你的完成通知
+來了才收你的回報，你的做法不變。`get-to-work` 給審查主持 agent 一個時限（`timeout-review`）：你被放到背景時它
+照樣掃時限，超時就停下你，改派一次、重發同一模式的審查。
 spawn 被拒 —— 拿不到 Agent tool，或被 plugin 的 hook 以預算為由擋下 —— 時不重試、不換路，也不自己兼任：結論
 `stuck`，原因寫被拒的訊息，已完成的節照第 5 節留給續跑。
 
@@ -158,27 +167,41 @@ Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktre
 
 ### 實跑
 
-**全套交給 CI，審查只跑受影響範圍。** 在審查用 worktree 的根目錄先判範圍：
+**審查只跑受影響範圍，全套不在審查裡跑。** 有 CI 的線由 CI 在整併後跑全套；CI 不涵蓋整合分支或沒有 `origin`
+的線，由呼叫方在收官跑一次全套（`get-to-work` 的本機驗證）。CI 覆蓋不改變範圍。
+
+**同一組測試在一次審查裡至多跑一次。** 實作 agent 已經跑過針對性檢查；審查依審查分級決定沿用還是自己跑：
+
+- **`light` 與 `standard`：SHA 相同就沿用。** 把第 1 節回報的 SHA 與審查 head 都解成完整 SHA 比對：
+
+  ```bash
+  git -C <repo> rev-parse --verify "<回報的 SHA>^{commit}" "<ticket 分支>^{commit}"
+  ```
+
+  兩行相同時不跑：實跑的結果就是回報的指令與結果，不跑 `scope.mjs`。`live run` 行寫 `scope=affected`、`ci` 照第 1 節
+  的 CI 覆蓋、`source` 照回報的 `source`，另加 `reused=<SHA>`，log 路徑寫回報檔的路徑（第 6 節）。兩行不同、回報沒有
+  SHA，或解不出來時，照下面的 `full` 自己跑一次 —— 絕不沿用別的 commit 的結果。
+- **`full`：自己跑一次。** 不論 SHA 相不相同，照下面判範圍、實跑一次 `affected`。實作 agent 的結果只用來確認開審
+  前提（第 1 節）。敏感改動保有一次獨立實跑，也只多這一次。
+
+自己跑的時候，在審查用 worktree 的根目錄先判範圍：
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/scope.mjs" --base <fixed point> --ci <第 1 節的 CI 覆蓋> > <scratchpad>/review-<票>-scope.json
 ```
 
-呼叫方沒給 CI 覆蓋時省略 `--ci`。範圍與指令來源的規則寫在腳本檔頭，照輸出讀：
+呼叫方沒給 CI 覆蓋時省略 `--ci`。範圍與指令來源的規則寫在腳本檔頭，照輸出讀：輸出的 `scope` 一律是
+`affected`，這裡只跑 typecheck、涵蓋改動檔的測試、改動檔相關的 lint。把輸出的 `targeted`（指令契約「Targeted
+checks」原文）套到 `changed` 上得出指令；它是 `null` 時自己從 manifest 與測試設定推。`tests` 是候選的測試檔，沿
+import 或契約的對照確認涵蓋改動檔才算。專案沒有 typecheck 或 lint 就不跑那一項。
 
-- `scope: full`：CI 不涵蓋整合分支或沒有 `origin`，收官前沒有別人會跑全套，所以照舊跑專案完整的 test、
-  typecheck、lint，各一次。指令取輸出的 `commands`；它是 `null` 時自己從 manifest 與 CI 設定找。
-- `scope: affected`：整併後 CI 會跑全套，這裡只跑 typecheck、涵蓋改動檔的測試、改動檔相關的 lint。把輸出的
-  `targeted`（指令契約「Targeted checks」原文）套到 `changed` 上得出指令；它是 `null` 時自己從 manifest 與測試
-  設定推。`tests` 是候選的測試檔，沿 import 或契約的對照確認涵蓋改動檔才算。專案沒有 typecheck 或 lint 就不跑
-  那一項。
-
-指令由審查方自己選，不照抄實作 agent 回報的那條。輸出的 `scope`、`ci`、`source` 照抄進 `live run` 行（第 6 節），
-所以看得出這次是全套還是受影響範圍、指令來自契約還是自己推的。這是突變的基準：
+自己跑時指令由審查方自己選，不照抄實作 agent 回報的那條。輸出的 `scope`、`ci`、`source` 照抄進 `live run` 行（第 6 節），
+所以看得出 CI 覆蓋、指令來自契約還是自己推的。實跑的結果 —— 沿用的或自己跑的 —— 就是突變的基準，突變不再為基準
+另跑一次（下方的 `--green-at`）：
 
 - 全綠 → 進突變。
 - 紅燈 → 紅燈本身是一則候選（lens `live-run`），交 Verifier 裁決。基準不綠，突變沒有意義，
-  這次不突變，突變紀錄寫 `skipped: red baseline`（格式見第 6 節）。
+  這次不突變，突變紀錄寫 `skipped: red baseline`（格式見第 6 節）。沿用的結果不會是紅的：第 1 節只收綠燈的票。
 
 ### 突變
 
@@ -223,11 +246,18 @@ coverage、coverage.py）或執行環境內建的（Node 22 的
 **沒有工具就手動突變**，用腳本跑。在 scratchpad 寫 plan，格式寫在腳本檔頭：
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --base <fixed point> [--lcov <lcov 檔>] --plan <scratchpad>/mutants.json --ledger <scratchpad>/review-<票>-r<round>-ledger.json --cmd "<測試指令>" > <scratchpad>/mutants-result.json
+node "${CLAUDE_SKILL_DIR}/scripts/mutate.mjs" run --base <fixed point> [--lcov <lcov 檔>] --plan <scratchpad>/mutants.json --ledger <scratchpad>/review-<票>-r<round>-ledger.json --cmd "<測試指令>" [--green-at <實跑的 SHA>] > <scratchpad>/mutants-result.json
 ```
 
-在審查用 worktree 的根目錄執行。`--cmd` 用涵蓋選定行的最窄測試指令，取自實跑的指令或它的縮小版。腳本先跑
-一次基準；拒絕不在本票 diff 改動行上、或 lcov 標為未覆蓋的 mutant，拒絕同一行兩個 mutant、`original`
+在審查用 worktree 的根目錄執行。`--cmd` 用涵蓋選定行的測試指令，取自實跑的指令或它的縮小版。
+
+**基準沿用實跑。** `--cmd` 是實跑裡綠過的一條指令原文 —— 沿用時是回報裡的一條，自己跑時是你跑過的一條 —— 而且
+在審查用 worktree 的根目錄照原文就能跑時，加 `--green-at <實跑的 SHA>`（沿用時是回報的 SHA，自己跑時是審查
+head）：那個 SHA 就是審查用 worktree 的 HEAD 時，腳本不再跑基準，輸出 `baselineSource: "reused"`。輸出
+`greenAtIgnored` 時是 SHA 不是 HEAD，腳本照常跑了基準。`--cmd` 要比實跑的指令窄、或要改寫才能跑時不加
+`--green-at`：腳本先跑一次那條窄指令當基準 —— 一條每次都失敗的指令會把每個 mutant 都算成殺掉，基準就是擋這件事的。
+
+腳本拒絕不在本票 diff 改動行上、或 lcov 標為未覆蓋的 mutant，拒絕同一行兩個 mutant、`original`
 與現行內容不符的 plan，也拒絕 plan 加上 ledger 已用的數量超過上限；`--cap` 只能調低。每個
 mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger。**一輪審查只用一個 ledger**：
 同一輪可以分幾次 `run`，但不換 ledger、不另開一輪來繞過上限。
@@ -249,7 +279,9 @@ mutant 跑完就寫回原始位元組並比對 SHA-256，跑過的記進 ledger�
 `failure_scenario` 寫一個會讓原碼與 mutant 產生不同可觀察結果、而現有測試都沒擋下的具體輸入。
 
 完成判準：實跑結果已記錄；沒有可執行的行時突變已跳過，紀錄寫 `skipped: no executable lines`；
-實跑的範圍與指令來源取自 `scope.mjs` 的輸出，指令不是照抄實作 agent 的；
+`light` 與 `standard` 在回報的 SHA 等於審查 head 時沿用了回報、沒有重跑，SHA 不同或沒有 SHA 時與 `full` 一樣自己跑；
+自己跑的範圍與指令來源取自 `scope.mjs` 的輸出，指令不是照抄實作 agent 的；同一組測試在本輪只跑了一次：`--cmd` 是實跑
+綠過的指令原文時帶了 `--green-at`，只有更窄或改寫過的 `--cmd` 由腳本另跑基準；
 突變只碰本票 diff 中有覆蓋的行，每行至多一個、總數不超過上限，超過上限時本票新測試宣稱守住的行排最前；
 每個 mutant 都有結果；`mutate.mjs` 非 0 結束時已照上面三種情況處理；每個存活的 mutant 都成為候選。
 
@@ -327,17 +359,19 @@ observations:
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 
-live run: scope=<affected | full | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> -> green | red (<log path>)
+live run: scope=<affected | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> [reused=<sha>] -> green | red (<log path>)
 - <command> -> green | red
-mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
+mutation (round <n>): tool=<manual | stryker | cargo-mutants | mutmut> cap=<n> baseline=<reused | ran> mutated=<n> survived=<n> uncovered=<n> coverage=<lcov | inferred>
 - <file>:<line> <operator> -> killed | timeout | survived | restore-failed: <disposition: F2 | equivalent, invalid | ...>
 - error: <message> (<mutation output path>)
 restored: yes | no | n/a
 ```
 
-`live run` 一行寫範圍、CI 覆蓋與指令來源，底下每條指令一行：`scope` 是第 3 節 `scope.mjs` 輸出的 `full` 或
-`affected`，複驗（第 7 節）寫 `findings`；`ci` 照輸出的 `ci`；`source` 取自契約寫 `commands.md`，自己找或自己推的
-寫 `self-found`。`- error:` 只在 `mutate.mjs` 以執行期錯誤結束時出現；`restore-failed` 只用在結束代碼 3 那個
+`live run` 一行寫範圍、CI 覆蓋與指令來源，底下每條指令一行：`scope` 是第 3 節 `scope.mjs` 輸出的 `affected`，
+複驗（第 7 節）寫 `findings`；`ci` 照輸出的 `ci`；`source` 取自契約寫 `commands.md`，自己找或自己推的
+寫 `self-found`。`reused=<sha>` 只在第 3 節沿用實作 agent 的結果時出現：值是它跑的完整 SHA，底下的指令與結果照
+回報，log 路徑是回報檔；自己跑的不寫。`mutation` 行的 `baseline` 照 `mutate.mjs` 輸出的 `baselineSource`
+（`reused` 是沿用實跑、`ran` 是腳本另跑了基準）；用突變工具時寫 `ran`。`- error:` 只在 `mutate.mjs` 以執行期錯誤結束時出現；`restore-failed` 只用在結束代碼 3 那個
 mutant（輸出的 `restoreFailed`）。沒有內容的清單寫 `none`。`acceptance` finding 的位置寫比對輸出的路徑，不寫
 `file:line`。spec 層級的觀察在句末、`(evidence: …)` 之前標 `(spec-level)`。
 
@@ -408,7 +442,7 @@ node "${CLAUDE_SKILL_DIR}/scripts/worktree.mjs" close --path <scratchpad>/review
 
 其餘的 `fix` 留著它，給下一次複驗沿用。
 
-完成判準：區塊符合上述格式；`live run` 行看得出範圍是 `full`、`affected` 還是 `findings`；`restored` 取自
+完成判準：區塊符合上述格式；`live run` 行看得出範圍是 `affected` 還是 `findings`；`restored` 取自
 `worktree.mjs status`；接續紀錄只有一個最新的 review 區塊，而且保有歷輪的突變紀錄；沒有發出任何 PR 評語、
 review 或 `suggestion` 區塊；結論定案時審查用 worktree 已移除，其餘的 `fix` 留著它；回傳給呼叫方的只有至多
 六行的審查回報，不含 finding 全文。
@@ -434,10 +468,12 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。複驗不派 Finder �
    它對每則 finding 回報**已關閉**或**未關閉**，附 `file:line`，以及修正 diff 的改動行裡命中判準、成立的本輪新
    finding（附 `rule` 與修法方向）。回報最後一行 `noticed`：同一則 finding 的其他寫法、修正 diff 以外的行、沒命中
    判準的問題，由你當成觀察。
-2. **實跑**：只跑涵蓋 finding 行的測試，加上修正新增的測試。`live run` 行寫 `scope=findings`，`ci` 照第 1 節的
+2. **實跑**：只跑 findings 的範圍 —— 涵蓋 finding 行的測試，加上修正新增的測試。不論審查分級，都不重跑初審的
+   `affected`、不跑 `scope.mjs`，也不沿用修正 agent 回報的結果。`live run` 行寫 `scope=findings`，`ci` 照第 1 節的
    CI 覆蓋，`source` 是這幾條指令的來源。
 3. **突變**：只重跑上次存活的 mutant，這次必須被殺掉；該行內容變了，就在取代它的那一行做同一個運算子的
-   mutant。用本輪新的 ledger。修正新增的行由第 1 步第 2 題把關。
+   mutant。用本輪新的 ledger。基準沿用第 2 步：`--cmd` 是第 2 步綠過的指令原文時加 `--green-at <修正後的 head>`
+   （第 3 節）。修正新增的行由第 1 步第 2 題把關。
 4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
    關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
@@ -448,6 +484,6 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。複驗不派 Finder �
 **一張票至多兩次 `recheck`。** 第二次的結論仍是 `fix` 時，區塊照寫，呼叫方依 get-to-work 的規則把這張票標
 卡住；本輪新 finding 與舊 finding 算在同一個輪數裡。
 
-完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑只碰
-finding 涉及的行，突變只重跑上次存活的 mutant；本輪新 finding 都落在修正 diff 的改動行上並帶 `rule`；
+完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑只跑
+findings 的範圍、沒有重跑 `affected`，突變只重跑上次存活的 mutant；本輪新 finding 都落在修正 diff 的改動行上並帶 `rule`；
 結論與區塊已依第 6 節寫進接續紀錄。

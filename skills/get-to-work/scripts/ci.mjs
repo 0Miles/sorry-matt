@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // ci: what GitHub Actions says about an integration branch. `verdict` turns the runs of one SHA into one result;
-// `earliest-red` finds where a red line turned red and which tickets were merged in that stretch.
+// `base` does the same for the latest SHA of the base branch; `earliest-red` finds where a red line turned red
+// and which tickets were merged in that stretch.
 // Read-only: it queries `gh` and `git` and never reruns, pushes or writes anything.
 // No dependencies: runs on a bare Node 20+ with git and the `gh` CLI.
 //
 // Usage
 //   node ci.mjs verdict [--repo <owner>/<repo>] <integration branch> <sha>
+//   node ci.mjs base [--repo <owner>/<repo>] <base branch>
 //   node ci.mjs earliest-red <plan.json>
 //
 // verdict
@@ -36,6 +38,18 @@
 //     "rerun":   [123]                             // for cancelled: the ids of the cancelled runs, for
 //                                                  // `gh run rerun <id>`, which the caller runs; else []
 //   }
+//
+// base
+//   Input: the base branch, as a branch name or `origin/<branch>`, `refs/remotes/origin/<branch>` or
+//   `refs/heads/<branch>` (the prefix is dropped). Its latest SHA is GitHub's, not a local ref's:
+//     gh api repos/<owner>/<repo>/commits/<branch> --jq .sha
+//   (`repos/{owner}/{repo}/...` without --repo, which gh fills in from the current directory). That SHA's runs are
+//   then read and judged exactly as `verdict` does. A lookup that fails or does not print a SHA is query-failed
+//   with `sha` null, and no runs are read.
+//
+//   Output: `verdict`'s fields with `command` "base", `branch` the base branch and `sha` its latest SHA or null,
+//   plus `failed`: the ids of the red runs, for `gh run view <id> --log-failed`. freeze.mjs reads it for its
+//   `base-ci` preflight check.
 //
 // earliest-red
 //   plan.json, written by the host for one line:
@@ -74,11 +88,17 @@
 //   conclusion is green or no SHA has one.
 //   `lowerBound`: that green SHA (`kind` "green"), or the merge base when there is no earlier green conclusion
 //   (`kind` "merge-base"), on lines with CI as well.
-//   `tickets`: the tickets owning the two-parent first-parent merges of `<lowerBound.sha>..<earliestRed>`, oldest
-//   first, each once, matched by the rules in the header of review-guide.mjs (merges.mjs implements them for
-//   both scripts): a ticket with recorded `merges` is matched only by SHA; one without, by its subject —
-//   `Merge branch '<branch>'` or `Merge branch '<branch>-ci'`, or `Merge <id>`. Host commits in the stretch are
-//   not merges and own nothing.
+//   `baseCi`: with `ci` true, a red and no green on the line, the base's runs of the merge base, from
+//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,status,conclusion
+//   where <base branch> is `base` without a leading `origin/`, `refs/remotes/origin/` or `refs/heads/`, judged by
+//   the rules of `verdict`. When that verdict is red, the base was already red where the line left it: the red
+//   came in with the base, `tickets` is empty and `unmatched` true. Any other verdict (green, running, cancelled,
+//   no-run, query-failed) changes nothing. null when the base is not read.
+//   `tickets`: unless `baseCi` is red, the tickets owning the two-parent first-parent merges of
+//   `<lowerBound.sha>..<earliestRed>`, oldest first, each once, matched by the rules in the header of
+//   review-guide.mjs (merges.mjs implements them for both scripts): a ticket with recorded `merges` is matched
+//   only by SHA; one without, by its subject — `Merge branch '<branch>'` or `Merge branch '<branch>-ci'`, or
+//   `Merge <id>`. Host commits in the stretch are not merges and own nothing.
 //
 //   Output (stdout, JSON, format "sorry-matt/ci@1"; fields are only ever added, never renamed)
 //   {
@@ -90,11 +110,16 @@
 //     "truncated":   false,                                    // true: gh returned 200 runs, older ones may be
 //                                                              // missing (see Truncation above)
 //     "boundary":    "<sha>" | null,                           // set only with truncated: the oldest run's SHA
+//     "baseCi":      { "branch": "main", "sha": "<merge base>",
+//                      "verdict": "query-failed" | "no-run" | "red" | "running" | "cancelled" | "green",
+//                      "error": "<gh's error message>" | null, "runs": [...], "failed": [123] } | null,
+//                                                              // the base at the merge base (see `baseCi` above);
+//                                                              // `runs` and `failed` as in `verdicts`
 //     "earliestRed": "<sha>" | null,
 //     "lowerBound":  { "sha": "<sha>", "kind": "green" | "merge-base" } | null,   // null with earliestRed
 //     "tickets":     ["#12", "#14"],                           // ids, oldest merge first
 //     "unmatched":   false,                                    // true: there is a red, and no merge in the
-//                                                              // stretch belongs to a ticket
+//                                                              // stretch belongs to a ticket, or `baseCi` is red
 //     "merges":      [{ "sha": "<merge>", "subject": "...", "tickets": ["#12"],
 //                       "matchedBy": "sha" | "branch" | "id" | null }],   // the stretch's merges, oldest first
 //     "verdicts":    [{ "sha": "<sha>", "verdict": "red", "source": "ci" | "local", "partial": false,
@@ -270,6 +295,22 @@ export function earliestRed(plan, { git, gh }) {
     red = i;
   }
 
+  // No green on the line: the stretch reaches back to the merge base. When the base was already red there, the
+  // red came in with the base and belongs to no ticket on the line.
+  let baseCi = null;
+  if (plan.ci && red >= 0 && green < 0) {
+    const branch = baseBranch(plan.base);
+    const args = ['--branch', branch, '--commit', mergeBase, '--limit', '100', '--json', `headSha,${RUN_FIELDS}`, ...(plan.repo ? ['--repo', plan.repo] : [])];
+    const q = queryRuns(gh, args, plan.worktree);
+    if (q.error !== undefined) {
+      baseCi = { branch, sha: mergeBase, verdict: 'query-failed', error: q.error, runs: [], failed: [] };
+    } else {
+      const runs = q.rows.filter((r) => r.headSha === mergeBase).map(toRun);
+      const failed = runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id);
+      baseCi = { branch, sha: mergeBase, verdict: classify(runs).verdict, error: null, runs, failed };
+    }
+  }
+
   const out = {
     format: FORMAT,
     command: 'earliest-red',
@@ -278,6 +319,7 @@ export function earliestRed(plan, { git, gh }) {
     error,
     truncated,
     boundary,
+    baseCi,
     earliestRed: null,
     lowerBound: null,
     tickets: [],
@@ -299,7 +341,7 @@ export function earliestRed(plan, { git, gh }) {
       const match = owners(c);
       return { sha: c.sha, subject: c.subject, tickets: match.owners.map((t) => t.id), matchedBy: match.owners.length ? match.matchedBy : null };
     });
-  const tickets = [...new Set(merges.flatMap((m) => m.tickets))];
+  const tickets = baseCi?.verdict === 'red' ? [] : [...new Set(merges.flatMap((m) => m.tickets))];
   return {
     ...out,
     earliestRed: walk[red].sha,
@@ -310,7 +352,28 @@ export function earliestRed(plan, { git, gh }) {
   };
 }
 
-function verdictArgs(argv) {
+// The branch GitHub knows the base by: `origin/main`, `refs/remotes/origin/main` and `refs/heads/main` are `main`.
+const baseBranch = (base) => base.replace(/^refs\/remotes\/origin\/|^origin\/|^refs\/heads\//, '');
+
+/** The base branch's latest SHA on GitHub and the verdict of its runs: the `base` command of the header. */
+export function baseVerdict({ base, repo, cwd }, gh) {
+  const branch = baseBranch(base);
+  const head = { format: FORMAT, command: 'base', branch };
+  let sha;
+  try {
+    sha = String(gh(['api', `repos/${repo ?? '{owner}/{repo}'}/commits/${branch}`, '--jq', '.sha'], cwd)).trim();
+    if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error(`gh api did not print a SHA: ${sha.slice(0, 80)}`);
+  } catch (e) {
+    const error = (e.stderr && String(e.stderr).trim()) || e.message;
+    return { ...head, sha: null, verdict: 'query-failed', reason: null, error, runs: [], rerun: [], failed: [] };
+  }
+  const v = verdict({ branch, sha, repo, cwd }, gh);
+  const failed = v.runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id);
+  return { ...head, sha, verdict: v.verdict, reason: v.reason, error: v.error, runs: v.runs, rerun: v.rerun, failed };
+}
+
+// --repo and the positional arguments of verdict (2) and base (1).
+function repoArgs(argv, count, usage) {
   const rest = [];
   let repo = null;
   for (let i = 0; i < argv.length; i += 1) {
@@ -323,8 +386,8 @@ function verdictArgs(argv) {
       rest.push(argv[i]);
     }
   }
-  if (rest.length !== 2) throw new UsageError('verdict takes <integration branch> <sha>');
-  return { branch: rest[0], sha: rest[1], repo };
+  if (rest.length !== count) throw new UsageError(usage);
+  return { rest, repo };
 }
 
 export function defaultDeps() {
@@ -342,12 +405,16 @@ export function main(argv, deps = defaultDeps()) {
     const [command, ...rest] = argv;
     let result;
     if (command === 'verdict') {
-      result = verdict({ ...verdictArgs(rest), cwd: deps.cwd }, deps.gh);
+      const { rest: [branch, sha], repo } = repoArgs(rest, 2, 'verdict takes <integration branch> <sha>');
+      result = verdict({ branch, sha, repo, cwd: deps.cwd }, deps.gh);
+    } else if (command === 'base') {
+      const { rest: [base], repo } = repoArgs(rest, 1, 'base takes <base branch>');
+      result = baseVerdict({ base, repo, cwd: deps.cwd }, deps.gh);
     } else if (command === 'earliest-red') {
       if (rest.length !== 1 || rest[0].startsWith('-')) throw new UsageError('earliest-red takes exactly one plan file');
       result = earliestRed(readPlan(resolve(rest[0]), deps.read), deps);
     } else {
-      throw new UsageError('expected verdict or earliest-red');
+      throw new UsageError('expected verdict, base or earliest-red');
     }
     return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
   } catch (e) {

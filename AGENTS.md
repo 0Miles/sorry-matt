@@ -143,6 +143,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 硬停 | hard stop |
 | 確認呼叫 | prompting call |
 | 精簡 | simplify pass |
+| 精簡 agent | simplify agent |
+| 跳過精簡 | skip the simplify pass |
 | 展開(票) | expand |
 | 兩段展開 | two-stage expansion |
 | 完整展開 | full expansion |
@@ -419,6 +421,18 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 裁剪(lens) | prune |
 | 併入(lens) | fold into |
 | 合批 | batch |
+| 寫到 symbol(預計檔案) | narrow to a symbol |
+| symbol 鏈 | symbol chain |
+| 基底 CI | base CI |
+| 審查方式 | review method |
+| minimal 審查 | minimal review |
+| prove-it 審查 | prove-it review |
+| 敏感路徑 | sensitive path |
+| 前景/背景(spawn) | foreground / background |
+| 計數(審查回報 `counts:` 行的) | counts |
+| 報告檔(minimal reviewer 的) | report file |
+| agent 回報(實作或修正 agent 交回的) | agent report |
+| 針對性檢查結果 | targeted-check results |
 
 ## 外部語義來源
 
