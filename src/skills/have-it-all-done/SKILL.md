@@ -86,8 +86,10 @@ disable-model-invocation: true
 
 開局 agent 交付之後、進入步驟 3 之前，執行 `ASKING.md` 第 4 節的**唯一裁決點**。
 
-**基底 CI**：tracker 是 GitHub 時，裁決點前以 `node <base directory>/../get-to-work/scripts/ci.mjs base --repo <owner>/<repo> <基底分支>`
-讀基底最新 SHA 的 CI（輸出欄位在該腳本檔頭）。`verdict` 是 `red` 就在裁決點列一題「繼續，或先修基底」，附分支、
+**基底 CI**：裁決點前在 repo 裡以 `node <base directory>/../get-to-work/scripts/ci.mjs base [--repo <owner>/<repo>] <基底分支>`
+讀基底最新 SHA 的 CI（輸出欄位在該腳本檔頭）。CI 來自 git remote，與 tracker 無關：tracker 是 GitHub 時帶
+`--repo` 指向票所在的 repo；Local Markdown 時不帶，`gh` 由 repo 的 remote 認出 GitHub repo。repo 沒有 `origin`
+remote 時沒有 CI 可讀，不跑、不列題。`verdict` 是 `red` 就在裁決點列一題「繼續，或先修基底」，附分支、
 SHA 與 `failed` 的 run id；這題屬第 2 節 (a)，建議「繼續」，寫明每條線的 CI 都會帶著這個紅，基底帶進來的紅由
 紅燈處置判為對不到票。`query-failed` 時重跑一次，仍失敗就不列題，代答「繼續」並連同錯誤訊息記進自答清單；
 其他結果不列題。題目的結果（分支、SHA、選擇）記進 ledger 第 2 欄，`get-to-work` 凍結時照它走。選「先修基底」

@@ -31,9 +31,11 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 4. Write a plan and run `scripts/freeze.mjs` (preflight, held files, exclusions, **joined lines**, candidate order).
    When `preflight.ok` is false, fix what `checks` lists and rerun; a holder git cannot see (another session you know
    of) goes into the plan's `held`. Each `excluded` ticket is **awaiting ruling**, with its holder and release
-   condition. The plan's `base` is the base branch the lines merge into (required on GitHub).
-   **Base CI**: the `base-ci` check reads the CI of the base's latest SHA and never blocks the freeze; when its
-   `warning` is true (the base is red, or its CI could not be read):
+   condition. The plan's `base` is the base branch the lines merge into (required).
+   **Base CI**: the `base-ci` check reads the CI of the base's latest SHA and never blocks the freeze. The CI comes
+   from the git remote, not from where the tickets live: Local Markdown reads it too (`gh`, in the repo, finds the
+   GitHub repo from its remotes); a repo with no `origin` has no CI to read, `ci` is null and it is no warning.
+   When its `warning` is true (the base is red, or its CI could not be read):
    - Composed by `have-it-all-done`, follow the choice the ruling point recorded in ledger field 2; when field 2 has no
      such question (the base was not red at the ruling point), answer "continue" on the user's behalf and log it in
      the self-answer log.

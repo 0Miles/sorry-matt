@@ -312,21 +312,55 @@ test('base-ci: a base still running or with no run is neither blocking nor a war
   }
 });
 
-test('base-ci: a github plan needs base; a local tracker reads no base CI', (t) => {
+test('base-ci: every plan needs base, whichever the tracker', (t) => {
   const dir = scratch(t);
   const repo = repoIn(dir, { remote: null });
-  const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { base: undefined } });
-  assert.equal(r.code, 2);
-  assert.match(r.err, /base/);
-  const local = run(dir, {
-    repo,
-    frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }),
-    files: { '#1': 'a\n' },
-    extra: { base: undefined },
-    gh: () => assert.fail('gh must not be called for a local tracker'),
-  });
-  assert.equal(local.code, 0, local.err);
-  assert.deepEqual(local.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean']);
+  for (const frontier of [frontierOf([['#1']]), frontierOf([['#1']], { tracker: 'local', source: 'worktree' })]) {
+    const r = run(dir, { repo, frontier, files: { '#1': 'a\n' }, extra: { base: undefined }, gh: () => assert.fail('gh is not called') });
+    assert.equal(r.code, 2, frontier.tracker);
+    assert.match(r.err, /base/);
+  }
+});
+
+// The base's CI comes from the git remote and gh, not from where the tickets live: a Local Markdown run reads it
+// too, through gh in the repository (gh finds the GitHub repository from its remotes), with no --repo.
+test('base-ci: a local tracker in a repository with an origin reads the base CI through gh in that repository', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const calls = [];
+  const cwds = [];
+  const ok = ghOk([], { baseRuns: [ghRun(7, 'failure')], calls });
+  const gh = (args, cwd) => {
+    cwds.push(cwd);
+    return ok(args);
+  };
+  const r = run(dir, { repo, frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }), files: { '#1': 'a\n' }, gh });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean', 'base-ci']);
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.sha, base.ci.verdict, base.ci.failed], [true, true, 'main', BASE_SHA, 'red', [7]]);
+  assert.equal(r.json.preflight.ok, true);
+  // only the base's CI: no gh auth check and no pull requests for a local tracker
+  assert.deepEqual(calls.map((a) => a[0]), ['api', 'run']);
+  assert.deepEqual(calls[0], ['api', 'repos/{owner}/{repo}/commits/main', '--jq', '.sha']);
+  assert.ok(!calls[1].includes('--repo'), calls[1].join(' '));
+  assert.deepEqual(cwds, [r.json.repo, r.json.repo], 'gh runs in the repository');
+});
+
+test('base-ci: a local tracker whose origin gh cannot read is a warning (query-failed) that does not block the freeze', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir, { remote: 'https://gitlab.example.invalid/acme/widgets.git' });
+  const gh = () => {
+    const e = new Error('Command failed: gh api');
+    e.stderr = 'none of the git remotes configured for this repository point to a known GitHub host';
+    throw e;
+  };
+  const r = run(dir, { repo, frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }), files: { '#1': 'a\n' }, gh });
+  assert.equal(r.code, 0, r.err);
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci.sha, base.ci.verdict], [true, true, null, 'query-failed']);
+  assert.match(base.detail, /known GitHub host/);
+  assert.equal(r.json.preflight.ok, true);
 });
 
 test('preflight fails outside a git repository; the rest is null and gh is still checked', (t) => {
@@ -402,7 +436,7 @@ test('preflight fails when no remote points at the frontier source (another repo
 test('local tracker: no gh check, no remote needed, no pull requests read', (t) => {
   const dir = scratch(t);
   const repo = repoIn(dir, { remote: null });
-  const gh = () => assert.fail('gh must not be called for a local tracker');
+  const gh = () => assert.fail('gh must not be called for a local tracker without an origin');
   const r = run(dir, {
     repo,
     frontier: frontierOf([['.scratch/f/issues/01-a.md']], { tracker: 'local', source: 'worktree' }),
@@ -410,7 +444,11 @@ test('local tracker: no gh check, no remote needed, no pull requests read', (t) 
     gh,
   });
   assert.equal(r.code, 0, r.err);
-  assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean']);
+  assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean', 'base-ci']);
+  // no origin: no CI to read (its lines go on local verification, as tick has it), and no warning
+  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  assert.deepEqual([base.ok, base.warning, base.ci], [true, false, null]);
+  assert.match(base.detail, /no origin/);
   assert.deepEqual(r.json.candidates, [{ id: '.scratch/f/issues/01-a.md', line: '.scratch/f/issues/01-a.md', unlocks: 0 }]);
 });
 

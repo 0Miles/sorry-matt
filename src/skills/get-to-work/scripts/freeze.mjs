@@ -10,17 +10,16 @@
 // a line never spans repositories):
 //   {
 //     "repo":     "<working tree>",                 // optional; default the current directory
-//     "base":     "<base branch>",                  // the branch the lines merge into, e.g. "main"; needed with
-//                                                   // tracker "github", ignored otherwise
+//     "base":     "<base branch>",                  // the branch the lines merge into, e.g. "main"; needed
 //     "frontier": "<frontier output file>" | { ...frontier.mjs output... },   // format sorry-matt/frontier@1
 //     "files":    { "#11": "<predicted-files list>", ... },                   // one per open ticket
 //     "ignore":   ["<worktree path>" | "<branch>" | "#<pr>"],                // optional holders to leave out
 //     "held":     [{ "id": "<who>", "files": "<predicted-files list>", "release": "<condition>" }]  // optional
 //   }
 //   Relative paths are relative to the plan file. `frontier` is the output of frontier.mjs for the whole frozen
-//   set, run without --line; its `tracker` and `source` decide the GitHub checks and which repository's pull
-//   requests are read. A predicted-files list is the format overlap.mjs reads: one repo-relative path per line,
-//   `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
+//   set, run without --line; its `tracker` and `source` decide the GitHub checks, which repository's pull
+//   requests are read, and how the base's CI is read. A predicted-files list is the format overlap.mjs reads:
+//   one repo-relative path per line, `/` alone for the whole repository, blank lines and `#` lines ignored; a path covers itself and everything
 //   under it, and `path#symbol` (`path#outer#inner` when nested) narrows it to a function, block or markdown
 //   heading of that file. Overlap is overlap.mjs's: two entries on the same path that both name a symbol
 //   overlap only when one symbol chain starts with the other; an entry without a symbol is the whole file.
@@ -31,11 +30,15 @@
 //   preflight  `git-repo`: the repo is a git working tree with a commit on HEAD. `clean`: `git status
 //              --porcelain` prints nothing. With tracker "github" also `gh-auth`: `gh auth status` exits 0, and
 //              `repo-match`: one of the repo's remotes points at the frontier's `source` (owner/repo, any host,
-//              case-insensitive), and `base-ci`: `ci.mjs base` on the plan's `base` and the frontier's
-//              `source` — the CI of the base's latest SHA on GitHub. `base-ci` never fails (`ok` is always true):
-//              when that verdict is red or query-failed its `warning` is true and the freeze goes on (what the
-//              host does with a warning is in SKILL.md, freeze step 4); any other verdict is no warning. When a
-//              check fails, `ok` is false and everything below is null.
+//              case-insensitive). Then, whichever the tracker, `base-ci`: `ci.mjs base` on the plan's `base` —
+//              the CI of the base's latest SHA on GitHub. The CI comes from the git remote, not from where the
+//              tickets live: with tracker "github" it is read from the frontier's `source` (`--repo`); with
+//              tracker "local", gh runs in the repo without `--repo` and finds the GitHub repository from its
+//              remotes (a remote gh does not know as GitHub is query-failed), and a repo with no `origin` remote
+//              has no CI to read: `base-ci` is then no warning, with `ci` null, and gh is not called. `base-ci`
+//              never fails (`ok` is always true): when that verdict is red or query-failed its `warning` is true
+//              and the freeze goes on (what the host does with a warning is in SKILL.md, freeze step 4); any other
+//              verdict is no warning. When a check fails, `ok` is false and everything below is null.
 //   held       Files other work is changing, each holder with a release condition:
 //              - every other worktree of the repo (not bare, not prunable): `git diff --name-only --no-renames
 //                <merge-base of HEAD and its HEAD>` inside it (committed, staged, unstaged) plus its untracked
@@ -71,7 +74,8 @@
 //     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match" | "base-ci",
 //                                              "ok": true, "detail": "..." }] },
 //                   // base-ci also has "warning": true | false and "ci": ci.mjs base's output without format and
-//                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed })
+//                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed }), or null when a local
+//                   // tracker's repo has no origin
 //     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
 //                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
 //     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
@@ -166,7 +170,7 @@ export function readPlan(path, read, cwd = process.cwd()) {
   if (!Array.isArray(hostHeld)) throw new UsageError(`${path}: held is an array`);
   const base = plan.base ?? null;
   if (base !== null && (typeof base !== 'string' || !base)) throw new UsageError(`${path}: base is a non-empty string`);
-  if (frontier.tracker === 'github' && !base) throw new UsageError(`${path}: a github plan needs base, the branch the lines merge into`);
+  if (!base) throw new UsageError(`${path}: a plan needs base, the branch the lines merge into`);
   const held = hostHeld.map((h, i) => {
     if (!h || typeof h.id !== 'string' || !h.id) throw new UsageError(`${path}: held[${i}] has no id`);
     if (typeof h.files !== 'string' || !h.files) throw new UsageError(`${path}: held ${h.id} has no files list`);
@@ -227,6 +231,20 @@ export function preflight({ repo, tracker, source, base }, { git, gh }) {
       );
     }
     checks.push(baseCheck(baseVerdict({ base, repo: source }, gh)));
+  } else if (top) {
+    // The base's CI comes from the git remote, not the tracker: gh, run in the repository, finds the GitHub
+    // repository from its remotes. No `origin`: no CI to read (the lines go on local verification, as in tick).
+    let origin = true;
+    try {
+      git(top, ['remote', 'get-url', 'origin']);
+    } catch {
+      origin = false;
+    }
+    checks.push(
+      origin
+        ? baseCheck(baseVerdict({ base, cwd: top }, gh))
+        : { name: 'base-ci', ok: true, warning: false, detail: `${base}: the repository has no origin remote, no CI to read`, ci: null },
+    );
   }
   return { top, result: { ok: checks.every((c) => c.ok), checks } };
 }
@@ -424,11 +442,11 @@ export function freeze(plan, deps) {
 }
 
 export function defaultDeps() {
-  const exec = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exec = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
   return {
     read: (p) => readFileSync(p, 'utf8'),
     git: (cwd, args) => exec('git', ['-C', cwd, ...args]),
-    gh: (args) => exec('gh', args),
+    gh: (args, cwd) => exec('gh', args, cwd), // cwd: a local tracker's base CI, which gh reads from the repository's remotes
   };
 }
 

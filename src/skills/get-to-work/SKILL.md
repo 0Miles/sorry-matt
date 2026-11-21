@@ -28,8 +28,10 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 3. 為每張票寫預計檔案（第 2 節「預計檔案」）。
 4. 寫計畫檔跑 `scripts/freeze.mjs`：前置檢查、他線佔用、排除、**合線**與候選順序都由它算。`preflight.ok` 是
    false 就照 `checks` 修好重跑；腳本看不到的佔用（本 session 已知的其他 session）寫進計畫檔的 `held`。
-   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（GitHub 時必填）。
-   **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結；`warning` 是 true（基底紅，或 CI 讀不到）時：
+   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）。
+   **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結。CI 來自 git remote，與票放在哪無關：Local Markdown
+   也讀（`gh` 在 repo 裡由 remote 認出 GitHub repo）；repo 沒有 `origin` 時沒有 CI 可讀，`ci` 是 null，不是警告。
+   `warning` 是 true（基底紅，或 CI 讀不到）時：
    - 由 `have-it-all-done` 組合時照 ledger 第 2 欄裁決點的選擇走；第 2 欄沒有這題（裁決點時基底不紅）就代答
      「繼續」，記進自答清單。
    - 獨立執行時，紅就在這裡問使用者「繼續，或先修基底」（`ASKING.md` 第 2 節 (a)，建議「繼續」，寫明每條線的

@@ -105,9 +105,11 @@ next action instead of re-running what is already published.
 
 After the kickoff agent delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4.
 
-**Base CI**: when the tracker is GitHub, before the ruling point read the CI of the base's latest SHA with
-`node <base directory>/../get-to-work/scripts/ci.mjs base --repo <owner>/<repo> <base branch>` (its output fields are in
-that script's header). When `verdict` is `red`, list one question at the ruling point, "continue, or fix the base
+**Base CI**: before the ruling point, in the repo, read the CI of the base's latest SHA with
+`node <base directory>/../get-to-work/scripts/ci.mjs base [--repo <owner>/<repo>] <base branch>` (its output fields are in
+that script's header). The CI comes from the git remote, not from the tracker: when the tracker is GitHub, pass
+`--repo` for the repo the tickets live in; under Local Markdown leave it out and `gh` finds the GitHub repo from the
+repo's remotes. A repo with no `origin` remote has no CI to read: do not run it, and list no question. When `verdict` is `red`, list one question at the ruling point, "continue, or fix the base
 first", with the branch, the SHA and the run ids in `failed`; it falls under section 2(a), so recommend "continue",
 stating that every line's CI will carry this red and that red-light handling judges a red the base brought in as
 mapping to no ticket. On `query-failed` run it once more; if it still fails, list no question, answer "continue" on
