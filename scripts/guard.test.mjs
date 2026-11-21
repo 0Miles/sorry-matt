@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide as decideWith, confirmCommand, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, confirmInvocation, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { parse } from '../hooks/shell.mjs';
 import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
 import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
@@ -267,6 +268,48 @@ test('cmd /c is read with cmd quoting: backslashes are paths, \\\\?\\ is a long 
   assert.equal(pwshAt('cmd /c "rd /s /q D:\\other\\place"'), 'catastrophic');
   assert.equal(pwshAt('cmd /c "rd /s /q \\\\?\\D:\\other\\place"'), 'catastrophic');
   assert.equal(bash("cmd /c 'rd /s /q C:\\Users'"), 'catastrophic');
+});
+
+test('bash double quotes keep a backslash unless it escapes $, backtick, ", \\ or a newline', () => {
+  const argv = (line, dialect = 'bash') => parse(line, dialect).map((seg) => seg.argv);
+  assert.deepEqual(argv('echo "C:\\a\\b" "x\\"y" "\\$x" "a\\\\b"'), [['echo', 'C:\\a\\b', 'x"y', '$x', 'a\\b']]);
+  assert.deepEqual(argv('echo "a\\`b"'), [['echo', 'a`b']]);
+  assert.deepEqual(argv('echo "a\\\nb"'), [['echo', 'ab']]);
+  assert.deepEqual(argv('echo "a\\\r\nb"'), [['echo', 'ab']]);
+  assert.deepEqual(argv('echo "\\n" "\\\'" "a\\""'), [['echo', '\\n', "\\'", 'a"']]);
+  // Outside quotes a backslash still escapes whatever follows it.
+  assert.deepEqual(argv('echo C:\\a\\b'), [['echo', 'C:ab']]);
+  // PowerShell and cmd quoting are not bash's.
+  assert.deepEqual(argv('echo "C:\\a\\b" "x`"y"', 'powershell'), [['echo', 'C:\\a\\b', 'x"y']]);
+  assert.deepEqual(argv('echo "C:\\a\\b" "a^b"', 'cmd'), [['echo', 'C:\\a\\b', 'a^b']]);
+});
+
+test('Bash: a double-quoted backslash path is read as that path', () => {
+  const at = (command) => verdicts('Bash', { command }, 'D:/code/x')[0] ?? null;
+  for (const [command, category, level] of [
+    ['rm -rf "D:\\elsewhere\\proj"', 'catastrophic', 'double'],
+    ['rm -rf "D:/elsewhere/proj"', 'catastrophic', 'double'],
+    ['cp perms.json "C:\\Users\\me\\.claude\\settings.json"', 'claude-settings', 'ask'],
+    ['cp perms.json "C:/Users/me/.claude/settings.json"', 'claude-settings', 'ask'],
+  ]) {
+    assert.equal(at(command)?.category, category, command);
+    assert.equal(at(command)?.level, level, command);
+  }
+  // A delete inside the working directory is still let through.
+  assert.equal(at('rm -rf "D:\\code\\x\\dist"'), null);
+});
+
+test('Bash: the confirm command with a double-quoted backslash path is the confirm command', () => {
+  const token = '0123456789abcdef';
+  const invocation = (command, tool_name = 'Bash') =>
+    confirmInvocation({ tool_name, tool_input: { command }, cwd: 'D:/code/x' }, 'C:\\p\\sorry-matt');
+  const backslashed = `node "C:\\p\\sorry-matt\\hooks\\confirm.mjs" ${token}`;
+  assert.equal(invocation(backslashed), token);
+  assert.equal(invocation(backslashed, 'PowerShell'), token);
+  assert.equal(invocation(`node "C:/p/sorry-matt/hooks/confirm.mjs" ${token}`), token);
+  assert.equal(invocation(`${backslashed}; echo x`), '');
+  assert.equal(invocation(`${backslashed} > out.txt`), '');
+  assert.equal(invocation(`node "C:\\p\\other\\hooks\\confirm.mjs" ${token}`), '');
 });
 
 for (const [category, commands] of Object.entries(CLASSIFIED)) {
