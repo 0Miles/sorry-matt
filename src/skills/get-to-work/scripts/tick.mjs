@@ -1082,9 +1082,9 @@ function stepTimeouts(c) {
         judge(
           `timeout:${x.id}@${x.a.assigned}`,
           'timeout',
-          `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it and settle it by TIMEOUTS.md step 3 (${hint}); write the timeout handling into the status record (step 4). Record the branch taken; collected when it had already finished (its report is then taken).`,
+          `${x.id} (${x.stage}, ${x.tickets.join(', ')}) is overdue: ${result.error ? `error ${result.error}` : 'stop'}. TaskStop it (TIMEOUTS.md step 1) and settle it by step 2 (${hint}); write the timeout handling into the status record (step 3). Record the branch taken; collected when it had already finished (its report is then taken).`,
           x.stage === 'in-review' ? ['reassign', 'stuck', 'awaiting-ruling', 'collected'] : ['reassign', 'stuck', 'awaiting-ruling', 'send-back', 'collected'],
-          [doc('TIMEOUTS.md', 'steps 3 and 4')],
+          [doc('TIMEOUTS.md', 'steps 1 to 3')],
           { tickets: x.tickets, line: t.line, meta: { agent: x.id, stage: x.stage, hint } },
         ),
       );
@@ -1331,7 +1331,7 @@ const stageTo = (c, id, t, to, { reason = null, after = [] } = {}) =>
 /** Findings still open with no fix round left: a raw issue (onUnfixed: file-issue) or stuck. */
 function unfixed(c, id, t, what) {
   if (c.profile.onUnfixed === 'file-issue' && t.unfixedIssue) return stageTo(c, id, t, 'queued');
-  // review: minimal: the open findings are in the reviewer's report; a full review's are in the status record's review block
+  // review: minimal: the open findings are in the reviewer's report; a prove-it review's are in the status record's review block
   const report = c.flag(id).report;
   if (c.profile.onUnfixed === 'file-issue') {
     return c.emit(
@@ -1435,7 +1435,7 @@ function stepInReview(c, id, t) {
       tickets: [id],
       line: t.line,
       after: [ag, body.id],
-      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${brief} in full and follow it.`, background: false },
+      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
       meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}) },
@@ -2267,7 +2267,7 @@ function simplifySpawn(c, line, target, wt) {
     tickets: [],
     line,
     after: [],
-    spawn: { subagent_type: 'general-purpose', description: roleDescription('simplify', [line]), prompt: `Read ${brief} in full and follow it.`, background: false },
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('simplify', [line]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
     reference: [doc('FINISH.md', 'step 1 (simplify pass)')],
     outcomes: ['applied', 'none', 'skipped'],
     record: `node ${q(SELF)} record ${q(c.path)} ${q(id)} --agent <agent id> --outcome applied|none|skipped --value <one-line reason>`,
@@ -2549,10 +2549,14 @@ export function record(path, id, flags, now, deps) {
     const fix = book.red[line]?.ciFix;
     if (fix) fix.status = 'dispatched';
   };
-  const ciFixEnded = (line, agent, status, stopped = false) => {
-    if (live().lines[line]?.assignment?.deadline) S('release', '--line', line, ...(stopped ? ['--stopped'] : []));
+  // An agent's report taken (or the agent stopped): its status on the books, and it leaves the inbox.
+  const takeAgent = (agent, status = 'collected') => {
     if (book.agents[agent]) book.agents[agent].status = status;
     book.inbox = book.inbox.filter((x) => x !== agent);
+  };
+  const ciFixEnded = (line, agent, status, stopped = false) => {
+    if (live().lines[line]?.assignment?.deadline) S('release', '--line', line, ...(stopped ? ['--stopped'] : []));
+    takeAgent(agent, status);
     const fix = book.red[line]?.ciFix;
     if (fix) fix.status = 'ended';
   };
@@ -2573,8 +2577,7 @@ export function record(path, id, flags, now, deps) {
   // its report's counts (#142) and the review tier it was chosen by (#139).
   const reviewEnded = (tid, agent, mode, verdict, counts, tier) => {
     release([tid]);
-    if (book.agents[agent]) book.agents[agent].status = 'collected';
-    book.inbox = book.inbox.filter((x) => x !== agent);
+    takeAgent(agent);
     const t = ticket(tid);
     if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
       S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(tier ? ['--tier', tier] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
@@ -2599,8 +2602,7 @@ export function record(path, id, flags, now, deps) {
         for (const tid of tickets) flag(tid).agentReport = meta.agentReport;
       }
       release(tickets);
-      if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
-      book.inbox = book.inbox.filter((x) => x !== meta.agent);
+      takeAgent(meta.agent);
       const [tid] = tickets;
       if (meta.stage === 'implementing') {
         if (outcome === 'green') stageIf(tid, 'in-review');

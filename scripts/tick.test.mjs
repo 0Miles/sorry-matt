@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -501,6 +501,15 @@ test('a report from an agent replaced after a timeout is ignored, not taken', (t
   assert.ok(timeout, 'the overdue agent is stopped');
   assert.deepEqual(timeout.tickets, ['#1']);
   assert.match(timeout.do, /reassign/);
+  // the steps it sends the host to are TIMEOUTS.md's own (stop, settle, write the record)
+  const ref = timeout.reference.find((r) => r.path.endsWith('TIMEOUTS.md'));
+  assert.ok(ref, 'the timeout judge points to TIMEOUTS.md');
+  const steps = new Set([...readFileSync(ref.path, 'utf8').matchAll(/^(\d+)\. /gm)].map((m) => m[1]));
+  const named = [ref.part, timeout.do].flatMap((text) => [...text.matchAll(/\bsteps? (\d+)(?: (?:to|and) (\d+))?/g)].flatMap((m) => m.slice(1).filter(Boolean)));
+  assert.ok(named.length, timeout.do);
+  for (const n of named) assert.ok(steps.has(n), `TIMEOUTS.md has no step ${n}: ${ref.part} / ${timeout.do}`);
+  // TIMEOUTS.md: 1 stop the agent, 2 settle it by the case, 3 write the timeout handling down
+  assert.match(timeout.do, /TaskStop it \(TIMEOUTS\.md step 1\).*settle it by step 2 \(.*\(step 3\)/);
   // the reassignment: a new assignment with --reassign and a new agent
   assert.ok(a2.some((a) => a.step === 'assignment' && a.argv.includes('--reassign')));
   const st = h.state();
@@ -2544,4 +2553,27 @@ test("#139 × #142 × #143: a light ticket's minimal review takes no counts and 
   assert.equal(collect.meta.tier, 'standard');
   assert.deepEqual(h.state().tickets['#2'].reviews.map((r) => [r.kind, r.tier, r.observations, r.preExisting]), [['full', 'standard', 1, 0]]);
   assert.deepEqual(distinct(h.log).filter((a) => a.step === 'observations').map((a) => a.id), ['observations:#2:1']);
+});
+
+// AGENTS.md: a subagent is given the files it reads by absolute path. The host may hand tick a relative state path;
+// each spawn's prompt still names its brief absolutely (implement, minimal and prove-it review, simplify).
+test('with a relative state path every spawn prompt names its brief by an absolute path', (t) => {
+  const h = world(t);
+  h.change['#1'] = { lines: 10 }; // light: a minimal review; #2 is standard: a prove-it review
+  const cwd = process.cwd();
+  process.chdir(h.dir);
+  try {
+    const rel = relative(h.dir, h.path);
+    assert.ok(!isAbsolute(rel));
+    assert.equal(h.untilDone(() => h.wake({ via: (...args) => h.tick('next', rel, ...args) })).then, 'done');
+  } finally {
+    process.chdir(cwd);
+  }
+  const spawns = distinct(h.log).filter((a) => a.kind === 'spawn');
+  const kinds = spawns.map((a) => `${a.step}${a.meta?.kind ? `:${a.meta.kind}` : ''}`);
+  for (const k of ['spawn', 'review:minimal', 'review:full', 'simplify']) assert.ok(kinds.includes(k), `${k} in ${kinds}`);
+  for (const a of spawns) {
+    assert.ok(isAbsolute(briefOf(a)), `${a.id}: ${a.spawn.prompt}`);
+    if (a.spawn.fallback) assert.ok(isAbsolute(briefOf({ spawn: a.spawn.fallback })), `${a.id} fallback: ${a.spawn.fallback.prompt}`);
+  }
 });
