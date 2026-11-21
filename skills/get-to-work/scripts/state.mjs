@@ -106,7 +106,7 @@
 //   stuck, awaiting-ruling → nothing
 // and these guards hold on top, each refused with what is missing (the profile's defaults shown; see Profile):
 //   - implementing from candidate needs the acceptance snapshot's sha256 (`set --snapshot`);
-//   - queued needs a `pass` from a full review (or a minimal one recorded with tier light) as the latest review
+//   - queued needs a `pass` from a prove-it review (or a minimal review recorded with review tier light) as the latest review
 //     recorded since the ticket last entered in-review; fixing needs a `fix` there, and at most two fix rounds per ticket (a third is refused: mark it
 //     stuck);
 //   - delivered needs a merge SHA recorded with `merge`;
@@ -502,7 +502,7 @@ function queueFromReview(id, t, profile) {
   const r = currentReview(t);
   if (!r) return `${id}: queued needs a review recorded since it entered in-review; there is none (record it with review)`;
   if (profile.review === 'full' && r.kind !== 'full' && r.tier !== 'light')
-    return `${id}: queued needs a full review (profile review: full), or a minimal one of a ticket whose review tier is light; the latest is ${r.kind}${r.tier ? ` (tier ${r.tier})` : ''}`;
+    return `${id}: queued needs a prove-it review (profile review: full), or a minimal review of a ticket whose review tier is light; the latest is a ${r.kind === 'full' ? 'prove-it' : r.kind} review${r.tier ? ` (review tier ${r.tier})` : ''}`;
   if (r.verdict === 'pass') return null;
   if (r.verdict !== 'fix') return `${id}: queued needs the latest review verdict to be pass; it is ${r.verdict} (${r.mode})`;
   if (profile.onUnfixed !== 'file-issue') return `${id}: queued needs the latest review verdict to be pass; it is fix (${r.mode})`;

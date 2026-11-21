@@ -292,11 +292,11 @@ test('a profile cannot carry confirmations or budget limits', (t) => {
   assert.equal(existsSync(r.path), false);
 });
 
-test('review minimal: a minimal review passes; no review still blocks; the default needs a full one', (t) => {
+test('review minimal: a minimal review passes; no review still blocks; the default needs a prove-it review', (t) => {
   const strict = run(t);
   at(strict, '#1', 'in-review');
   strict.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal');
-  strict.refused(/needs a full review \(profile review: full\), or a minimal one of a ticket whose review tier is light; the latest is minimal$/m, 'stage', 'queued', '#1');
+  strict.refused(/needs a prove-it review \(profile review: full\), or a minimal review of a ticket whose review tier is light; the latest is a minimal review$/m, 'stage', 'queued', '#1');
 
   const r = run(t);
   r.ok('profile', '--review', 'minimal');
@@ -317,7 +317,7 @@ test('#139: under review: full a minimal review recorded with tier light lets th
     const r = run(t);
     at(r, '#1', 'in-review');
     r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--kind', 'minimal', '--tier', tier);
-    r.refused(new RegExp(`or a minimal one of a ticket whose review tier is light; the latest is minimal \\(tier ${tier}\\)`), 'stage', 'queued', '#1');
+    r.refused(new RegExp(`or a minimal review of a ticket whose review tier is light; the latest is a minimal review \\(review tier ${tier}\\)`), 'stage', 'queued', '#1');
   }
   // a prove-it review records its tier too; without --tier it is null
   const full = run(t);

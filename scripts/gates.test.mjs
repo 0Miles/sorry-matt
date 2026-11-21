@@ -457,7 +457,7 @@ test('review fails on queued-review: the passing review was not a full one under
   w.edit((s) => {
     s.tickets['#1'].reviews[0].kind = 'minimal';
   });
-  failsOnly(w.check('review'), 'queued-review', /needs a full review/);
+  failsOnly(w.check('review'), 'queued-review', /needs a prove-it review/);
 });
 
 // ---- merged --------------------------------------------------------------------------------------------------------
