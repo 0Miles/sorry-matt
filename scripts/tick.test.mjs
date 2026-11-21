@@ -6,7 +6,7 @@
 // as SKILL.md states them, written here by hand.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, utimesSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -56,7 +56,8 @@ const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id}.\n\n#
 function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"' } = {}) {
   const local = tracker === 'local';
   const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
-  const dir = mkdtempSync(join(tmpdir(), 'sorry-matt-tick-'));
+  // the long form: on a Windows runner tmpdir() is an 8.3 short path (RUNNER~1), git prints the long one
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-tick-')));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const origin = join(dir, 'origin.git');
   const repo = join(dir, 'repo');
