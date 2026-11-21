@@ -4,13 +4,15 @@
 // everything else is left to Claude Code's permission settings.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
-import { decide as decideWith, confirmCommand, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { decide as decideWith, confirmCommand, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
+import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
+import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
 
@@ -734,5 +736,512 @@ test('unattended is switched by a file in ~/.claude or by SORRY_MATT_UNATTENDED'
     assert.equal(guard(), 'deny');
     // Creating the switch is not a Claude settings write.
     assert.equal(bash('touch ~/.claude/sorry-matt-unattended'), null);
+  });
+});
+
+// ---------- unattended: the automatic source ----------
+
+const PLUGIN = process.platform === 'win32' ? 'C:\\plugins\\sorry-matt' : '/plugins/sorry-matt';
+const ENTERED = { at: 1_700_000_000_000, reason: '使用者說要去睡了', by: 'agent', session: 's0' };
+const decisionOf = (result) => out(result)?.permissionDecision ?? null;
+const savedState = (home) => JSON.parse(readFileSync(autoStateFile(home), 'utf8'));
+
+test('the automatic state blocks exactly what the switch file blocks, and records no confirmation', () => {
+  const run = (home) => {
+    const store = memoryStore();
+    const deps = { home, store, now: 5, pluginRoot: PLUGIN, detect: () => ({ deploys: true, reason: 'deploy.yml' }) };
+    const token = tokenFor('s1', 'Bash', { command: 'rm -rf ~' });
+    const results = [
+      event('npm publish'),
+      event('gh pr merge 12'),
+      event('rm -rf ~'),
+      event(confirmCommand(PLUGIN, token)),
+      JSON.stringify({ tool_name: 'mcp__slack__send_message', tool_input: { channel: 'C1', text: 'hi' }, session_id: 's1' }),
+    ].map((raw) => out(decideWith(raw, {}, deps)));
+    assert.deepEqual(store.sessions, {}, 'no two-step token was started or approved');
+    assert.equal(decideWith(event('git status'), {}, deps), null);
+    return results.map((r) => [r.permissionDecision, r.permissionDecisionReason.replaceAll(home.replace(/\\/g, '/'), '~'), r.updatedInput]);
+  };
+  withDir((autoHome) => withDir((switchHome) => {
+    autoState(autoHome).enter(ENTERED);
+    mkdirSync(join(switchHome, '.claude'));
+    writeFileSync(unattendedFile(switchHome), '');
+    const auto = run(autoHome);
+    assert.deepEqual(auto.map(([decision]) => decision), ['deny', 'deny', 'deny', 'deny', 'deny']);
+    for (const [, reason] of auto) assert.match(reason, /^sorry-matt guard 無人值守模式：/);
+    assert.match(auto[0][1], /發布版本或部署正式環境/);
+    assert.match(auto[1][1], /會立即觸發正式部署/);
+    assert.match(auto[2][1], /不經資源回收筒/);
+    assert.match(auto[3][1], /兩段確認的第一次確認指令/);
+    assert.deepEqual(auto, run(switchHome));
+  }));
+});
+
+test('with neither source the guard asks as before and writes no state', () => {
+  withDir((home) => {
+    const deps = { home, store: memoryStore(), now: 5 };
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps)), 'ask');
+    assert.match(out(decideWith(event('rm -rf ~'), {}, deps)).permissionDecisionReason, /第一次確認/);
+    assert.equal(decideWith(event('git status'), {}, deps), null);
+    assert.deepEqual(readdirSync(home), [], 'nothing was written under the home directory');
+  });
+});
+
+test('the entry line is allowed without a prompt and puts every session in unattended mode', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now, pluginRoot: PLUGIN });
+    const line = enterCommand(PLUGIN, '使用者說要離開兩小時');
+    assert.equal(line, `node "${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs" "使用者說要離開兩小時"`);
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps(1000))), 'ask');
+
+    const allowed = out(decideWith(event(line), {}, deps(2000)));
+    assert.equal(allowed.permissionDecision, 'allow');
+    assert.equal(allowed.updatedInput, undefined);
+    assert.deepEqual(savedState(home), { entered: { at: 2000, reason: '使用者說要離開兩小時', by: 'agent', session: 's1' }, blocked: [] });
+
+    // The same session and another one: the next call that needs the user is blocked.
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, deps(3000))), 'deny');
+    assert.equal(decisionOf(decideWith(event('rm -rf ~', { session_id: 's2' }), {}, deps(4000))), 'deny');
+    assert.equal(decideWith(event('git status', { session_id: 's2' }), {}, deps(4500)), null);
+
+    // Entering again changes nothing: the first time and reason stay, and so does the list.
+    for (const again of [line, enterCommand(PLUGIN, '另一個原因')]) {
+      assert.equal(decisionOf(decideWith(event(again, { session_id: 's2', tool_name: 'PowerShell' }), {}, deps(9000))), 'allow');
+    }
+    assert.equal(enter('第三個原因', { state: autoState(home), now: 9500 }).ok, true);
+    const state = savedState(home);
+    assert.deepEqual(state.entered, { at: 2000, reason: '使用者說要離開兩小時', by: 'agent', session: 's1' });
+    assert.deepEqual(state.blocked.map((b) => [b.session, b.at, b.subject]), [['s1', 3000, 'npm publish'], ['s2', 4000, 'rm -rf ~']]);
+  });
+});
+
+test('only the entry line itself, unchanged and alone, is allowed', () => {
+  withDir((home) => {
+    const deps = { home, store: memoryStore(), now: 1, pluginRoot: PLUGIN };
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    const line = enterCommand(PLUGIN, 'away');
+    for (const command of [
+      `${line} && npm publish`,
+      `${line}; echo done`,
+      `echo go && ${line}`,
+      `${line} | cat`,
+      `${line} > out.txt`,
+      `bash -c '${line}'`,
+      `FOO=1 ${line}`,
+      `node --no-warnings "${script}" "away"`,
+      `node "${script}" "away" extra`,
+      `node "${script}"`,
+      `node "${script}" ""`,
+      `node "${script}" away`,
+      `node "${script}" "$(npm publish)"`,
+      `node "${script}" "\`npm publish\`"`,
+      `node "/elsewhere/hooks/enter-unattended.mjs" "away"`,
+      `node "${PLUGIN.replace(/\\/g, '/')}/hooks/confirm-state.mjs" "away"`,
+      `cd "${PLUGIN.replace(/\\/g, '/')}/hooks" && node enter-unattended.mjs "away"`,
+      `node -e "import('${script}')" "away"`,
+      `node "${script}" 'away'`,
+    ]) {
+      assert.notEqual(decisionOf(decideWith(event(command), {}, deps)), 'allow', command);
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'none of them entered');
+    assert.equal(decisionOf(decideWith(event(line), {}, deps)), 'allow');
+    assert.equal(savedState(home).entered.reason, 'away');
+  });
+});
+
+test('every block while unattended, from either source, is added to the list', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now, pluginRoot: PLUGIN });
+    // The user's source alone: listed, and the automatic state stays off.
+    decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, deps(100));
+    assert.equal(savedState(home).entered, undefined);
+    assert.equal(autoState(home).active(), false);
+    // The automatic source.
+    autoState(home).enter(ENTERED);
+    decideWith(JSON.stringify({ tool_name: 'mcp__slack__send_message', tool_input: { channel: 'C1', text: 'hi' }, session_id: 's2' }), {}, deps(200));
+    decideWith(event('git status'), {}, deps(300));
+    const { blocked } = savedState(home);
+    assert.equal(blocked.length, 2, 'what is let through is not listed');
+    assert.deepEqual(blocked.map((b) => [b.session, b.at, b.subject]), [['s1', 100, 'npm publish'], ['s2', 200, 'mcp__slack__send_message']]);
+    assert.match(blocked[0].reason, /發布版本或部署正式環境.*npm publish/);
+    assert.match(blocked[1].reason, /送出後無法收回/);
+  });
+});
+
+test('a blocked call stays denied when the list cannot be written', () => {
+  const state = { active: () => true, record: () => { throw new Error('EACCES'); }, enter: () => { throw new Error('EACCES'); } };
+  assert.equal(decisionOf(decideWith(event('npm publish'), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  assert.equal(decisionOf(decideWith(event('rm -rf ~'), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  // With the user's switch as the only source, too.
+  const off = { ...state, active: () => false };
+  assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: '1' }, { state: off, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+  // The entry line is still let through: the script it runs writes the entry itself, and says so when it cannot.
+  assert.equal(decisionOf(decideWith(event(enterCommand(PLUGIN, 'away')), {}, { state, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow');
+  assert.deepEqual(enter('away', { state, now: 1 }).ok, false);
+});
+
+test('an automatic state that is missing, unreadable or damaged is no automatic state', () => {
+  const damaged = ['', 'not json', '[]', 'null', '{"entered": "yes"}', '{"entered": {"reason": "no time"}}', '{"entered": {"at": "soon"}}', '{"blocked": [{"at": 1}]}',
+    // A time no Date can hold, or no reason: damaged too, not an entry in force.
+    '{"entered": {"at": 1e300, "reason": "r"}}', '{"entered": {"at": -1e300, "reason": "r"}}', '{"entered": {"at": 1e16, "reason": "r"}}', '{"entered": {"at": 1e300}}', '{"entered": {"at": 1}}', '{"entered": {"at": 1, "reason": 5}}'];
+  for (const text of damaged) {
+    withDir((home) => {
+      mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+      writeFileSync(autoStateFile(home), text);
+      const result = decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 });
+      assert.equal(decisionOf(result), 'ask', text);
+      assert.doesNotMatch(out(result).permissionDecisionReason, /guard 錯誤/, text);
+      assert.equal(decideWith(event('git status'), {}, { home, store: memoryStore(), now: 1 }), null, text);
+    });
+  }
+  withDir((home) => {
+    // A directory where the file should be: it cannot be read at all.
+    mkdirSync(autoStateFile(home), { recursive: true });
+    assert.equal(decisionOf(decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 })), 'ask');
+  });
+  withDir((home) => {
+    // A damaged file can still be entered over.
+    mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+    writeFileSync(autoStateFile(home), 'not json');
+    assert.equal(decisionOf(decideWith(event(enterCommand(PLUGIN, 'away')), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 7 })), 'allow');
+    assert.deepEqual(savedState(home), { entered: { at: 7, reason: 'away', by: 'agent', session: 's1' }, blocked: [] });
+  });
+  withDir((home) => {
+    // So can an entry whose time no Date can hold: the script enters and reports, with no RangeError.
+    mkdirSync(dirname(autoStateFile(home)), { recursive: true });
+    writeFileSync(autoStateFile(home), '{"entered": {"at": 1e300, "reason": "r"}}');
+    const result = enter('away', { state: autoState(home), now: Date.UTC(2026, 10, 21) });
+    assert.equal(result.ok, true, result.text);
+    assert.match(result.text, /進入時間 2026-11-21T00:00:00\.000Z，原因：away/);
+    assert.deepEqual(savedState(home).entered, { at: Date.UTC(2026, 10, 21), reason: 'away', by: 'agent', session: null });
+  });
+});
+
+test('the unattended deny says how each source ends and that the agent ends neither', () => {
+  withDir((home) => {
+    autoState(home).enter(ENTERED);
+    const reason = out(decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 })).permissionDecisionReason;
+    assert.ok(reason.includes(`使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED`), reason);
+    assert.match(reason, /自動進入的，使用者回來送出訊息後解除/);
+    assert.match(reason, /agent 兩種都不能動/);
+    assert.match(reason, /人工作業清單/);
+  });
+});
+
+test('the entry line end to end: the hook process enters, and other sessions are blocked on their next call', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const guard = (command, session_id) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id, permission_mode: 'default' }), encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+    };
+    assert.equal(guard('npm publish', 'a').permissionDecision, 'ask');
+    const before = Date.now();
+    const allowed = guard(enterCommand(root, '提問沒有人回'), 'a');
+    assert.equal(allowed.hookEventName, 'PreToolUse');
+    assert.equal(allowed.permissionDecision, 'allow');
+    const { entered } = savedState(home);
+    assert.equal(entered.reason, '提問沒有人回');
+    assert.equal(entered.session, 'a');
+    assert.ok(entered.at >= before && entered.at <= Date.now(), 'the entry time is when the hook ran');
+
+    // The line then runs: it reports the entry already in force and changes nothing.
+    const ran = spawnSync(process.execPath, [join(root, 'hooks', 'enter-unattended.mjs'), '提問沒有人回'], { encoding: 'utf8', env });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.match(ran.stdout, /已進入無人值守模式.*原因：提問沒有人回/s);
+    assert.deepEqual(savedState(home).entered, entered);
+    assert.equal(spawnSync(process.execPath, [join(root, 'hooks', 'enter-unattended.mjs')], { encoding: 'utf8', env }).status, 1, 'no reason, no entry');
+
+    assert.equal(guard('npm publish', 'a').permissionDecision, 'deny');
+    assert.equal(guard('rm -rf ~', 'b').permissionDecision, 'deny');
+    assert.equal(guard('git status', 'b'), null);
+    assert.deepEqual(savedState(home).blocked.map((b) => [b.session, b.subject]), [['a', 'npm publish'], ['b', 'rm -rf ~']]);
+  });
+});
+
+test('every session is handed the entry line at start: filled in and run as it is, it is allowed and enters', () => {
+  const config = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
+  const entry = config.hooks.SessionStart.find((e) => e.hooks.some((h) => h.command.includes('hooks/unattended-intro.mjs')));
+  assert.equal(entry.matcher, undefined, 'on every SessionStart source: startup, resume, clear and compact');
+  assert.equal(entry.hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/hooks/unattended-intro.mjs"');
+
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    withDir((home) => {
+      // CLAUDE_PLUGIN_ROOT as Claude Code sets it for every hook: native separators, backslashes on Windows.
+      const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+      delete env.SORRY_MATT_GUARD;
+      delete env.SORRY_MATT_UNATTENDED;
+      const started = spawnSync(process.execPath, [join(root, 'hooks', 'unattended-intro.mjs')], { input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', cwd: CWD, session_id: 'a' }), encoding: 'utf8', env });
+      assert.equal(started.status, 0, started.stderr);
+      const handed = started.stdout.split(/\r?\n/).filter((l) => l.startsWith('node ') && l.endsWith('"<原因>"'));
+      assert.equal(handed.length, 1, started.stdout);
+      const command = handed[0].replace('<原因>', '使用者說要去開會');
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name, tool_input: { command }, cwd: CWD, session_id: 'a', permission_mode: 'default' }), encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'allow', `${tool_name} ${command}`);
+      assert.equal(savedState(home).entered.reason, '使用者說要去開會');
+      assert.equal(savedState(home).entered.session, 'a');
+      // With the guard off there is nothing to hand out.
+      const off = spawnSync(process.execPath, [join(root, 'hooks', 'unattended-intro.mjs')], { input: '{}', encoding: 'utf8', env: { ...env, SORRY_MATT_GUARD: 'off' } });
+      assert.equal(off.status, 0, off.stderr);
+      assert.equal(off.stdout, '');
+    });
+  }
+});
+
+test('hook processes writing the state at the same time lose nothing and leave no partial file', async () => {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-guard-')));
+  try {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root, SORRY_MATT_UNATTENDED: 'on' };
+    delete env.SORRY_MATT_GUARD;
+    const hook = (command, session_id) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, [join(root, 'hooks', 'guard.mjs')], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.on('error', fail);
+      child.on('close', (code) => done({ code, decision: stdout ? JSON.parse(stdout).hookSpecificOutput.permissionDecision : null }));
+      child.stdin.end(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id, permission_mode: 'default' }));
+    });
+    const sessions = Array.from({ length: 12 }, (_, i) => `s${i}`);
+    const results = await Promise.all([
+      ...sessions.map((s) => hook(`npm publish --tag ${s}`, s)),
+      hook(enterCommand(root, 'first'), 'enter-1'),
+      hook(enterCommand(root, 'second'), 'enter-2'),
+    ]);
+    assert.deepEqual(results.map((r) => r.code), Array(14).fill(0));
+    assert.deepEqual(results.map((r) => r.decision), [...Array(12).fill('deny'), 'allow', 'allow']);
+    const state = savedState(home);
+    assert.deepEqual(state.blocked.map((b) => b.session).sort(), [...sessions].sort(), 'every block is on the list, once');
+    assert.deepEqual(state.blocked.map((b) => b.subject).sort(), sessions.map((s) => `npm publish --tag ${s}`).sort());
+    assert.ok(['first', 'second'].includes(state.entered.reason));
+    assert.deepEqual(readdirSync(dirname(autoStateFile(home))), ['unattended.json'], 'no lock or temp file is left behind');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a state file that cannot be read is never written over: the entry and the list survive', () => {
+  withDir((home) => {
+    const state = autoState(home);
+    state.enter(ENTERED);
+    state.record({ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' });
+    state.record({ session: 's2', at: 20, subject: 'rm -rf ~', reason: 'r2' });
+    const before = readFileSync(autoStateFile(home), 'utf8');
+    for (const code of ['EIO', 'EBUSY']) {
+      const unreadable = autoState(home, { read: () => { throw Object.assign(new Error(code), { code }); } });
+      assert.throws(() => unreadable.record({ session: 's3', at: 30, subject: 'npm publish', reason: 'r3' }), { code });
+      assert.throws(() => unreadable.enter({ at: 40, reason: 'later', by: 'agent', session: 's3' }), { code });
+      // Reading still never throws, and the hook still denies under the user's switch.
+      assert.equal(unreadable.active(), false);
+      assert.deepEqual(unreadable.read(), { entered: null, blocked: [] });
+      assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, { state: unreadable, store: memoryStore(), now: 50, home })), 'deny', code);
+      assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, code);
+    }
+    assert.deepEqual(savedState(home).entered, ENTERED);
+    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['npm publish', 'rm -rf ~']);
+  });
+});
+
+test('the entry line names the script as handed out: a case variant, even of the same file, gets no allow', () => {
+  const slashed = (p) => p.replace(/\\/g, '/');
+  const call = (path, tool_name = 'Bash') => ({ tool_name, tool_input: { command: `node "${path}" "away"` }, cwd: CWD });
+  const variantsOf = (script) => [script.replace('enter-unattended.mjs', 'Enter-Unattended.mjs'), script.replace('enter-unattended.mjs', 'ENTER-UNATTENDED.MJS'), script.replace('/hooks/', '/Hooks/')];
+
+  // A plugin root that is not on disk: only the spelling as handed out is the line, on every platform.
+  const ghost = `${slashed(PLUGIN)}/hooks/enter-unattended.mjs`;
+  assert.equal(enterInvocation(call(ghost), PLUGIN), 'away');
+  for (const path of variantsOf(ghost)) assert.equal(enterInvocation(call(path), PLUGIN), null, path);
+
+  withDir((dir) => {
+    const plugin = join(dir, 'Plugin');
+    const hooks = join(plugin, 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, 'enter-unattended.mjs'), '// the real one\n');
+    const script = slashed(join(hooks, 'enter-unattended.mjs'));
+    assert.equal(enterCommand(plugin, 'away'), `node "${script}" "away"`);
+    assert.equal(enterInvocation(call(script), plugin), 'away');
+    // Case-insensitive file systems open the real script under all of these; the guard still reads only the text.
+    const spellings = [...variantsOf(script), script.replace('/Plugin/', '/plugin/')];
+    if (/^[A-Za-z]:\//.test(script)) spellings.push(script[0].toLowerCase() + script.slice(1), script[0].toUpperCase() + script.slice(1));
+    for (const path of spellings.filter((p) => p !== script)) {
+      for (const tool_name of ['Bash', 'PowerShell']) assert.equal(enterInvocation(call(path, tool_name), plugin), null, `${tool_name} ${path}`);
+      withDir((home) => {
+        assert.notEqual(decisionOf(decideWith(event(`node "${path}" "away"`), {}, { home, pluginRoot: plugin, store: memoryStore(), now: 1 })), 'allow', path);
+        assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+      });
+    }
+  });
+});
+
+test('under PowerShell a curly quote ends a quoted word, so a line with one is not the entry line', () => {
+  withDir((home) => {
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    const deps = { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 };
+    const commands = [
+      // The reported bypass: the reason "ends" at a curly quote and a second command follows.
+      `node "${script}" "away\u201d ; calc \u201cx"`,
+      `node "${script}" 'away\u2019 ; calc \u2018x'`,
+      `node "${script}\u201d ; calc \u201cx" "away"`,
+      `node '${script}\u2019 ; calc \u2018x' 'away'`,
+      // Each of the characters PowerShell takes for a quote, in the reason.
+      ...['\u2018', '\u2019', '\u201a', '\u201b', '\u201c', '\u201d', '\u201e'].flatMap((q) => [`node "${script}" "a${q}way"`, `node "${script}" 'a${q}way'`]),
+    ];
+    for (const command of commands) {
+      assert.equal(enterInvocation({ tool_name: 'PowerShell', tool_input: { command }, cwd: CWD }, PLUGIN), null, command);
+      assert.notEqual(decisionOf(decideWith(event(command, { tool_name: 'PowerShell' }), {}, deps)), 'allow', command);
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+    // Plain quotes are still the line under PowerShell; under Bash a curly quote is an ordinary character of the reason.
+    assert.equal(enterInvocation({ tool_name: 'PowerShell', tool_input: { command: `node "${script}" "away"` }, cwd: CWD }, PLUGIN), 'away');
+    assert.equal(enterInvocation({ tool_name: 'Bash', tool_input: { command: `node "${script}" "他說\u201c晚安\u201d"` }, cwd: CWD }, PLUGIN), '他說\u201c晚安\u201d');
+  });
+});
+
+test('a command with a line break in it is not the entry line, in either shell', () => {
+  withDir((home) => {
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of [
+        `node "${script}"\r"away"`,
+        `node "${script}"\n"away"`,
+        `node\r"${script}" "away"`,
+        `node "${script}" "away"\r`,
+        `node "${script}" "away"\n`,
+        `\rnode "${script}" "away"`,
+        `node "${script}" "a\rway"`,
+        `node "${script}" 'a\nway'`,
+        `node "${script}" "a\u2028way"`,
+        `node "${script}"\f"away"`,
+      ]) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, JSON.stringify(command));
+        assert.notEqual(decisionOf(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow', JSON.stringify(command));
+      }
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+    assert.equal(autoState(home).active(), false);
+  });
+});
+
+test('the path word of the entry line is the script path as written: no option, no .. and no other route to it', () => {
+  withDir((dir) => withDir((home) => {
+    const slashed = (p) => p.replace(/\\/g, '/');
+    const plugin = join(dir, 'plugin');
+    const work = join(dir, 'work');
+    mkdirSync(join(plugin, 'hooks'), { recursive: true });
+    mkdirSync(work);
+    writeFileSync(join(plugin, 'hooks', 'enter-unattended.mjs'), '');
+    writeFileSync(join(work, 'evil.js'), '');
+    const script = slashed(join(plugin, 'hooks', 'enter-unattended.mjs'));
+    const tail = 'plugin/hooks/enter-unattended.mjs';
+    const refused = [
+      // A node option in the path's place: node would run the second word as the script.
+      `node "--title=x/../../${tail}" "evil.js"`,
+      `node --title=x/../../${tail} "evil.js"`,
+      `node '--title=x/../../${tail}' 'evil.js'`,
+      `node "-r/../../${tail}" "evil.js"`,
+      `node "--require=${script}" "evil.js"`,
+      `node "-" "away"`,
+      // The script reached through `..`, `.` or an empty segment, or relative to wherever the shell is.
+      `node "${slashed(work)}/../${tail}" "away"`,
+      `node "${script}/../enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/./hooks/enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/hooks//enter-unattended.mjs" "away"`,
+      `node "${slashed(plugin)}/.. /plugin/hooks/enter-unattended.mjs" "away"`,
+      `node "../${tail}" "away"`,
+      `node calc/../../${tail} "away"`,
+      `node "${script}/" "away"`,
+      // The path not written as the one double-quoted literal the guard hands out.
+      `node ${script} "away"`,
+      `node '${script}' "away"`,
+      `node "${script.replace(/\//g, '\\')}" "away"`,
+      // Names that are not the plain file, and control characters anywhere.
+      `node "${script}:evil" "away"`,
+      `node "${script}::\$DATA" "away"`,
+      `node "//?/${script}" "away"`,
+      `node "${script}" "a\x1bway"`,
+      `node "${script}" "a\x00way"`,
+      `node "${script}\x7f" "away"`,
+    ];
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of refused) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: work }, plugin), null, `${tool_name} ${JSON.stringify(command)}`);
+        assert.notEqual(decisionOf(decideWith(event(command, { tool_name, cwd: work }), {}, { home, pluginRoot: plugin, store: memoryStore(), now: 1 })), 'allow', `${tool_name} ${JSON.stringify(command)}`);
+      }
+    }
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+    // The line as handed out is still the line, in both shells.
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(plugin, 'away') }, cwd: work }, plugin), 'away', tool_name);
+    }
+  }));
+});
+
+test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spelling, other quotes or spacing', () => {
+  withDir((home) => {
+    const line = enterCommand(PLUGIN, 'away');
+    const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
+    const gitBash = (path) => path.replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`);
+    const refused = [
+      // Git Bash leaves a /c/… argument untranslated when it holds `'`, `;`, `[`, `]` or a `~` segment, or under
+      // MSYS_NO_PATHCONV, and node then opens another path: so no /c/ spelling is the line, whatever it holds.
+      `node "${gitBash(script)}" "away"`,
+      `node "/c/Users/me/links/a;b/hooks/enter-unattended.mjs" "away"`,
+      `node "/c/Users/me/links/o'b/hooks/enter-unattended.mjs" "away"`,
+      `node "/c/Users/me/links/[b]/hooks/enter-unattended.mjs" "away"`,
+      `node "/c/Users/me/~t/hooks/enter-unattended.mjs" "away"`,
+      `MSYS_NO_PATHCONV=1 ${line}`,
+      // Other spacing or quoting of the very same words.
+      ` ${line}`,
+      `${line} `,
+      `${line}\t`,
+      line.replace('node ', 'node  '),
+      line.replace('node ', 'node\t'),
+      line.replace('" "', '"  "'),
+      `node "${script}" 'away'`,
+      `"node" "${script}" "away"`,
+      `node.exe "${script}" "away"`,
+      `NODE "${script}" "away"`,
+      `node "${script.replace(/\.mjs$/, '.MJS')}" "away"`,
+      // The reason has to stay one literal word in both shells.
+      enterCommand(PLUGIN, 'a"b'),
+      enterCommand(PLUGIN, 'a$HOME'),
+      enterCommand(PLUGIN, 'a`b`'),
+      enterCommand(PLUGIN, 'a\\b'),
+      enterCommand(PLUGIN, 'a\tb'),
+      enterCommand(PLUGIN, ' '),
+      enterCommand(PLUGIN, ''),
+    ];
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      for (const command of refused) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, `${tool_name} ${JSON.stringify(command)}`);
+        assert.notEqual(decisionOf(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 })), 'allow', `${tool_name} ${JSON.stringify(command)}`);
+      }
+    }
+    // The handed-out prefix with no closing quote, or something else after the reason: neither shell runs it as the
+    // line (Bash: unexpected EOF; PowerShell: missing terminator), so it is not the line.
+    const [prefix] = enterCommand(PLUGIN, '\0').split('\0');
+    for (const command of [`${prefix}awayX`, `${prefix}away\u201d`, `${prefix}away\n`, `${prefix}away" `, `${prefix}away"x`]) {
+      for (const tool_name of ['Bash', 'PowerShell']) {
+        assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, `${tool_name} ${JSON.stringify(command)}`);
+        assert.equal(decideWith(event(command, { tool_name }), {}, { home, pluginRoot: PLUGIN, store: memoryStore(), now: 1 }), null, `${tool_name} ${JSON.stringify(command)}`);
+      }
+    }
+    assert.equal(autoState(home).active(), false);
+    // Windows PowerShell 5.1 reads even a quoted `--%` as the stop-parsing token and drops the reason; Bash does not.
+    assert.equal(enterInvocation({ tool_name: 'PowerShell', tool_input: { command: enterCommand(PLUGIN, '--%') }, cwd: CWD }, PLUGIN), null);
+    assert.equal(enterInvocation({ tool_name: 'Bash', tool_input: { command: enterCommand(PLUGIN, '--%') }, cwd: CWD }, PLUGIN), '--%');
+    // A plugin root the shell would expand is never the line, even as handed out.
+    const odd = process.platform === 'win32' ? 'C:\\plugins\\$HOME' : '/plugins/$HOME';
+    assert.equal(enterInvocation({ tool_name: 'Bash', tool_input: { command: enterCommand(odd, 'away') }, cwd: CWD }, odd), null);
+    assert.equal(existsSync(autoStateFile(home)), false, 'the state stays not entered');
+
+    // The line as handed out is the line in both shells, with the reason trimmed and free text inside it.
+    for (const tool_name of ['Bash', 'PowerShell']) {
+      assert.equal(enterInvocation({ tool_name, tool_input: { command: line }, cwd: CWD }, PLUGIN), 'away', tool_name);
+      assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(PLUGIN, ' 睡了 (2h); 晚點見 ') }, cwd: CWD }, PLUGIN), '睡了 (2h); 晚點見', tool_name);
+    }
   });
 });

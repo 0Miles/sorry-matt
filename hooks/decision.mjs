@@ -2,7 +2,9 @@
 //   - double verdicts go through the two-step confirmation (README "Guard hook"; state in confirm-state.mjs)
 //   - ask verdicts ask once
 //   - merge verdicts ask once when deploy-on-merge.mjs says the merge deploys, or cannot tell
-//   - unattended (switch file or SORRY_MATT_UNATTENDED): each of those asks is a deny the agent parks instead
+//   - unattended, from either source (the user's switch file or SORRY_MATT_UNATTENDED; the automatic state in
+//     unattended-state.mjs): each of those asks is a deny the agent parks instead, added to the blocked list
+//   - the one line that enters unattended mode is allowed without a prompt, and the entry is recorded here
 // It fails closed: an event it cannot read is denied, so a broken guard is loud, not silent.
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -12,11 +14,28 @@ import { classify } from './classify.mjs';
 import { parse, unwrap, commandName } from './shell.mjs';
 import { fileStore, isLive, stateDir, tokenFor, TOKEN } from './confirm-state.mjs';
 import { mergeDeploys } from './deploy-on-merge.mjs';
+import { autoState } from './unattended-state.mjs';
 
 const HOOK_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const pluginRoot = (env = process.env) => env.CLAUDE_PLUGIN_ROOT || HOOK_ROOT;
 // Forward slashes run in Bash, Git Bash and PowerShell alike, on Windows too.
 export const confirmCommand = (root, token) => `node "${join(root, 'hooks', 'confirm.mjs').replace(/\\/g, '/')}" ${token}`;
+
+// The one line that enters unattended mode. The reason is the agent's own words, as a single quoted argument; the
+// guard lets through only this exact text (enterInvocation).
+const enterScript = (root) => join(root, 'hooks', 'enter-unattended.mjs').replace(/\\/g, '/');
+export const enterCommand = (root, reason = '<原因>') => `node "${enterScript(root)}" "${reason}"`;
+
+/**
+ * What every session is told when it starts (unattended-intro.mjs, on SessionStart): the entry line for this hook's
+ * own plugin root, the only place the agent gets it from. The SessionStart and PreToolUse hooks get the same
+ * CLAUDE_PLUGIN_ROOT, so the printed line is the text enterInvocation lets through once `<原因>` is filled in.
+ */
+export const enterIntro = (root) => [
+  'sorry-matt guard：使用者說要離開，或提問得到的結果是使用者可能不在時，可以進入無人值守模式：把下面這一行的 <原因> 換成原因，其餘一字不改、單獨執行。',
+  enterCommand(root),
+  '原因裡不要有 "、$、反引號、反斜線或換行（PowerShell 下也不要有彎引號或 --%）；改過寫法、串接或換路徑的版本不會被認得，會照常跳確認框。進入後所有 session 需要使用者確認的動作都直接擋下、記進清單；只有使用者能解除。',
+].join('\n');
 
 const BYPASS = 'bypassPermissions';
 const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_GUARD=off 關掉這個 guard。）';
@@ -24,7 +43,9 @@ const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_G
 /**
  * @param {string} raw the event JSON from stdin
  * @param {Record<string, string | undefined>} env the hook process environment
- * @param {{store?: object, now?: number, pluginRoot?: string, detect?: Function}} deps
+ * @param {{store?: object, now?: number, pluginRoot?: string, detect?: Function, home?: string, state?: object, unattended?: boolean}} deps
+ *   `home` is where the switch file and the automatic state are looked for. `unattended` is a fixed answer that
+ *   replaces both sources; with it the hook stays off the automatic state file unless `state` is passed too.
  */
 export function decide(raw, env = process.env, deps = {}) {
   if (String(env.SORRY_MATT_GUARD || '').toLowerCase() === 'off') return null;
@@ -43,28 +64,37 @@ export function decide(raw, env = process.env, deps = {}) {
       now: deps.now ?? Date.now(),
       root: deps.pluginRoot ?? pluginRoot(env),
       detect: deps.detect ?? mergeDeploys,
+      home: deps.home ?? homedir(),
     };
+    ctx.state = deps.state ?? (deps.unattended === undefined ? autoState(ctx.home) : null);
+    let awayNow;
+    const away = () => (awayNow ??= deps.unattended ?? (unattended(env, existsSync, ctx.home) || ctx.state.active()));
     if (writesGuardState(event)) {
       return deny('sorry-matt guard：不能寫入 guard 的確認紀錄（sorry-matt-guard 目錄）。兩段確認只能經由 guard 給的確認指令完成。');
     }
+    const why = enterInvocation(event, ctx.root);
+    if (why !== null) return enterStep(ctx, why);
     const token = confirmInvocation(event, ctx.root);
-    if (token !== null && token && (deps.unattended ?? unattended(env))) {
-      return unattendedDeny('這是兩段確認的第一次確認指令。');
-    }
+    if (token !== null && token && away()) return park(ctx, '這是兩段確認的第一次確認指令。');
     if (token !== null) return confirmStep(ctx, token);
 
     const verdicts = classify(event);
     const doubles = verdicts.filter((v) => v.level === 'double');
-    const away = deps.unattended ?? unattended(env);
-    if (doubles.length && away) {
-      return unattendedDeny(`${[...new Set(doubles.map((v) => v.consequence))].join('\n')}\n要執行的是：${subjectOf(event)}`);
+    if (doubles.length && away()) {
+      return park(ctx, `${[...new Set(doubles.map((v) => v.consequence))].join('\n')}\n要執行的是：${subjectOf(event)}`);
     }
     if (doubles.length) return twoStep(ctx, doubles);
     const asks = verdicts.filter((v) => v.level === 'ask');
-    if (asks.length) return (away ? unattendedDeny : ask)(asks.map(askReason).join('\n'));
+    if (asks.length) {
+      const reason = asks.map(askReason).join('\n');
+      return away() ? park(ctx, reason) : ask(reason);
+    }
     for (const verdict of verdicts.filter((v) => v.level === 'merge')) {
       const result = ctx.detect(verdict.target, { cwd: event.cwd || process.cwd(), env });
-      if (result.deploys !== false) return (away ? unattendedDeny : ask)(mergeReason(verdict, result));
+      if (result.deploys !== false) {
+        const reason = mergeReason(verdict, result);
+        return away() ? park(ctx, reason) : ask(reason);
+      }
     }
     return null;
   } catch (error) {
@@ -202,9 +232,10 @@ function mergeReason(verdict, result) {
 
 // ---------- unattended ----------
 
-// While the user is away, a prompt would hold the session until morning. The switch file (or the env) turns every
-// ask into a deny the agent can work around: park the step for the user and keep going. It only ever makes the
-// guard stricter, so whoever creates the file cannot loosen anything with it.
+// While the user is away, a prompt would hold the session until morning. Unattended mode turns every ask into a
+// deny the agent can work around: park the step for the user and keep going. It has two sources, and either one is
+// enough: the user's (the switch file or the env, below) and the automatic one (unattended-state.mjs), which the
+// agent may enter with the one line the guard hands out. Both only ever make the guard stricter.
 export const unattendedFile = (home = homedir()) => join(home, '.claude', 'sorry-matt-unattended');
 const ON = /^(1|on|yes|true)$/i;
 export function unattended(env = process.env, exists = existsSync, home = homedir()) {
@@ -216,8 +247,54 @@ export function unattended(env = process.env, exists = existsSync, home = homedi
   }
 }
 
-function unattendedDeny(reason) {
-  return deny(`sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守模式只由使用者切換（刪除 ${unattendedFile().replace(/\\/g, '/')}，或拿掉 SORRY_MATT_UNATTENDED），不要動它。`);
+/** The unattended deny: one more entry on the blocked list, and the call is denied whether or not that write worked. */
+function park({ event, now, state, home }, reason) {
+  try {
+    state?.record({ session: event.session_id, at: now, subject: subjectOf(event), reason });
+  } catch {
+    // the list is for the user's return; losing an entry must not let the call through
+  }
+  return deny(`sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`);
+}
+
+// The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every
+// rewrite the guard tried to read through — another spelling of the path, other quotes, Git Bash's `/c/` — turned
+// out to be a line the shell runs differently, so nothing is parsed or resolved here: the command is the text
+// `enterCommand` hands out for this plugin root, byte for byte, and only the reason is the agent's own. Any other
+// spelling gets no allow and goes through the usual permission flow.
+// The path and the reason each have to stay one literal word in both shells inside double quotes: no `"`, `$`,
+// backtick or backslash, which Bash or PowerShell expand or escape there, and no control character, line break or
+// line separator, after which the shell runs something other than the one line read here.
+const NOT_LITERAL = /["$`\\\x00-\x1f\x7f\u0085\u2028\u2029]/;
+// PowerShell also reads these as quotes (U+2018–U+201B single, U+201C–U+201E double), so there a quoted word may end
+// early; and Windows PowerShell 5.1 takes even a quoted `--%` as the stop-parsing token and drops the argument.
+const NOT_LITERAL_POWERSHELL = /[\u2018-\u201e]|--%/;
+const literal = (text, tool) => !NOT_LITERAL.test(text) && !(tool === 'PowerShell' && NOT_LITERAL_POWERSHELL.test(text));
+
+/**
+ * The reason, when a shell call is the one line the guard hands out for entering unattended mode: exactly
+ * `enterCommand(root, reason)`, run on its own, with a reason that is not blank. null for everything else —
+ * chained, rewritten, another spelling of the path, other quotes, spaces around it — which gets no special treatment.
+ */
+export function enterInvocation(event, root = pluginRoot()) {
+  const tool = event.tool_name;
+  if (tool !== 'Bash' && tool !== 'PowerShell') return null;
+  const command = String(event.tool_input?.command ?? '');
+  const [before, after] = enterCommand(root, '\0').split('\0');
+  if (command.length <= before.length + after.length || !command.startsWith(before) || !command.endsWith(after)) return null;
+  const reason = command.slice(before.length, command.length - after.length);
+  if (reason.trim() === '' || !literal(reason, tool) || !literal(enterScript(root), tool)) return null;
+  return reason.trim();
+}
+
+/** Entering only makes the guard stricter, so it needs no prompt. The script records it again if this write fails. */
+function enterStep({ event, now, state }, reason) {
+  try {
+    state?.enter({ at: now, reason, by: 'agent', session: event.session_id ?? null });
+  } catch {
+    // enter-unattended.mjs tries again and reports
+  }
+  return output('allow', 'sorry-matt guard：這是進入無人值守模式的指令，只會讓 guard 更嚴，不需要確認。');
 }
 
 // ---------- hook output ----------
