@@ -1407,9 +1407,17 @@ test('a turn no person sent, or one that cannot be told, leaves the automatic st
   withDir((home) => {
     // A transcript file that is not there: not ended; the turn is left to the session's Stop.
     const before = JSON.parse(awayHome(home));
-    assert.equal(onPromptSubmit(submit(join(home, 'nowhere.jsonl')), {}, { home, exists: noSwitch, ...fakeClock() }), null);
+    const transcript = join(home, 'nowhere.jsonl');
+    const clock = fakeClock();
+    assert.equal(onPromptSubmit(submit(transcript), {}, { home, exists: noSwitch, ...clock }), null);
+    assert.equal(clock.slept, 500, 'a file not there yet is reread like an entry not written yet');
     const after = savedState(home);
     assert.deepEqual([after.entered, after.blocked], [before.entered, before.blocked]);
+    assert.deepEqual(after.pending, [{ session: 's3', prompt_id: 'p1' }]);
+    // The file shows up with the person's entry by the time the turn stops: Stop ends the state.
+    writeFileSync(transcript, JSON.stringify({ type: 'user', promptId: 'p1', turnOrigin: 'human' }) + '\n');
+    assert.equal(onStop(stop(transcript, { session_id: 's3' }), {}, { home, exists: noSwitch }).decision, 'block');
+    assert.deepEqual(savedState(home), { blocked: [] });
   });
 });
 
