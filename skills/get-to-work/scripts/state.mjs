@@ -810,6 +810,8 @@ function importLedger(path, rest, flags, ctx) {
     if (!isObject(t) || !isText(t.line) || !isText(t.stage)) throw new UsageError(`seed: tickets.${id} needs line and stage`);
     state.lines[t.line] ??= newLine();
     const ticket = { ...newTicket(t.line), ...t };
+    // #156 F14: a seed that counted extensions for the run only stays that way; 0 would claim none for the ticket
+    if (!('timeoutExtensions' in t)) delete ticket.timeoutExtensions;
     ticket.timeoutReassignments = { ...newTicket().timeoutReassignments, ...(t.timeoutReassignments ?? {}) };
     ticket.reviews = (t.reviews ?? []).map((r) => ({ kind: 'full', tier: null, findings: null, at: ctx.now, after: 0, ...r }));
     ticket.fixReports = (t.fixReports ?? []).map((r) => ({ at: ctx.now, after: 0, ...r }));

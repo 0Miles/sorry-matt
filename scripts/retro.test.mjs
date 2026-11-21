@@ -197,6 +197,16 @@ test('an older state without per-ticket extensions: null when the run had some, 
   assert.deepEqual(w.rows().map((r) => r.timeoutExtensions), [0, 0]);
 });
 
+test('#156 F14: a state imported from a seed that counted extensions for the run only gives null, not 0', (t) => {
+  const w = world(t);
+  rmSync(w.statePath);
+  const seed = write(join(w.dir, 'seed.json'), { run: RUN, usage: { timeoutExtensions: 2 }, tickets: { '#1': { line: LINE, stage: 'implementing', snapshotSha256: SNAP }, '#2': { line: LINE, stage: 'implementing', snapshotSha256: SNAP, timeoutExtensions: 1 } } });
+  const r = state(['import', w.statePath, '--from', seed, '--now', '2026-03-10T12:00:00Z']);
+  assert.equal(r.code, 0, r.err);
+  ok(w.record());
+  assert.deepEqual(w.rows().map((x) => [x.ticket, x.timeoutExtensions]), [['#1', null], ['#2', 1]]);
+});
+
 test('two runs recording into one retro file at the same time both keep their rows', async (t) => {
   const dir = scratch(t);
   const a = world(t, { run: 'run-a', dir: join(dir, 'a') });
