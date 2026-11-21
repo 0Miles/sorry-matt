@@ -1183,7 +1183,9 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
   withDir((home) => {
     const line = enterCommand(PLUGIN, 'away');
     const script = `${PLUGIN.replace(/\\/g, '/')}/hooks/enter-unattended.mjs`;
-    const gitBash = (path) => path.replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`);
+    // Git Bash's /c/ spelling of the script: the drive letter turned into a first segment. A POSIX root has no drive,
+    // so there the same /c/ spelling is the script under a leading /c, still another text than the line.
+    const gitBash = (path) => (/^[A-Za-z]:\//.test(path) ? path.replace(/^([A-Za-z]):\//, (_, drive) => `/${drive.toLowerCase()}/`) : `/c${path}`);
     const refused = [
       // Git Bash leaves a /c/… argument untranslated when it holds `'`, `;`, `[`, `]` or a `~` segment, or under
       // MSYS_NO_PATHCONV, and node then opens another path: so no /c/ spelling is the line, whatever it holds.
@@ -1214,6 +1216,8 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
       enterCommand(PLUGIN, ' '),
       enterCommand(PLUGIN, ''),
     ];
+    // Each case is a rewrite of the line on every platform, never the line itself.
+    for (const command of refused) assert.notEqual(command, line, JSON.stringify(command));
     for (const tool_name of ['Bash', 'PowerShell']) {
       for (const command of refused) {
         assert.equal(enterInvocation({ tool_name, tool_input: { command }, cwd: CWD }, PLUGIN), null, `${tool_name} ${JSON.stringify(command)}`);
