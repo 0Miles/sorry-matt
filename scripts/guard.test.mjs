@@ -16,6 +16,7 @@ import { autoState, autoStateFile } from '../hooks/unattended-state.mjs';
 import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
+import { onPromptSubmit, onStop, turnOrigin, REREAD_MS } from '../hooks/unattended-return.mjs';
 
 // Unless a test says otherwise the user is at the keyboard, whatever switch file this machine has.
 const decide = (raw, env = {}, deps = {}) => decideWith(raw, env, { unattended: false, ...deps });
@@ -1081,7 +1082,9 @@ test('a state file that cannot be read is never written over: the entry and the 
       assert.throws(() => unreadable.enter({ at: 40, reason: 'later', by: 'agent', session: 's3' }), { code });
       // Reading still never throws, and the hook still denies under the user's switch.
       assert.equal(unreadable.active(), false);
-      assert.deepEqual(unreadable.read(), { entered: null, blocked: [] });
+      assert.deepEqual(unreadable.read(), { entered: null, pending: [], blocked: [] });
+      assert.throws(() => unreadable.clear(), { code });
+      assert.throws(() => unreadable.defer({ session: 's3', prompt_id: 'p1' }), { code });
       assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, { state: unreadable, store: memoryStore(), now: 50, home })), 'deny', code);
       assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, code);
     }
@@ -1293,4 +1296,346 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
       assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(PLUGIN, ' 睡了 (2h); 晚點見 ') }, cwd: CWD }, PLUGIN), '睡了 (2h); 晚點見', tool_name);
     }
   });
+});
+
+// ---------- unattended: the user is back (UserPromptSubmit and Stop) ----------
+
+// Transcript fixtures, shaped like Claude Code's session JSONL (scripts/unattended.live.mjs): the user entry of a turn
+// carries the hook's prompt_id as `promptId`, and where the turn came from as `turnOrigin`.
+const userLine = (promptId, origin, extra = {}) => JSON.stringify({
+  parentUuid: null, isSidechain: false, promptId, type: 'user', message: { role: 'user', content: 'hello' },
+  uuid: `u-${promptId}-${origin}`, timestamp: '2026-11-22T01:00:00.000Z', ...(origin === undefined ? {} : { turnOrigin: origin }), ...extra,
+});
+const assistantLine = (promptId) => JSON.stringify({ type: 'assistant', promptId, turnOrigin: 'human', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } });
+const EARLIER = [JSON.stringify({ type: 'summary', summary: 'earlier' }), userLine('p0', 'human'), assistantLine('p0'), '{"type": "user", broken'];
+const TRANSCRIPTS = {
+  human: [...EARLIER, userLine('p1', 'human', { promptSource: 'typed', origin: { kind: 'human' } }), assistantLine('p1')],
+  desktop: [...EARLIER, userLine('p1', 'human', { promptSource: 'sdk', entrypoint: 'claude-desktop' })],
+  scheduled: [...EARLIER, userLine('p1', 'scheduled', { wakeupSource: 'loop_wakeup' }), userLine('p1', 'human')],
+  task_notification: [...EARLIER, userLine('p1', 'task_notification', { origin: { kind: 'task-notification' } })],
+  peer: [...EARLIER, userLine('p1', 'peer')],
+  sdk: [...EARLIER, userLine('p1', 'sdk')],
+  other: [...EARLIER, userLine('p1', 'Human')],
+  missingField: [...EARLIER, userLine('p1', undefined)],
+  notYet: [...EARLIER, assistantLine('p1')],
+};
+const writeTranscript = (dir, lines, name = 'session.jsonl') => {
+  const path = join(dir, name);
+  writeFileSync(path, lines.join('\n') + '\n');
+  return path;
+};
+const submit = (transcript_path, extra = {}) => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's3', transcript_path, cwd: CWD, prompt_id: 'p1', prompt: 'I am back', permission_mode: 'default', ...extra });
+const stop = (transcript_path, extra = {}) => JSON.stringify({ hook_event_name: 'Stop', session_id: 's3', transcript_path, cwd: CWD, stop_hook_active: false, ...extra });
+// A clock the rereads move forward, so no test waits half a second.
+const fakeClock = () => {
+  const clock = { t: 0, slept: 0 };
+  clock.now = () => clock.t;
+  clock.sleep = (ms) => {
+    clock.t += ms;
+    clock.slept += ms;
+  };
+  return clock;
+};
+// The automatic state, entered from session s0, with two blocks: one from s0 and one from s2.
+function awayHome(home) {
+  autoState(home).enter(ENTERED);
+  const deps = (now) => ({ home, store: memoryStore(), now, pluginRoot: PLUGIN });
+  assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's0' }), {}, deps(3000))), 'deny');
+  assert.equal(decisionOf(decideWith(event('rm -rf ~', { session_id: 's2' }), {}, deps(4000))), 'deny');
+  return readFileSync(autoStateFile(home), 'utf8');
+}
+const noSwitch = () => false;
+
+test('a person\'s turn in any session ends the automatic state and hands the agent every blocked action', () => {
+  for (const kind of ['human', 'desktop']) {
+    withDir((home) => {
+      awayHome(home);
+      const clock = fakeClock();
+      const result = onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS[kind])), {}, { home, exists: noSwitch, ...clock });
+      assert.equal(clock.slept, 0, 'the entry was there: no reread');
+      assert.equal(result.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+      const context = result.hookSpecificOutput.additionalContext;
+      assert.match(context, /自動進入的無人值守模式已解除（進入時間 2023-11-14T22:13:20\.000Z，原因：使用者說要去睡了）/);
+      assert.match(context, /擋下了 2 個需要使用者確認的動作。請把下面的清單完整告訴使用者/);
+      assert.match(context, /1\. session s0，1970-01-01T00:00:03\.000Z\n {3}原指令：npm publish\n {3}理由：sorry-matt guard 確認：這是發布版本或部署正式環境的動作/);
+      assert.match(context, /2\. session s2，1970-01-01T00:00:04\.000Z\n {3}原指令：rm -rf ~\n {3}理由：.*不經資源回收筒/);
+      assert.deepEqual(Object.keys(result), ['hookSpecificOutput'], 'JSON additionalContext, nothing else');
+      assert.deepEqual(savedState(home), { blocked: [] }, 'entered is gone and the list is emptied');
+      // Every session is asked as before.
+      assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's2' }), {}, { home, store: memoryStore(), now: 6000 })), 'ask');
+      // The list is handed over once: the next turn finds no automatic state and says nothing.
+      assert.equal(onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.human), { prompt_id: 'p0' }), {}, { home, exists: noSwitch }), null);
+    });
+  }
+});
+
+test('with nothing blocked the agent is still told the automatic state ended', () => {
+  withDir((home) => {
+    autoState(home).enter(ENTERED);
+    const context = onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.human)), {}, { home, exists: noSwitch }).hookSpecificOutput.additionalContext;
+    assert.match(context, /已解除/);
+    assert.match(context, /沒有擋下任何動作/);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+});
+
+test('a turn no person sent, or one that cannot be told, leaves the automatic state and the list as they are', () => {
+  for (const kind of ['scheduled', 'task_notification', 'peer', 'sdk', 'other', 'missingField']) {
+    withDir((home) => {
+      const before = awayHome(home);
+      const clock = fakeClock();
+      assert.equal(onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS[kind])), {}, { home, exists: noSwitch, ...clock }), null, kind);
+      assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, kind);
+      assert.equal(clock.slept, 0, `${kind}: the entry was found, so there is no reread`);
+      assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's2' }), {}, { home, store: memoryStore(), now: 9 })), 'deny', kind);
+    });
+  }
+  withDir((home) => {
+    // A transcript that cannot be read: a directory where the file should be, or a read that fails.
+    const before = awayHome(home);
+    const dir = join(home, 'transcript-dir.jsonl');
+    mkdirSync(dir);
+    assert.equal(onPromptSubmit(submit(dir), {}, { home, exists: noSwitch, ...fakeClock() }), null);
+    const eacces = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    assert.equal(onPromptSubmit(submit(join(home, 'any.jsonl')), {}, { home, exists: noSwitch, read: eacces, ...fakeClock() }), null);
+    // An event without a transcript path or a prompt id, or one that is not JSON.
+    assert.equal(onPromptSubmit(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's3', prompt_id: 'p1' }), {}, { home }), null);
+    assert.equal(onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.human), { prompt_id: undefined }), {}, { home }), null);
+    assert.equal(onPromptSubmit('not json', {}, { home }), null);
+    assert.equal(readFileSync(autoStateFile(home), 'utf8'), before);
+  });
+  withDir((home) => {
+    // A transcript file that is not there: not ended; the turn is left to the session's Stop.
+    const before = JSON.parse(awayHome(home));
+    const transcript = join(home, 'nowhere.jsonl');
+    const clock = fakeClock();
+    assert.equal(onPromptSubmit(submit(transcript), {}, { home, exists: noSwitch, ...clock }), null);
+    assert.equal(clock.slept, 500, 'a file not there yet is reread like an entry not written yet');
+    const after = savedState(home);
+    assert.deepEqual([after.entered, after.blocked], [before.entered, before.blocked]);
+    assert.deepEqual(after.pending, [{ session: 's3', prompt_id: 'p1' }]);
+    // The file shows up with the person's entry by the time the turn stops: Stop ends the state.
+    writeFileSync(transcript, JSON.stringify({ type: 'user', promptId: 'p1', turnOrigin: 'human' }) + '\n');
+    assert.equal(onStop(stop(transcript, { session_id: 's3' }), {}, { home, exists: noSwitch }).decision, 'block');
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+});
+
+test('the transcript is matched on the first user entry with the prompt id, past broken lines', () => {
+  assert.deepEqual(turnOrigin(TRANSCRIPTS.human.join('\n'), 'p1'), { found: true, origin: 'human' });
+  assert.deepEqual(turnOrigin(TRANSCRIPTS.scheduled.join('\r\n'), 'p1'), { found: true, origin: 'scheduled' });
+  assert.deepEqual(turnOrigin(TRANSCRIPTS.missingField.join('\n'), 'p1'), { found: true, origin: undefined });
+  assert.deepEqual(turnOrigin(TRANSCRIPTS.notYet.join('\n'), 'p1'), { found: false }, 'an assistant entry is not the turn');
+  assert.deepEqual(turnOrigin('', 'p1'), { found: false });
+});
+
+test('the user\'s own switch is never ended by a person\'s turn; only the automatic state is', () => {
+  for (const source of ['file', 'env']) {
+    withDir((home) => {
+      const env = source === 'env' ? { SORRY_MATT_UNATTENDED: 'on' } : {};
+      if (source === 'file') {
+        mkdirSync(join(home, '.claude'), { recursive: true });
+        writeFileSync(unattendedFile(home), '');
+      }
+      awayHome(home);
+      const result = onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.human)), env, { home });
+      const context = result.hookSpecificOutput.additionalContext;
+      assert.match(context, /擋下了 2 個/, source);
+      assert.match(context, /使用者自己開的無人值守.*仍然開著/, source);
+      assert.deepEqual(savedState(home), { blocked: [] }, source);
+      if (source === 'file') assert.equal(existsSync(unattendedFile(home)), true, 'the switch file is still there');
+      assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's2' }), env, { home, store: memoryStore(), now: 9 })), 'deny', source);
+    });
+  }
+  withDir((home) => {
+    // The switch alone: the hook says nothing and leaves the state file (and the list kept under the switch) alone.
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(unattendedFile(home), '');
+    decideWith(event('npm publish'), {}, { home, store: memoryStore(), now: 1 });
+    const before = readFileSync(autoStateFile(home), 'utf8');
+    const read = () => assert.fail('the transcript is not read without the automatic state');
+    assert.equal(onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.human)), {}, { home, read }), null);
+    assert.equal(onStop(stop(join(home, 'session.jsonl')), {}, { home, read }), null);
+    assert.equal(readFileSync(autoStateFile(home), 'utf8'), before);
+    assert.equal(existsSync(unattendedFile(home)), true);
+  });
+  withDir((home) => {
+    // Neither source: nothing is printed and nothing is written.
+    const transcript = writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onPromptSubmit(submit(transcript), {}, { home }), null);
+    assert.equal(onStop(stop(transcript), {}, { home }), null);
+    assert.deepEqual(readdirSync(home), ['session.jsonl']);
+  });
+});
+
+test('an entry not written yet is reread for up to 500 ms, then decided by that session\'s Stop', () => {
+  assert.equal(REREAD_MS, 500);
+  withDir((home) => {
+    const before = JSON.parse(awayHome(home));
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    const clock = fakeClock();
+    assert.equal(onPromptSubmit(submit(transcript), {}, { home, exists: noSwitch, ...clock }), null);
+    assert.equal(clock.slept, 500, 'reread until 500 ms, and no longer');
+    assert.deepEqual(savedState(home), { ...before, pending: [{ session: 's3', prompt_id: 'p1' }] });
+
+    // Another session's Stop leaves it alone.
+    assert.equal(onStop(stop(transcript, { session_id: 's4' }), {}, { home, exists: noSwitch }), null);
+    assert.deepEqual(savedState(home).pending, [{ session: 's3', prompt_id: 'p1' }]);
+
+    // The entry is written by the time the turn stops: a person's turn ends the state and blocks the stop with the list.
+    writeTranscript(home, TRANSCRIPTS.human);
+    const blocked = onStop(stop(transcript), {}, { home, exists: noSwitch });
+    assert.equal(blocked.decision, 'block');
+    assert.match(blocked.reason, /已解除/);
+    assert.match(blocked.reason, /1\. session s0，1970-01-01T00:00:03\.000Z\n {3}原指令：npm publish/);
+    assert.match(blocked.reason, /2\. session s2，1970-01-01T00:00:04\.000Z\n {3}原指令：rm -rf ~/);
+    assert.deepEqual(savedState(home), { blocked: [] }, 'the pending turn went with the state, before the block');
+    assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's2' }), {}, { home, store: memoryStore(), now: 9 })), 'ask');
+    // The stop that block causes comes back with stop_hook_active, and finds nothing to do.
+    assert.equal(onStop(stop(transcript, { stop_hook_active: true }), {}, { home }), null);
+  });
+  withDir((home) => {
+    // stop_hook_active on the pending turn's own Stop changes nothing: it is still decided.
+    awayHome(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    onPromptSubmit(submit(transcript), {}, { home, ...fakeClock() });
+    writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onStop(stop(transcript, { stop_hook_active: true }), {}, { home, exists: noSwitch }).decision, 'block');
+  });
+  for (const kind of ['scheduled', 'task_notification', 'notYet']) {
+    withDir((home) => {
+      // Any other answer at Stop only drops the pending turn.
+      const before = JSON.parse(awayHome(home));
+      const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+      onPromptSubmit(submit(transcript), {}, { home, ...fakeClock() });
+      writeTranscript(home, TRANSCRIPTS[kind]);
+      assert.equal(onStop(stop(transcript), {}, { home }), null, kind);
+      assert.deepEqual(savedState(home), before, kind);
+    });
+  }
+  withDir((home) => {
+    // An entry that shows up during the rereads ends the state right there.
+    awayHome(home);
+    let reads = 0;
+    const read = () => (++reads < 3 ? TRANSCRIPTS.notYet : TRANSCRIPTS.human).join('\n');
+    const clock = fakeClock();
+    const result = onPromptSubmit(submit(join(home, 'session.jsonl')), {}, { home, exists: noSwitch, read, ...clock });
+    assert.match(result.hookSpecificOutput.additionalContext, /擋下了 2 個/);
+    assert.equal(clock.slept, 50);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+  withDir((home) => {
+    // Without the automatic state nothing is left pending.
+    const state = autoState(home);
+    assert.equal(state.defer({ session: 's3', prompt_id: 'p1' }), false);
+    assert.equal(existsSync(autoStateFile(home)), false);
+    assert.equal(onPromptSubmit(submit(writeTranscript(home, TRANSCRIPTS.notYet)), {}, { home, ...fakeClock() }), null);
+    assert.equal(existsSync(autoStateFile(home)), false);
+  });
+});
+
+test('with the guard off neither hook prints or writes anything', () => {
+  withDir((home) => {
+    const before = awayHome(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    const env = { SORRY_MATT_GUARD: 'off' };
+    assert.equal(onPromptSubmit(submit(transcript), env, { home, ...fakeClock() }), null);
+    writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onPromptSubmit(submit(transcript), env, { home }), null);
+    assert.equal(readFileSync(autoStateFile(home), 'utf8'), before);
+    // A pending turn is left for the guard's Stop, which with the guard off does nothing either.
+    writeTranscript(home, TRANSCRIPTS.notYet);
+    onPromptSubmit(submit(transcript), {}, { home, ...fakeClock() });
+    const pending = readFileSync(autoStateFile(home), 'utf8');
+    assert.match(pending, /"pending"/);
+    writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onStop(stop(transcript), env, { home }), null);
+    assert.equal(readFileSync(autoStateFile(home), 'utf8'), pending);
+  });
+});
+
+test('clearing is one locked step: it returns what it removed once, and nothing without the automatic state', () => {
+  withDir((home) => {
+    const state = autoState(home);
+    assert.equal(state.clear(), null);
+    assert.equal(existsSync(autoStateFile(home)), false, 'nothing written');
+    state.enter(ENTERED);
+    state.record({ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' });
+    assert.equal(state.defer({ session: 's3', prompt_id: 'p1' }), true);
+    assert.equal(state.defer({ session: 's3', prompt_id: 'p1' }), true);
+    assert.deepEqual(state.read().pending, [{ session: 's3', prompt_id: 'p1' }], 'once on the list');
+    assert.deepEqual(state.clear(), { entered: ENTERED, pending: [{ session: 's3', prompt_id: 'p1' }], blocked: [{ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' }] });
+    assert.equal(state.clear(), null);
+    assert.equal(state.settle({ session: 's3', prompt_id: 'p1' }), false);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+});
+
+test('hooks.json registers unattended-return.mjs on every UserPromptSubmit and every Stop', () => {
+  const config = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
+  for (const name of ['UserPromptSubmit', 'Stop']) {
+    const entries = config.hooks[name].filter((e) => e.hooks.some((h) => h.command.includes('hooks/unattended-return.mjs')));
+    assert.equal(entries.length, 1, name);
+    assert.equal(entries[0].matcher, undefined, name);
+    assert.deepEqual(entries[0].hooks, [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs"' }], name);
+  }
+});
+
+test('the user is back end to end: the hook process ends the state and the guard asks again in another session', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const hook = (script, input) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', script)], { input, encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout) : null;
+    };
+    const guard = (command, session_id) => hook('guard.mjs', JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id, permission_mode: 'default' }))?.hookSpecificOutput.permissionDecision ?? null;
+    assert.equal(guard(enterCommand(root, '使用者說要去睡了'), 'a'), 'allow');
+    assert.equal(guard('npm publish', 'a'), 'deny');
+    assert.equal(guard('rm -rf ~', 'b'), 'deny');
+
+    // A /loop wake-up in session a is not the user.
+    assert.equal(hook('unattended-return.mjs', submit(writeTranscript(home, TRANSCRIPTS.scheduled, 'a.jsonl'), { session_id: 'a' })), null);
+    assert.equal(guard('npm publish', 'b'), 'deny');
+
+    // The user types in session c.
+    const out = hook('unattended-return.mjs', submit(writeTranscript(home, TRANSCRIPTS.human, 'c.jsonl'), { session_id: 'c' }));
+    assert.equal(out.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.match(out.hookSpecificOutput.additionalContext, /擋下了 3 個/);
+    assert.match(out.hookSpecificOutput.additionalContext, /session a，.*\n {3}原指令：npm publish/);
+    assert.match(out.hookSpecificOutput.additionalContext, /session b，.*\n {3}原指令：rm -rf ~/);
+    assert.deepEqual(savedState(home), { blocked: [] });
+    assert.equal(guard('npm publish', 'b'), 'ask');
+    assert.equal(hook('unattended-return.mjs', stop(join(home, 'c.jsonl'), { session_id: 'c' })), null);
+    assert.equal(hook('unattended-return.mjs', JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'c' })), null);
+  });
+});
+
+test('sessions back at the same moment get the list once between them', async () => {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-guard-')));
+  try {
+    awayHome(home);
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const hook = (session_id) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, [join(root, 'hooks', 'unattended-return.mjs')], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.on('error', fail);
+      child.on('close', (code) => done({ code, stdout }));
+      child.stdin.end(submit(writeTranscript(home, TRANSCRIPTS.human, `${session_id}.jsonl`), { session_id }));
+    });
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => hook(`c${i}`)));
+    assert.deepEqual(results.map((r) => r.code), Array(8).fill(0));
+    const handed = results.filter((r) => r.stdout);
+    assert.equal(handed.length, 1, 'exactly one session hands the list over');
+    assert.match(JSON.parse(handed[0].stdout).hookSpecificOutput.additionalContext, /擋下了 2 個/);
+    assert.deepEqual(savedState(home), { blocked: [] });
+    assert.deepEqual(readdirSync(dirname(autoStateFile(home))), ['unattended.json'], 'no lock or temp file is left behind');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

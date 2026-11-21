@@ -2,8 +2,11 @@
 // One global file, apart from the user's switch file, so every session reads the same state on its next call:
 //   ~/.claude/sorry-matt-guard/unattended.json
 //   { "entered": { "at": <ms>, "reason": "<why>", "by": "agent", "session": "<session_id or null>" },
+//     "pending": [ { "session": "<session_id>", "prompt_id": "<prompt_id>" } ],
 //     "blocked": [ { "session": "<session_id>", "at": <ms>, "subject": "<command, or the tool name>", "reason": "<why it needs the user>" } ] }
 // `entered` is there only while the automatic source holds; `blocked` is kept under the user's switch too.
+// `pending` holds the turns whose transcript entry was not there yet when UserPromptSubmit ran (unattended-return.mjs);
+// it lives only while `entered` does, and the session's Stop hook decides each one.
 // Every hook goes through this module. Reading never throws: a missing, unreadable or damaged file is "no automatic
 // state", so the guard asks as usual. Writing throws, and each caller decides what a failed write means. A write
 // starts from what is on disk: only a file that is not there, or one whose content cannot be used, counts as empty;
@@ -19,6 +22,11 @@ export const autoStateFile = (home = homedir()) => join(home, '.claude', 'sorry-
 // An entry is usable only with a time a Date can hold (±8.64e15 ms) and a string reason; anything else is damage.
 const validEntry = (e) => !!e && typeof e === 'object' && !Array.isArray(e) &&
   Number.isFinite(e.at) && !Number.isNaN(new Date(e.at).getTime()) && typeof e.reason === 'string';
+const validPending = (p) => !!p && typeof p === 'object' && typeof p.session === 'string' && typeof p.prompt_id === 'string';
+const empty = () => ({ entered: null, pending: [], blocked: [] });
+const samePending = (a, b) => a.session === b.session && a.prompt_id === b.prompt_id;
+// What a change returns to leave the file exactly as it is.
+const NO_WRITE = Symbol('no write');
 
 /** What the file holds. Throws when it is there but cannot be read; missing or damaged content is the empty state. */
 function loadStrict(path, read) {
@@ -26,18 +34,20 @@ function loadStrict(path, read) {
   try {
     text = retrying(() => read(path, 'utf8'));
   } catch (error) {
-    if (error.code === 'ENOENT') return { entered: null, blocked: [] };
+    if (error.code === 'ENOENT') return empty();
     throw error;
   }
   let data;
   try {
     data = JSON.parse(text);
   } catch {
-    return { entered: null, blocked: [] };
+    return empty();
   }
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return { entered: null, blocked: [] };
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return empty();
+  const entered = validEntry(data.entered) ? data.entered : null;
   return {
-    entered: validEntry(data.entered) ? data.entered : null,
+    entered,
+    pending: entered && Array.isArray(data.pending) ? data.pending.filter(validPending) : [],
     blocked: Array.isArray(data.blocked) ? data.blocked.filter(validEntry) : [],
   };
 }
@@ -46,9 +56,15 @@ function load(path, read) {
   try {
     return loadStrict(path, read);
   } catch {
-    return { entered: null, blocked: [] };
+    return empty();
   }
 }
+
+const serialize = (state) => JSON.stringify({
+  ...(state.entered ? { entered: state.entered } : {}),
+  ...(state.entered && state.pending.length ? { pending: state.pending } : {}),
+  blocked: state.blocked,
+}, null, 2) + '\n';
 
 /**
  * @param {string} home the user's home directory
@@ -56,19 +72,20 @@ function load(path, read) {
  */
 export function autoState(home = homedir(), { read = readFileSync } = {}) {
   const path = autoStateFile(home);
+  // A change whose function returns NO_WRITE leaves the file alone and returns null.
   const change = (fn) => {
     mkdirSync(dirname(path), { recursive: true });
     return withLock(path, () => {
       const state = loadStrict(path, read);
       const result = fn(state);
-      const out = { ...(state.entered ? { entered: state.entered } : {}), blocked: state.blocked };
-      writeAtomic(path, JSON.stringify(out, null, 2) + '\n');
+      if (result === NO_WRITE) return null;
+      writeAtomic(path, serialize(state));
       return result;
     });
   };
   return {
     path,
-    /** @returns {{entered: object | null, blocked: object[]}} */
+    /** @returns {{entered: object | null, pending: object[], blocked: object[]}} */
     read: () => load(path, read),
     active: () => load(path, read).entered !== null,
     /** Idempotent: an earlier entry keeps its time and reason, and the blocked list is left alone. Returns the entry in force. */
@@ -79,5 +96,33 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
       change((state) => {
         state.blocked.push({ session: session ?? null, at, subject: String(subject), reason: String(reason) });
       }),
+    /**
+     * Ends the automatic state: `entered`, every pending turn and the blocked list go in one locked write, and are
+     * returned. null, with the file untouched, when the automatic state does not hold, so of two sessions clearing
+     * at once only one gets the list. The user's switch file and SORRY_MATT_UNATTENDED are not this module's.
+     */
+    clear: () =>
+      change((state) => {
+        if (!state.entered) return NO_WRITE;
+        const cleared = { entered: state.entered, pending: state.pending, blocked: state.blocked };
+        Object.assign(state, empty());
+        return cleared;
+      }),
+    /** A turn to decide at the session's Stop. Only while the automatic state holds; true when it is on the list. */
+    defer: ({ session, prompt_id }) =>
+      change((state) => {
+        if (!state.entered) return NO_WRITE;
+        const item = { session: String(session), prompt_id: String(prompt_id) };
+        if (!state.pending.some((p) => samePending(p, item))) state.pending.push(item);
+        return true;
+      }) ?? false,
+    /** Takes one pending turn off the list; true when it was there. */
+    settle: ({ session, prompt_id }) =>
+      change((state) => {
+        const kept = state.pending.filter((p) => !samePending(p, { session, prompt_id }));
+        if (kept.length === state.pending.length) return NO_WRITE;
+        state.pending = kept;
+        return true;
+      }) ?? false,
   };
 }
