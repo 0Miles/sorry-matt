@@ -25,6 +25,7 @@ grill them
 | `make-the-ui-fast` | When the UI is slow, measure first, name the bottleneck, change one thing, and measure again. |
 | `make-this-shit-pretty` | Rework an existing piece of UI in small verified steps, with behavior unchanged. |
 | `set-up-ui-skills` | Map a frontend project's component library, tokens, shared components, and conventions into `docs/agents/ui.md` for the frontend skills. Run once per project. |
+| `unattended` | Toggle the sorry-matt guard's unattended mode by hand with on, off or status; no argument flips it |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
@@ -170,6 +171,11 @@ those instead).
 touch ~/.claude/sorry-matt-unattended   # going to bed
 rm ~/.claude/sorry-matt-unattended      # back
 ```
+
+Or type `/sorry-matt:unattended on`, `off` or `status` (no argument flips it). A hook does the switching when you
+type the command, not the agent, which cannot run it. `off` also ends the automatic state, hands the agent the
+list of what was blocked under either source, and works only on a turn you sent yourself; when that cannot be told,
+nothing changes and you are told to remove the file. It cannot end `SORRY_MATT_UNATTENDED`, and says so.
 
 To turn the guard off, set it in the `env` of your Claude Code settings:
 
