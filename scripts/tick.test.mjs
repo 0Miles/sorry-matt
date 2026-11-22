@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { main as tick, defaultDeps, bashExecutor, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
-import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
+import { FINDING_COUNTS, main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
@@ -396,7 +396,7 @@ const ids = (actions) => actions.map((a) => a.id);
 const distinct = (actions) => [...new Map(actions.map((a) => [a.id, a])).values()];
 /** #156: the four finding counts of a review report's `counts:` line, as the host records them. */
 function findingCountFlags(v) {
-  return v.findingCounts ? ['candidates', 'confirmed', 'invalid', 'blocking'].flatMap((k) => [`--${k}`, String(v.findingCounts[k])]) : [];
+  return v.findingCounts ? FINDING_COUNTS.flatMap((k) => [`--${k}`, String(v.findingCounts[k])]) : [];
 }
 const stage = (h, id) => h.state().tickets[id].stage;
 /** The file a spawn's prompt tells the agent to read. */
@@ -2562,7 +2562,7 @@ test('#156: the four finding counts go together', (t) => {
     return 'pass';
   };
   assert.equal(h.untilDone().then, 'done');
-  assert.equal(checked > 0, true);
+  assert.ok(checked > 0);
 });
 
 test("#139 × #142 × #143: a light ticket's minimal review takes no counts and has no assignment record; a standard ticket's review host in the background is recorded by its collect, with its tier and counts", (t) => {

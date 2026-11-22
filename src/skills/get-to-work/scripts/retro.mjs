@@ -101,13 +101,14 @@
 // Exit codes: 0 done; 1 a file could not be read or written, or is not what it should be (the state, the retro file),
 // or the lock could not be taken;
 // 2 bad arguments.
-import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
-import { ROLES, category, ticketOf } from './spawns.mjs';
-import { PROFILE_DEFAULTS, STAGES, withLock } from './state.mjs';
+import { SESSION } from './gates.mjs';
+import { category, roleOf, ticketOf } from './spawns.mjs';
+import { FINDING_COUNTS, PROFILE_DEFAULTS, load, withLock, writeAtomic } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
 export const RECORD_FORMAT = 'sorry-matt/retro-record@1';
@@ -151,6 +152,18 @@ const addTokens = (to, from) => {
 const totalOf = (t) => TOKEN_FIELDS.reduce((n, [k]) => n + t[k], 0);
 const seconds = (from, to) => Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 1000));
 const readText = (p) => readFileSync(p, 'utf8');
+/** The lines of a JSON-lines text, each with its parse (null for a line that is not JSON); blank lines left out. */
+const jsonLines = (text) =>
+  String(text)
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return { line, value: JSON.parse(line) };
+      } catch {
+        return { line, value: null };
+      }
+    });
 const readJson = (p, what) => {
   try {
     return parseJson(readText(p));
@@ -160,10 +173,7 @@ const readJson = (p, what) => {
 };
 
 /** The kind an agent of the counters log counts under: its description's role word, else its spawns.mjs category. */
-export function kindOf(entry) {
-  const word = String(entry.description ?? '').trim().split(/\s+/)[0].toLowerCase();
-  return ROLES.includes(word) ? word : category(entry);
-}
+export const kindOf = (entry) => roleOf(entry.description) ?? category(entry);
 
 /** The report stage of a kind. */
 export const stageOf = (kind) => STAGE_OF[kind] ?? 'other';
@@ -175,8 +185,11 @@ export const stageOf = (kind) => STAGE_OF[kind] ?? 'other';
  */
 export function transcriptUsage(text, { since = null, until = null } = {}) {
   const byId = new Map();
+  const from = since ? Date.parse(since) : null;
+  const to = until ? Date.parse(until) : null;
+  // a line with usage has the key; the rest (tool inputs and results, most of the bytes) is not parsed
   for (const line of String(text).split(/\r?\n/)) {
-    if (!line.trim()) continue;
+    if (!line.includes('"usage"')) continue;
     let entry;
     try {
       entry = JSON.parse(line);
@@ -186,7 +199,7 @@ export function transcriptUsage(text, { since = null, until = null } = {}) {
     const m = entry?.message;
     if (!m || typeof m.id !== 'string' || !m.usage || typeof m.usage !== 'object') continue;
     const at = Date.parse(entry.timestamp);
-    if ((since && !(at >= Date.parse(since))) || (until && !(at <= Date.parse(until)))) continue;
+    if ((from !== null && !(at >= from)) || (to !== null && !(at <= to))) continue;
     byId.set(m.id, m);
   }
   const tokens = zero();
@@ -198,10 +211,10 @@ export function transcriptUsage(text, { since = null, until = null } = {}) {
   return { tokens, models: [...models].sort(), messages: byId.size };
 }
 
-/** The first `session: <id>` line of a ledger (a list bullet and backticks allowed), as the budget hook reads it. */
+/** The first `session: <id>` line of a ledger, in the budget hook's line shape (gates.mjs SESSION). */
 export function sessionOf(text) {
   for (const line of String(text).split(/\r?\n/)) {
-    const m = /^\s*(?:[-*]\s+)?`?session:\s*`?\s*([^`\s]+)\s*`?\s*`?\s*$/.exec(line);
+    const m = SESSION.exec(line);
     if (m) return m[1];
   }
   return null;
@@ -327,7 +340,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
     const initial = reviews.filter((r) => r.mode === 'initial').at(-1) ?? null;
     const counted = reviews.filter((r) => r.findingCounts);
     const findingCounts = counted.length
-      ? counted.reduce((s, r) => ({ candidates: s.candidates + r.findingCounts.candidates, confirmed: s.confirmed + r.findingCounts.confirmed, invalid: s.invalid + r.findingCounts.invalid, blocking: s.blocking + r.findingCounts.blocking }), { candidates: 0, confirmed: 0, invalid: 0, blocking: 0 })
+      ? Object.fromEntries(FINDING_COUNTS.map((k) => [k, counted.reduce((n, r) => n + r.findingCounts[k], 0)]))
       : null;
     const history = t.history ?? [];
     const merges = (t.merges ?? []).map((m) => (typeof m === 'string' ? m : m.sha));
@@ -368,25 +381,10 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
   });
 }
 
-/** The retro file's lines, split into this run's rows and everything else (kept as it is). */
-function readRetro(path) {
-  if (!existsSync(path)) return [];
-  return readText(path).split(/\r?\n/).filter((l) => l.trim());
-}
-
-function writeAtomic(path, text) {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
-}
-
 export function record(flags, deps) {
   for (const k of ['state', 'counters', 'ledger']) if (!flags[k]) throw new UsageError(`record needs --${k} <path>`);
   const statePath = resolve(flags.state);
-  const state = readJson(statePath, 'state');
-  if (!state || state.format !== 'sorry-matt/state@1' || typeof state.run !== 'string' || !state.tickets || typeof state.tickets !== 'object')
-    throw new Error(`${statePath} is not a sorry-matt state file`);
-  for (const t of Object.values(state.tickets)) if (!STAGES.includes(t?.stage)) throw new Error(`${statePath} is not a sorry-matt state file`);
+  const state = load(statePath);
 
   let log = [];
   let logReason = null;
@@ -418,10 +416,10 @@ export function record(flags, deps) {
     }
   };
   // #156 F13: a Local Markdown run still has CI on its origin remote; its mentions stay unknown (tracker: local)
-  let repo = null;
-  if (!config) repo = originRepo(dirname(statePath));
-  else if (tracker === 'github') repo = typeof config.repo === 'string' ? config.repo : null;
-  else repo = originRepo(typeof config.root === 'string' ? config.root : dirname(statePath));
+  const repo =
+    tracker === 'github'
+      ? typeof config.repo === 'string' ? config.repo : null
+      : originRepo(typeof config?.root === 'string' ? config.root : dirname(statePath));
   const now = flags.now ?? new Date(deps.clock()).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const rows = rowsOf({ state, log, logReason, session, places, version: deps.version ?? pluginVersion(), repo, tracker, base, now });
 
@@ -430,13 +428,7 @@ export function record(flags, deps) {
   const replaced = withLock(retro, () => {
     const kept = [];
     let n = 0;
-    for (const line of readRetro(retro)) {
-      let row = null;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        row = null;
-      }
+    for (const { line, value: row } of existsSync(retro) ? jsonLines(readText(retro)) : []) {
       if (row?.format === FORMAT && row.run === state.run) n += 1;
       else kept.push(line);
     }
@@ -469,8 +461,9 @@ function escapes(row, look) {
   const issues = row.repo && row.tracker !== 'local' ? look.issues(row.repo) : null;
   if (issues) {
     const num = /^#(\d+)$/.exec(row.ticket)?.[1];
+    const ref = num ? new RegExp(`(^|[^\\w&/])#${num}(?!\\w)`) : null;
     const names = (text) =>
-      (num && new RegExp(`(^|[^\\w&/])#${num}(?!\\w)`).test(text)) ||
+      ref?.test(text) ||
       (String(text).match(/\b[0-9a-f]{7,64}\b/g) ?? []).some((tok) => shas.some((s) => s.startsWith(tok) || tok.startsWith(s)));
     mentions = issues
       .filter((i) => `#${i.number}` !== row.ticket && Date.parse(i.createdAt) > Date.parse(row.deliveredAt) && names(`${i.title ?? ''}\n${i.body ?? ''}`))
@@ -481,7 +474,7 @@ function escapes(row, look) {
   let reverted = row.endState === 'stuck' && !upstream ? true : UNKNOWN;
   if (reverted !== true) {
     const bodies = look.log();
-    if (bodies !== null) reverted = shas.some((s) => new RegExp(`This reverts commit ${s}`).test(bodies));
+    if (bodies !== null) reverted = shas.some((s) => bodies.includes(`This reverts commit ${s}`));
   }
   let ciRed = UNKNOWN;
   const branch = row.profile?.integrate === 'direct' ? row.base : row.line;
@@ -511,6 +504,9 @@ function lookups(deps, repoDir) {
   };
 }
 
+/** The confirmed findings of one review (a minimal review's findings all count), or null when they were not counted. */
+const confirmedOf = (v) => (v.findingCounts ? v.findingCounts.confirmed : v.kind === 'minimal' ? (v.findings ?? 0) : null);
+
 function summarize(key, rows, look) {
   const tokensByStage = Object.fromEntries(REPORT_STAGES.map((s) => [s, zero()]));
   let unknownAgents = 0;
@@ -528,7 +524,6 @@ function summarize(key, rows, look) {
     const tier = r.tier ?? 'none';
     const b = (byTier[tier] ??= { tickets: 0, reviews: 0, confirmed: 0, reviewTokens: 0, unknownCounts: 0, initialKnown: 0, initialZero: 0 });
     b.tickets += 1;
-    const confirmedOf = (v) => (v.findingCounts ? v.findingCounts.confirmed : v.kind === 'minimal' ? (v.findings ?? 0) : null);
     // #156: a ticket with a review of unknown count spent review tokens on findings no one counted: left out
     if ((r.reviews ?? []).some((v) => confirmedOf(v) === null)) b.unknownCounts += 1;
     else b.reviewTokens += (r.agents ?? []).filter((a) => a.tokens && stageOf(a.kind) === 'review').reduce((n, a) => n + totalOf(a.tokens), 0);
@@ -598,19 +593,9 @@ export function report(flags, deps) {
   } catch (e) {
     throw new Error(`retro ${retro}: ${e.code === 'ENOENT' ? 'no such file (run record first)' : e.message}`);
   }
-  const rows = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (row?.format !== FORMAT) continue;
-    if (flags.since && !(String(row.started ?? '').slice(0, 10) >= flags.since)) continue;
-    rows.push(row);
-  }
+  const rows = jsonLines(text)
+    .map(({ value }) => value)
+    .filter((row) => row?.format === FORMAT && (!flags.since || String(row.started ?? '').slice(0, 10) >= flags.since));
   const look = lookups(deps, repoDir);
   const groups = new Map();
   for (const r of rows) {

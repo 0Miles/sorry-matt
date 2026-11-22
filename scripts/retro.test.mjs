@@ -291,7 +291,7 @@ test('record and report refuse what they cannot use: exit 1 for an unreadable st
   const w = world(t);
   const missing = main(['record', '--state', join(w.dir, 'nope.json'), '--counters', w.counters, '--ledger', w.ledger], w.deps);
   assert.equal(missing.code, 1);
-  assert.match(missing.err, /no such file/);
+  assert.match(missing.err, /nope\.json does not exist/);
   assert.equal(main(['record', '--state', w.statePath], w.deps).code, 2);
   assert.equal(main(['report', '--retro', w.retro, '--by', 'colour'], w.deps).code, 2);
   assert.equal(main(['report', '--retro', w.retro, '--since', 'May'], w.deps).code, 2);

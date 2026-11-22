@@ -55,11 +55,16 @@ const SLUG = '[^\\s\\/\\\\,;:()\\[\\]{}<>"\'`，、。；：（）「」]';
 const TICKET = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'u');
 const optionalString = (value) => value === null || value === undefined || typeof value === 'string';
 
+/** The role word a description starts with (ROLES), or null. */
+export function roleOf(description) {
+  const word = String(description ?? '').trim().split(/\s+/)[0].toLowerCase();
+  return ROLES.includes(word) ? word : null;
+}
+
 /** The category one log entry counts under. */
 export function category({ type, description }) {
   if (type && type !== 'general-purpose') return type;
-  const word = String(description ?? '').trim().split(/\s+/)[0].toLowerCase();
-  return ROLES.includes(word) ? word : 'general-purpose';
+  return roleOf(description) ?? 'general-purpose';
 }
 
 /** The ticket a description names, or null. */

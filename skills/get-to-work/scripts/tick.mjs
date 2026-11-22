@@ -1558,7 +1558,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
     spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
-    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}), ...(tier?.file && tier.reasons ? { tierReasons: tier.reasons } : {}) },
+    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}), ...(tier?.reasons ? { tierReasons: tier.reasons } : {}) },
     // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
     record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]   (in the background: --agent <agent id> alone)`,
   });
@@ -2588,15 +2588,18 @@ export function record(path, id, flags, now, deps) {
       ...more.flatMap((k) => [`--${k}`, flags[k]]),
     ];
   };
-  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once, with
-  // its report's counts (#142) and the review tier it was chosen by (#139).
-  const reviewEnded = (tid, agent, mode, verdict, counts, tier, tierReasons) => {
+  // A review recorded once on ticket `t`, with its report's counts (#142) and the review tier it was chosen by and that
+  // tier's reasons (#139, #156).
+  const recordReview = (tid, t, meta, verdict, counts) => {
+    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
+      S('review', tid, '--mode', meta.mode, '--verdict', verdict, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(meta.tier && meta.tierReasons ? ['--tier-reasons', meta.tierReasons.join(',')] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+    }
+  };
+  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once.
+  const reviewEnded = (tid, agent, meta, verdict, counts) => {
     release([tid]);
     takeAgent(agent);
-    const t = ticket(tid);
-    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(tier ? ['--tier', tier] : []), ...(tier && tierReasons ? ['--tier-reasons', tierReasons.join(',')] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
-    }
+    recordReview(tid, ticket(tid), { ...meta, kind: 'full' }, verdict, counts);
   };
 
   switch (issued.step) {
@@ -2607,7 +2610,7 @@ export function record(path, id, flags, now, deps) {
       }
       if (meta.stage === 'in-review') {
         // #143: the report of a review host that went to the background, with its counts as for the spawn (#142)
-        reviewEnded(tickets[0], meta.agent, meta.mode, outcome, reviewCounts(true, true), meta.tier, meta.tierReasons);
+        reviewEnded(tickets[0], meta.agent, meta, outcome, reviewCounts(true, true));
         break;
       }
       // #138: a round a review follows hands its report over first (checked before anything is written)
@@ -2710,12 +2713,10 @@ export function record(path, id, flags, now, deps) {
         else delete flag(tid).reviewTier;
         if (meta.tierReasons) flag(tid).reviewTierReasons = meta.tierReasons;
         else delete flag(tid).reviewTierReasons;
-        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome, counts, meta.tier, meta.tierReasons);
+        if (outcome !== null) reviewEnded(tid, flags.agent, meta, outcome, counts);
         break;
       }
-      if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(meta.tier && meta.tierReasons ? ['--tier-reasons', meta.tierReasons.join(',')] : []), ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
-      }
+      recordReview(tid, t, meta, outcome, counts);
       break;
     }
     case 'agent-report':

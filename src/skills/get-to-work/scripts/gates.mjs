@@ -110,7 +110,7 @@ export const TARGETS = { ci: 'branch', review: 'ticket', merged: 'ticket!', inte
 const ledgerLine = (key, value) =>
   new RegExp(`^\\s*(?:[-*+]\\s+)?(?:\`\\s*)?${key}:\\s*(?:\`\\s*)?(?!\\s)${value.source}(?<!\\s)\\s*(?:\`\\s*)?$`);
 const BUDGET = ledgerLine('budget', /([a-z][a-z-]*)\s+(\d+)/);
-const SESSION = ledgerLine('session', /([^`\s]+)/);
+export const SESSION = ledgerLine('session', /([^`\s]+)/);
 const RULE = ledgerLine('rule', /([^`]+?)/);
 
 // ---- git -----------------------------------------------------------------------------------------------------------

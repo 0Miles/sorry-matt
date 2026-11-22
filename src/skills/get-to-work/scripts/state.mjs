@@ -638,7 +638,7 @@ export function withLock(path, fn, { wait = 5000, stale = 2000, now = Date.now }
   }
 }
 
-function writeAtomic(path, text) {
+export function writeAtomic(path, text) {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, text);
   try {
