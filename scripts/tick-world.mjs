@@ -15,7 +15,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main as tick, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
+import { main as tick, defaultDeps, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { FINDING_COUNTS, main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
