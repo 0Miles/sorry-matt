@@ -248,29 +248,32 @@ export const shownUnattendedFile = (home = homedir()) => unattendedFile(home).re
 const ON = /^(1|on|yes|true)$/i;
 /** The user's environment source alone: SORRY_MATT_UNATTENDED set to an on value. */
 export const unattendedEnv = (env = process.env) => ON.test(String(env.SORRY_MATT_UNATTENDED ?? '').trim());
-export function unattended(env = process.env, exists = existsSync, home = homedir()) {
-  if (unattendedEnv(env)) return true;
+/** The user's file source alone: the switch file is there. A check that throws counts as off. */
+export function unattendedSwitch(exists = existsSync, home = homedir()) {
   try {
     return exists(unattendedFile(home));
   } catch {
     return false;
   }
 }
+export const unattended = (env = process.env, exists = existsSync, home = homedir()) =>
+  unattendedEnv(env) || unattendedSwitch(exists, home);
 
 /** Unattended from either source: the user's (switch file or env) or the automatic state. */
 export const isAway = (env, home, state, exists = existsSync) => unattended(env, exists, home) || state.active();
 
 /**
  * One more entry on the blocked list, and the text of the unattended deny. The caller denies whether or not that
- * write worked: the list is for the user's return; losing an entry must not let the call through.
+ * write worked: the list is for the user's return; losing an entry must not let the call through. `message` builds
+ * the text from the reason and home; it defaults to the deny of an action needing confirmation.
  */
-export function parked(state, { session, at, subject, reason }, home) {
+export function parked(state, { session, at, subject, reason }, home, message = unattendedMessage) {
   try {
     state?.record({ session, at, subject, reason });
   } catch {
     // denied all the same
   }
-  return unattendedMessage(reason, home);
+  return message(reason, home);
 }
 
 /** The unattended deny of PreToolUse. */
@@ -292,11 +295,8 @@ const questionsOf = (event) => {
   const questions = event.tool_input?.questions;
   return Array.isArray(questions) ? questions.map((q) => q?.question).filter((q) => typeof q === 'string' && q.trim()) : [];
 };
-const questionSubject = (event) => {
-  const questions = questionsOf(event);
-  return questions.length ? `AskUserQuestion: ${questions.join(' / ')}` : 'AskUserQuestion';
-};
-const questionMessage = (questions, home = homedir()) => [
+const questionSubject = (questions) => questions.length ? `AskUserQuestion: ${questions.join(' / ')}` : 'AskUserQuestion';
+const questionMessage = (questions, home) => [
   'sorry-matt guard 無人值守模式：使用者現在不在，所以這次提問直接擋下，不跳提問框。',
   ...(questions.length ? [`被擋下的提問：${questions.join(' / ')}`] : []),
   '不要停下來等，也不要重問或換個方式再問。每一題從三條出路擇一：能依自己的判斷代答，並記錄問題、答案與理由（記進自答清單，沒有清單就留到最後的回報）；答不出來就列為待裁決；只有使用者能做的就列進人工作業清單。然後繼續做其他做得了的事。',
@@ -305,12 +305,9 @@ const questionMessage = (questions, home = homedir()) => [
 
 /** The unattended deny of an AskUserQuestion. Denied whether or not the list could be written. */
 function parkQuestion({ event, now, state, home }) {
-  try {
-    state?.record({ session: event.session_id, at: now, subject: questionSubject(event), reason: QUESTION_REASON });
-  } catch {
-    // denied all the same
-  }
-  return deny(questionMessage(questionsOf(event), home));
+  const questions = questionsOf(event);
+  const entry = { session: event.session_id, at: now, subject: questionSubject(questions), reason: QUESTION_REASON };
+  return deny(parked(state, entry, home, (_, h) => questionMessage(questions, h)));
 }
 
 // The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every

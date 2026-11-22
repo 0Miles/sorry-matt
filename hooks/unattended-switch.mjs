@@ -20,28 +20,18 @@ import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pause } from './budget.mjs';
-import { guardOff, shownUnattendedFile, unattendedEnv, unattendedFile } from './decision.mjs';
+import { guardOff, shownUnattendedFile, unattendedEnv, unattendedFile, unattendedSwitch } from './decision.mjs';
 import { autoState } from './unattended-state.mjs';
-import { REREAD_MS, blockedLines, judge, time } from './unattended-return.mjs';
+import { COMMAND, blockedSection, judge, parse, rereadVerdict, text, time } from './unattended-return.mjs';
 
 /** The only command name this hook answers: the plugin's `unattended` skill, as Claude Code names a plugin command. */
-export const COMMAND = 'sorry-matt:unattended';
+export { COMMAND };
 /** Every result starts with this, so the skill body can tell a hook result from anything else in the context. */
 export const PREFIX = '[sorry-matt unattended]';
-const STEP_MS = 25;
 const RM = 'rm ~/.claude/sorry-matt-unattended';
 const TOUCH = 'touch ~/.claude/sorry-matt-unattended';
 const RELAY = '請把這段結果照實告訴使用者。';
 
-const parse = (raw) => {
-  try {
-    const event = JSON.parse(raw);
-    return event && typeof event === 'object' ? event : null;
-  } catch {
-    return null;
-  }
-};
-const text = (v) => typeof v === 'string' && v !== '';
 const isCommand = (name) => typeof name === 'string' && name.replace(/^\//, '') === COMMAND;
 
 function context(env, deps) {
@@ -60,13 +50,8 @@ function context(env, deps) {
 
 /** Which sources hold right now. Reads only. */
 function sources({ env, home, state, exists }) {
-  let file = false;
-  try {
-    file = exists(unattendedFile(home));
-  } catch {
-    // unknown is off: status says so, and `off` has nothing of its to remove
-  }
-  return { file, env: unattendedEnv(env), auto: state.read() };
+  // unknown is off: status says so, and `off` has nothing of its to remove
+  return { file: unattendedSwitch(exists, home), env: unattendedEnv(env), auto: state.read() };
 }
 const anyOn = (s) => s.file || s.env || s.auto.entered !== null;
 
@@ -146,7 +131,7 @@ function turnOff(ctx) {
       lines.push(`- 開關檔 ${shown} 刪不掉（${error.message}），仍然開著；請使用者執行 \`${RM}\`。`);
     }
   }
-  const entered = cleared?.entered ?? null;
+  const entered = cleared?.entered;
   if (entered) lines.push(`- 自動進入的無人值守已解除（${auto(entered)}）。`);
   if (s.env) {
     lines.push(`無人值守仍因環境變數 SORRY_MATT_UNATTENDED 開著：需要使用者確認的動作仍會直接擋下。${ENV_NOTE}`);
@@ -158,8 +143,7 @@ function turnOff(ctx) {
     lines.push(`無人值守期間沒有擋下任何動作。${RELAY}`);
     return lines.join('\n');
   }
-  lines.push(`無人值守期間擋下了 ${blocked.length} 個需要使用者確認的動作（清單已清空）。請把下面的清單完整告訴使用者（session、時間、原指令、理由），由使用者決定要不要執行；不要自己重跑它們。`);
-  lines.push(...blockedLines(blocked));
+  lines.push(...blockedSection(blocked, '（清單已清空）'));
   return lines.join('\n');
 }
 
@@ -167,26 +151,24 @@ const notHuman = (why) =>
   `${PREFIX} 沒有關閉無人值守：${why}，判不出這一輪是使用者親自送出的，所以開關檔、自動進入的狀態與擋下清單都沒動。要關閉，請使用者在終端機執行 \`${RM}\`（自動進入的狀態在使用者親自送出訊息時解除；環境變數 SORRY_MATT_UNATTENDED 要從 settings 的 "env" 拿掉）。${RELAY}`;
 const DEFERRED = `${PREFIX} 這一輪的 transcript 紀錄還沒寫入，還判不出是不是使用者親自送出的，所以先記成待判定，現在什麼都還沒改。這一輪結束時（Stop）再判定：是使用者送出的就關閉，並把結果與擋下清單交回來；不是就不關閉。`;
 
-/** `off` and the toggle that turns off: a person's turn only. */
-function offTurn(event, ctx) {
-  if (!anyOn(sources(ctx))) return turnOff(ctx);
-  if (!text(event.prompt_id) || !text(event.transcript_path)) return notHuman('事件沒有 prompt_id 或 transcript_path');
-  const deadline = ctx.now() + REREAD_MS;
-  let verdict = judge(event.transcript_path, event.prompt_id, ctx.read);
-  while (verdict === 'missing' && ctx.now() < deadline) {
-    ctx.sleep(STEP_MS);
-    verdict = judge(event.transcript_path, event.prompt_id, ctx.read);
+/** Leaves an `off` turn for this session's Stop; false when it cannot be left there. */
+function deferOff(event, ctx) {
+  if (!text(event.session_id)) return false;
+  try {
+    ctx.state.deferOff({ session: event.session_id, prompt_id: event.prompt_id });
+    return true;
+  } catch {
+    return false;
   }
+}
+
+/** `off` and the toggle that turns off: a person's turn only. `on` is whether any source holds, when already known. */
+function offTurn(event, ctx, on = anyOn(sources(ctx))) {
+  if (!on) return turnOff(ctx);
+  if (!text(event.prompt_id) || !text(event.transcript_path)) return notHuman('事件沒有 prompt_id 或 transcript_path');
+  const verdict = rereadVerdict(event.transcript_path, event.prompt_id, ctx);
   if (verdict === 'missing') {
-    if (text(event.session_id)) {
-      try {
-        ctx.state.deferOff({ session: event.session_id, prompt_id: event.prompt_id });
-        return DEFERRED;
-      } catch {
-        // cannot be left for Stop: not decided
-      }
-    }
-    return notHuman('這一輪的 transcript 紀錄還沒寫入，也無法留到這一輪結束時再判定');
+    return deferOff(event, ctx) ? DEFERRED : notHuman('這一輪的 transcript 紀錄還沒寫入，也無法留到這一輪結束時再判定');
   }
   if (verdict === 'unreadable') return notHuman('讀不到這個 session 的 transcript');
   if (verdict !== 'human') return notHuman('transcript 裡這一輪不是使用者親自輸入的（例如排程或 /loop 喚醒、背景 agent 的通知），或沒有記下來源');
@@ -214,7 +196,10 @@ export function onExpansion(raw, env = process.env, deps = {}) {
     if (word === 'status') return say(statusText(ctx));
     if (word === 'on') return say(turnOn(ctx));
     if (word === 'off') return say(offTurn(event, ctx));
-    if (word === '') return say(anyOn(sources(ctx)) ? offTurn(event, ctx) : turnOn(ctx));
+    if (word === '') {
+      const on = anyOn(sources(ctx));
+      return say(on ? offTurn(event, ctx, on) : turnOn(ctx));
+    }
     return say(usage(arg));
   } catch (error) {
     return say(`${PREFIX} 處理時出錯（${error.message}），沒有完成切換。請使用者自己執行 \`${TOUCH}\`（開啟）或 \`${RM}\`（關閉）。${RELAY}`);

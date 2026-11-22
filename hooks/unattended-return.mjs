@@ -52,12 +52,29 @@ export function judge(path, promptId, read) {
   return found.origin === 'human' ? 'human' : 'other';
 }
 
+/** judge(), reread every STEP_MS for up to REREAD_MS while the entry is still 'missing'. */
+export function rereadVerdict(path, promptId, { read = readFileSync, now = Date.now, sleep = pause } = {}) {
+  const deadline = now() + REREAD_MS;
+  let verdict = judge(path, promptId, read);
+  while (verdict === 'missing' && now() < deadline) {
+    sleep(STEP_MS);
+    verdict = judge(path, promptId, read);
+  }
+  return verdict;
+}
+
 export const time = (ms) => new Date(ms).toISOString();
 const indent = (text) => String(text).split(/\r?\n/).join('\n     ');
 
-/** The blocked list as the agent is handed it: one numbered item per action, with session, time, command and reason. */
-export const blockedLines = (blocked) => blocked.flatMap((b, i) =>
-  [`${i + 1}. session ${b.session ?? '（不明）'}，${time(b.at)}`, `   原指令：${indent(b.subject)}`, `   理由：${indent(b.reason)}`]);
+/**
+ * A non-empty blocked list as the agent is handed it: the relay line, then one numbered item per action, with
+ * session, time, command and reason. `note` goes right after the count.
+ */
+export const blockedSection = (blocked, note = '') => [
+  `無人值守期間擋下了 ${blocked.length} 個需要使用者確認的動作${note}。請把下面的清單完整告訴使用者（session、時間、原指令、理由），由使用者決定要不要執行；不要自己重跑它們。`,
+  ...blocked.flatMap((b, i) =>
+    [`${i + 1}. session ${b.session ?? '（不明）'}，${time(b.at)}`, `   原指令：${indent(b.subject)}`, `   理由：${indent(b.reason)}`]),
+];
 
 /** What the agent is told when the automatic state ends: the entry, and every blocked action. */
 export function handover({ entered, blocked }, { env = process.env, home = homedir(), exists = existsSync } = {}) {
@@ -71,8 +88,7 @@ export function handover({ entered, blocked }, { env = process.env, home = homed
     lines.push('無人值守期間沒有擋下任何動作。請告訴使用者無人值守已解除。');
     return lines.join('\n');
   }
-  lines.push(`無人值守期間擋下了 ${blocked.length} 個需要使用者確認的動作。請把下面的清單完整告訴使用者（session、時間、原指令、理由），由使用者決定要不要執行；不要自己重跑它們。`);
-  lines.push(...blockedLines(blocked));
+  lines.push(...blockedSection(blocked));
   return lines.join('\n');
 }
 
@@ -82,7 +98,8 @@ function end(state, { env, home, exists }) {
   return cleared ? handover(cleared, { env, home, exists }) : null;
 }
 
-const parse = (raw) => {
+/** The hook event, or null when stdin is not a JSON object. */
+export const parse = (raw) => {
   try {
     const event = JSON.parse(raw);
     return event && typeof event === 'object' ? event : null;
@@ -90,12 +107,14 @@ const parse = (raw) => {
     return null;
   }
 };
-const text = (v) => typeof v === 'string' && v !== '';
-// The user's switch command. Claude Code runs UserPromptSubmit before the command's UserPromptExpansion, so ending
+export const text = (v) => typeof v === 'string' && v !== '';
+/** The user's switch command: the plugin's `unattended` skill, as Claude Code names a plugin command. */
+export const COMMAND = 'sorry-matt:unattended';
+// Claude Code runs UserPromptSubmit before the command's UserPromptExpansion, so ending
 // the automatic state here would leave unattended-switch.mjs no source to see: its toggle would turn on instead of
 // off, and its `off` would find no list to hand over. That turn is the switch hook's to decide.
-const SWITCH_PROMPT = /^\s*\/sorry-matt:unattended(\s|$)/;
-export const isSwitchCommand = (prompt) => typeof prompt === 'string' && SWITCH_PROMPT.test(prompt);
+const SWITCH_PROMPT = new RegExp(`^\\s*/${COMMAND}(\\s|$)`);
+const isSwitchCommand = (prompt) => typeof prompt === 'string' && SWITCH_PROMPT.test(prompt);
 
 /**
  * UserPromptSubmit: ends the automatic state on a person's turn and returns the hook output that hands the list to
@@ -110,13 +129,7 @@ export function onPromptSubmit(raw, env = process.env, deps = {}) {
     const state = deps.state ?? autoState(home);
     if (!event || isSwitchCommand(event.prompt) || !state.active()) return null;
     if (!text(event.prompt_id) || !text(event.transcript_path)) return null;
-    const { read = readFileSync, now = Date.now, sleep = pause } = deps;
-    const deadline = now() + REREAD_MS;
-    let verdict = judge(event.transcript_path, event.prompt_id, read);
-    while (verdict === 'missing' && now() < deadline) {
-      sleep(STEP_MS);
-      verdict = judge(event.transcript_path, event.prompt_id, read);
-    }
+    const verdict = rereadVerdict(event.transcript_path, event.prompt_id, deps);
     if (verdict === 'missing') {
       if (text(event.session_id)) state.defer({ session: event.session_id, prompt_id: event.prompt_id });
       return null;

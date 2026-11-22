@@ -89,6 +89,22 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
       return result;
     });
   };
+  // A turn to decide at the session's Stop, onto `key`; with `needsEntered`, only while the automatic state holds.
+  const deferTo = (key, needsEntered) => ({ session, prompt_id }) =>
+    change((state) => {
+      if (needsEntered && !state.entered) return NO_WRITE;
+      const item = { session: String(session), prompt_id: String(prompt_id) };
+      if (!state[key].some((p) => samePending(p, item))) state[key].push(item);
+      return true;
+    }) ?? false;
+  // Takes one pending turn off `key`; true when it was there.
+  const settleFrom = (key) => ({ session, prompt_id }) =>
+    change((state) => {
+      const kept = state[key].filter((p) => !samePending(p, { session, prompt_id }));
+      if (kept.length === state[key].length) return NO_WRITE;
+      state[key] = kept;
+      return true;
+    }) ?? false;
   return {
     path,
     /** @returns {{entered: object | null, pending: object[], pendingOff: object[], blocked: object[]}} */
@@ -128,20 +144,9 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
         return cleared;
       }),
     /** A turn to decide at the session's Stop. Only while the automatic state holds; true when it is on the list. */
-    defer: ({ session, prompt_id }) =>
-      change((state) => {
-        if (!state.entered) return NO_WRITE;
-        const item = { session: String(session), prompt_id: String(prompt_id) };
-        if (!state.pending.some((p) => samePending(p, item))) state.pending.push(item);
-        return true;
-      }) ?? false,
+    defer: deferTo('pending', true),
     /** A `/sorry-matt:unattended off` turn to decide at the session's Stop; true when it is on the list. */
-    deferOff: ({ session, prompt_id }) =>
-      change((state) => {
-        const item = { session: String(session), prompt_id: String(prompt_id) };
-        if (!state.pendingOff.some((p) => samePending(p, item))) state.pendingOff.push(item);
-        return true;
-      }),
+    deferOff: deferTo('pendingOff', false),
     /** `/sorry-matt:unattended on`: every pending `off` turn, of every session, is dropped; returns how many. */
     dropOffs: () =>
       change((state) => {
@@ -151,20 +156,8 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
         return dropped;
       }) ?? 0,
     /** Takes one pending `off` turn off the list; true when it was there. */
-    settleOff: ({ session, prompt_id }) =>
-      change((state) => {
-        const kept = state.pendingOff.filter((p) => !samePending(p, { session, prompt_id }));
-        if (kept.length === state.pendingOff.length) return NO_WRITE;
-        state.pendingOff = kept;
-        return true;
-      }) ?? false,
+    settleOff: settleFrom('pendingOff'),
     /** Takes one pending turn off the list; true when it was there. */
-    settle: ({ session, prompt_id }) =>
-      change((state) => {
-        const kept = state.pending.filter((p) => !samePending(p, { session, prompt_id }));
-        if (kept.length === state.pending.length) return NO_WRITE;
-        state.pending = kept;
-        return true;
-      }) ?? false,
+    settle: settleFrom('pending'),
   };
 }
