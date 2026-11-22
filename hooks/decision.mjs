@@ -37,6 +37,9 @@ export const enterIntro = (root) => [
   '原因裡不要有 "、$、反引號、反斜線或換行（PowerShell 下也不要有彎引號或 --%）；改過寫法、串接或換路徑的版本不會被認得，會照常跳確認框。進入後所有 session 需要使用者確認的動作都直接擋下、記進清單；只有使用者能解除。',
 ].join('\n');
 
+/** SORRY_MATT_GUARD=off turns every guard hook off. */
+export const guardOff = (env = process.env) => String(env.SORRY_MATT_GUARD || '').toLowerCase() === 'off';
+
 const BYPASS = 'bypassPermissions';
 const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_GUARD=off 關掉這個 guard。）';
 
@@ -48,7 +51,7 @@ const OPT_OUT = '（使用者可在 Claude Code 設定的 "env" 加 SORRY_MATT_G
  *   replaces both sources; with it the hook stays off the automatic state file unless `state` is passed too.
  */
 export function decide(raw, env = process.env, deps = {}) {
-  if (String(env.SORRY_MATT_GUARD || '').toLowerCase() === 'off') return null;
+  if (guardOff(env)) return null;
   let event;
   try {
     event = JSON.parse(raw);
@@ -67,8 +70,7 @@ export function decide(raw, env = process.env, deps = {}) {
       home: deps.home ?? homedir(),
     };
     ctx.state = deps.state ?? (deps.unattended === undefined ? autoState(ctx.home) : null);
-    let awayNow;
-    const away = () => (awayNow ??= deps.unattended ?? (unattended(env, existsSync, ctx.home) || ctx.state.active()));
+    const away = () => deps.unattended ?? isAway(env, ctx.home, ctx.state);
     if (writesGuardState(event)) {
       return deny('sorry-matt guard：不能寫入 guard 的確認紀錄（sorry-matt-guard 目錄）。兩段確認只能經由 guard 給的確認指令完成。');
     }
@@ -238,6 +240,8 @@ function mergeReason(verdict, result) {
 // enough: the user's (the switch file or the env, below) and the automatic one (unattended-state.mjs), which the
 // agent may enter with the one line the guard hands out. Both only ever make the guard stricter.
 export const unattendedFile = (home = homedir()) => join(home, '.claude', 'sorry-matt-unattended');
+/** The switch file as messages show it, with forward slashes. */
+export const shownUnattendedFile = (home = homedir()) => unattendedFile(home).replace(/\\/g, '/');
 const ON = /^(1|on|yes|true)$/i;
 export function unattended(env = process.env, exists = existsSync, home = homedir()) {
   if (ON.test(String(env.SORRY_MATT_UNATTENDED ?? '').trim())) return true;
@@ -248,19 +252,29 @@ export function unattended(env = process.env, exists = existsSync, home = homedi
   }
 }
 
-/** The unattended deny: one more entry on the blocked list, and the call is denied whether or not that write worked. */
-function park({ event, now, state, home }, reason) {
+/** Unattended from either source: the user's (switch file or env) or the automatic state. */
+export const isAway = (env, home, state, exists = existsSync) => unattended(env, exists, home) || state.active();
+
+/**
+ * One more entry on the blocked list, and the text of the unattended deny. The caller denies whether or not that
+ * write worked: the list is for the user's return; losing an entry must not let the call through.
+ */
+export function parked(state, { session, at, subject, reason }, home) {
   try {
-    state?.record({ session: event.session_id, at: now, subject: subjectOf(event), reason });
+    state?.record({ session, at, subject, reason });
   } catch {
-    // the list is for the user's return; losing an entry must not let the call through
+    // denied all the same
   }
-  return deny(unattendedMessage(reason, home));
+  return unattendedMessage(reason, home);
 }
+
+/** The unattended deny of PreToolUse. */
+const park = ({ event, now, state, home }, reason) =>
+  deny(parked(state, { session: event.session_id, at: now, subject: subjectOf(event), reason }, home));
 
 /** The text every unattended deny carries, PreToolUse and PermissionRequest alike: the reason line is the only part that differs. */
 export const unattendedMessage = (reason, home = homedir()) =>
-  `sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`;
+  `sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${shownUnattendedFile(home)} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`;
 
 // The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every
 // rewrite the guard tried to read through — another spelling of the path, other quotes, Git Bash's `/c/` — turned

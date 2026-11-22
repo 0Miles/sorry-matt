@@ -104,7 +104,7 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
     clear: () =>
       change((state) => {
         if (!state.entered) return NO_WRITE;
-        const cleared = { entered: state.entered, pending: state.pending, blocked: state.blocked };
+        const cleared = { ...state };
         Object.assign(state, empty());
         return cleared;
       }),

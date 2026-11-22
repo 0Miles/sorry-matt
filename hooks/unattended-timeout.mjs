@@ -14,9 +14,10 @@
 // that is still running then has no tool_result yet (scripts/unattended.live.mjs).
 // Dialogs waiting at the same time each run out on their own; entering is idempotent, so the first keeps its time
 // and reason. Anything that goes wrong is no output: the dialog stays up for the user, as without this hook.
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { subjectOf, unattended, unattendedMessage } from './decision.mjs';
+import { stable } from './confirm-state.mjs';
+import { guardOff, isAway, parked, subjectOf } from './decision.mjs';
 import { autoState } from './unattended-state.mjs';
 
 export const DEFAULT_MINUTES = 10;
@@ -37,18 +38,9 @@ export function waitMinutes(value) {
   return Math.min(minutes, MAX_MINUTES);
 }
 
-// The same input whatever the key order.
-const canonical = (value) => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value ?? null);
-};
-
-/** Whether transcript JSONL has a tool_result for the last tool_use of this tool with this input. */
+/** Whether transcript JSONL has a tool_result for the last tool_use of this tool with this input (in any key order). */
 export function answeredIn(text, toolName, toolInput) {
-  const wanted = canonical(toolInput ?? {});
+  const wanted = stable(toolInput ?? {});
   let id = null;
   const results = new Set();
   for (const line of String(text).split(/\r?\n/)) {
@@ -63,7 +55,7 @@ export function answeredIn(text, toolName, toolInput) {
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (entry.type === 'assistant' && block?.type === 'tool_use' && typeof block.id === 'string' &&
-        block.name === toolName && canonical(block.input ?? {}) === wanted) id = block.id;
+        block.name === toolName && stable(block.input ?? {}) === wanted) id = block.id;
       if (entry.type === 'user' && block?.type === 'tool_result' && typeof block.tool_use_id === 'string') results.add(block.tool_use_id);
     }
   }
@@ -86,12 +78,11 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 /**
  * @param {string} raw the PermissionRequest event JSON
  * @param {Record<string, string | undefined>} env the hook process environment
- * @param {{home?: string, state?: object, exists?: Function, now?: () => number, sleep?: (ms: number) => Promise<void>,
- *   answered?: (event: object) => boolean, read?: typeof readFileSync}} deps
+ * @param {{home?: string, now?: () => number, sleep?: (ms: number) => Promise<void>, answered?: (event: object) => boolean}} deps
  * @returns {Promise<object | null>} the hook output, or null for none
  */
 export async function onPermissionRequest(raw, env = process.env, deps = {}) {
-  if (String(env.SORRY_MATT_GUARD || '').toLowerCase() === 'off') return null;
+  if (guardOff(env)) return null;
   try {
     let event;
     try {
@@ -101,22 +92,16 @@ export async function onPermissionRequest(raw, env = process.env, deps = {}) {
     }
     if (!event || typeof event !== 'object' || event.hook_event_name !== 'PermissionRequest') return null;
     const home = deps.home ?? homedir();
-    const state = deps.state ?? autoState(home);
+    const state = autoState(home);
     const now = deps.now ?? Date.now;
     const sleep = deps.sleep ?? wait;
-    const isAnswered = deps.answered ?? ((e) => answered(e, deps.read));
+    const isAnswered = deps.answered ?? answered;
     const session = event.session_id ?? null;
     const subject = subjectOf(event);
-    const park = (at, reason) => {
-      try {
-        state.record({ session, at, subject, reason });
-      } catch {
-        // the list is for the user's return; losing an entry must not bring the dialog back
-      }
-      return deny(unattendedMessage(reason, home));
-    };
+    // Losing the list entry must not bring the dialog back: parked denies all the same.
+    const park = (at, reason) => deny(parked(state, { session, at, subject, reason }, home));
 
-    if (unattended(env, deps.exists ?? existsSync, home) || state.active()) {
+    if (isAway(env, home, state)) {
       return park(now(), `這是 Claude Code 的權限提示（${event.tool_name}）。`);
     }
     const minutes = waitMinutes(env.SORRY_MATT_UNATTENDED_AFTER);

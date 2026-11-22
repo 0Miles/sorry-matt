@@ -17,12 +17,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { unattended, unattendedFile } from './decision.mjs';
+import { pause } from './budget.mjs';
+import { guardOff, shownUnattendedFile, unattended } from './decision.mjs';
 import { autoState } from './unattended-state.mjs';
 
 export const REREAD_MS = 500;
 const STEP_MS = 25;
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** The `turnOrigin` of the first user entry for `promptId` in transcript JSONL; `found: false` when there is none yet. */
 export function turnOrigin(text, promptId) {
@@ -61,7 +61,7 @@ export function handover({ entered, blocked }, { env = process.env, home = homed
     `sorry-matt guard：使用者回來送出了訊息，自動進入的無人值守模式已解除（進入時間 ${time(entered.at)}，原因：${entered.reason}）。之後需要使用者確認的動作會照常跳確認框。`,
   ];
   if (unattended(env, exists, home)) {
-    lines.push(`使用者自己開的無人值守（開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或環境變數 SORRY_MATT_UNATTENDED）仍然開著，需要確認的動作仍會直接擋下；它只由使用者關閉。`);
+    lines.push(`使用者自己開的無人值守（開關檔 ${shownUnattendedFile(home)} 或環境變數 SORRY_MATT_UNATTENDED）仍然開著，需要確認的動作仍會直接擋下；它只由使用者關閉。`);
   }
   if (!blocked.length) {
     lines.push('無人值守期間沒有擋下任何動作。請告訴使用者無人值守已解除。');
@@ -74,7 +74,12 @@ export function handover({ entered, blocked }, { env = process.env, home = homed
   return lines.join('\n');
 }
 
-const off = (env) => String(env.SORRY_MATT_GUARD || '').toLowerCase() === 'off';
+/** Ends the automatic state; the handover text, or null when another session ended it first. */
+function end(state, { env, home, exists }) {
+  const cleared = state.clear();
+  return cleared ? handover(cleared, { env, home, exists }) : null;
+}
+
 const parse = (raw) => {
   try {
     const event = JSON.parse(raw);
@@ -91,7 +96,7 @@ const text = (v) => typeof v === 'string' && v !== '';
  * @param {{home?: string, state?: object, read?: typeof readFileSync, now?: () => number, sleep?: (ms: number) => void, exists?: Function}} deps
  */
 export function onPromptSubmit(raw, env = process.env, deps = {}) {
-  if (off(env)) return null;
+  if (guardOff(env)) return null;
   try {
     const event = parse(raw);
     const home = deps.home ?? homedir();
@@ -110,9 +115,8 @@ export function onPromptSubmit(raw, env = process.env, deps = {}) {
       return null;
     }
     if (verdict !== 'human') return null;
-    const cleared = state.clear();
-    if (!cleared) return null;
-    return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: handover(cleared, { env, home, exists: deps.exists }) } };
+    const list = end(state, { env, home, exists: deps.exists });
+    return list ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: list } } : null;
   } catch {
     return null;
   }
@@ -124,7 +128,7 @@ export function onPromptSubmit(raw, env = process.env, deps = {}) {
  * turns are gone once the state is cleared, so the block comes once.
  */
 export function onStop(raw, env = process.env, deps = {}) {
-  if (off(env)) return null;
+  if (guardOff(env)) return null;
   try {
     const event = parse(raw);
     if (!event || !text(event.session_id)) return null;
@@ -132,12 +136,12 @@ export function onStop(raw, env = process.env, deps = {}) {
     const state = deps.state ?? autoState(home);
     const mine = state.read().pending.filter((p) => p.session === event.session_id);
     const read = deps.read ?? readFileSync;
+    const path = text(event.transcript_path) ? event.transcript_path : null;
     for (const turn of mine) {
-      const verdict = text(event.transcript_path) ? judge(event.transcript_path, turn.prompt_id, read) : 'unreadable';
+      const verdict = path ? judge(path, turn.prompt_id, read) : 'unreadable';
       if (verdict === 'human') {
-        const cleared = state.clear();
-        if (cleared) return { decision: 'block', reason: handover(cleared, { env, home, exists: deps.exists }) };
-        return null;
+        const list = end(state, { env, home, exists: deps.exists });
+        return list ? { decision: 'block', reason: list } : null;
       }
       state.settle(turn);
     }

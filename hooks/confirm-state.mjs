@@ -20,7 +20,7 @@ export const stateDir = () => join(tmpdir(), 'sorry-matt-guard');
 const fileFor = (dir, sessionId) => join(dir, `${String(sessionId || 'no-session').replace(/[^\w.-]/g, '_')}.json`);
 
 // Keys sorted at every level, so the same input always serializes the same way.
-const stable = (value) => {
+export const stable = (value) => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;

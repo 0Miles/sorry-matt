@@ -88,7 +88,7 @@ export function parseBudget(text) {
 
 export const countersPath = (ledger) => ledger.replace(/\.md$/i, '.counters.json');
 
-const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // Errors Windows raises while another process (antivirus, indexer, a rename in flight) holds the file.
 const TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
