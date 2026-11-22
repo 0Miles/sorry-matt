@@ -17,6 +17,7 @@ import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
 import { onPromptSubmit, onStop, turnOrigin, REREAD_MS } from '../hooks/unattended-return.mjs';
+import { onPermissionRequest, waitMinutes, answeredIn } from '../hooks/unattended-timeout.mjs';
 
 // Unless a test says otherwise the user is at the keyboard, whatever switch file this machine has.
 const decide = (raw, env = {}, deps = {}) => decideWith(raw, env, { unattended: false, ...deps });
@@ -1634,6 +1635,309 @@ test('sessions back at the same moment get the list once between them', async ()
     assert.equal(handed.length, 1, 'exactly one session hands the list over');
     assert.match(JSON.parse(handed[0].stdout).hookSpecificOutput.additionalContext, /擋下了 2 個/);
     assert.deepEqual(savedState(home), { blocked: [] });
+    assert.deepEqual(readdirSync(dirname(autoStateFile(home))), ['unattended.json'], 'no lock or temp file is left behind');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ---------- unattended: a permission dialog nobody answers (PermissionRequest) ----------
+
+// A PermissionRequest event as spec #89 measured it: no tool_use_id, so the hook finds the call in the transcript.
+const permission = (extra = {}) => JSON.stringify({
+  hook_event_name: 'PermissionRequest', session_id: 's5', transcript_path: join(tmpdir(), 'sorry-matt-no-such-transcript.jsonl'),
+  cwd: CWD, permission_mode: 'default', prompt_id: 'p5', tool_name: 'Bash', tool_input: { command: 'npm publish', description: 'publish' },
+  permission_suggestions: [], ...extra,
+});
+const MINUTE = 60_000;
+// Virtual time: a sleep resolves only when advance() moves the clock past it, so a ten-minute wait takes no time.
+function virtualTime(start = 0) {
+  const clock = { t: start, sleeps: [], timers: [] };
+  clock.now = () => clock.t;
+  clock.sleep = (ms) => {
+    clock.sleeps.push(ms);
+    return new Promise((resolve) => clock.timers.push({ at: clock.t + ms, resolve }));
+  };
+  const settle = () => new Promise((done) => setImmediate(done));
+  clock.advance = async (ms) => {
+    const end = clock.t + ms;
+    for (;;) {
+      await settle();
+      clock.timers.sort((a, b) => a.at - b.at);
+      if (!clock.timers.length || clock.timers[0].at > end) break;
+      const next = clock.timers.shift();
+      clock.t = next.at;
+      next.resolve();
+    }
+    clock.t = end;
+    await settle();
+  };
+  return clock;
+}
+async function withDirAsync(fn) {
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-guard-')));
+  try {
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const requestDecision = (result) => result?.hookSpecificOutput?.decision ?? null;
+// The PreToolUse guard's unattended deny for `npm publish`, split around its one reason line.
+const guardParkLines = (home) => out(decideWith(event('npm publish'), {}, { unattended: true, home, store: memoryStore(), now: 1 })).permissionDecisionReason.split('\n');
+
+test('a permission dialog nobody answers is taken back at the deadline and enters unattended mode', () => withDirAsync(async (home) => {
+  const clock = virtualTime(1_000_000);
+  const checks = [];
+  const deps = { home, now: clock.now, sleep: clock.sleep, answered: () => (checks.push(clock.t), false) };
+  const pending = onPermissionRequest(permission(), {}, deps);
+  await clock.advance(10 * MINUTE - 1);
+  assert.equal(existsSync(autoStateFile(home)), false, 'nothing is written before the deadline');
+  await clock.advance(1);
+  const result = await pending;
+  assert.equal(result.hookSpecificOutput.hookEventName, 'PermissionRequest');
+  const decision = requestDecision(result);
+  assert.equal(decision.behavior, 'deny');
+  // The same deny the guard parks with, but for its reason line.
+  const [head, reason, ...tail] = decision.message.split('\n');
+  const [guardHead, , ...guardTail] = guardParkLines(home);
+  assert.equal(head, guardHead);
+  assert.deepEqual(tail, guardTail);
+  assert.equal(reason, '權限確認框 10 分鐘沒有人回應。');
+  assert.deepEqual(savedState(home), {
+    entered: { at: 1_600_000, reason: '權限確認框 10 分鐘沒有回應：npm publish', by: 'timeout', session: 's5' },
+    blocked: [{ session: 's5', at: 1_600_000, subject: 'npm publish', reason: '權限確認框 10 分鐘沒有人回應。' }],
+  });
+  // Asked about every 5 s, and once more at the deadline itself.
+  assert.ok(clock.sleeps.every((ms) => ms > 0 && ms <= 5000), String(clock.sleeps));
+  assert.equal(checks.length, 120);
+  assert.equal(checks.at(-1), 1_600_000);
+}));
+
+test('dialogs waiting at the same time each run out on their own; the entry is written once, by the first', () => withDirAsync(async (home) => {
+  const clock = virtualTime(0);
+  const deps = { home, now: clock.now, sleep: clock.sleep, answered: () => false };
+  const first = onPermissionRequest(permission({ session_id: 'a', tool_input: { command: 'npm publish' } }), {}, deps);
+  await clock.advance(MINUTE);
+  const second = onPermissionRequest(permission({ session_id: 'b', tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } }), {}, deps);
+  await clock.advance(9 * MINUTE);
+  assert.equal(requestDecision(await first).behavior, 'deny');
+  assert.equal(savedState(home).entered.at, 10 * MINUTE);
+  await clock.advance(MINUTE);
+  assert.equal(requestDecision(await second).behavior, 'deny');
+  const state = savedState(home);
+  assert.deepEqual(state.entered, { at: 10 * MINUTE, reason: '權限確認框 10 分鐘沒有回應：npm publish', by: 'timeout', session: 'a' });
+  assert.deepEqual(state.blocked.map((b) => [b.session, b.at, b.subject]), [['a', 10 * MINUTE, 'npm publish'], ['b', 11 * MINUTE, 'WebFetch']]);
+}));
+
+test('already unattended, from any source, a permission dialog is denied at once and added to the list', () => withDirAsync(async (home) => {
+  const sources = {
+    switchFile: () => {
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      writeFileSync(unattendedFile(home), '');
+      return {};
+    },
+    env: () => ({ SORRY_MATT_UNATTENDED: '1' }),
+    automatic: () => {
+      autoState(home).enter(ENTERED);
+      return {};
+    },
+  };
+  for (const [name, arm] of Object.entries(sources)) {
+    rmSync(join(home, '.claude'), { recursive: true, force: true });
+    const env = arm();
+    for (const after of [undefined, 'off', '0']) {
+      const clock = virtualTime(7);
+      let asked = 0;
+      const deps = { home, now: clock.now, sleep: clock.sleep, answered: () => (asked++, false) };
+      const before = autoState(home).read().blocked.length;
+      const result = await onPermissionRequest(permission({ tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } }), { ...env, SORRY_MATT_UNATTENDED_AFTER: after }, deps);
+      const decision = requestDecision(result);
+      assert.equal(decision?.behavior, 'deny', `${name} ${after}`);
+      const [head, reason, ...tail] = decision.message.split('\n');
+      const [guardHead, , ...guardTail] = guardParkLines(home);
+      assert.equal(head, guardHead);
+      assert.deepEqual(tail, guardTail);
+      assert.equal(reason, '這是 Claude Code 的權限提示（WebFetch）。');
+      assert.deepEqual(clock.sleeps, [], `${name}: no wait`);
+      assert.equal(asked, 0, `${name}: nothing to wait for`);
+      const { blocked, entered } = autoState(home).read();
+      assert.equal(blocked.length, before + 1, name);
+      assert.deepEqual(blocked.at(-1), { session: 's5', at: 7, subject: 'WebFetch', reason: '這是 Claude Code 的權限提示（WebFetch）。' });
+      assert.equal(entered?.by ?? null, name === 'automatic' ? 'agent' : null, `${name}: no entry of its own`);
+    }
+  }
+  // A shell call is listed by its command.
+  const result = await onPermissionRequest(permission(), { SORRY_MATT_UNATTENDED: 'on' }, { home, now: () => 8, sleep: () => assert.fail('no wait') });
+  assert.equal(requestDecision(result).behavior, 'deny');
+  assert.deepEqual(autoState(home).read().blocked.at(-1), { session: 's5', at: 8, subject: 'npm publish', reason: '這是 Claude Code 的權限提示（Bash）。' });
+}));
+
+test('a dialog answered before the deadline ends the wait and leaves nothing behind', () => withDirAsync(async (home) => {
+  const clock = virtualTime(0);
+  let checks = 0;
+  const deps = { home, now: clock.now, sleep: clock.sleep, answered: () => ++checks === 3 };
+  const pending = onPermissionRequest(permission(), {}, deps);
+  await clock.advance(10 * MINUTE);
+  assert.equal(await pending, null);
+  assert.equal(checks, 3, 'the wait stopped at the answer');
+  assert.equal(clock.timers.length, 0);
+  assert.equal(existsSync(autoStateFile(home)), false, 'no state at all');
+  // Answered at the last check, with a list already on disk: no entry, and nothing added.
+  autoState(home).record({ session: 's1', at: 1, subject: 'npm publish', reason: 'r' });
+  const listed = readFileSync(autoStateFile(home), 'utf8');
+  const lastCheck = virtualTime(0);
+  const late = onPermissionRequest(permission(), {}, { home, now: lastCheck.now, sleep: lastCheck.sleep, answered: () => lastCheck.t >= 10 * MINUTE });
+  await lastCheck.advance(10 * MINUTE);
+  assert.equal(await late, null, 'answered by the check at the deadline');
+  assert.equal(readFileSync(autoStateFile(home), 'utf8'), listed);
+}));
+
+test('the wait is SORRY_MATT_UNATTENDED_AFTER minutes: 10 by default, at most 60, 0 or off turns it off', async () => {
+  const cases = [
+    [undefined, 10], ['', 10], ['10', 10], ['0.5', 0.5], [' 2 ', 2], ['.25', 0.25], ['60', 60], ['61', 60], ['90.5', 60],
+    ['0', null], ['0.0', null], ['off', null], ['OFF', null], [' off ', null],
+    ['-5', 10], ['abc', 10], ['5m', 10], ['1e1', 10], ['Infinity', 10], ['0x10', 10], ['NaN', 10],
+  ];
+  for (const [value, minutes] of cases) assert.equal(waitMinutes(value), minutes, JSON.stringify(value));
+  await withDirAsync(async (home) => {
+    const run = async (after, ms) => {
+      const clock = virtualTime(0);
+      const pending = onPermissionRequest(permission(), { SORRY_MATT_UNATTENDED_AFTER: after }, { home, now: clock.now, sleep: clock.sleep, answered: () => false });
+      await clock.advance(ms - 1);
+      const early = clock.timers.length;
+      await clock.advance(1);
+      const result = await pending;
+      return { early, result, clock };
+    };
+    const half = await run('0.5', 30_000);
+    assert.ok(half.early > 0, 'still waiting just before 30 s');
+    assert.equal(requestDecision(half.result).behavior, 'deny');
+    assert.match(requestDecision(half.result).message, /\n權限確認框 0\.5 分鐘沒有人回應。\n/);
+    assert.equal(savedState(home).entered.reason, '權限確認框 0.5 分鐘沒有回應：npm publish');
+    autoState(home).clear();
+    const capped = await run('90', 60 * MINUTE);
+    assert.ok(capped.early > 0, 'still waiting just before 60 minutes');
+    assert.equal(savedState(home).entered.at, 60 * MINUTE);
+    autoState(home).clear();
+    for (const after of ['0', 'off']) {
+      const clock = virtualTime(0);
+      assert.equal(await onPermissionRequest(permission(), { SORRY_MATT_UNATTENDED_AFTER: after }, { home, now: clock.now, sleep: clock.sleep, answered: () => false }), null, after);
+      assert.deepEqual(clock.sleeps, [], `${after}: no wait`);
+    }
+    assert.deepEqual(savedState(home), { blocked: [] }, 'turned off, nothing entered');
+  });
+});
+
+test('with the guard off the PermissionRequest hook prints and writes nothing, away or not', () => withDirAsync(async (home) => {
+  awayHome(home);
+  for (const off of ['off', 'OFF']) {
+    const clock = virtualTime(0);
+    assert.equal(await onPermissionRequest(permission(), { SORRY_MATT_GUARD: off }, { home, now: clock.now, sleep: clock.sleep, answered: () => false }), null);
+    assert.deepEqual(clock.sleeps, []);
+  }
+  autoState(home).clear();
+  const clock = virtualTime(0);
+  assert.equal(await onPermissionRequest(permission(), { SORRY_MATT_GUARD: 'off' }, { home, now: clock.now, sleep: clock.sleep, answered: () => false }), null);
+  assert.deepEqual(clock.sleeps, []);
+  assert.deepEqual(savedState(home), { blocked: [] });
+  // Not a PermissionRequest, or not an event at all: nothing.
+  for (const raw of ['not json', JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm publish' } }), 'null']) {
+    assert.equal(await onPermissionRequest(raw, {}, { home, now: clock.now, sleep: clock.sleep, answered: () => false }), null, raw);
+  }
+}));
+
+// Transcript lines for the call the dialog is about: the assistant's tool_use, and the user's tool_result once answered.
+const toolUse = (id, name, input) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'running it' }, { type: 'tool_use', id, name, input }] } });
+const toolResult = (id, isError = false) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: isError ? 'denied' : 'ok', is_error: isError }] } });
+const CALL = { command: 'npm publish', description: 'publish' };
+
+test('a call counts as answered when its last matching tool_use in the transcript has a tool_result', () => {
+  const t = (...lines) => [JSON.stringify({ type: 'summary' }), userLine('p5', 'human'), ...lines].join('\n');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL), toolResult('t1')), 'Bash', CALL), true, 'allowed and run');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL), toolResult('t1', true)), 'Bash', CALL), true, 'denied by the user');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', { description: 'publish', command: 'npm publish' }), toolResult('t1')), 'Bash', CALL), true, 'key order does not matter');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL)), 'Bash', CALL), false, 'still waiting');
+  assert.equal(answeredIn(t(), 'Bash', CALL), false, 'no tool_use yet');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', { command: 'npm publish --tag next' }), toolResult('t1')), 'Bash', CALL), false, 'another input');
+  assert.equal(answeredIn(t(toolUse('t1', 'PowerShell', CALL), toolResult('t1')), 'Bash', CALL), false, 'another tool');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL), toolResult('t1'), toolUse('t2', 'Bash', CALL)), 'Bash', CALL), false, 'the same call again, not answered yet');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL), '{"type": "user", broken', toolResult('t2')), 'Bash', CALL), false, 'another call\'s result');
+  assert.equal(answeredIn(t(toolUse('t1', 'Bash', CALL), '{"type": "user", broken', toolResult('t1')), 'Bash', CALL), true, 'past a broken line');
+  assert.equal(answeredIn('', 'Bash', CALL), false);
+});
+
+test('the hook reads the event\'s transcript: answered ends the wait early; a missing transcript is not answered', () => withDirAsync(async (home) => {
+  const transcript = writeTranscript(home, [userLine('p5', 'human'), toolUse('t1', 'Bash', CALL)], 'session.jsonl');
+  const clock = virtualTime(0);
+  const pending = onPermissionRequest(permission({ transcript_path: transcript }), {}, { home, now: clock.now, sleep: clock.sleep });
+  await clock.advance(MINUTE);
+  writeTranscript(home, [userLine('p5', 'human'), toolUse('t1', 'Bash', CALL), toolResult('t1')], 'session.jsonl');
+  await clock.advance(5000);
+  assert.equal(await pending, null);
+  assert.equal(existsSync(autoStateFile(home)), false);
+  for (const transcript_path of [join(home, 'missing.jsonl'), home, undefined]) {
+    const c = virtualTime(0);
+    const p = onPermissionRequest(permission({ transcript_path }), {}, { home, now: c.now, sleep: c.sleep });
+    await c.advance(10 * MINUTE);
+    assert.equal(requestDecision(await p).behavior, 'deny', String(transcript_path));
+    autoState(home).clear();
+  }
+}));
+
+test('hooks.json registers the PermissionRequest hook for every tool, with a timeout past the 60-minute cap', () => {
+  const config = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
+  const entries = config.hooks.PermissionRequest;
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].matcher, undefined, 'every tool');
+  const [hook] = entries[0].hooks;
+  assert.equal(entries[0].hooks.length, 1);
+  assert.equal(hook.type, 'command');
+  assert.equal(hook.command, 'node "${CLAUDE_PLUGIN_ROOT}/hooks/permission-request.mjs"');
+  assert.ok(hook.timeout > 3600, `timeout ${hook.timeout} s`);
+});
+
+test('the PermissionRequest hook end to end: dialogs run out, enter once, and the next one is denied at once', async () => {
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-guard-')));
+  try {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root, SORRY_MATT_UNATTENDED_AFTER: '0.002' };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const hook = (input, extra = {}) => new Promise((done, fail) => {
+      const child = spawn(process.execPath, [join(root, 'hooks', 'permission-request.mjs')], { env: { ...env, ...extra }, stdio: ['pipe', 'pipe', 'inherit'] });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.on('error', fail);
+      child.on('close', (code) => done({ code, stdout, out: stdout ? JSON.parse(stdout) : null }));
+      child.stdin.end(input);
+    });
+    // Answered: nothing printed, nothing written.
+    const answered = writeTranscript(home, [userLine('p5', 'human'), toolUse('t1', 'Bash', CALL), toolResult('t1')], 'answered.jsonl');
+    const quiet = await hook(permission({ transcript_path: answered }));
+    assert.equal(quiet.code, 0);
+    assert.equal(quiet.stdout, '');
+    assert.equal(existsSync(autoStateFile(home)), false);
+    // Two dialogs nobody answers, at the same time.
+    const waiting = writeTranscript(home, [userLine('p5', 'human'), toolUse('t1', 'Bash', CALL)], 'waiting.jsonl');
+    const before = Date.now();
+    const both = await Promise.all(['a', 'b'].map((session_id) => hook(permission({ session_id, transcript_path: waiting }))));
+    for (const r of both) {
+      assert.equal(r.code, 0);
+      assert.equal(r.out.hookSpecificOutput.hookEventName, 'PermissionRequest');
+      assert.equal(r.out.hookSpecificOutput.decision.behavior, 'deny');
+      assert.match(r.out.hookSpecificOutput.decision.message, /^sorry-matt guard 無人值守模式：[^]*\n權限確認框 0\.002 分鐘沒有人回應。\n/);
+    }
+    const state = savedState(home);
+    assert.equal(state.entered.by, 'timeout');
+    assert.equal(state.entered.reason, '權限確認框 0.002 分鐘沒有回應：npm publish');
+    assert.ok(['a', 'b'].includes(state.entered.session));
+    assert.ok(state.entered.at >= before + 120 && state.entered.at <= Date.now(), 'entered at the deadline');
+    assert.deepEqual(state.blocked.map((b) => b.session).sort(), ['a', 'b']);
+    // Unattended now: the next dialog is denied without waiting, even with the timeout turned off.
+    const next = await hook(permission({ session_id: 'c', tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } }), { SORRY_MATT_UNATTENDED_AFTER: 'off' });
+    assert.equal(next.out.hookSpecificOutput.decision.behavior, 'deny');
+    assert.match(next.out.hookSpecificOutput.decision.message, /\n這是 Claude Code 的權限提示（WebFetch）。\n/);
+    assert.deepEqual(savedState(home).blocked.at(-1).subject, 'WebFetch');
     assert.deepEqual(readdirSync(dirname(autoStateFile(home))), ['unattended.json'], 'no lock or temp file is left behind');
   } finally {
     rmSync(home, { recursive: true, force: true });

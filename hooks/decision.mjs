@@ -156,7 +156,8 @@ function writesGuardState(event) {
   return /sorry-matt-guard/i.test(path) || p === dir || p.startsWith(`${dir}/`);
 }
 
-const subjectOf = (event) =>
+/** What the blocked list shows for a call: the command of a shell call, the tool name otherwise. */
+export const subjectOf = (event) =>
   event.tool_name === 'Bash' || event.tool_name === 'PowerShell' ? String(event.tool_input?.command ?? '') : event.tool_name;
 
 function confirmStep({ event, mode, store, now }, token) {
@@ -254,8 +255,12 @@ function park({ event, now, state, home }, reason) {
   } catch {
     // the list is for the user's return; losing an entry must not let the call through
   }
-  return deny(`sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`);
+  return deny(unattendedMessage(reason, home));
 }
+
+/** The text every unattended deny carries, PreToolUse and PermissionRequest alike: the reason line is the only part that differs. */
+export const unattendedMessage = (reason, home = homedir()) =>
+  `sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${unattendedFile(home).replace(/\\/g, '/')} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`;
 
 // The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every
 // rewrite the guard tried to read through — another spelling of the path, other quotes, Git Bash's `/c/` — turned
