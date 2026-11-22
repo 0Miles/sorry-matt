@@ -711,7 +711,7 @@ test('hooks.json wires the guard to every tool it classifies', () => {
   const entry = config.hooks.PreToolUse.find((e) => e.hooks.some((h) => h.command.includes('hooks/guard.mjs')));
   assert.ok(entry, 'PreToolUse has the guard');
   const matcher = new RegExp(`^(${entry.matcher})$`);
-  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__gmail__send_email']) {
+  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__gmail__send_email', 'AskUserQuestion']) {
     assert.ok(matcher.test(tool), tool);
   }
   assert.ok(!matcher.test('Agent'), 'Agent is left to its own entry');
@@ -1296,6 +1296,118 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
       assert.equal(enterInvocation({ tool_name, tool_input: { command: line }, cwd: CWD }, PLUGIN), 'away', tool_name);
       assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(PLUGIN, ' 睡了 (2h); 晚點見 ') }, cwd: CWD }, PLUGIN), '睡了 (2h); 晚點見', tool_name);
     }
+  });
+});
+
+// ---------- unattended: AskUserQuestion (#93) ----------
+
+// Shaped like Claude Code's AskUserQuestion input: one to four questions, each with a header and options.
+const asking = (questions = ['要用哪個資料庫？', '要不要保留舊 API？'], extra = {}) => JSON.stringify({
+  hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's4', cwd: CWD, permission_mode: 'default',
+  tool_input: { questions: questions.map((question, i) => ({ question, header: `Q${i + 1}`, multiSelect: false, options: [{ label: '是', description: 'a' }, { label: '否', description: 'b' }] })) },
+  ...extra,
+});
+const AWAY = {
+  'the switch file': (home) => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(unattendedFile(home), '');
+    return {};
+  },
+  SORRY_MATT_UNATTENDED: () => ({ SORRY_MATT_UNATTENDED: 'on' }),
+  'the automatic state': (home) => {
+    autoState(home).enter(ENTERED);
+    return {};
+  },
+};
+
+test('unattended, from any source, a question is denied: three ways on, no waiting, and it is listed with its text', () => {
+  for (const [source, setUp] of Object.entries(AWAY)) {
+    withDir((home) => {
+      const env = setUp(home);
+      const store = memoryStore();
+      const result = out(decideWith(asking(), env, { home, store, now: 42 }));
+      assert.equal(result.permissionDecision, 'deny', source);
+      assert.equal(result.updatedInput, undefined, source);
+      const reason = result.permissionDecisionReason;
+      assert.match(reason, /^sorry-matt guard 無人值守模式：/, source);
+      assert.ok(reason.includes('要用哪個資料庫？') && reason.includes('要不要保留舊 API？'), reason);
+      // The three ways on of ASKING.md section 4, then the rest of the work.
+      assert.match(reason, /依自己的判斷代答，並記錄/, source);
+      assert.match(reason, /列為待裁決/, source);
+      assert.match(reason, /列進人工作業清單/, source);
+      assert.match(reason, /然後繼續做其他做得了的事/, source);
+      assert.match(reason, /不要停下來等/, source);
+      assert.match(reason, /不要重問/, source);
+      assert.doesNotMatch(reason, /這個動作需要使用者確認/, 'not the generic park text');
+      // How each source ends, and that the agent touches neither file.
+      assert.match(reason, /不要刪除、改寫或搬移開關檔與自動進入的狀態檔/, source);
+      assert.ok(reason.includes(unattendedFile(home).replace(/\\/g, '/')), reason);
+      assert.deepEqual(store.sessions, {}, 'no two-step token');
+      assert.deepEqual(savedState(home).blocked, [{ session: 's4', at: 42, subject: 'AskUserQuestion: 要用哪個資料庫？ / 要不要保留舊 API？', reason: '無人值守期間的提問' }], source);
+    });
+  }
+});
+
+test('a blocked question is listed by each of its questions, or by the tool name when it has none', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now });
+    const env = { SORRY_MATT_UNATTENDED: '1' };
+    assert.equal(decisionOf(decideWith(asking(['只有一題']), env, deps(1))), 'deny');
+    assert.equal(decisionOf(decideWith(asking([], { tool_input: {} }), env, deps(2))), 'deny');
+    assert.equal(decisionOf(decideWith(asking([], { tool_input: { questions: 'broken' } }), env, deps(3))), 'deny');
+    // Blank and whitespace-only questions are left out of the subject and the deny text.
+    const blanks = out(decideWith(asking(['', '  ', '只有一題']), env, deps(4))).permissionDecisionReason;
+    assert.ok(blanks.includes('被擋下的提問：只有一題\n'), blanks);
+    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['AskUserQuestion: 只有一題', 'AskUserQuestion', 'AskUserQuestion', 'AskUserQuestion: 只有一題']);
+  });
+});
+
+test('a blocked question stays denied when the list cannot be written', () => {
+  const state = { active: () => true, record: () => { throw new Error('EACCES'); }, enter: () => { throw new Error('EACCES'); } };
+  const result = out(decideWith(asking(), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' }));
+  assert.equal(result.permissionDecision, 'deny');
+  assert.match(result.permissionDecisionReason, /列為待裁決/);
+  const off = { ...state, active: () => false };
+  assert.equal(decisionOf(decideWith(asking(), { SORRY_MATT_UNATTENDED: '1' }, { state: off, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+});
+
+test('with nobody away a question is left alone and nothing is written; with the guard off, even while away', () => {
+  withDir((home) => {
+    assert.equal(decideWith(asking(), {}, { home, store: memoryStore(), now: 1 }), null);
+    assert.equal(decideWith(asking(), { SORRY_MATT_UNATTENDED: 'off' }, { home, store: memoryStore(), now: 1 }), null);
+    assert.deepEqual(readdirSync(home), [], 'nothing was written under the home directory');
+  });
+  for (const [source, setUp] of Object.entries(AWAY)) {
+    withDir((home) => {
+      const env = { ...setUp(home), SORRY_MATT_GUARD: 'off' };
+      const before = existsSync(autoStateFile(home)) ? readFileSync(autoStateFile(home), 'utf8') : null;
+      assert.equal(decideWith(asking(), env, { home, store: memoryStore(), now: 1 }), null, source);
+      assert.equal(existsSync(autoStateFile(home)) ? readFileSync(autoStateFile(home), 'utf8') : null, before, source);
+    });
+  }
+});
+
+test('a question end to end: the hook process lets it be, then denies and lists it once the user is away', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const guard = (extraEnv = {}) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: asking(), encoding: 'utf8', env: { ...env, ...extraEnv } });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+    };
+    assert.equal(guard(), null);
+    assert.equal(existsSync(autoStateFile(home)), false);
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(unattendedFile(home), '');
+    assert.equal(guard({ SORRY_MATT_GUARD: 'off' }), null);
+    assert.equal(existsSync(autoStateFile(home)), false, 'the guard off writes nothing');
+    const denied = guard();
+    assert.equal(denied.hookEventName, 'PreToolUse');
+    assert.equal(denied.permissionDecision, 'deny');
+    assert.match(denied.permissionDecisionReason, /列為待裁決/);
+    assert.deepEqual(savedState(home).blocked.map((b) => [b.session, b.subject, b.reason]), [['s4', 'AskUserQuestion: 要用哪個資料庫？ / 要不要保留舊 API？', '無人值守期間的提問']]);
   });
 });
 

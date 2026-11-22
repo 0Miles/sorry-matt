@@ -67,6 +67,25 @@
 //     (b) The desktop app (SDK host): whether its dialog is taken back the same way. The official docs say the hook
 //     and the host run side by side and the first to decide wins; install a build with this hook, set
 //     SORRY_MATT_UNATTENDED_AFTER=0.5 in Claude Code's "env", leave one dialog alone for 30 s and look.
+//
+// Also: does the guard's PreToolUse entry deny AskUserQuestion while unattended? (#93, spec #89) A throwaway probe
+// plugin whose PreToolUse has the guard's own matcher from hooks/hooks.json and runs this checkout's decide() with
+// SORRY_MATT_UNATTENDED on and a home inside the work dir:
+//   node scripts/unattended.live.mjs --ask [work dir]               headless stream-json with `--permission-prompt-tool
+//       stdio`, as an SDK host runs it (half a cent with haiku).
+//   node scripts/unattended.live.mjs --ask-interactive [work dir]   sets up the probe and prints the interactive line.
+//   node scripts/unattended.live.mjs --ask-report <work dir>        each PreToolUse call it saw and the blocked list.
+// Result, Claude Code 2.1.328 (2026-11-22, Windows 11):
+//   - Plain `claude -p` does not offer AskUserQuestion at all (not in the tool list, not found by ToolSearch): 0
+//     PreToolUse calls, nothing to block.
+//   - Stream-json with `--permission-prompt-tool stdio` offers it. PreToolUse fired for AskUserQuestion with the
+//     matcher `...|AskUserQuestion|mcp__.*` (event `tool_input.questions[].question`, `permission_mode: "default"`);
+//     the deny came back to the model as an `is_error` tool_result starting "PreToolUse:AskUserQuestion hook error:"
+//     plus the guard's message, no `can_use_tool` control request went to the host (so no question box), the agent
+//     went on to reply, and the blocked list got `AskUserQuestion: Which color, red or blue?`. Ran twice.
+//   - Eyes-on, not done yet: an interactive session (the CLI and the desktop app), where the question box would be
+//     drawn. Run `--ask-interactive`, ask for one question, and look that no box appears; the interactive part needs a
+//     key press before the first prompt (the Chrome extension startup choice), which an agent cannot send.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -282,7 +301,108 @@ function permissionInteractive() {
   ].join('\n'));
 }
 
+// ---------- #93: AskUserQuestion while unattended (PreToolUse) ----------
+
+/**
+ * A probe plugin whose PreToolUse is the guard's own entry in hooks/hooks.json (same matcher), running this checkout's
+ * decide() with SORRY_MATT_UNATTENDED on and a home inside the work dir, so the real unattended state is never touched.
+ */
+function askProbe(work) {
+  const probe = join(work, 'probe');
+  const log = join(work, 'events.jsonl');
+  const home = join(work, 'home');
+  mkdirSync(join(probe, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(probe, 'hooks'), { recursive: true });
+  mkdirSync(home, { recursive: true });
+  const here = dirname(fileURLToPath(import.meta.url));
+  const decision = pathToFileURL(join(here, '..', 'hooks', 'decision.mjs')).href;
+  const { matcher } = JSON.parse(readFileSync(join(here, '..', 'hooks', 'hooks.json'), 'utf8')).hooks.PreToolUse
+    .find((e) => e.hooks.some((h) => h.command.includes('hooks/guard.mjs')));
+  writeFileSync(join(probe, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'unattended-ask-probe', version: '0.0.0', description: 'denies AskUserQuestion as the guard does while unattended' }));
+  writeFileSync(join(probe, 'hooks', 'guard.mjs'), [
+    "import { appendFileSync } from 'node:fs';",
+    `const { decide } = await import(${JSON.stringify(decision)});`,
+    'const chunks = [];',
+    "process.stdin.on('data', (c) => chunks.push(c));",
+    "process.stdin.on('end', () => {",
+    "  const raw = Buffer.concat(chunks).toString('utf8');",
+    `  const out = decide(raw, { ...process.env, SORRY_MATT_GUARD: '', SORRY_MATT_UNATTENDED: '1' }, { home: ${JSON.stringify(home)} });`,
+    "  const event = JSON.parse(raw);",
+    `  appendFileSync(${JSON.stringify(log)}, JSON.stringify({ at: Date.now(), tool_name: event.tool_name, tool_input: event.tool_input, permission_mode: event.permission_mode, decision: out?.hookSpecificOutput?.permissionDecision ?? null }) + '\\n');`,
+    '  if (out) process.stdout.write(JSON.stringify(out));',
+    '});',
+  ].join('\n'));
+  writeFileSync(join(probe, 'hooks', 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher, hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs"' }] }] } }));
+  return { probe, log, home };
+}
+
+/** What the ask probe saw: each PreToolUse call and its decision, and the blocked list it wrote. */
+function askReport(work) {
+  const log = join(work, 'events.jsonl');
+  const events = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  console.log(`PreToolUse calls: ${events.length}; for AskUserQuestion: ${events.filter((e) => e.tool_name === 'AskUserQuestion').length}`);
+  for (const e of events) console.log(`  ${e.tool_name} (permission_mode ${e.permission_mode}): ${e.decision ?? 'no output'}`);
+  const state = join(work, 'home', '.claude', 'sorry-matt-guard', 'unattended.json');
+  console.log(`blocked list: ${existsSync(state) ? JSON.stringify(JSON.parse(readFileSync(state, 'utf8')).blocked) : 'none'}`);
+}
+
+const ASK_PROMPT = 'Use the AskUserQuestion tool exactly once to ask me one question: "Which color, red or blue?" with the options red and blue. Then reply with the exact text the tool call returned, or NO_TOOL if you have no AskUserQuestion tool.';
+
+/**
+ * Headless, as an SDK host runs it: stream-json with `--permission-prompt-tool stdio`, the one headless mode that
+ * offers AskUserQuestion (plain `-p` does not). Does PreToolUse fire for it, what comes back to the model, and does a
+ * `can_use_tool` control request (the host's question box) still go out.
+ */
+async function askHeadless() {
+  const work = mkdtempSync(join(process.argv[3] || tmpdir(), 'unattended-ask-'));
+  const repo = join(work, 'repo');
+  mkdirSync(repo);
+  const { probe } = askProbe(work);
+  const run = spawn('claude', ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-prompt-tool', 'stdio',
+    '--plugin-dir', probe, '--model', 'haiku', '--max-budget-usd', '0.5'], { cwd: repo, stdio: ['pipe', 'pipe', 'inherit'] });
+  run.stdin.end(JSON.stringify({ type: 'user', message: { role: 'user', content: ASK_PROMPT } }) + '\n');
+  let stdout = '';
+  run.stdout.on('data', (c) => (stdout += c));
+  await new Promise((done) => run.on('close', done));
+  const lines = stdout.split('\n').flatMap((l) => {
+    try {
+      return [JSON.parse(l)];
+    } catch {
+      return [];
+    }
+  });
+  const init = lines.find((e) => e.type === 'system' && e.subtype === 'init');
+  const result = lines.find((e) => e.type === 'result') ?? {};
+  console.log(`version ${init?.claude_code_version ?? 'unknown'}; AskUserQuestion offered: ${init?.tools?.includes('AskUserQuestion') ?? 'unknown'}`);
+  console.log(`can_use_tool requests: ${lines.filter((e) => e.type === 'control_request' && e.request?.subtype === 'can_use_tool').length}`);
+  for (const e of lines.filter((l) => l.type === 'user')) {
+    for (const c of e.message?.content ?? []) {
+      if (c.type === 'tool_result') console.log(`tool_result (is_error ${c.is_error}): ${String(typeof c.content === 'string' ? c.content : JSON.stringify(c.content)).split('\n')[0]}`);
+    }
+  }
+  console.log(`result: ${result.subtype ?? 'none'}; cost (USD): ${result.total_cost_usd ?? 'unknown'}`);
+  askReport(work);
+  console.log(`logs in ${work}`);
+}
+
+/** Interactive: sets up the probe and prints what a person runs and looks at. */
+function askInteractive() {
+  const work = mkdtempSync(join(process.argv[3] || tmpdir(), 'unattended-ask-'));
+  const { probe } = askProbe(work);
+  console.log([
+    'In a terminal, in a folder Claude Code already trusts, run:',
+    `  claude --model haiku --plugin-dir "${probe}"`,
+    'Ask: "Use the AskUserQuestion tool once to ask me: red or blue?". No question box should appear: the tool call',
+    'comes back denied with the sorry-matt unattended message, and the agent goes on (answers it itself or lists it).',
+    'Then quit and run:',
+    `  node scripts/unattended.live.mjs --ask-report "${work}"`,
+  ].join('\n'));
+}
+
 if (process.argv.includes('--survey')) survey();
+else if (process.argv[2] === '--ask') await askHeadless();
+else if (process.argv[2] === '--ask-interactive') askInteractive();
+else if (process.argv[2] === '--ask-report') askReport(process.argv[3]);
 else if (process.argv[2] === '--permission') await permissionHeadless();
 else if (process.argv[2] === '--permission-interactive') permissionInteractive();
 else if (process.argv[2] === '--permission-report') permissionReport(process.argv[3]);
