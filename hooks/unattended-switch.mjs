@@ -12,7 +12,7 @@
 // `turnOrigin: "human"`. Anything else leaves every file as it is and tells the user to remove the switch file
 // themselves. An entry not written yet is reread for up to REREAD_MS, then left as a pending `off` that this
 // session's Stop decides: a person's turn runs the `off` there and hands the result over as a Stop block reason;
-// anything else only drops the pending turn. SORRY_MATT_UNATTENDED is the user's settings, not a file: `off` cannot
+// anything else only drops the pending turn; a later `on` drops it too. SORRY_MATT_UNATTENDED is the user's settings, not a file: `off` cannot
 // end it, and says so. The command name is matched here, not only by the hooks.json matcher. Any failure is a
 // message, never a thrown error: the hook always exits 0.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -88,9 +88,23 @@ function statusText(ctx) {
   return lines.join('\n');
 }
 
-function turnOn({ home, exists }) {
+// An `on` outranks every `off` typed before it: a pending `off` still waiting for its Stop (in this session or
+// another, or one whose Stop never came after an interrupt) is dropped first, so it cannot later remove the switch
+// file this `on` creates. The automatic state file is written only when there is such a turn.
+function dropOffs(state) {
+  try {
+    if (!state.read().pendingOff.length) return null;
+    state.dropOffs();
+    return null;
+  } catch (error) {
+    return `注意：尚未判定的 /sorry-matt:unattended off 清不掉（${error.message}），它在之後的 Stop 判成使用者送出的話，仍可能刪掉開關檔。`;
+  }
+}
+
+function turnOn({ home, exists, state }) {
   const path = unattendedFile(home);
   const shown = shownUnattendedFile(home);
+  const warning = dropOffs(state);
   let there = false;
   try {
     there = exists(path);
@@ -102,6 +116,7 @@ function turnOn({ home, exists }) {
   return [
     `${PREFIX} 已開啟無人值守：${there ? `開關檔 ${shown} 原本就在，維持開啟` : `建立了開關檔 ${shown}`}。`,
     '之後所有 session 需要使用者確認的動作與提問都直接擋下、記進清單，不跳確認框。',
+    ...(warning ? [warning] : []),
     `要關閉，請使用者輸入 /sorry-matt:unattended off，或執行 \`${RM}\`。${RELAY}`,
   ].join('\n');
 }

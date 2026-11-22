@@ -91,6 +91,11 @@ const parse = (raw) => {
   }
 };
 const text = (v) => typeof v === 'string' && v !== '';
+// The user's switch command. Claude Code runs UserPromptSubmit before the command's UserPromptExpansion, so ending
+// the automatic state here would leave unattended-switch.mjs no source to see: its toggle would turn on instead of
+// off, and its `off` would find no list to hand over. That turn is the switch hook's to decide.
+const SWITCH_PROMPT = /^\s*\/sorry-matt:unattended(\s|$)/;
+export const isSwitchCommand = (prompt) => typeof prompt === 'string' && SWITCH_PROMPT.test(prompt);
 
 /**
  * UserPromptSubmit: ends the automatic state on a person's turn and returns the hook output that hands the list to
@@ -103,7 +108,7 @@ export function onPromptSubmit(raw, env = process.env, deps = {}) {
     const event = parse(raw);
     const home = deps.home ?? homedir();
     const state = deps.state ?? autoState(home);
-    if (!event || !state.active()) return null;
+    if (!event || isSwitchCommand(event.prompt) || !state.active()) return null;
     if (!text(event.prompt_id) || !text(event.transcript_path)) return null;
     const { read = readFileSync, now = Date.now, sleep = pause } = deps;
     const deadline = now() + REREAD_MS;

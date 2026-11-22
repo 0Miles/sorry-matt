@@ -142,6 +142,14 @@ export function autoState(home = homedir(), { read = readFileSync } = {}) {
         if (!state.pendingOff.some((p) => samePending(p, item))) state.pendingOff.push(item);
         return true;
       }),
+    /** `/sorry-matt:unattended on`: every pending `off` turn, of every session, is dropped; returns how many. */
+    dropOffs: () =>
+      change((state) => {
+        if (!state.pendingOff.length) return NO_WRITE;
+        const dropped = state.pendingOff.length;
+        state.pendingOff = [];
+        return dropped;
+      }) ?? 0,
     /** Takes one pending `off` turn off the list; true when it was there. */
     settleOff: ({ session, prompt_id }) =>
       change((state) => {
