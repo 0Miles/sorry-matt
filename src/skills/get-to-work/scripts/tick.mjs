@@ -18,7 +18,8 @@
 //   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
-//                        [--observations <n>] [--pre-existing <n>] [--now <UTC>]
+//                        [--observations <n>] [--pre-existing <n>]
+//                        [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] [--now <UTC>]
 //
 // setup writes the run's configuration into the state file once at the freeze (again to change it; the bookkeeping
 // below is kept). `--repo` is required with github, `--tickets-dir` (where the ticket files are, e.g.
@@ -93,7 +94,9 @@
 //   file: nothing is left for the host to fill in, and the diff and the review's output stay with the review host.
 //   Record it with `--agent`, `--outcome` (`--findings` with fix) and the counts of its report's `counts:` line,
 //   `--observations <n> --pre-existing <n>` (#142: both required, exit 2 without; a minimal reviewer's record takes
-//   neither, exit 2 with either). The targeted checks come from the report of the
+//   neither, exit 2 with either), and `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>` (#156: all four
+//   or none, under the same rules; state.mjs keeps them on the review, null without). The review is also recorded
+//   with the reasons of its tier.mjs judge output (`--tier-reasons`, #156). The targeted checks come from the report of the
 //   round under review: the collect of an implementation round (and of a fix round a recheck follows) names
 //   `tick/report/<ticket key>-<assigned>.md`, and record green / fixed is refused (3) until that file holds the
 //   report with its `targeted checks:` line. A ticket in review with no such file on record (a timeout's collected
@@ -293,7 +296,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
-import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS } from './state.mjs';
+import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
@@ -725,7 +728,7 @@ const COLLECT = {
     // #143: the review host went to the background; its report comes with its completion notice
     outcomes: ['pass', 'fix', 'stuck'],
     what: (ids) =>
-      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck, with the counts of its \`counts:\` line, --observations <n> --pre-existing <n> (both, 0 when there are none).`,
+      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck, with the counts of its \`counts:\` line, --observations <n> --pre-existing <n> (both, 0 when there are none) and, when the line has them, --candidates <n> --confirmed <n> --invalid <n> --blocking <n>.`,
     reference: [doc('REVIEWER.md', 'section 2, the review report'), doc('SKILL.md', 'section 2, Close-out checks and review')],
   },
   integrating: {
@@ -779,12 +782,13 @@ function stepReports(c) {
         // #143: a review host that went to the background reports here; its verdict is recorded as a review, with
         // the review tier its spawn was chosen by (#139)
         const tier = c.flag(ids[0]).reviewTier;
+        const tierReasons = c.flag(ids[0]).reviewTierReasons;
         const a = judge(id, 'collect', spec.what(ids), spec.outcomes, spec.reference, {
           tickets: ids,
           line: t0.line,
-          meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full', ...(tier ? { tier } : {}) },
+          meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full', ...(tier ? { tier } : {}), ...(tier && tierReasons ? { tierReasons } : {}) },
         });
-        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>`;
+        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]`;
         c.emit(a);
         continue;
       }
@@ -1438,7 +1442,7 @@ function stepInReview(c, id, t) {
       spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
-      meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}) },
+      meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}), ...(tier?.reasons ? { tierReasons: tier.reasons } : {}) },
       record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix [--findings <id>,<id>]`,
     });
   }
@@ -1459,7 +1463,9 @@ function reviewTier(c, id, t) {
   const argv = ['node', TIER_SCRIPT, 'judge', '--base', c.target(t.line), '--head', t.branch];
   if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
   const out = readJsonFile(c.deps, file);
-  return TIERS.includes(out?.tier) ? { tier: out.tier, file } : { tier: 'full', file: null };
+  // #156: the judge's reasons go on the review's record with its tier
+  const reasons = Array.isArray(out?.reasons) && out.reasons.length && out.reasons.every((x) => typeof x === 'string' && /^[^\s,]+$/.test(x)) ? out.reasons : null;
+  return TIERS.includes(out?.tier) ? { tier: out.tier, file, reasons } : { tier: 'full', file: null, reasons: null };
 }
 
 /**
@@ -1552,9 +1558,9 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
     spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
-    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}) },
+    meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}), ...(tier?.reasons ? { tierReasons: tier.reasons } : {}) },
     // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
-    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n>   (in the background: --agent <agent id> alone)`,
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]   (in the background: --agent <agent id> alone)`,
   });
 }
 
@@ -2569,19 +2575,31 @@ export function record(path, id, flags, now, deps) {
       throw new UsageError(`${id}: a review host in the background has no report yet: record --agent alone; its collect takes --observations and --pre-existing`);
     if (full && withVerdict && given < 2)
       throw new UsageError(`${id}: record the review with the counts of its report's \`counts:\` line: --observations <n> --pre-existing <n>`);
-    for (const k of ['observations', 'pre-existing'])
+    // #156: the four finding counts of the same line, all four or none, under the same rules
+    const more = FINDING_COUNTS.filter((k) => flags[k] !== undefined);
+    if (more.length && !full) throw new UsageError(`${id}: a minimal review reports blocking findings only; record it without --${FINDING_COUNTS.join(', --')}`);
+    if (more.length && !withVerdict)
+      throw new UsageError(`${id}: a review host in the background has no report yet: record --agent alone; its collect takes the counts`);
+    if (more.length && more.length < FINDING_COUNTS.length) throw new UsageError(`${id}: --candidates, --confirmed, --invalid and --blocking go together`);
+    for (const k of ['observations', 'pre-existing', ...FINDING_COUNTS])
       if (flags[k] !== undefined && !/^\d+$/.test(flags[k])) throw new UsageError(`--${k}: expected a whole number, 0 or more, got ${JSON.stringify(flags[k])}`);
-    return given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : [];
+    return [
+      ...(given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : []),
+      ...more.flatMap((k) => [`--${k}`, flags[k]]),
+    ];
   };
-  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once, with
-  // its report's counts (#142) and the review tier it was chosen by (#139).
-  const reviewEnded = (tid, agent, mode, verdict, counts, tier) => {
+  // A review recorded once on ticket `t`, with its report's counts (#142) and the review tier it was chosen by and that
+  // tier's reasons (#139, #156).
+  const recordReview = (tid, t, meta, verdict, counts) => {
+    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
+      S('review', tid, '--mode', meta.mode, '--verdict', verdict, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(meta.tier && meta.tierReasons ? ['--tier-reasons', meta.tierReasons.join(',')] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+    }
+  };
+  // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once.
+  const reviewEnded = (tid, agent, meta, verdict, counts) => {
     release([tid]);
     takeAgent(agent);
-    const t = ticket(tid);
-    if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-      S('review', tid, '--mode', mode, '--verdict', verdict, '--kind', 'full', ...(tier ? ['--tier', tier] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
-    }
+    recordReview(tid, ticket(tid), { ...meta, kind: 'full' }, verdict, counts);
   };
 
   switch (issued.step) {
@@ -2592,7 +2610,7 @@ export function record(path, id, flags, now, deps) {
       }
       if (meta.stage === 'in-review') {
         // #143: the report of a review host that went to the background, with its counts as for the spawn (#142)
-        reviewEnded(tickets[0], meta.agent, meta.mode, outcome, reviewCounts(true, true), meta.tier);
+        reviewEnded(tickets[0], meta.agent, meta, outcome, reviewCounts(true, true));
         break;
       }
       // #138: a round a review follows hands its report over first (checked before anything is written)
@@ -2693,12 +2711,12 @@ export function record(path, id, flags, now, deps) {
         // #139: a host that went to the background is recorded by its collect, with this spawn's tier
         if (meta.tier) flag(tid).reviewTier = meta.tier;
         else delete flag(tid).reviewTier;
-        if (outcome !== null) reviewEnded(tid, flags.agent, meta.mode, outcome, counts, meta.tier);
+        if (meta.tierReasons) flag(tid).reviewTierReasons = meta.tierReasons;
+        else delete flag(tid).reviewTierReasons;
+        if (outcome !== null) reviewEnded(tid, flags.agent, meta, outcome, counts);
         break;
       }
-      if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-        S('review', tid, '--mode', meta.mode, '--verdict', outcome, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(outcome === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
-      }
+      recordReview(tid, t, meta, outcome, counts);
       break;
     }
     case 'agent-report':
@@ -3041,7 +3059,7 @@ const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
   run: { reported: 'many', now: 'one' },
-  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', now: 'one' },
+  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', candidates: 'one', confirmed: 'one', invalid: 'one', blocking: 'one', now: 'one' },
 };
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.

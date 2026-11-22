@@ -70,11 +70,16 @@
 票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄）、**本 run 的計量與預算**（state 的
 `usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄）、**跳過精簡的線**（`wrap-up` 的
 `meta.simplifySkipped`，每條附理由；沒有就不列），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
-分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。獨立執行時，
+分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。
+接著把本 run 每張票寫成一列跨 run 的回顧紀錄（#156）：
+`scripts/retro.mjs record --state <state 檔> --counters <ledger 所在目錄>/<run>.counters.json --ledger <ledger 檔>`。
+它在 run 結束時就跑，因為 Claude Code 會定期清掉舊的 transcript，事後才撈，token 數可能已經不見了。輸出只看結束代碼與
+`gaps`（每個 token 數為 null 的原因）：以非 0 結束不擋收尾，在結尾摘要寫明沒有回顧紀錄與原因；`gaps` 不是空的時，結尾摘要
+一行列出哪些 token 數因此是 null。報表（`retro.mjs report`）由人在事後跑，不在這裡跑。獨立執行時，
 輸出後把 ledger 第一行改成 `<!-- sorry-matt:run ended -->`；由 `have-it-all-done` 組合時不改，留給它的交棒。
 
 完成判準：精簡的修法與併入基底各是自己的 commit；總 PR body 有依 `review-guide.mjs` 輸出寫的逐票導覽，
 `size.over` 為 true 時開頭有門檻提醒；未併入的線寫明衝突檔案與嘗試的基底 SHA，並留給人合併；每條線恰有一項
 可供人合併的交付，或已依 `merge-gate.mjs` 的決定送出合併並回報；已合併的總 PR，其完成票都已關閉，關鍵字不生效的
-在人工作業清單有關票指令；輸出列出了對帳表、需授權動作的結果與計量（含分段計量或沒有的原因），以及跳過精簡的線，
+在人工作業清單有關票指令；`retro.mjs record` 已跑過，以非 0 結束時結尾摘要寫明原因；輸出列出了對帳表、需授權動作的結果與計量（含分段計量或沒有的原因），以及跳過精簡的線，
 其理由在自答清單；獨立執行時 ledger 第一行已是 ended 標記。

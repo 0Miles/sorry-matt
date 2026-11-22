@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { main as tick, defaultDeps, bashExecutor, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
-import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
+import { FINDING_COUNTS, main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
 import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
@@ -287,7 +287,7 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
     const flags = ['--outcome', r.outcome];
     for (const k of ['value', 'findings', 'fixed', 'unfixed', 'agent']) if (r[k] !== undefined) flags.push(`--${k}`, r[k]);
     // #142 × #143: the report of a review host that went to the background carries its `counts:` line, as at the spawn
-    if (a.step === 'collect' && a.meta.stage === 'in-review') flags.push('--observations', String(r.observations ?? 0), '--pre-existing', String(r.preExisting ?? 0));
+    if (a.step === 'collect' && a.meta.stage === 'in-review') flags.push('--observations', String(r.observations ?? 0), '--pre-existing', String(r.preExisting ?? 0), ...findingCountFlags(r));
     return flags;
   };
   /** The implementation (or fix) agent's report as agents/implementer.md section 5 has it. */
@@ -306,7 +306,7 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
       // the minimal reviewer writes its report to the file its brief names (#128); the review host writes a block
       if (a.meta.kind === 'minimal') h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       // #142: a prove-it review's report line `counts:` gives the observations and pre-existing counts
-      const counts = a.meta.kind === 'minimal' ? [] : ['--observations', String(v.observations ?? 0), '--pre-existing', String(v.preExisting ?? 0)];
+      const counts = a.meta.kind === 'minimal' ? [] : ['--observations', String(v.observations ?? 0), '--pre-existing', String(v.preExisting ?? 0), ...findingCountFlags(v)];
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : []), ...counts];
     }
     if (a.step === 'simplify') {
@@ -394,6 +394,10 @@ function world(t, { profile = null, tracker = 'github', check = 'node -e "proces
 const ids = (actions) => actions.map((a) => a.id);
 /** Each action once: a later batch is listed again by the lists after it until it is run (#128). */
 const distinct = (actions) => [...new Map(actions.map((a) => [a.id, a])).values()];
+/** #156: the four finding counts of a review report's `counts:` line, as the host records them. */
+function findingCountFlags(v) {
+  return v.findingCounts ? FINDING_COUNTS.flatMap((k) => [`--${k}`, String(v.findingCounts[k])]) : [];
+}
 const stage = (h, id) => h.state().tickets[id].stage;
 /** The file a spawn's prompt tells the agent to read. */
 const briefOf = (a) => a.spawn.prompt.match(/^Read (.+) in full and follow it\.$/)[1];
@@ -1290,7 +1294,7 @@ test('#142: a prove-it review is recorded with both counts; a minimal review tak
   h.policy.review = (a) => {
     if (!checked++) {
       // #143: the template also says how a review host the Agent tool put in the background is recorded
-      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> {3}\(in the background: --agent <agent id> alone\)$/);
+      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\] {3}\(in the background: --agent <agent id> alone\)$/);
       for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
         const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', ...missing);
         assert.equal(r.code, 2, `without ${missing.length ? 'one' : 'both'}`);
@@ -1451,7 +1455,7 @@ test('#142 × #143: a review host in the background brings its counts with the c
     if (a.tickets[0] !== '#1') return 'pass';
     assert.equal(a.step, 'collect', 'in the background the verdict comes by the collect');
     if (!checked++) {
-      assert.match(a.record, /--outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n>$/);
+      assert.match(a.record, /--outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\]$/);
       assert.match(a.do, /--observations <n> --pre-existing <n>/);
       for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
         const r = h.tick('record', h.path, a.id, '--outcome', 'pass', ...missing);
@@ -2524,6 +2528,42 @@ test('#139: under review: minimal every ticket gets the minimal review, whatever
 });
 
 // ---- #139 × #142 × #143: the review tier picks the review; the counts and the assignment record go with it -------------
+
+test('#156: the review is recorded with its tier.mjs reasons and its four finding counts, in the foreground and from the background', (t) => {
+  for (const background of [false, true]) {
+    const h = world(t);
+    h.reviewBackground = background;
+    h.change['#1'] = { lines: 10 }; // light: the minimal review, which takes no finding counts
+    let refused = 0;
+    h.policy.review = (a) => {
+      if (a.tickets[0] === '#1' && !refused++) {
+        const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', '--candidates', '1', '--confirmed', '0', '--invalid', '1', '--blocking', '0');
+        assert.equal(r.code, 2, 'a minimal review takes no finding counts');
+        assert.match(r.err, /minimal/);
+      }
+      return a.tickets[0] === '#2' ? { outcome: 'pass', findingCounts: { candidates: 4, confirmed: 1, invalid: 3, blocking: 0 } } : 'pass';
+    };
+    assert.equal(h.untilDone().then, 'done');
+    const reviews = (id) => h.state().tickets[id].reviews.map((r) => [r.kind, r.tier, r.tierReasons, r.findingCounts]);
+    assert.deepEqual(reviews('#1'), [['minimal', 'light', ['few-lines'], null]], `background ${background}`);
+    assert.deepEqual(reviews('#2'), [['full', 'standard', ['default'], { candidates: 4, confirmed: 1, invalid: 3, blocking: 0 }]], `background ${background}`);
+  }
+});
+
+test('#156: the four finding counts go together', (t) => {
+  const h = world(t);
+  let checked = 0;
+  h.policy.review = (a) => {
+    if (a.meta.kind === 'full' && !checked++) {
+      const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', '--observations', '0', '--pre-existing', '0', '--candidates', '2', '--confirmed', '1');
+      assert.equal(r.code, 2);
+      assert.match(r.err, /--candidates, --confirmed, --invalid and --blocking go together/);
+    }
+    return 'pass';
+  };
+  assert.equal(h.untilDone().then, 'done');
+  assert.ok(checked > 0);
+});
 
 test("#139 × #142 × #143: a light ticket's minimal review takes no counts and has no assignment record; a standard ticket's review host in the background is recorded by its collect, with its tier and counts", (t) => {
   const h = world(t);
