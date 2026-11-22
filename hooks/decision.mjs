@@ -246,8 +246,10 @@ export const unattendedFile = (home = homedir()) => join(home, '.claude', 'sorry
 /** The switch file as messages show it, with forward slashes. */
 export const shownUnattendedFile = (home = homedir()) => unattendedFile(home).replace(/\\/g, '/');
 const ON = /^(1|on|yes|true)$/i;
+/** The user's environment source alone: SORRY_MATT_UNATTENDED set to an on value. */
+export const unattendedEnv = (env = process.env) => ON.test(String(env.SORRY_MATT_UNATTENDED ?? '').trim());
 export function unattended(env = process.env, exists = existsSync, home = homedir()) {
-  if (ON.test(String(env.SORRY_MATT_UNATTENDED ?? '').trim())) return true;
+  if (unattendedEnv(env)) return true;
   try {
     return exists(unattendedFile(home));
   } catch {

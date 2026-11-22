@@ -40,7 +40,7 @@ export function turnOrigin(text, promptId) {
 }
 
 /** 'human', 'other', 'missing' (no entry yet, or no file yet) or 'unreadable'. */
-function judge(path, promptId, read) {
+export function judge(path, promptId, read) {
   let text;
   try {
     text = read(path, 'utf8');
@@ -52,8 +52,12 @@ function judge(path, promptId, read) {
   return found.origin === 'human' ? 'human' : 'other';
 }
 
-const time = (ms) => new Date(ms).toISOString();
+export const time = (ms) => new Date(ms).toISOString();
 const indent = (text) => String(text).split(/\r?\n/).join('\n     ');
+
+/** The blocked list as the agent is handed it: one numbered item per action, with session, time, command and reason. */
+export const blockedLines = (blocked) => blocked.flatMap((b, i) =>
+  [`${i + 1}. session ${b.session ?? '（不明）'}，${time(b.at)}`, `   原指令：${indent(b.subject)}`, `   理由：${indent(b.reason)}`]);
 
 /** What the agent is told when the automatic state ends: the entry, and every blocked action. */
 export function handover({ entered, blocked }, { env = process.env, home = homedir(), exists = existsSync } = {}) {
@@ -68,9 +72,7 @@ export function handover({ entered, blocked }, { env = process.env, home = homed
     return lines.join('\n');
   }
   lines.push(`無人值守期間擋下了 ${blocked.length} 個需要使用者確認的動作。請把下面的清單完整告訴使用者（session、時間、原指令、理由），由使用者決定要不要執行；不要自己重跑它們。`);
-  blocked.forEach((b, i) => {
-    lines.push(`${i + 1}. session ${b.session ?? '（不明）'}，${time(b.at)}`, `   原指令：${indent(b.subject)}`, `   理由：${indent(b.reason)}`);
-  });
+  lines.push(...blockedLines(blocked));
   return lines.join('\n');
 }
 
@@ -89,6 +91,11 @@ const parse = (raw) => {
   }
 };
 const text = (v) => typeof v === 'string' && v !== '';
+// The user's switch command. Claude Code runs UserPromptSubmit before the command's UserPromptExpansion, so ending
+// the automatic state here would leave unattended-switch.mjs no source to see: its toggle would turn on instead of
+// off, and its `off` would find no list to hand over. That turn is the switch hook's to decide.
+const SWITCH_PROMPT = /^\s*\/sorry-matt:unattended(\s|$)/;
+export const isSwitchCommand = (prompt) => typeof prompt === 'string' && SWITCH_PROMPT.test(prompt);
 
 /**
  * UserPromptSubmit: ends the automatic state on a person's turn and returns the hook output that hands the list to
@@ -101,7 +108,7 @@ export function onPromptSubmit(raw, env = process.env, deps = {}) {
     const event = parse(raw);
     const home = deps.home ?? homedir();
     const state = deps.state ?? autoState(home);
-    if (!event || !state.active()) return null;
+    if (!event || isSwitchCommand(event.prompt) || !state.active()) return null;
     if (!text(event.prompt_id) || !text(event.transcript_path)) return null;
     const { read = readFileSync, now = Date.now, sleep = pause } = deps;
     const deadline = now() + REREAD_MS;

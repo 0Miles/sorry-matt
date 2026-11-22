@@ -31,6 +31,7 @@
     "./skills/actually-look-at-the-ui",
     "./skills/make-the-ui-fast",
     "./skills/make-this-shit-pretty",
-    "./skills/set-up-ui-skills"
+    "./skills/set-up-ui-skills",
+    "./skills/unattended"
   ]
 }
