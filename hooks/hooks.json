@@ -1,5 +1,5 @@
 {
-  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
+  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; at every session start, hand the agent the one line that enters unattended mode; when a permission dialog goes unanswered for SORRY_MATT_UNATTENDED_AFTER minutes (default 10), take it back and enter unattended mode, and while unattended deny every permission dialog at once; when the user sends a message in any session, end the automatic unattended state and hand the agent the list of what was blocked meanwhile; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
   "hooks": {
     "PreToolUse": [
       {
@@ -24,9 +24,35 @@
     ],
     "SessionStart": [
       {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-intro.mjs\"" }
+        ]
+      },
+      {
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/reread.mjs\"" }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/permission-request.mjs\"", "timeout": 3700 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
         ]
       }
     ]
