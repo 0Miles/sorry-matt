@@ -294,6 +294,8 @@ run profile 的宣告點（#100）寫進了裁決點。第 5 節留下的「需�
 
 ### `get-to-work/SKILL.md`
 
+#160 起 tick 的重播拆成 `scripts/tick.test.mjs` 與五支 `scripts/tick-*.test.mjs`（共用 `scripts/tick-world.mjs`），讓 `node --test` 平行跑；下表的 `tick.test.mjs` 指這整組。
+
 | 刪掉的規則（原段落） | 接手 | 測試 |
 | --- | --- | --- |
 | §0 確認工作樹乾淨、`gh` 已登入 | `freeze.mjs` preflight（`git-repo`、`clean`、`gh-auth`、`repo-match`） | `freeze.test.mjs` |
