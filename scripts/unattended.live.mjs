@@ -36,10 +36,42 @@
 // before; spec #89 saw 40–54 ms late in two of four. Hence the hook rereads for up to 500 ms and otherwise leaves the
 // turn to that session's Stop hook.
 // Re-run it by hand after a Claude Code upgrade that touches hooks, transcripts, `/loop` or background agents.
+//
+// Also: does hooks/permission-request.mjs take back a permission dialog nobody answers? (#92, spec #89) Three more
+// parts, all with a throwaway probe plugin whose PreToolUse asks for `echo sorry-matt-probe …` and whose
+// PermissionRequest runs this checkout's handler (hooks/unattended-timeout.mjs) against a home inside the work dir, so
+// the real unattended state is never touched:
+//   node scripts/unattended.live.mjs --permission [work dir]               headless `claude -p` (a cent or less with
+//       haiku): PreToolUse asks, and PermissionRequest should not run at all.
+//   node scripts/unattended.live.mjs --permission-interactive [work dir]   sets up the probe (wait 0.5 min) and prints
+//       the interactive `claude --plugin-dir` line and the two dialogs a person leaves alone and answers.
+//   node scripts/unattended.live.mjs --permission-report <work dir>        what the probe saw: each PermissionRequest
+//       run, its input fields, whether it decided or was ended first, and the automatic state it wrote.
+// Result, Claude Code 2.1.328 (2026-11-22, Windows 11):
+//   - Headless `-p`: PreToolUse ran once and asked; PermissionRequest did not run (0 runs, automatic state none). In
+//     `-p` an ask is denied at once, so there is no dialog to take back (also spec #89 Further Notes 3).
+//   - The dialog is taken back: not re-run here. The interactive part needs a key press before the first prompt (the
+//     Chrome extension startup choice), which an agent cannot send. Spec #89 Further Notes 1–2 (2.1.325 and 2.1.328,
+//     2026-11-19, a probe that waited 25–30 s and then denied): the dialog on screen went away and the tool call was
+//     denied with the hook's `message`, in `permission_mode: "auto"`, the dialog raised by a PreToolUse ask.
+//   - PermissionRequest input (spec #89 Further Notes 3, same runs): `session_id`, `prompt_id`, `permission_mode`,
+//     `tool_name`, `tool_input`, alongside the common `hook_event_name`, `transcript_path` and `cwd`; no `tool_use_id`.
+//     Hence "still unanswered" is read from the transcript: the last tool_use with the same tool name and input, and
+//     whether a tool_result answers it.
+//   - Eyes-on, not done yet: (a) a dialog answered before the deadline: the call goes as answered, and afterwards
+//     `unattended.json` has no `entered`. If Claude Code ends the waiting hook once the user answers, the report says
+//     "never decided"; if not, the transcript check must say "no output (answered)". Known gap either way it is read:
+//     a call allowed shortly before the deadline that is still running has no tool_result yet, so the hook enters.
+//     The same for a call whose input the PreToolUse guard rewrote (the two-step first step) or a subagent's call
+//     whose tool_use lives in another transcript: no matching tool_use is "unanswered", only ever stricter.
+//     (b) The desktop app (SDK host): whether its dialog is taken back the same way. The official docs say the hook
+//     and the host run side by side and the first to decide wins; install a build with this hook, set
+//     SORRY_MATT_UNATTENDED_AFTER=0.5 in Claude Code's "env", leave one dialog alone for 30 s and look.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const userEntries = (text) => text.split(/\r?\n/).flatMap((line) => {
   try {
@@ -150,5 +182,108 @@ async function headless() {
   console.log(`version: ${entries[0]?.version ?? 'unknown'}; cost (USD): ${cost ?? 'unknown'}; logs in ${work}`);
 }
 
+// ---------- #92: a permission dialog nobody answers (PermissionRequest) ----------
+
+const PROBE_COMMAND = 'echo sorry-matt-probe';
+
+/** A probe plugin: PreToolUse asks for the probe command, and PermissionRequest runs this checkout's handler. */
+function permissionProbe(work, after) {
+  const probe = join(work, 'probe');
+  const log = join(work, 'events.jsonl');
+  const home = join(work, 'home');
+  mkdirSync(join(probe, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(probe, 'hooks'), { recursive: true });
+  mkdirSync(home, { recursive: true });
+  const handler = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'unattended-timeout.mjs')).href;
+  writeFileSync(join(probe, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'unattended-permission-probe', version: '0.0.0', description: 'times out permission dialogs' }));
+  const common = [
+    "import { appendFileSync } from 'node:fs';",
+    `const log = (o) => appendFileSync(${JSON.stringify(log)}, JSON.stringify({ at: Date.now(), pid: process.pid, ...o }) + '\\n');`,
+    'const chunks = [];',
+    "process.stdin.on('data', (c) => chunks.push(c));",
+  ];
+  writeFileSync(join(probe, 'hooks', 'ask.mjs'), [...common,
+    "process.stdin.on('end', () => {",
+    "  const event = JSON.parse(Buffer.concat(chunks).toString('utf8'));",
+    "  log({ phase: 'pretooluse', tool_name: event.tool_name, permission_mode: event.permission_mode });",
+    `  if (String(event.tool_input?.command ?? '').includes(${JSON.stringify(PROBE_COMMAND)})) {`,
+    "    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'unattended live probe' } }));",
+    '  }',
+    '});',
+  ].join('\n'));
+  // The handler gets a home inside the work dir, so the probe never touches this machine's real unattended state.
+  writeFileSync(join(probe, 'hooks', 'permission.mjs'), [...common,
+    `const { onPermissionRequest } = await import(${JSON.stringify(handler)});`,
+    "process.stdin.on('end', async () => {",
+    "  const raw = Buffer.concat(chunks).toString('utf8');",
+    "  log({ phase: 'start', event: JSON.parse(raw) });",
+    `  const out = await onPermissionRequest(raw, { ...process.env, SORRY_MATT_UNATTENDED: '', SORRY_MATT_UNATTENDED_AFTER: ${JSON.stringify(after)} }, { home: ${JSON.stringify(home)} });`,
+    "  log({ phase: 'end', out });",
+    '  if (out) process.stdout.write(JSON.stringify(out));',
+    '});',
+  ].join('\n'));
+  const hook = (file, extra = {}) => ({ hooks: [{ type: 'command', command: `node "\${CLAUDE_PLUGIN_ROOT}/hooks/${file}"`, ...extra }] });
+  writeFileSync(join(probe, 'hooks', 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', ...hook('ask.mjs') }], PermissionRequest: [hook('permission.mjs', { timeout: 3700 })] } }));
+  return { probe, log, home };
+}
+
+/** What the probe saw: every PermissionRequest hook process, whether it decided, and the automatic state it wrote. */
+function permissionReport(work) {
+  const log = join(work, 'events.jsonl');
+  const events = existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  console.log(`PreToolUse calls: ${events.filter((e) => e.phase === 'pretooluse').length}`);
+  const starts = events.filter((e) => e.phase === 'start');
+  console.log(`PermissionRequest hook runs: ${starts.length}`);
+  for (const start of starts) {
+    const end = events.find((e) => e.phase === 'end' && e.pid === start.pid);
+    const decision = end?.out?.hookSpecificOutput?.decision;
+    console.log(`  pid ${start.pid}: input fields ${Object.keys(start.event).sort().join(', ')}; tool ${start.event.tool_name}, permission_mode ${start.event.permission_mode}; ` +
+      (end ? `decided after ${end.at - start.at} ms: ${decision ? decision.behavior : 'no output (answered)'}` : 'never decided: the process was ended first'));
+  }
+  const state = join(work, 'home', '.claude', 'sorry-matt-guard', 'unattended.json');
+  console.log(`automatic state: ${existsSync(state) ? readFileSync(state, 'utf8').trim() : 'none'}`);
+}
+
+/** Headless `-p`: the probe's PreToolUse asks, and PermissionRequest should not run at all. */
+async function permissionHeadless() {
+  const work = mkdtempSync(join(process.argv[3] || tmpdir(), 'unattended-permission-'));
+  const repo = join(work, 'repo');
+  mkdirSync(repo);
+  const { probe } = permissionProbe(work, '0.1');
+  const run = spawn('claude', ['-p', `Use the Bash tool exactly once to run this command: ${PROBE_COMMAND} headless. Then reply DONE.`, '--plugin-dir', probe,
+    '--model', 'haiku', '--max-budget-usd', '0.5', '--output-format', 'json'], { cwd: repo, stdio: ['ignore', 'pipe', 'inherit'] });
+  let stdout = '';
+  run.stdout.on('data', (c) => (stdout += c));
+  await new Promise((done) => run.on('close', done));
+  let result = {};
+  try {
+    result = JSON.parse(stdout);
+  } catch {
+    // not JSON: print what came back
+  }
+  console.log(`claude -p: ${result.subtype ?? stdout.trim()}; cost (USD): ${result.total_cost_usd ?? 'unknown'}`);
+  permissionReport(work);
+  console.log(`logs in ${work}`);
+}
+
+/** Interactive: sets up the probe and prints what a person runs and looks at. */
+function permissionInteractive() {
+  const work = mkdtempSync(join(process.argv[3] || tmpdir(), 'unattended-permission-'));
+  const { probe } = permissionProbe(work, '0.5');
+  console.log([
+    'In a terminal, in a folder Claude Code already trusts, run:',
+    `  claude --model haiku --plugin-dir "${probe}"`,
+    `1. Ask: "Run this Bash command once: ${PROBE_COMMAND} 1". Leave the dialog alone for 30 s: it should go away by itself and the`,
+    '   tool call come back denied with the sorry-matt unattended message.',
+    `2. Ask: "Run this Bash command once: ${PROBE_COMMAND} 2". Answer the dialog (allow or deny) within 30 s. A run that ends`,
+    '   "no output (answered)", or never decides, is what the design needs; a deny there is the known gap.',
+    'Then quit and run:',
+    `  node scripts/unattended.live.mjs --permission-report "${work}"`,
+  ].join('\n'));
+}
+
 if (process.argv.includes('--survey')) survey();
+else if (process.argv[2] === '--permission') await permissionHeadless();
+else if (process.argv[2] === '--permission-interactive') permissionInteractive();
+else if (process.argv[2] === '--permission-report') permissionReport(process.argv[3]);
 else await headless();
