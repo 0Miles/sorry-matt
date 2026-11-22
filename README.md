@@ -158,7 +158,9 @@ asked, saying why.
 **Unattended.** A prompt waits for an answer for as long as it takes, so an agent left running overnight stops at
 the first one. Before you walk away, create the switch file; every call the guard would ask about is then denied
 instead, with a message telling the agent to put it on the human-work list (or in its final report) and carry on.
-Two-step actions are denied before any confirmation is recorded. Remove the file to be asked again. The guard
+Two-step actions are denied before any confirmation is recorded. An `AskUserQuestion` is denied too, without the
+question box: the agent answers it on its own judgment and records that, marks it awaiting ruling, or puts it on
+the human-work list, and carries on. Remove the file to be asked again. The guard
 reads it on every call, so it takes effect in sessions that are already running. Setting `SORRY_MATT_UNATTENDED=on`
 in the `env` of your settings does the same for new sessions. This only makes the guard stricter; prompts that
 come from your own permission settings are not the guard's and still appear (in `auto` mode the classifier decides

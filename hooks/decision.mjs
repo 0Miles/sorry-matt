@@ -4,6 +4,8 @@
 //   - merge verdicts ask once when deploy-on-merge.mjs says the merge deploys, or cannot tell
 //   - unattended, from either source (the user's switch file or SORRY_MATT_UNATTENDED; the automatic state in
 //     unattended-state.mjs): each of those asks is a deny the agent parks instead, added to the blocked list
+//   - unattended, an AskUserQuestion is denied too, with its own message: answer, mark awaiting ruling or park it
+//     (ASKING.md section 4), and keep going; outside unattended mode the guard leaves questions alone
 //   - the one line that enters unattended mode is allowed without a prompt, and the entry is recorded here
 // It fails closed: an event it cannot read is denied, so a broken guard is loud, not silent.
 import { existsSync, realpathSync } from 'node:fs';
@@ -74,6 +76,7 @@ export function decide(raw, env = process.env, deps = {}) {
     if (writesGuardState(event)) {
       return deny('sorry-matt guard：不能寫入 guard 的確認紀錄（sorry-matt-guard 目錄）。兩段確認只能經由 guard 給的確認指令完成。');
     }
+    if (event.tool_name === 'AskUserQuestion') return away() ? parkQuestion(ctx) : null;
     const why = enterInvocation(event, ctx.root);
     if (why !== null) return enterStep(ctx, why);
     const token = confirmInvocation(event, ctx.root);
@@ -272,9 +275,41 @@ export function parked(state, { session, at, subject, reason }, home) {
 const park = ({ event, now, state, home }, reason) =>
   deny(parked(state, { session: event.session_id, at: now, subject: subjectOf(event), reason }, home));
 
+/** How each source of unattended mode ends, and that the agent ends neither: the closing part of every unattended deny. */
+const sourcesNote = (home) =>
+  `無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${shownUnattendedFile(home)} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`;
+
 /** The text every unattended deny carries, PreToolUse and PermissionRequest alike: the reason line is the only part that differs. */
 export const unattendedMessage = (reason, home = homedir()) =>
-  `sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。無人值守有兩種來源，agent 兩種都不能動：使用者開的，只由使用者移除開關檔 ${shownUnattendedFile(home)} 或拿掉環境變數 SORRY_MATT_UNATTENDED 來解除；自動進入的，使用者回來送出訊息後解除。不要刪除、改寫或搬移開關檔與自動進入的狀態檔。`;
+  `sorry-matt guard 無人值守模式：這個動作需要使用者確認，但使用者現在不在，所以直接擋下，不跳確認框。\n${reason}\n不要換寫法重試，也不要停下來等。把這個動作的原指令與上面的理由記進人工作業清單（沒有清單就留到最後的回報裡列出），然後繼續做其他做得了的事。${sourcesNote(home)}`;
+
+// A question has three ways on where an action needing confirmation has one, so it gets its own text: the three
+// exits of ASKING.md section 4. It is listed through the same state.record, by the text of each question.
+const QUESTION_REASON = '無人值守期間的提問';
+const questionsOf = (event) => {
+  const questions = event.tool_input?.questions;
+  return Array.isArray(questions) ? questions.map((q) => q?.question).filter((q) => typeof q === 'string' && q.trim()) : [];
+};
+const questionSubject = (event) => {
+  const questions = questionsOf(event);
+  return questions.length ? `AskUserQuestion: ${questions.join(' / ')}` : 'AskUserQuestion';
+};
+const questionMessage = (questions, home = homedir()) => [
+  'sorry-matt guard 無人值守模式：使用者現在不在，所以這次提問直接擋下，不跳提問框。',
+  ...(questions.length ? [`被擋下的提問：${questions.join(' / ')}`] : []),
+  '不要停下來等，也不要重問或換個方式再問。每一題從三條出路擇一：能依自己的判斷代答，並記錄問題、答案與理由（記進自答清單，沒有清單就留到最後的回報）；答不出來就列為待裁決；只有使用者能做的就列進人工作業清單。然後繼續做其他做得了的事。',
+  sourcesNote(home),
+].join('\n');
+
+/** The unattended deny of an AskUserQuestion. Denied whether or not the list could be written. */
+function parkQuestion({ event, now, state, home }) {
+  try {
+    state?.record({ session: event.session_id, at: now, subject: questionSubject(event), reason: QUESTION_REASON });
+  } catch {
+    // denied all the same
+  }
+  return deny(questionMessage(questionsOf(event), home));
+}
 
 // The entry line is answered with allow, so what is recognized has to be exactly what the shell then runs. Every
 // rewrite the guard tried to read through — another spelling of the path, other quotes, Git Bash's `/c/` — turned
