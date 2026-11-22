@@ -1339,6 +1339,9 @@ test('unattended, from any source, a question is denied: three ways on, no waiti
       assert.match(reason, /不要停下來等/, source);
       assert.match(reason, /不要重問/, source);
       assert.doesNotMatch(reason, /這個動作需要使用者確認/, 'not the generic park text');
+      // How each source ends, and that the agent touches neither file.
+      assert.match(reason, /不要刪除、改寫或搬移開關檔與自動進入的狀態檔/, source);
+      assert.ok(reason.includes(unattendedFile(home).replace(/\\/g, '/')), reason);
       assert.deepEqual(store.sessions, {}, 'no two-step token');
       assert.deepEqual(savedState(home).blocked, [{ session: 's4', at: 42, subject: 'AskUserQuestion: 要用哪個資料庫？ / 要不要保留舊 API？', reason: '無人值守期間的提問' }], source);
     });
@@ -1352,7 +1355,10 @@ test('a blocked question is listed by each of its questions, or by the tool name
     assert.equal(decisionOf(decideWith(asking(['只有一題']), env, deps(1))), 'deny');
     assert.equal(decisionOf(decideWith(asking([], { tool_input: {} }), env, deps(2))), 'deny');
     assert.equal(decisionOf(decideWith(asking([], { tool_input: { questions: 'broken' } }), env, deps(3))), 'deny');
-    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['AskUserQuestion: 只有一題', 'AskUserQuestion', 'AskUserQuestion']);
+    // Blank and whitespace-only questions are left out of the subject and the deny text.
+    const blanks = out(decideWith(asking(['', '  ', '只有一題']), env, deps(4))).permissionDecisionReason;
+    assert.ok(blanks.includes('被擋下的提問：只有一題\n'), blanks);
+    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['AskUserQuestion: 只有一題', 'AskUserQuestion', 'AskUserQuestion', 'AskUserQuestion: 只有一題']);
   });
 });
 
