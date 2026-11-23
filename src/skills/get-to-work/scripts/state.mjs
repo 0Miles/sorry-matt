@@ -76,7 +76,8 @@
 //                                   "in-review": <n> },     // the review host (#143); missing in an older file: 0
 //         "sendBacks": <n>, "fixRounds": <n>,
 //         "timeoutExtensions": <n>,                        // extensions of the agents that covered the ticket
-//                                                          // (#156); missing in an older file
+//                                                          // (#156); missing in an older file, and in an
+//                                                          // imported ticket whose seed gave none (#171)
 //         "reviews": [{ "mode": "initial" | "recheck", "verdict": "pass" | "fix" | "stuck", "kind": "full" | "minimal",
 //                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
 //                       "tierReasons": ["<tier.mjs reason>"] | null,    // its judge output's `reasons` (#156)
@@ -203,7 +204,7 @@
 //             another id is already there.
 //   extend    Sets the deadline from `deadline.mjs scan`'s `extend` and `extended` to "yes"; refused when already
 //             extended. One call per agent, naming every ticket it covers: usage `timeoutExtensions` + 1, and + 1 on
-//             each ticket named (#156).
+//             each ticket named (#156) that has a count; an imported ticket whose seed gave none keeps none (#171).
 //   release   The agent reported or was stopped: deadline null. `--stopped` (one call per agent) adds one to
 //             usage `timeoutStops`. `agent`, `extend` and `release` take `--line` in place of tickets for a line's
 //             assignment.
@@ -1139,8 +1140,9 @@ function extend(path, rest, flags, ctx) {
     inFlight(holders);
     for (const { name, holder } of holders) if (holder.assignment.extended === 'yes') throw new Refusal(`${name}: the assignment was already extended once; stop it`);
     for (const { holder } of holders) Object.assign(holder.assignment, { deadline, extended: 'yes' });
-    // #156: a ticket keeps its own count (a line's agent is counted in usage only)
-    if (flags.line === undefined) for (const { holder } of holders) holder.timeoutExtensions = (holder.timeoutExtensions ?? 0) + 1;
+    // #156: a ticket keeps its own count (a line's agent is counted in usage only); #171: an imported ticket whose
+    // seed gave it none stays without one, so retro.mjs reads it as unknown rather than as this extension alone
+    if (flags.line === undefined) for (const { holder } of holders) if ('timeoutExtensions' in holder) holder.timeoutExtensions += 1;
     state.usage.timeoutExtensions += 1;
     return out();
   });
