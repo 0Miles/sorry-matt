@@ -11,8 +11,10 @@
 //   node retro.mjs report [--since <YYYY-MM-DD>] [--by version|model|tier|profile] [--retro <file>] [--repo <path>]
 //                         [--json]
 //
-// record  Writes one row per ticket of the state's run to the retro file (default `<git common dir>/sorry-matt/
-//         retro.jsonl`, the directory above the state file's `runs/`). The run's earlier rows are replaced, so a
+// record  Writes one row per ticket of the state's run to the retro file. Without `--retro` that is
+//         `<git rev-parse --path-format=absolute --git-common-dir>/sorry-matt/retro.jsonl`, git run in the state file's
+//         directory; report finds it the same way in `--repo` (`retroFile`, #172). When git gives no common dir,
+//         record exits 1 and writes nothing: there is no other default. The run's earlier rows are replaced, so a
 //         rerun of the same run leaves one row per ticket. Lines of the file that are not JSON, and rows of other
 //         runs, are kept as they are. The file is replaced through a temporary file and a rename.
 //         Where its inputs come from:
@@ -25,11 +27,13 @@
 //                                              defaults to `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`;
 //                                              every `<slug>` directory is searched
 //           plugin version                     `.claude-plugin/plugin.json` in the nearest directory above this script
-//           tracker, repo, base                the state's tick configuration (`tick.mjs setup`); a state without
-//                                              one: no tracker, no base, and the repo from `git remote get-url
-//                                              origin` of the state's repository, as owner/repo. Under a Local
-//                                              Markdown tracker the repo (where CI is read) is the origin remote's
-//                                              of the configured root, else of the state's repository
+//           tracker, base                      the state's tick configuration (`tick.mjs setup`); a state without
+//                                              one: no tracker, no base
+//           repo                               where tick.mjs reads the run's CI (#172): the configuration's `repo`,
+//                                              whatever the tracker; without one, `nameWithOwner` of `gh repo view
+//                                              --json nameWithOwner` run in the configured `root` (the state file's
+//                                              directory without a configuration), not the origin remote; null when
+//                                              gh fails, and the report's `ciRed` is then "unknown"
 //         Tokens are only ever the `message.usage` of a transcript, one count per `message.id` (a message that is
 //         split over several lines counts once, its last line's usage). A ticket's agents are the counters entries
 //         whose description names it among its tickets (spawns.mjs `ticketsOf`): an agent that names several tickets
@@ -70,9 +74,11 @@
 //                   "gaps": ["<reason>"] }   // gaps: each distinct reason a token sum is null
 // report  Sums up the rows (those whose run started on or after `--since`), in one group, or one per plugin version,
 //         set of models, review tier or profile with `--by`. Per group:
-//           tokens by stage   stage of a kind: expand (expand, sorry-matt:expander), implement (implement,
-//                             sorry-matt:implementer), fix (fix, ci-fix), review (review, finder, architect, verifier,
-//                             fix-verifier and their sorry-matt: types), merge, simplify, other. `total` is the sum of
+//           tokens by stage   stage of a kind: the role word's in spawns.mjs `STAGE_OF_ROLE`, or for a plugin agent
+//                             type that of its role word in `ROLE_OF_AGENT` (#172); expand (expand, sorry-matt:expander),
+//                             implement (implement, sorry-matt:implementer), fix (fix, ci-fix), review (review, finder,
+//                             architect, verifier, fix-verifier and their sorry-matt: types), merge, simplify; any other
+//                             kind (general-purpose, unknown) is other. `total` is the sum of
 //                             the four token fields; agents with no tokens are counted in `unknownAgents`, not
 //                             estimated. A run's `runAgents` count once in each group that has a row of the run.
 //                             In every sum (a group's `tokensByStage` and `unknownAgents`, a tier's `reviewTokens`) an
@@ -123,7 +129,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
 import { SESSION } from './gates.mjs';
-import { category, roleOf, ticketsOf } from './spawns.mjs';
+import { ROLE_OF_AGENT, STAGE_OF_ROLE, category, roleOf, ticketsOf } from './spawns.mjs';
 import { FINDING_COUNTS, PROFILE_DEFAULTS, load, withLock, writeAtomic } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
@@ -136,25 +142,6 @@ const TOKEN_FIELDS = [
   ['cacheWrite', 'cache_creation_input_tokens'],
   ['cacheRead', 'cache_read_input_tokens'],
 ];
-const STAGE_OF = {
-  expand: 'expand',
-  'sorry-matt:expander': 'expand',
-  implement: 'implement',
-  'sorry-matt:implementer': 'implement',
-  fix: 'fix',
-  'ci-fix': 'fix',
-  review: 'review',
-  finder: 'review',
-  architect: 'review',
-  verifier: 'review',
-  'fix-verifier': 'review',
-  'sorry-matt:finder': 'review',
-  'sorry-matt:architect': 'review',
-  'sorry-matt:verifier': 'review',
-  'sorry-matt:fix-verifier': 'review',
-  merge: 'merge',
-  simplify: 'simplify',
-};
 export const REPORT_STAGES = ['expand', 'implement', 'fix', 'review', 'merge', 'simplify', 'other'];
 const UNKNOWN = 'unknown';
 
@@ -191,8 +178,8 @@ const readJson = (p, what) => {
 /** The kind an agent of the counters log counts under: its description's role word, else its spawns.mjs category. */
 export const kindOf = (entry) => roleOf(entry.description) ?? category(entry);
 
-/** The report stage of a kind. */
-export const stageOf = (kind) => STAGE_OF[kind] ?? 'other';
+/** The report stage of a kind: a role word's, or the role word's of a plugin agent type (spawns.mjs tables; #172). */
+export const stageOf = (kind) => STAGE_OF_ROLE[kind] ?? STAGE_OF_ROLE[ROLE_OF_AGENT[kind]] ?? 'other';
 
 /**
  * The usage of one transcript (JSON lines): one count per `message.id`, the last line of a message winning, and the
@@ -234,12 +221,6 @@ export function sessionOf(text) {
     if (m) return m[1];
   }
   return null;
-}
-
-/** owner/repo of a GitHub remote URL, or null. */
-export function repoOf(url) {
-  const m = /github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(String(url ?? '').trim());
-  return m ? `${m[1]}/${m[2]}` : null;
 }
 
 /** The version in the nearest `.claude-plugin/plugin.json` above `from`, or null. */
@@ -398,6 +379,37 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
   });
 }
 
+/**
+ * The retro file when no `--retro` is given (#172): `<git common dir>/sorry-matt/retro.jsonl` as git resolves it in
+ * `dir`. record and report both find it this way; with no git common dir there is no default.
+ */
+export function retroFile(deps, dir) {
+  let common;
+  try {
+    common = deps.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir).trim();
+  } catch (e) {
+    const why = (e?.stderr && String(e.stderr).trim()) || e?.message || 'git failed';
+    throw new Error(`no git common dir in ${dir} (${why}); give the retro file with --retro <file>`);
+  }
+  if (!common) throw new Error(`no git common dir in ${dir}; give the retro file with --retro <file>`);
+  return join(resolve(dir, common), 'sorry-matt', 'retro.jsonl');
+}
+
+/**
+ * The repo whose CI the run read (#172), as tick.mjs reads it: the configured `repo` whatever the tracker, else the
+ * one `gh repo view` gives in the configured `root` (the state's directory without one), which is where tick.mjs runs
+ * `ci.mjs verdict` without `--repo`. Null when gh cannot tell.
+ */
+function ciRepo(config, stateDir, deps) {
+  if (typeof config?.repo === 'string' && config.repo) return config.repo;
+  try {
+    const name = parseJson(deps.gh(['repo', 'view', '--json', 'nameWithOwner'], typeof config?.root === 'string' ? config.root : stateDir)).nameWithOwner;
+    return typeof name === 'string' && name ? name : null;
+  } catch {
+    return null;
+  }
+}
+
 export function record(flags, deps) {
   for (const k of ['state', 'counters', 'ledger']) if (!flags[k]) throw new UsageError(`record needs --${k} <path>`);
   const statePath = resolve(flags.state);
@@ -421,26 +433,15 @@ export function record(flags, deps) {
   const env = deps.env ?? process.env;
   const projects = resolve(flags.projects ?? (env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, 'projects') : join(deps.home ?? homedir(), '.claude', 'projects')));
   const places = ledgerReason ? { reason: ledgerReason, hosts: [], dirs: [] } : sessionPlaces(projects, session);
-  // the tracker and base the run was set up with (tick.mjs setup); an older state: the origin remote's repo
+  // the tracker and base the run was set up with (tick.mjs setup)
   const config = state.tick?.config && typeof state.tick.config === 'object' ? state.tick.config : null;
   const tracker = typeof config?.tracker === 'string' ? config.tracker : null;
   const base = typeof config?.base === 'string' ? config.base : null;
-  const originRepo = (dir) => {
-    try {
-      return repoOf(deps.git(['remote', 'get-url', 'origin'], dir));
-    } catch {
-      return null;
-    }
-  };
-  // #156 F13: a Local Markdown run still has CI on its origin remote; its mentions stay unknown (tracker: local)
-  const repo =
-    tracker === 'github'
-      ? typeof config.repo === 'string' ? config.repo : null
-      : originRepo(typeof config?.root === 'string' ? config.root : dirname(statePath));
+  const repo = ciRepo(config, dirname(statePath), deps);
   const now = flags.now ?? new Date(deps.clock()).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const rows = rowsOf({ state, log, logReason, session, places, version: deps.version ?? pluginVersion(), repo, tracker, base, now });
 
-  const retro = resolve(flags.retro ?? join(dirname(dirname(statePath)), 'retro.jsonl'));
+  const retro = flags.retro ? resolve(flags.retro) : retroFile(deps, dirname(statePath));
   // #156: under the lock, so a run recording at the same time is not lost between this read and the rename
   const replaced = withLock(retro, () => {
     const kept = [];
@@ -652,11 +653,7 @@ export function report(flags, deps) {
   if (flags.since !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(flags.since) || Number.isNaN(Date.parse(flags.since))))
     throw new UsageError(`--since: expected a date like 2026-01-31, got ${JSON.stringify(flags.since)}`);
   const repoDir = resolve(flags.repo ?? '.');
-  let retro = flags.retro;
-  if (!retro) {
-    const common = deps.git(['rev-parse', '--git-common-dir'], repoDir).trim();
-    retro = join(resolve(repoDir, common), 'sorry-matt', 'retro.jsonl');
-  }
+  const retro = flags.retro ? resolve(flags.retro) : retroFile(deps, repoDir);
   let text;
   try {
     text = readText(retro);
@@ -702,7 +699,7 @@ function parseFlags(argv, spec) {
 export function defaultDeps() {
   return {
     git: (args, cwd) => run('git', args, cwd),
-    gh: (args) => run('gh', args),
+    gh: (args, cwd) => run('gh', args, cwd),
     clock: () => Date.now(),
     env: process.env,
   };
