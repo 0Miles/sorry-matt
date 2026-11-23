@@ -447,7 +447,7 @@ test('integrate direct, ci skip, simplify false: delivery still needs its merge 
 test('#156: review records the finding counts and the tier reasons; without them both are null', (t) => {
   const r = run(t);
   at(r, '#1', 'in-review');
-  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--tier', 'full', '--tier-reasons', 'sensitive,over-lines', '--findings', 'F1', '--candidates', '7', '--confirmed', '3', '--invalid', '4', '--blocking', '1');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--tier', 'full', '--tier-reason', 'sensitive', '--tier-reason', 'over-lines', '--findings', 'F1', '--candidates', '7', '--confirmed', '3', '--invalid', '4', '--blocking', '1');
   r.ok('stage', 'fixing', '#1');
   r.ok('stage', 'in-review', '#1');
   r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass');
@@ -464,8 +464,80 @@ test('#156: review records the finding counts and the tier reasons; without them
   };
   bad(['--candidates', '1', '--confirmed', '1'], /--candidates, --confirmed, --invalid and --blocking go together/);
   bad(['--candidates', '-1', '--confirmed', '0', '--invalid', '0', '--blocking', '0'], /--candidates: expected a whole number/);
-  bad(['--tier-reasons', 'default'], /--tier-reasons goes with --tier/);
+  bad(['--tier-reason', 'default'], /--tier-reason goes with --tier/);
   assert.equal(r.state().tickets['#1'].reviews.length, 2, 'nothing more recorded');
+});
+
+test('#173: --tier-reason is given once per reason and kept whole; the old comma-joined --tier-reasons is gone', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  const before = readFileSync(r.path, 'utf8');
+  const bad = (args, re) => {
+    const out = r.cmd('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'full', ...args);
+    assert.equal(out.code, 2, args.join(' '));
+    assert.match(out.err, re);
+    assert.equal(readFileSync(r.path, 'utf8'), before, 'the state file is unchanged');
+  };
+  bad(['--tier-reasons', 'sensitive,default'], /unknown flag --tier-reasons/);
+  bad(['--tier-reason', 'sensitive', '--tier-reason', ''], /--tier-reason: expected a reason/);
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--tier', 'full', '--tier-reason', 'sensitive', '--tier-reason', 'src/x.mjs#a b', '--tier-reason', 'c,d');
+  assert.deepEqual(r.state().tickets['#1'].reviews[0].tierReasons, ['sensitive', 'src/x.mjs#a b', 'c,d']);
+  assert.deepEqual(r.ok('show').tickets['#1'].reviews[0].tierReasons, ['sensitive', 'src/x.mjs#a b', 'c,d'], 'and it loads back');
+});
+
+test('#173: review refuses finding counts that cannot add up (2, the file unchanged); equal bounds are recorded', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  const counts = (candidates, confirmed, invalid, blocking) => ['--candidates', `${candidates}`, '--confirmed', `${confirmed}`, '--invalid', `${invalid}`, '--blocking', `${blocking}`];
+  const before = readFileSync(r.path, 'utf8');
+  const bad = (args, re) => {
+    const out = r.cmd('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--findings', 'F1', ...args);
+    assert.equal(out.code, 2, args.join(' '));
+    assert.equal(out.out, '');
+    assert.match(out.err, re);
+    assert.equal(readFileSync(r.path, 'utf8'), before, 'the state file is unchanged');
+  };
+  bad(counts(5, 3, 3, 1), /confirmed \+ invalid \(3 \+ 3\) is more than candidates \(5\)/);
+  bad(counts(5, 2, 2, 3), /blocking \(3\) is more than confirmed \(2\)/);
+  bad(counts(0, 0, 1, 0), /confirmed \+ invalid \(0 \+ 1\) is more than candidates \(0\)/);
+  // at the bounds: every candidate ruled on, every confirmed finding blocking (a recheck's candidates=confirmed=blocking)
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--findings', 'F1', ...counts(5, 2, 3, 2));
+  r.ok('stage', 'fixing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'fix', '--findings', 'F1', ...counts(1, 1, 0, 1));
+  assert.deepEqual(r.state().tickets['#1'].reviews.map((x) => x.findingCounts), [
+    { candidates: 5, confirmed: 2, invalid: 3, blocking: 2 },
+    { candidates: 1, confirmed: 1, invalid: 0, blocking: 1 },
+  ]);
+});
+
+test('#173: a state file holding finding counts that cannot add up is not a state file (1), naming the review', (t) => {
+  const r = run(t);
+  at(r, '#1', 'in-review');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'fix', '--findings', 'F1', '--candidates', '4', '--confirmed', '2', '--invalid', '2', '--blocking', '1');
+  r.ok('stage', 'fixing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass', '--candidates', '0', '--confirmed', '0', '--invalid', '0', '--blocking', '0');
+  const good = r.state();
+  const edited = (i, findingCounts) => {
+    const s = structuredClone(good);
+    s.tickets['#1'].reviews[i].findingCounts = findingCounts;
+    writeFileSync(r.path, JSON.stringify(s));
+  };
+  for (const [i, findingCounts, re] of [
+    [0, { candidates: 3, confirmed: 2, invalid: 2, blocking: 1 }, /tickets\.#1\.reviews\[0\] has findingCounts where confirmed \+ invalid \(2 \+ 2\) is more than candidates \(3\)/],
+    [1, { candidates: 1, confirmed: 0, invalid: 0, blocking: 1 }, /tickets\.#1\.reviews\[1\] has findingCounts where blocking \(1\) is more than confirmed \(0\)/],
+  ]) {
+    edited(i, findingCounts);
+    for (const out of [r.cmd('show'), r.cmd('stage', 'queued', '#1')]) {
+      assert.equal(out.code, 1, out.err);
+      assert.equal(out.out, '');
+      assert.match(out.err, re);
+    }
+  }
+  // the bounds themselves are a state file
+  edited(1, { candidates: 2, confirmed: 2, invalid: 0, blocking: 2 });
+  assert.equal(r.cmd('show').code, 0);
 });
 
 test('#156: an extension counts on each ticket it covers; a ticket never extended has 0', (t) => {
@@ -481,6 +553,20 @@ test('#156: an extension counts on each ticket it covers; a ticket never extende
   const s = r.state();
   assert.deepEqual(['#1', '#2', '#3'].map((id) => s.tickets[id].timeoutExtensions), [2, 1, 0]);
   assert.equal(s.usage.timeoutExtensions, 2, 'one per agent');
+  assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
+});
+
+test('#171: extend leaves an imported ticket with no count of its own without one; a seeded count goes up by one', (t) => {
+  const r = run(t, { init: false });
+  const seed = r.file('seed.json', { run: 'run-1', usage: { timeoutExtensions: 2 }, tickets: { '#1': { line: LINE, stage: 'expanding' }, '#2': { line: LINE, stage: 'expanding', timeoutExtensions: 1 } } });
+  r.ok('import', '--from', seed);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=0', '--limit', '15', '--now', NOW]));
+  r.ok('assign', '#1', '#2', '--record', rec, '--type', 'sorry-matt:expander');
+  r.ok('extend', '#1', '#2', '--deadline', '2026-03-10T12:30:00Z');
+  const s = r.state();
+  assert.equal('timeoutExtensions' in s.tickets['#1'], false, 'the seed gave no count for #1: still none');
+  assert.equal(s.tickets['#2'].timeoutExtensions, 2);
+  assert.equal(s.usage.timeoutExtensions, 3, 'the run counts the extension either way');
   assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
 });
 

@@ -18,12 +18,15 @@
 //     "sorry-matt:expander").
 //   - otherwise the first word of `description`, lowercased, when it is one of the role words the skills start
 //     an Agent call's description with: expand, implement, fix, ci-fix, merge, review, simplify, finder, architect,
-//     verifier, fix-verifier.
+//     verifier, fix-verifier (`ROLES`, the keys of `STAGE_OF_ROLE`, which also gives each word its stage; the
+//     plugin's agent types map to their role word in `ROLE_OF_AGENT`).
 //   - otherwise "general-purpose".
 //   Spawns counted but not logged (`spawns` minus the number of log entries) are "unknown".
 //
-// Ticket of a log entry: the first `#<digits>` or `<digits>-<slug>.md` marker in `description`, by position. An
-// entry without one is in no ticket; it still counts in `byType`. A file-name marker:
+// Tickets of a log entry: every distinct `#<digits>` or `<digits>-<slug>.md` marker in `description`, in the order
+// they appear (`ticketsOf`; #173). A spawn that names several tickets (`expand #1 #2 #3`) counts under each of them in
+// `byTicket`, and once in `byType`. An entry without a marker is in no ticket; it still counts in `byType`. `ticketOf`
+// is the first marker alone, by position (brief.mjs asks whether a whole name is one marker). A file-name marker:
 //   - starts at digits not preceded by a letter, a digit, `_`, `.` or `-` (so after a space, `/`, `(` and the like);
 //   - has a slug in any script: any characters but whitespace, path separators, and the punctuation that
 //     separates or wraps names: , ; : ( ) [ ] { } < > quotes, and the full-width ，、。；：（）「」;
@@ -38,8 +41,9 @@
 //     "byType":   { "implement": 5, "sorry-matt:expander": 2, "finder": 6, "unknown": 4 },
 //     "byTicket": { "#72": { "implement": 1, "finder": 3 }, "03-add-login.md": { "implement": 1 } }
 //   }
-//   The values of `byType` add up to `spawns`. Categories and tickets appear in the order first seen, "unknown"
-//   last; one with no spawn is left out.
+//   The values of `byType` add up to `spawns`; those of `byTicket` can add up to more, a spawn naming several
+//   tickets counting under each. Categories and tickets appear in the order first seen, "unknown" last; one with no
+//   spawn is left out.
 //
 // Exit codes: 0 output written; 1 the file is missing, not JSON, or not a counters file (nothing on stdout);
 // 2 bad arguments.
@@ -47,12 +51,42 @@ import { readFileSync } from 'node:fs';
 import { UsageError, failure, parseJson, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/spawns@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'simplify', 'finder', 'architect', 'verifier', 'fix-verifier'];
+/**
+ * Each role word and the stage of a run it works in (#172): a role word does not exist without its stage, and
+ * retro.mjs sums tokens by these stages. Null-prototype, so a key of Object.prototype is no role word.
+ */
+export const STAGE_OF_ROLE = Object.freeze(
+  Object.assign(Object.create(null), {
+    expand: 'expand',
+    implement: 'implement',
+    fix: 'fix',
+    'ci-fix': 'fix',
+    merge: 'merge',
+    review: 'review',
+    simplify: 'simplify',
+    finder: 'review',
+    architect: 'review',
+    verifier: 'review',
+    'fix-verifier': 'review',
+  }),
+);
+export const ROLES = Object.freeze(Object.keys(STAGE_OF_ROLE));
+/** The role word of each of the plugin's agent types (`agents/<name>.md` is `sorry-matt:<name>`; #172). */
+export const ROLE_OF_AGENT = Object.freeze(
+  Object.assign(Object.create(null), {
+    'sorry-matt:expander': 'expand',
+    'sorry-matt:implementer': 'implement',
+    'sorry-matt:finder': 'finder',
+    'sorry-matt:architect': 'architect',
+    'sorry-matt:verifier': 'verifier',
+    'sorry-matt:fix-verifier': 'fix-verifier',
+  }),
+);
 
 // The file-name marker is described in the header: its start, its slug and its end.
 const WORD = '\\p{L}\\p{N}_';
 const SLUG = '[^\\s\\/\\\\,;:()\\[\\]{}<>"\'`，、。；：（）「」]';
-const TICKET = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'u');
+const TICKETS = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'gu');
 const optionalString = (value) => value === null || value === undefined || typeof value === 'string';
 
 /** The role word a description starts with (ROLES), or null. */
@@ -67,8 +101,11 @@ export function category({ type, description }) {
   return roleOf(description) ?? 'general-purpose';
 }
 
-/** The ticket a description names, or null. */
-export const ticketOf = (description) => TICKET.exec(String(description ?? ''))?.[0] ?? null;
+/** Every distinct ticket a description names, in the order they appear (#173). */
+export const ticketsOf = (description) => [...new Set(Array.from(String(description ?? '').matchAll(TICKETS), (m) => m[0]))];
+
+/** The first ticket a description names, or null. */
+export const ticketOf = (description) => ticketsOf(description)[0] ?? null;
 
 /** The summary of parsed counters; throws when they are not in the counters format. */
 export function summarize(counters, path = 'the input') {
@@ -88,8 +125,7 @@ export function summarize(counters, path = 'the input') {
   for (const entry of log) {
     const kind = category(entry);
     add(byType, kind);
-    const ticket = ticketOf(entry.description);
-    if (ticket) add((byTicket[ticket] ||= tally()), kind);
+    for (const ticket of ticketsOf(entry.description)) add((byTicket[ticket] ||= tally()), kind);
   }
   if (spawns > log.length) byType.unknown = (byType.unknown || 0) + spawns - log.length;
   return { format: FORMAT, spawns, byType, byTicket };

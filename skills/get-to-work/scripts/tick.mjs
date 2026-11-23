@@ -96,7 +96,8 @@
 //   `--observations <n> --pre-existing <n>` (#142: both required, exit 2 without; a minimal reviewer's record takes
 //   neither, exit 2 with either), and `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>` (#156: all four
 //   or none, under the same rules; state.mjs keeps them on the review, null without). The review is also recorded
-//   with the reasons of its tier.mjs judge output (`--tier-reasons`, #156). The targeted checks come from the report of the
+//   with the reasons of its tier.mjs judge output, one `--tier-reason` each and whole (#156, #173: a reason with a space
+//   or a comma is passed as it is). The targeted checks come from the report of the
 //   round under review: the collect of an implementation round (and of a fix round a recheck follows) names
 //   `tick/report/<ticket key>-<assigned>.md`, and record green / fixed is refused (3) until that file holds the
 //   report with its `targeted checks:` line. A ticket in review with no such file on record (a timeout's collected
@@ -296,7 +297,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
-import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS } from './state.mjs';
+import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
@@ -1464,7 +1465,8 @@ function reviewTier(c, id, t) {
   if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
   const out = readJsonFile(c.deps, file);
   // #156: the judge's reasons go on the review's record with its tier
-  const reasons = Array.isArray(out?.reasons) && out.reasons.length && out.reasons.every((x) => typeof x === 'string' && /^[^\s,]+$/.test(x)) ? out.reasons : null;
+  // #173: each reason whole, spaces and commas included; state.mjs takes one --tier-reason per reason
+  const reasons = Array.isArray(out?.reasons) && out.reasons.length && out.reasons.every(isText) ? out.reasons : null;
   return TIERS.includes(out?.tier) ? { tier: out.tier, file, reasons } : { tier: 'full', file: null, reasons: null };
 }
 
@@ -2592,7 +2594,7 @@ export function record(path, id, flags, now, deps) {
   // tier's reasons (#139, #156).
   const recordReview = (tid, t, meta, verdict, counts) => {
     if (t.stage === 'in-review' && !(currentReview(t) && flag(tid).retryReviews !== t.reviews.length)) {
-      S('review', tid, '--mode', meta.mode, '--verdict', verdict, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(meta.tier && meta.tierReasons ? ['--tier-reasons', meta.tierReasons.join(',')] : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
+      S('review', tid, '--mode', meta.mode, '--verdict', verdict, '--kind', meta.kind, ...(meta.tier ? ['--tier', meta.tier] : []), ...(meta.tier && meta.tierReasons ? meta.tierReasons.flatMap((r) => ['--tier-reason', r]) : []), ...(verdict === 'fix' && flags.findings ? ['--findings', flags.findings] : []), ...counts);
     }
   };
   // A prove-it review host's verdict (#143): its assignment released, it is collected, the review recorded once.

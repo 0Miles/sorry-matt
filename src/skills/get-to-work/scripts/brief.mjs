@@ -35,8 +35,8 @@
 //   rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
 //   Markdown. The plugin's budget hook logs each spawn's agent type and `description` next to the run ledger, and
-//   spawns.mjs reads the role word and the first ticket back from it; a spawn whose prefix is wrong counts as
-//   `general-purpose`. So every ticket target here must be one spawns.mjs reads as a whole ticket (its `ticketOf`);
+//   spawns.mjs reads the role word and every ticket back from it (#173: a spawn naming several counts under each); a
+//   spawn whose prefix is wrong counts as `general-purpose`. So every ticket target here must be one spawns.mjs reads as a whole ticket (its `ticketOf`);
 //   a file name with whitespace or the punctuation spawns.mjs stops at is refused. A Local Markdown path is reduced
 //   to its file name.
 //
