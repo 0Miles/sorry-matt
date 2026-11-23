@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { main, transcriptUsage } from '../src/skills/get-to-work/scripts/retro.mjs';
 import { main as state } from '../src/skills/get-to-work/scripts/state.mjs';
+import { main as deadline } from '../src/skills/get-to-work/scripts/deadline.mjs';
 
 const RUN = 'run-1';
 const LINE = 'run-1/line-a';
@@ -176,7 +177,7 @@ test('the tracker, repo and base come from the tick configuration when the state
   assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['o/r', 'local', 'trunk']);
   assert.deepEqual(dirs, ['/the/root']);
   const gh = (args) => {
-    if (args[0] === 'run') return JSON.stringify([{ conclusion: 'failure', createdAt: '2026-03-10T15:00:00Z' }]);
+    if (args[0] === 'run') return JSON.stringify([{ conclusion: 'failure', createdAt: '2026-03-10T15:00:00Z', headSha: 'h1' }]);
     throw new Error(`no ${args[0]} on a local tracker`);
   };
   const e = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], { git: () => '', gh }))).groups[0].escaped;
@@ -205,6 +206,46 @@ test('#156 F14: a state imported from a seed that counted extensions for the run
   assert.equal(r.code, 0, r.err);
   ok(w.record());
   assert.deepEqual(w.rows().map((x) => [x.ticket, x.timeoutExtensions]), [['#1', null], ['#2', 1]]);
+});
+
+test('#171: an imported ticket whose seed gave no count is null after an extension; a seeded count is the count plus one', (t) => {
+  const w = world(t);
+  rmSync(w.statePath);
+  // no run-level count in the seed either: only the extension below makes the run's count non-zero
+  const seed = write(join(w.dir, 'seed.json'), { run: RUN, tickets: { '#1': { line: LINE, stage: 'expanding' }, '#2': { line: LINE, stage: 'expanding', timeoutExtensions: 0 } } });
+  const S = (...argv) => {
+    const r = state([argv[0], w.statePath, ...argv.slice(1), '--now', '2026-03-10T12:00:00Z']);
+    assert.equal(r.code, 0, r.err);
+  };
+  S('import', '--from', seed);
+  const out = deadline(['record', '--expansions', '#1=0', '--expansions', '#2=0', '--limit', '15', '--now', '2026-03-10T12:00:00Z']);
+  assert.equal(out.code, 0, out.err);
+  const rec = write(join(w.dir, 'rec.json'), out.out);
+  S('assign', '#1', '#2', '--record', rec, '--type', 'sorry-matt:expander');
+  S('extend', '#1', '#2', '--deadline', '2026-03-10T12:30:00Z');
+  ok(w.record());
+  assert.deepEqual(w.rows().map((x) => [x.ticket, x.timeoutExtensions]), [['#1', null], ['#2', 1]]);
+});
+
+test('#171: the host tokens stop at the run end the state recorded (tick.finished), else at --now', (t) => {
+  const w = world(t);
+  // h2 is after the run finished but before --now (a later record of the same run): not the run's
+  const host = join(w.projects, 'D--code-repo', 's-1.jsonl');
+  writeFileSync(host, readFileSync(host, 'utf8') + jsonl([msg('h2', [3, 30, 300, 3000], { at: '2026-03-10T13:55:00Z' })]));
+  w.edit((s) => (s.tick = { finished: '2026-03-10T13:50:00Z' }));
+  ok(w.record());
+  assert.deepEqual(w.rows().map((r) => r.host.tokens), [{ input: 4, output: 40, cacheWrite: 400, cacheRead: 4000 }, { input: 4, output: 40, cacheWrite: 400, cacheRead: 4000 }]);
+});
+
+test('#171: without tick.finished (a run still going, or no tick at all) the host tokens run to --now', (t) => {
+  const w = world(t);
+  const host = join(w.projects, 'D--code-repo', 's-1.jsonl');
+  writeFileSync(host, readFileSync(host, 'utf8') + jsonl([msg('h2', [3, 30, 300, 3000], { at: '2026-03-10T13:55:00Z' })]));
+  ok(w.record());
+  assert.deepEqual(w.rows()[0].host.tokens, { input: 7, output: 70, cacheWrite: 700, cacheRead: 7000 }, 'no tick: h1 and h2');
+  w.edit((s) => (s.tick = { finished: null }));
+  ok(w.record());
+  assert.deepEqual(w.rows()[0].host.tokens, { input: 7, output: 70, cacheWrite: 700, cacheRead: 7000 }, 'tick.finished null: h1 and h2');
 });
 
 test('two runs recording into one retro file at the same time both keep their rows', async (t) => {
@@ -319,6 +360,7 @@ const row = (o) => ({
   merges: [],
   deliveredAt: null,
   ...o,
+  mergeSha: o.merges?.[0] ?? null, // as record writes it: the first merge
 });
 const review = (mode, confirmed, extra = {}) => ({ mode, kind: 'full', verdict: confirmed ? 'fix' : 'pass', findingCounts: { candidates: confirmed + 1, confirmed, invalid: 1, blocking: confirmed }, ...extra });
 
@@ -385,10 +427,12 @@ test('report: escaped defects from newer tickets naming the ticket or its merge,
   ];
   const gh = (args) => {
     if (args[0] === 'issue') return JSON.stringify(issues);
-    if (args[0] === 'run') return JSON.stringify(args.includes('r/red') ? [{ conclusion: 'failure', createdAt: '2026-03-10T14:00:00Z' }] : [{ conclusion: 'failure', createdAt: '2026-03-10T12:00:00Z' }, { conclusion: 'success', createdAt: '2026-03-10T14:00:00Z' }]);
+    // a run on `post` has the ticket's merge, one on `pre` does not
+    if (args[0] === 'run') return JSON.stringify(args.includes('r/red') ? [ciRun('failure', '2026-03-10T14:00:00Z', 'post')] : [ciRun('failure', '2026-03-10T12:00:00Z', 'pre'), ciRun('success', '2026-03-10T14:00:00Z', 'post')]);
     throw new Error(args.join(' '));
   };
-  const git = (args) => (args[0] === 'log' ? `fix\n\nThis reverts commit ${'2'.repeat(40)}.\n` : '');
+  const covers = ancestry({ covering: ['post'] });
+  const git = (args, cwd) => (args[0] === 'log' ? `fix\n\nThis reverts commit ${'2'.repeat(40)}.\n` : covers(args, cwd));
   const e = reportOf(t, rows, [], { gh, git }).groups[0].escaped;
   assert.deepEqual([e.delivered, e.escaped, e.unknown], [4, 4, 0]);
   assert.deepEqual(e.tickets.map((s) => [s.ticket, s.mentions, s.reverted, s.ciRed]), [
@@ -418,7 +462,7 @@ test("report: CI of the base branch under integrate: direct; an upstream revert 
   ];
   const gh = (args) => {
     if (args[0] === 'issue') return JSON.stringify([{ number: 7, title: 'broke #3', body: '', createdAt: '2026-03-11T00:00:00Z' }]);
-    if (args[0] === 'run') return JSON.stringify(args.includes('main') ? [{ conclusion: 'failure', createdAt: '2026-03-10T14:00:00Z' }] : []);
+    if (args[0] === 'run') return JSON.stringify(args.includes('main') ? [ciRun('failure', '2026-03-10T14:00:00Z', 'h1')] : []);
     throw new Error(args.join(' '));
   };
   const e = reportOf(t, rows, [], { gh, git: () => 'nothing reverted\n' }).groups[0].escaped;
@@ -428,6 +472,72 @@ test("report: CI of the base branch under integrate: direct; an upstream revert 
     ['#3', 'unknown', false, false],
   ]);
   assert.deepEqual([e.escaped, e.unknown], [1, 1]);
+});
+
+/** A fake `git` whose `merge-base --is-ancestor <merge> <head>` holds for the heads in `covering`, exits 1 for the
+ * other heads, and fails like a SHA missing here for the heads in `failing`; each call's cwd and merge go into `calls`. */
+const ancestry = ({ covering = [], failing = [], calls = [] } = {}) => (args, cwd) => {
+  if (args[0] !== 'merge-base') return '';
+  calls.push({ cwd, merge: args[2] });
+  assert.deepEqual(args.slice(0, 2), ['merge-base', '--is-ancestor']);
+  const head = args[3];
+  if (covering.includes(head)) return '';
+  const e = new Error(failing.includes(head) ? `fatal: Not a valid commit name ${head}` : 'not an ancestor');
+  e.status = failing.includes(head) ? 128 : 1;
+  throw e;
+};
+const ciRun = (conclusion, createdAt, headSha) => ({ conclusion, createdAt, headSha });
+
+test('#171: ciRed is the first finished run that covers the delivery merge going red from green', (t) => {
+  const dir = scratch(t);
+  const at = '2026-03-10T13:00:00Z';
+  const tickets = ['#1', '#2', '#3', '#4', '#5'];
+  const rows = tickets.map((id, i) => row({ ticket: id, line: `r/l${i + 1}`, merges: [`${i + 1}`.repeat(40), 'f'.repeat(40)], deliveredAt: at }));
+  const runs = {
+    // green, then the first run with the merge red; a cancelled and a running one in between are not results; the
+    // list comes in any order
+    'r/l1': [ciRun('failure', '2026-03-10T14:00:00Z', 'c1'), ciRun('', '2026-03-10T13:40:00Z', 'c1b'), ciRun('cancelled', '2026-03-10T13:30:00Z', 'c1a'), ciRun('success', '2026-03-10T12:00:00Z', 'n1')],
+    // no finished run before it: the line was green from its base
+    'r/l2': [ciRun('failure', '2026-03-10T14:00:00Z', 'c2')],
+    // red before the delivery: not this ticket's red
+    'r/l3': [ciRun('failure', '2026-03-10T12:00:00Z', 'n3'), ciRun('failure', '2026-03-10T14:00:00Z', 'c3')],
+    // green with the merge, red later (another ticket delivered after it)
+    'r/l4': [ciRun('success', '2026-03-10T12:00:00Z', 'n4'), ciRun('success', '2026-03-10T14:00:00Z', 'c4'), ciRun('failure', '2026-03-10T15:00:00Z', 'c4b')],
+    // no run has the merge (a red one after the delivery time on a head without it is still not this ticket's)
+    'r/l5': [ciRun('success', '2026-03-10T12:00:00Z', 'n5'), ciRun('failure', '2026-03-10T14:00:00Z', 'n5b')],
+  };
+  const gh = (args) => {
+    if (args[0] === 'run') return JSON.stringify(runs[args[args.indexOf('--branch') + 1]]);
+    return '[]';
+  };
+  const calls = [];
+  const git = ancestry({ covering: ['c1', 'c1a', 'c1b', 'c2', 'c3', 'c4', 'c4b'], calls });
+  const e = reportOf(t, rows, ['--repo', dir], { gh, git }).groups[0].escaped;
+  assert.deepEqual(e.tickets.map((s) => [s.ticket, s.ciRed]), [['#1', true], ['#2', true], ['#3', false], ['#4', false], ['#5', false]]);
+  assert.ok(calls.length > 0 && calls.every((c) => c.cwd === dir), 'git runs in the --repo directory');
+  // the delivery merge, never the -ci merge after it
+  assert.deepEqual([...new Set(calls.map((c) => c.merge))].sort(), tickets.map((_, i) => `${i + 1}`.repeat(40)));
+});
+
+test('#171: ciRed is unknown when git cannot tell whether a run that decides it covers the merge; the report goes on', (t) => {
+  const at = '2026-03-10T13:00:00Z';
+  const rows = [
+    row({ ticket: '#1', line: 'r/l1', merges: ['1'.repeat(40)], deliveredAt: at }),
+    row({ ticket: '#2', line: 'r/l2', merges: ['2'.repeat(40)], deliveredAt: at }),
+  ];
+  const runs = {
+    // x1 red after green: whether it has the merge decides between true and false
+    'r/l1': [ciRun('success', '2026-03-10T12:00:00Z', 'n1'), ciRun('failure', '2026-03-10T14:00:00Z', 'x1')],
+    // the line was red already: false whether x2 has the merge or not
+    'r/l2': [ciRun('failure', '2026-03-10T12:00:00Z', 'n2'), ciRun('failure', '2026-03-10T14:00:00Z', 'x2')],
+  };
+  const gh = (args) => (args[0] === 'run' ? JSON.stringify(runs[args[args.indexOf('--branch') + 1]]) : '[]');
+  const e = reportOf(t, rows, [], { gh, git: ancestry({ failing: ['x1', 'x2'] }) }).groups[0].escaped;
+  assert.deepEqual(e.tickets.map((s) => [s.ticket, s.ciRed]), [['#1', 'unknown'], ['#2', false]]);
+  assert.deepEqual([e.delivered, e.escaped, e.unknown], [2, 0, 1]);
+  // git not there at all: every coverage question fails
+  const none = reportOf(t, rows, [], { gh, git: () => { throw new Error('spawn git ENOENT'); } }).groups[0].escaped;
+  assert.deepEqual(none.tickets.map((s) => [s.ticket, s.ciRed]), [['#1', 'unknown'], ['#2', 'unknown']], 'n2 may have the merge too');
 });
 
 test('report without --json writes a Markdown table per group, unknown where a value is missing', (t) => {

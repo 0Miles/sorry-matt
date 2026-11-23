@@ -38,8 +38,9 @@
 //         description names no ticket of the run (`simplify <line>`, `ci-fix <line>`, `merge <line>`, the agents
 //         those spawn) is the run's: `runAgents`, the same on every row of the run. Nothing is estimated
 //         from time or agent counts (ASKING.md section 7, field 9). The host's tokens are those of its transcript's
-//         messages from the run's start to `--now`; they are the run's, not a ticket's, and are the same on every row
-//         of the run.
+//         messages from the run's start to its end, the state's `tick.finished` (the wrap-up's time; a later record
+//         of a finished run counts nothing after it), or `--now` when that is null or the state has no `tick`; they
+//         are the run's, not a ticket's, and are the same on every row of the run.
 //         A row (format "sorry-matt/retro@1"; fields are only ever added, never renamed):
 //           { "format", "run", "ticket", "recorded": "<UTC>", "started": "<UTC>", "repo": "<owner/repo>" | null,
 //             "tracker": "github" | "local" | null, "base": "<base branch>" | null,
@@ -83,10 +84,17 @@
 //                             merge SHA (`This reverts commit <sha>` in `git log --all` of `--repo`, default the
 //                             current directory; a ticket that went from delivered to stuck for its own red light
 //                             counts as reverted, one stuck as `upstream reverted:` is looked up like any other), and
-//                             whether a CI run failed after its delivery on the branch it was merged into (its
-//                             integration branch, the base branch under `integrate: direct`). What cannot be read
-//                             (`gh` missing or failing, a Local Markdown tracker or no GitHub repo, `git` failing) is
-//                             "unknown"; the report goes on.
+//                             `ciRed`, whether its delivery turned CI red on the branch it was merged into (its
+//                             integration branch, the base branch under `integrate: direct`): of that branch's runs
+//                             with a `conclusion` of `success` or `failure` (cancelled, skipped and running ones are
+//                             left out), in `createdAt` order, the first whose `headSha` has the ticket's `mergeSha`
+//                             (the delivery merge, not a later `-ci` merge; `git merge-base --is-ancestor <mergeSha>
+//                             <headSha>` in `--repo`) is a `failure`, and the last run before it, which lacks the
+//                             merge, is a `success` or there is none (#171). A line red before the delivery, a red
+//                             that only comes after a green run with the merge, or no run with the merge: false.
+//                             What cannot be read (`gh` missing or failing, a Local Markdown tracker or no GitHub
+//                             repo, `git` failing, for `ciRed` only when a run it cannot place could change the
+//                             answer) is "unknown"; the report goes on.
 //         Output: a Markdown table per group; with `--json`, { "format": "sorry-matt/retro-report@1", "since", "by",
 //                 "rows", "groups": [{ "key", "tickets", "runs", "tokensByStage", "unknownAgents", "reviewToImplement",
 //                 "byTier", "escaped": { "delivered", "escaped", "unknown", "tickets": [...] } }] }.
@@ -309,7 +317,8 @@ function reviewRow(r) {
 /** The rows of one run: one per ticket of its state. */
 export function rowsOf({ state, log, logReason, session, places, version, repo, tracker = null, base = null, now }) {
   const started = state.usage?.started ?? state.created;
-  const host = hostUsage(places, session, started, now);
+  // #171: the run's end the wrap-up recorded; a run not finished yet has no other bound than --now
+  const host = hostUsage(places, session, started, state.tick?.finished ?? now);
   const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
   const agents = log.map((entry) => {
     const ticket = ticketOf(entry.description);
@@ -453,6 +462,30 @@ const groupKey = {
   profile: (r) => Object.entries(r.profile ?? {}).map(([k, v]) => `${k}=${v}`).join(',') || UNKNOWN,
 };
 
+/**
+ * Whether the delivery merge `merge` turned its branch's CI red (#171): of the finished runs (`success` or `failure`;
+ * cancelled, skipped and running ones are no result) in `createdAt` order, the first whose head has the merge is a
+ * failure and the run before it (which lacks the merge) a success, or there is none (the line came green from its
+ * base). `covers(merge, head)` is true, false, or null when git cannot tell; the answer is UNKNOWN only when a run
+ * git cannot place could change it.
+ */
+export function wentRed(runs, merge, covers) {
+  const done = runs.filter((r) => r?.conclusion === 'success' || r?.conclusion === 'failure').sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  // every run before the first covering one lacks the merge, so the run just before it is the last that lacks it;
+  // each run git cannot place may be the first covering one, so its answer is one of the possible answers
+  const redAt = (i) => i < done.length && done[i].conclusion === 'failure' && (i === 0 || done[i - 1].conclusion === 'success');
+  const answers = new Set();
+  let i = 0;
+  for (; i < done.length; i++) {
+    const c = merge && typeof done[i].headSha === 'string' && done[i].headSha ? covers(merge, done[i].headSha) : null;
+    if (c === false) continue;
+    answers.add(redAt(i));
+    if (c === true) break;
+  }
+  if (i === done.length) answers.add(false); // possibly no run has the merge
+  return answers.size === 1 ? [...answers][0] : UNKNOWN;
+}
+
 /** The escaped-defect signals of a ticket's row, from what `gh` and `git` give (memoised per repo and branch). */
 function escapes(row, look) {
   if (!row.deliveredAt) return null;
@@ -476,10 +509,9 @@ function escapes(row, look) {
     const bodies = look.log();
     if (bodies !== null) reverted = shas.some((s) => bodies.includes(`This reverts commit ${s}`));
   }
-  let ciRed = UNKNOWN;
   const branch = row.profile?.integrate === 'direct' ? row.base : row.line;
   const runs = row.repo && branch ? look.runs(row.repo, branch) : null;
-  if (runs) ciRed = runs.some((r) => r.conclusion === 'failure' && Date.parse(r.createdAt) > Date.parse(row.deliveredAt));
+  const ciRed = runs ? wentRed(runs, row.mergeSha, look.covers) : UNKNOWN;
   const escaped = (Array.isArray(mentions) && mentions.length > 0) || reverted === true || ciRed === true;
   const unknown = !escaped && [mentions, reverted, ciRed].includes(UNKNOWN);
   return { run: row.run, ticket: row.ticket, mentions, reverted, ciRed, escaped, unknown };
@@ -501,6 +533,17 @@ function lookups(deps, repoDir) {
     issues: (repo) => once(`issues:${repo}`, () => JSON.parse(deps.gh(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '1000', '--json', 'number,title,body,createdAt']))),
     runs: (repo, branch) => once(`runs:${repo}:${branch}`, () => JSON.parse(deps.gh(['run', 'list', '--repo', repo, '--branch', branch, '--limit', '100', '--json', 'conclusion,createdAt,headSha']))),
     log: () => once('log', () => deps.git(['log', '--all', '--format=%B'], repoDir)),
+    // exit 1 is "not an ancestor"; any other failure (a SHA not here, no git) is null: not known
+    covers: (merge, head) =>
+      once(`covers:${merge}:${head}`, () => {
+        try {
+          deps.git(['merge-base', '--is-ancestor', merge, head], repoDir);
+          return true;
+        } catch (e) {
+          if (e?.status === 1) return false;
+          throw e;
+        }
+      }),
   };
 }
 

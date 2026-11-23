@@ -484,6 +484,20 @@ test('#156: an extension counts on each ticket it covers; a ticket never extende
   assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
 });
 
+test('#171: extend leaves an imported ticket with no count of its own without one; a seeded count goes up by one', (t) => {
+  const r = run(t, { init: false });
+  const seed = r.file('seed.json', { run: 'run-1', usage: { timeoutExtensions: 2 }, tickets: { '#1': { line: LINE, stage: 'expanding' }, '#2': { line: LINE, stage: 'expanding', timeoutExtensions: 1 } } });
+  r.ok('import', '--from', seed);
+  const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=0', '--limit', '15', '--now', NOW]));
+  r.ok('assign', '#1', '#2', '--record', rec, '--type', 'sorry-matt:expander');
+  r.ok('extend', '#1', '#2', '--deadline', '2026-03-10T12:30:00Z');
+  const s = r.state();
+  assert.equal('timeoutExtensions' in s.tickets['#1'], false, 'the seed gave no count for #1: still none');
+  assert.equal(s.tickets['#2'].timeoutExtensions, 2);
+  assert.equal(s.usage.timeoutExtensions, 3, 'the run counts the extension either way');
+  assert.equal(r.ok('show').revision, s.revision, 'the state still checks');
+});
+
 test('assignments, agent ids, extension, release and timeout reassignment', (t) => {
   const r = run(t);
   const rec = r.file('rec.json', deadlineOut(r, ['record', '--expansions', '#1=0', '--expansions', '#2=1', '--limit', '15', '--now', NOW]));
