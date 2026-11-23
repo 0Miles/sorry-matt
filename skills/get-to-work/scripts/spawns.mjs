@@ -18,7 +18,8 @@
 //     "sorry-matt:expander").
 //   - otherwise the first word of `description`, lowercased, when it is one of the role words the skills start
 //     an Agent call's description with: expand, implement, fix, ci-fix, merge, review, simplify, finder, architect,
-//     verifier, fix-verifier.
+//     verifier, fix-verifier (`ROLES`, the keys of `STAGE_OF_ROLE`, which also gives each word its stage; the
+//     plugin's agent types map to their role word in `ROLE_OF_AGENT`).
 //   - otherwise "general-purpose".
 //   Spawns counted but not logged (`spawns` minus the number of log entries) are "unknown".
 //
@@ -50,7 +51,37 @@ import { readFileSync } from 'node:fs';
 import { UsageError, failure, parseJson, runIfEntry } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/spawns@1';
-export const ROLES = ['expand', 'implement', 'fix', 'ci-fix', 'merge', 'review', 'simplify', 'finder', 'architect', 'verifier', 'fix-verifier'];
+/**
+ * Each role word and the stage of a run it works in (#172): a role word does not exist without its stage, and
+ * retro.mjs sums tokens by these stages. Null-prototype, so a key of Object.prototype is no role word.
+ */
+export const STAGE_OF_ROLE = Object.freeze(
+  Object.assign(Object.create(null), {
+    expand: 'expand',
+    implement: 'implement',
+    fix: 'fix',
+    'ci-fix': 'fix',
+    merge: 'merge',
+    review: 'review',
+    simplify: 'simplify',
+    finder: 'review',
+    architect: 'review',
+    verifier: 'review',
+    'fix-verifier': 'review',
+  }),
+);
+export const ROLES = Object.freeze(Object.keys(STAGE_OF_ROLE));
+/** The role word of each of the plugin's agent types (`agents/<name>.md` is `sorry-matt:<name>`; #172). */
+export const ROLE_OF_AGENT = Object.freeze(
+  Object.assign(Object.create(null), {
+    'sorry-matt:expander': 'expand',
+    'sorry-matt:implementer': 'implement',
+    'sorry-matt:finder': 'finder',
+    'sorry-matt:architect': 'architect',
+    'sorry-matt:verifier': 'verifier',
+    'sorry-matt:fix-verifier': 'fix-verifier',
+  }),
+);
 
 // The file-name marker is described in the header: its start, its slug and its end.
 const WORD = '\\p{L}\\p{N}_';

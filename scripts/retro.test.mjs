@@ -4,12 +4,13 @@
 // summed by hand from the fixture transcripts below, not recomputed the way the script does.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { main, transcriptUsage } from '../src/skills/get-to-work/scripts/retro.mjs';
+import { kindOf, main, stageOf, transcriptUsage } from '../src/skills/get-to-work/scripts/retro.mjs';
+import { ROLES } from '../src/skills/get-to-work/scripts/spawns.mjs';
 import { main as state } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadline } from '../src/skills/get-to-work/scripts/deadline.mjs';
 
@@ -46,7 +47,9 @@ const msg = (id, usage, { model = 'claude-test-1', at = '2026-03-10T12:30:00Z' }
  */
 function world(t, { session = 's-1', run: RUN = 'run-1', dir = scratch(t) } = {}) {
   const LINE = `${RUN}/line-a`;
-  const runs = join(dir, 'common', 'sorry-matt', 'runs');
+  const common = join(dir, 'common');
+  // as get-to-work lays a run out: <common dir>/sorry-matt/runs/<run>/
+  const runs = join(common, 'sorry-matt', 'runs', RUN);
   const statePath = join(runs, `${RUN}.state.json`);
   const S = (cmd, now, ...args) => {
     const r = state([cmd, statePath, ...args, '--now', now]);
@@ -93,18 +96,21 @@ function world(t, { session = 's-1', run: RUN = 'run-1', dir = scratch(t) } = {}
   // the host: one message before the run started (another run in the same session) is not this run's
   write(join(projects, 'D--code-repo', 's-1.jsonl'), jsonl([msg('h0', [9, 9, 9, 9], { at: '2026-03-09T00:00:00Z' }), msg('h1', [4, 40, 400, 4000]), msg('h1', [4, 40, 400, 4000])]));
 
+  // the origin remote is not where CI is read (#172): `gh repo view` is, and it answers o/r
   const deps = {
     git: (args) => {
-      if (args[0] === 'remote') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'remote') return 'git@github.com:origin/remote.git\n';
+      if (args.join(' ') === 'rev-parse --path-format=absolute --git-common-dir') return `${common}\n`;
       throw new Error('no git here');
     },
-    gh: () => {
+    gh: (args) => {
+      if (args.join(' ') === 'repo view --json nameWithOwner') return '{"nameWithOwner":"o/r"}\n';
       throw new Error('gh: not found');
     },
     clock: () => Date.parse('2026-03-10T14:00:00Z'),
     env: {},
   };
-  const retro = join(dir, 'common', 'sorry-matt', 'retro.jsonl');
+  const retro = join(common, 'sorry-matt', 'retro.jsonl');
   const record = (...extra) => main(['record', '--state', statePath, '--counters', counters, '--ledger', ledger, '--projects', projects, '--now', '2026-03-10T14:00:00Z', ...extra], deps);
   const rows = () => readFileSync(retro, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   /** Changes the state file by hand: a field an older state lacks, or the tick configuration. */
@@ -113,7 +119,7 @@ function world(t, { session = 's-1', run: RUN = 'run-1', dir = scratch(t) } = {}
     fn(s);
     writeFileSync(statePath, JSON.stringify(s));
   };
-  return { dir, statePath, counters, ledger, projects, retro, record, rows, deps, edit, run: RUN };
+  return { dir, common, statePath, counters, ledger, projects, retro, record, rows, deps, edit, run: RUN };
 }
 
 const ok = (r) => {
@@ -169,11 +175,15 @@ test('the tracker, repo and base come from the tick configuration when the state
   const w = world(t);
   w.edit((s) => (s.tick = { config: { tracker: 'github', repo: 'x/y', base: 'main' } }));
   ok(w.record());
-  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['x/y', 'github', 'main'], 'not the origin remote');
+  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['x/y', 'github', 'main'], 'not gh repo view');
+  // #172: the configured repo is where tick.mjs reads CI whatever the tracker
+  w.edit((s) => (s.tick = { config: { tracker: 'local', repo: 'l/m', root: '/the/root', base: 'trunk' } }));
+  ok(w.record());
+  assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['l/m', 'local', 'trunk']);
   w.edit((s) => (s.tick = { config: { tracker: 'local', repo: null, root: '/the/root', base: 'trunk' } }));
   const dirs = [];
-  ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, git: (args, dir) => (dirs.push(dir), w.deps.git(args, dir)) }));
-  // #156 F13: a Local Markdown run still reads CI on its origin remote, the configured root's
+  ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, gh: (args, dir) => (dirs.push(dir), w.deps.gh(args, dir)) }));
+  // #172: without one, tick.mjs reads CI with gh's own repo of the configured root, so record asks gh there
   assert.deepEqual(['repo', 'tracker', 'base'].map((k) => w.rows()[0][k]), ['o/r', 'local', 'trunk']);
   assert.deepEqual(dirs, ['/the/root']);
   const gh = (args) => {
@@ -183,6 +193,62 @@ test('the tracker, repo and base come from the tick configuration when the state
   const e = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], { git: () => '', gh }))).groups[0].escaped;
   assert.deepEqual(e.tickets.map((s) => [s.ticket, s.mentions, s.ciRed]), [['#1', 'unknown', true]]);
   assert.deepEqual([e.delivered, e.escaped, e.unknown], [1, 1, 0]);
+});
+
+test("#172: with no tick configuration the repo is gh repo view's in the state's directory, not the origin remote; null when gh fails", (t) => {
+  const w = world(t);
+  const dirs = [];
+  ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, gh: (args, dir) => (dirs.push(dir), w.deps.gh(args, dir)) }));
+  assert.equal(w.rows()[0].repo, 'o/r', 'the origin remote is origin/remote');
+  assert.deepEqual(dirs, [dirname(w.statePath)]);
+
+  const noGh = () => {
+    throw new Error('gh: not found');
+  };
+  ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, gh: noGh }));
+  assert.deepEqual(w.rows().map((r) => r.repo), [null, null]);
+  // with no repo the report cannot read CI, even with a gh that has runs to give
+  const gh = (args) => (args[0] === 'run' ? JSON.stringify([{ conclusion: 'failure', createdAt: '2026-03-10T15:00:00Z', headSha: 'h1' }]) : '[]');
+  const e = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], { git: () => '', gh }))).groups[0].escaped;
+  assert.deepEqual(e.tickets.map((s) => [s.ticket, s.ciRed]), [['#1', 'unknown']]);
+});
+
+test('#172: record and report without --retro both use <git common dir>/sorry-matt/retro.jsonl, from the state and the --repo directories', (t) => {
+  const w = world(t);
+  const repoDir = join(w.dir, 'checkout');
+  const asked = [];
+  const git = (args, dir) => (args[0] === 'rev-parse' && asked.push([args.join(' '), dir]), w.deps.git(args, dir));
+  const out = JSON.parse(ok(main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, git })));
+  assert.equal(out.retro, join(w.common, 'sorry-matt', 'retro.jsonl'));
+  const r = JSON.parse(ok(main(['report', '--repo', repoDir, '--json'], { ...w.deps, git })));
+  assert.equal(r.rows, 2, 'the rows record just wrote');
+  assert.deepEqual(r.groups[0].escaped.tickets.map((s) => s.ticket), ['#1']);
+  const q = 'rev-parse --path-format=absolute --git-common-dir';
+  assert.deepEqual(asked, [[q, dirname(w.statePath)], [q, repoDir]]);
+});
+
+test('#172: record without --retro exits 1 and writes nothing when git cannot give the common dir', (t) => {
+  const w = world(t);
+  const before = readdirSync(dirname(w.statePath)).sort();
+  const git = (args, dir) => {
+    if (args[0] === 'rev-parse') throw Object.assign(new Error('git failed'), { stderr: 'fatal: not a git repository' });
+    return w.deps.git(args, dir);
+  };
+  const r = main(['record', '--state', w.statePath, '--counters', w.counters, '--ledger', w.ledger, '--projects', w.projects, '--now', '2026-03-10T14:00:00Z'], { ...w.deps, git });
+  assert.equal(r.code, 1);
+  assert.match(r.err, /--retro/);
+  assert.equal(existsSync(join(w.common, 'sorry-matt', 'retro.jsonl')), false);
+  assert.deepEqual(readdirSync(join(w.common, 'sorry-matt')).sort(), ['runs']);
+  assert.deepEqual(readdirSync(dirname(w.statePath)).sort(), before);
+});
+
+test("#172: every role word and every plugin agent's sorry-matt: type has a report stage; general-purpose is other", () => {
+  const agents = readdirSync(join(ROOT, 'agents')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
+  assert.ok(agents.length > 0);
+  for (const role of ROLES) assert.notEqual(stageOf(kindOf({ type: 'general-purpose', description: `${role} #1` })), 'other', role);
+  for (const name of agents) assert.notEqual(stageOf(kindOf({ type: `sorry-matt:${name}`, description: null })), 'other', `sorry-matt:${name}`);
+  assert.equal(stageOf(kindOf({ type: 'general-purpose', description: 'look around #1' })), 'other');
+  assert.equal(stageOf('constructor'), 'other', 'a key of Object.prototype is no stage');
 });
 
 test('an older state without per-ticket extensions: null when the run had some, 0 when it had none', (t) => {
