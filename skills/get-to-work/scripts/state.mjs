@@ -23,7 +23,7 @@
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
-//                           [--tier light|standard|full [--tier-reasons <reason>,<reason>]]
+//                           [--tier light|standard|full [--tier-reason <reason>]...]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
 //                           [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
@@ -82,7 +82,8 @@
 //                       "tier": "light" | "standard" | "full" | null,   // the review tier tick judged; null: none
 //                       "tierReasons": ["<tier.mjs reason>"] | null,    // its judge output's `reasons` (#156)
 //                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
-//                       "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // (#156)
+//                       "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // (#156);
+//                                                          // confirmed + invalid <= candidates, blocking <= confirmed
 //                       "after": <history length when recorded> }],   // the counts of the review report (#142)
 //                                                          // tierReasons and findingCounts missing: an older file
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
@@ -185,10 +186,13 @@
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
 //             tier the review was chosen by (none without it); `--findings` (with `fix`) lists the finding ids;
 //             `--observations` and `--pre-existing` are the report's counts of those two sections (default 0; a
-//             review recorded before #142 has neither). `--tier-reasons` (with `--tier`) are the reasons of the
-//             tier.mjs judge output it was chosen by; `--candidates`, `--confirmed`, `--invalid` and `--blocking` (all
-//             four or none) are the report's counts of the candidates, the verifier's confirmed and invalid rulings
-//             and the blocking findings (#156). Without them each is null. Adds one to usage `reviewRounds`.
+//             review recorded before #142 has neither). `--tier-reason` (with `--tier`, once per reason, in order;
+//             #173: any non-empty text, commas and spaces included) are the reasons of the tier.mjs judge output it
+//             was chosen by; `--candidates`, `--confirmed`, `--invalid` and `--blocking` (all four or none) are the
+//             report's counts of the candidates, the verifier's confirmed and invalid rulings and the blocking findings
+//             (#156). A ruling is of a candidate and a blocking finding is a confirmed one, so confirmed + invalid
+//             above candidates, or blocking above confirmed, is refused (2; #173), and a state file holding such
+//             counts is not a state file (1). Without them each is null. Adds one to usage `reviewRounds`.
 //   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
 //             the latest (fix) review exactly once.
 //   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
@@ -401,6 +405,13 @@ function checkAssignment(a, w, need) {
   need(a.worktree === null || isText(a.worktree), `${w}.worktree`, 'is not a path or null');
 }
 
+/** What is wrong with a review's finding counts, or null (#173); the four are whole numbers. */
+function countsProblem({ candidates, confirmed, invalid, blocking }) {
+  if (confirmed + invalid > candidates) return `confirmed + invalid (${confirmed} + ${invalid}) is more than candidates (${candidates})`;
+  if (blocking > confirmed) return `blocking (${blocking}) is more than confirmed (${confirmed})`;
+  return null;
+}
+
 // Every check throws `bad(where, what)`; the caller decides whether that is a corrupt file (1) or bad input (2).
 function check(state, bad) {
   const need = (ok, where, what) => {
@@ -460,6 +471,11 @@ function check(state, bad) {
         'is not { mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, after }',
       ),
     );
+    // #173: every ruling is of a candidate, every blocking finding a confirmed one
+    t.reviews.forEach((r, i) => {
+      const why = r.findingCounts ? countsProblem(r.findingCounts) : null;
+      need(why === null, `${w}.reviews[${i}]`, `has findingCounts where ${why}`);
+    });
     need(t.timeoutExtensions === undefined || isCount(t.timeoutExtensions), `${w}.timeoutExtensions`, 'is not a count');
     need(
       Array.isArray(t.fixReports) && t.fixReports.every((r) => isObject(r) && Array.isArray(r.fixed) && Array.isArray(r.unfixed) && isCount(r.after)),
@@ -971,11 +987,14 @@ function review(path, rest, flags, ctx) {
   if (findings !== null && verdict !== 'fix') throw new UsageError('--findings goes with --verdict fix');
   const observations = count(flags.observations ?? 0, '--observations');
   const preExisting = count(flags['pre-existing'] ?? 0, '--pre-existing');
-  if (flags['tier-reasons'] !== undefined && tier === null) throw new UsageError('--tier-reasons goes with --tier');
-  const tierReasons = flags['tier-reasons'] === undefined ? null : ids(flags['tier-reasons'], '--tier-reasons');
+  if (flags['tier-reason'] !== undefined && tier === null) throw new UsageError('--tier-reason goes with --tier');
+  const tierReasons = flags['tier-reason'] ?? null;
+  if (tierReasons && !tierReasons.every(isText)) throw new UsageError('--tier-reason: expected a reason, not an empty text');
   const given = FINDING_COUNTS.filter((k) => flags[k] !== undefined);
   if (given.length && given.length < FINDING_COUNTS.length) throw new UsageError('--candidates, --confirmed, --invalid and --blocking go together');
   const findingCounts = given.length ? Object.fromEntries(FINDING_COUNTS.map((k) => [k, count(flags[k], `--${k}`)])) : null;
+  const why = findingCounts && countsProblem(findingCounts);
+  if (why) throw new UsageError(`the finding counts do not add up: ${why}`);
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
@@ -1293,7 +1312,7 @@ const COMMANDS = {
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
   set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
-  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reasons': 'one', findings: 'one', observations: 'one', 'pre-existing': 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
   assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],

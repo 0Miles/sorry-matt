@@ -131,6 +131,7 @@ src/skills/get-to-work/scripts/state.mjs#newLine
 src/skills/get-to-work/scripts/state.mjs#newTicket
 src/skills/get-to-work/scripts/state.mjs#newState
 src/skills/get-to-work/scripts/state.mjs#checkAssignment
+src/skills/get-to-work/scripts/state.mjs#countsProblem
 src/skills/get-to-work/scripts/state.mjs#check
 src/skills/get-to-work/scripts/state.mjs#profileProblem
 src/skills/get-to-work/scripts/state.mjs#lastEntry
@@ -159,6 +160,7 @@ skills/get-to-work/scripts/state.mjs#newLine
 skills/get-to-work/scripts/state.mjs#newTicket
 skills/get-to-work/scripts/state.mjs#newState
 skills/get-to-work/scripts/state.mjs#checkAssignment
+skills/get-to-work/scripts/state.mjs#countsProblem
 skills/get-to-work/scripts/state.mjs#check
 skills/get-to-work/scripts/state.mjs#profileProblem
 skills/get-to-work/scripts/state.mjs#lastEntry

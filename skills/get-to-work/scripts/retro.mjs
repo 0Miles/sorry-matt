@@ -32,8 +32,10 @@
 //                                              of the configured root, else of the state's repository
 //         Tokens are only ever the `message.usage` of a transcript, one count per `message.id` (a message that is
 //         split over several lines counts once, its last line's usage). A ticket's agents are the counters entries
-//         whose description names it (spawns.mjs `ticketOf`); an agent's kind is the role word its description
-//         starts with (spawns.mjs ROLES), else its spawns.mjs category. An agent with no id or no transcript has
+//         whose description names it among its tickets (spawns.mjs `ticketsOf`): an agent that names several tickets
+//         of the run (`expand #1 #2 #3`) is in the `agents` and `byKind` of each of them (#173), and the report counts
+//         it once. An agent's kind is the role word its description starts with (spawns.mjs ROLES), else its
+//         spawns.mjs category. An agent with no id or no transcript has
 //         `tokens: null` and a `reason`; so has every kind and host sum it would be part of. An agent whose
 //         description names no ticket of the run (`simplify <line>`, `ci-fix <line>`, `merge <line>`, the agents
 //         those spawn) is the run's: `runAgents`, the same on every row of the run. Nothing is estimated
@@ -72,7 +74,13 @@
 //                             sorry-matt:implementer), fix (fix, ci-fix), review (review, finder, architect, verifier,
 //                             fix-verifier and their sorry-matt: types), merge, simplify, other. `total` is the sum of
 //                             the four token fields; agents with no tokens are counted in `unknownAgents`, not
-//                             estimated. A run's `runAgents` count once in each group that has a row of the run
+//                             estimated. A run's `runAgents` count once in each group that has a row of the run.
+//                             In every sum (a group's `tokensByStage` and `unknownAgents`, a tier's `reviewTokens`) an
+//                             agent of a run counts once, however many of the run's rows list it (#173): the key is
+//                             the run and the agent's `id`, or for an agent without one the run, its `description`
+//                             and its `at`. Under `--by tier` or `--by model` an agent listed on rows of different
+//                             groups still counts once in each of them, as `runAgents` do, and so does one on rows of
+//                             different tiers in `byTier`
 //           reviewToImplement review total over implement + fix total; null when the latter is 0
 //           byTier            per review tier: `confirmed` (the confirmed rulings of every review: a minimal review's
 //                             findings count as confirmed), `reviewTokens` (the review stage of the tier's tickets
@@ -115,7 +123,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
 import { SESSION } from './gates.mjs';
-import { category, roleOf, ticketOf } from './spawns.mjs';
+import { category, roleOf, ticketsOf } from './spawns.mjs';
 import { FINDING_COUNTS, PROFILE_DEFAULTS, load, withLock, writeAtomic } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
@@ -321,16 +329,16 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
   const host = hostUsage(places, session, started, state.tick?.finished ?? now);
   const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
   const agents = log.map((entry) => {
-    const ticket = ticketOf(entry.description);
     const u = agentUsage(places, entry);
     return {
-      ticket: ticket && ticket in state.tickets ? ticket : null,
+      // #173: every ticket of the run the description names
+      tickets: ticketsOf(entry.description).filter((id) => Object.hasOwn(state.tickets, id)),
       agent: { id: entry.id ?? null, kind: kindOf(entry), type: entry.type ?? null, description: entry.description ?? null, at: entry.at ?? null, models: u.models, tokens: u.tokens, ...(u.reason ? { reason: u.reason } : {}) },
     };
   });
-  const runAgents = agents.filter((a) => a.ticket === null).map((a) => a.agent);
+  const runAgents = agents.filter((a) => !a.tickets.length).map((a) => a.agent);
   return Object.entries(state.tickets).map(([id, t]) => {
-    const mine = agents.filter((a) => a.ticket === id).map((a) => a.agent);
+    const mine = agents.filter((a) => a.tickets.includes(id)).map((a) => a.agent);
     const byKind = {};
     for (const a of mine) {
       const k = (byKind[a.kind] ??= { spawns: 0, tokens: zero(), reasons: [] });
@@ -547,6 +555,16 @@ function lookups(deps, repoDir) {
   };
 }
 
+/** Who an agent of a run is, across the rows that list it (#173): its id, else its description and spawn time. */
+const agentKey = (run, a) => JSON.stringify(typeof a.id === 'string' && a.id ? [run, a.id] : [run, null, a.description ?? null, a.at ?? null]);
+/** Whether `a` of `run` is new to `seen`; it is in `seen` afterwards. */
+const firstTime = (seen, run, a) => {
+  const k = agentKey(run, a);
+  if (seen.has(k)) return false;
+  seen.add(k);
+  return true;
+};
+
 /** The confirmed findings of one review (a minimal review's findings all count), or null when they were not counted. */
 const confirmedOf = (v) => (v.findingCounts ? v.findingCounts.confirmed : v.kind === 'minimal' ? (v.findings ?? 0) : null);
 
@@ -556,20 +574,29 @@ function summarize(key, rows, look) {
   // a run's own agents count once in the group, whichever of its rows brings them
   const runs = new Map();
   for (const r of rows) if (!runs.has(r.run)) runs.set(r.run, r.runAgents ?? []);
-  for (const a of [...rows.flatMap((r) => r.agents ?? []), ...[...runs.values()].flat()]) {
+  // #173: an agent listed on several rows of its run (one naming several tickets) counts once
+  const seen = new Set();
+  const listed = [...rows.flatMap((r) => (r.agents ?? []).map((a) => [r.run, a])), ...[...runs].flatMap(([run, list]) => list.map((a) => [run, a]))];
+  for (const [run, a] of listed) {
+    if (!firstTime(seen, run, a)) continue;
     if (a.tokens) addTokens(tokensByStage[stageOf(a.kind)], a.tokens);
     else unknownAgents += 1;
   }
   for (const s of REPORT_STAGES) tokensByStage[s].total = totalOf(tokensByStage[s]);
   const implement = tokensByStage.implement.total + tokensByStage.fix.total;
   const byTier = {};
+  const seenByTier = new Map();
   for (const r of rows) {
     const tier = r.tier ?? 'none';
     const b = (byTier[tier] ??= { tickets: 0, reviews: 0, confirmed: 0, reviewTokens: 0, unknownCounts: 0, initialKnown: 0, initialZero: 0 });
     b.tickets += 1;
     // #156: a ticket with a review of unknown count spent review tokens on findings no one counted: left out
     if ((r.reviews ?? []).some((v) => confirmedOf(v) === null)) b.unknownCounts += 1;
-    else b.reviewTokens += (r.agents ?? []).filter((a) => a.tokens && stageOf(a.kind) === 'review').reduce((n, a) => n + totalOf(a.tokens), 0);
+    else {
+      if (!seenByTier.has(tier)) seenByTier.set(tier, new Set());
+      const seenHere = seenByTier.get(tier);
+      for (const a of r.agents ?? []) if (a.tokens && stageOf(a.kind) === 'review' && firstTime(seenHere, r.run, a)) b.reviewTokens += totalOf(a.tokens);
+    }
     for (const v of r.reviews ?? []) {
       const confirmed = confirmedOf(v);
       if (confirmed === null) continue;

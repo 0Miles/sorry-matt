@@ -2550,6 +2550,31 @@ test('#156: the review is recorded with its tier.mjs reasons and its four findin
   }
 });
 
+test('#173: tier.mjs reasons with a space or a comma are recorded whole, one entry each, in the foreground and from the background', (t) => {
+  const REASONS = ['sensitive', 'src/x.mjs#a b', 'c,d'];
+  for (const background of [false, true]) {
+    const h = world(t);
+    h.reviewBackground = background;
+    h.change['#1'] = { lines: 10 }; // light: the minimal review; #2 standard: the prove-it review host
+    // replay the judge's output with these reasons in place of its own
+    const exec = h.exec;
+    let replayed = 0;
+    h.exec = (a) => {
+      const code = exec(a);
+      if (a.argv[0] === 'node' && basename(a.argv[1]) === 'tier.mjs' && a.stdout) {
+        writeFileSync(a.stdout, JSON.stringify({ ...JSON.parse(readFileSync(a.stdout, 'utf8')), reasons: REASONS }));
+        replayed += 1;
+      }
+      return code;
+    };
+    assert.equal(h.untilDone().then, 'done');
+    assert.ok(replayed >= 2, `background ${background}: both tickets judged`);
+    const reviews = (id) => h.state().tickets[id].reviews.map((r) => [r.kind, r.tier, r.tierReasons]);
+    assert.deepEqual(reviews('#1'), [['minimal', 'light', REASONS]], `background ${background}`);
+    assert.deepEqual(reviews('#2'), [['full', 'standard', REASONS]], `background ${background}`);
+  }
+});
+
 test('#156: the four finding counts go together', (t) => {
   const h = world(t);
   let checked = 0;
