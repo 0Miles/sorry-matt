@@ -383,7 +383,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
  * The retro file when no `--retro` is given (#172): `<git common dir>/sorry-matt/retro.jsonl` as git resolves it in
  * `dir`. record and report both find it this way; with no git common dir there is no default.
  */
-export function retroFile(deps, dir) {
+function retroFile(deps, dir) {
   let common;
   try {
     common = deps.git(['rev-parse', '--path-format=absolute', '--git-common-dir'], dir).trim();
@@ -478,18 +478,18 @@ const groupKey = {
  * base). `covers(merge, head)` is true, false, or null when git cannot tell; the answer is UNKNOWN only when a run
  * git cannot place could change it.
  */
-export function wentRed(runs, merge, covers) {
+function wentRed(runs, merge, covers) {
   const done = runs.filter((r) => r?.conclusion === 'success' || r?.conclusion === 'failure').sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   // every run before the first covering one lacks the merge, so the run just before it is the last that lacks it;
   // each run git cannot place may be the first covering one, so its answer is one of the possible answers
-  const redAt = (i) => i < done.length && done[i].conclusion === 'failure' && (i === 0 || done[i - 1].conclusion === 'success');
+  const redAt = (i) => done[i].conclusion === 'failure' && (i === 0 || done[i - 1].conclusion === 'success');
   const answers = new Set();
   let i = 0;
   for (; i < done.length; i++) {
     const c = merge && typeof done[i].headSha === 'string' && done[i].headSha ? covers(merge, done[i].headSha) : null;
     if (c === false) continue;
     answers.add(redAt(i));
-    if (c === true) break;
+    if (c === true || answers.size === 2) break; // both answers possible: no later run decides it
   }
   if (i === done.length) answers.add(false); // possibly no run has the merge
   return answers.size === 1 ? [...answers][0] : UNKNOWN;
@@ -572,12 +572,11 @@ const confirmedOf = (v) => (v.findingCounts ? v.findingCounts.confirmed : v.kind
 function summarize(key, rows, look) {
   const tokensByStage = Object.fromEntries(REPORT_STAGES.map((s) => [s, zero()]));
   let unknownAgents = 0;
-  // a run's own agents count once in the group, whichever of its rows brings them
-  const runs = new Map();
-  for (const r of rows) if (!runs.has(r.run)) runs.set(r.run, r.runAgents ?? []);
-  // #173: an agent listed on several rows of its run (one naming several tickets) counts once
+  const runs = new Set(rows.map((r) => r.run));
+  // an agent counts once in the group, however many rows of its run list it: a run's own agents (on every row of
+  // the run) and one naming several tickets (#173)
   const seen = new Set();
-  const listed = [...rows.flatMap((r) => (r.agents ?? []).map((a) => [r.run, a])), ...[...runs].flatMap(([run, list]) => list.map((a) => [run, a]))];
+  const listed = rows.flatMap((r) => [...(r.agents ?? []), ...(r.runAgents ?? [])].map((a) => [r.run, a]));
   for (const [run, a] of listed) {
     if (!firstTime(seen, run, a)) continue;
     if (a.tokens) addTokens(tokensByStage[stageOf(a.kind)], a.tokens);
@@ -586,7 +585,7 @@ function summarize(key, rows, look) {
   for (const s of REPORT_STAGES) tokensByStage[s].total = totalOf(tokensByStage[s]);
   const implement = tokensByStage.implement.total + tokensByStage.fix.total;
   const byTier = {};
-  const seenByTier = new Map();
+  const seenByTier = {};
   for (const r of rows) {
     const tier = r.tier ?? 'none';
     const b = (byTier[tier] ??= { tickets: 0, reviews: 0, confirmed: 0, reviewTokens: 0, unknownCounts: 0, initialKnown: 0, initialZero: 0 });
@@ -594,8 +593,7 @@ function summarize(key, rows, look) {
     // #156: a ticket with a review of unknown count spent review tokens on findings no one counted: left out
     if ((r.reviews ?? []).some((v) => confirmedOf(v) === null)) b.unknownCounts += 1;
     else {
-      if (!seenByTier.has(tier)) seenByTier.set(tier, new Set());
-      const seenHere = seenByTier.get(tier);
+      const seenHere = (seenByTier[tier] ??= new Set());
       for (const a of r.agents ?? []) if (a.tokens && stageOf(a.kind) === 'review' && firstTime(seenHere, r.run, a)) b.reviewTokens += totalOf(a.tokens);
     }
     for (const v of r.reviews ?? []) {

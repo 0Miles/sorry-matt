@@ -297,7 +297,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
-import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS } from './state.mjs';
+import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
@@ -1466,7 +1466,7 @@ function reviewTier(c, id, t) {
   const out = readJsonFile(c.deps, file);
   // #156: the judge's reasons go on the review's record with its tier
   // #173: each reason whole, spaces and commas included; state.mjs takes one --tier-reason per reason
-  const reasons = Array.isArray(out?.reasons) && out.reasons.length && out.reasons.every((x) => typeof x === 'string' && x.length > 0) ? out.reasons : null;
+  const reasons = Array.isArray(out?.reasons) && out.reasons.length && out.reasons.every(isText) ? out.reasons : null;
   return TIERS.includes(out?.tier) ? { tier: out.tier, file, reasons } : { tier: 'full', file: null, reasons: null };
 }
 

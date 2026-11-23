@@ -315,7 +315,7 @@ const formatTime = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const isTime = (x) => typeof x === 'string' && TIME.test(x) && !Number.isNaN(Date.parse(x));
 const isObject = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 const isCount = (x) => Number.isInteger(x) && x >= 0;
-const isText = (x) => typeof x === 'string' && x.length > 0;
+export const isText = (x) => typeof x === 'string' && x.length > 0;
 const isId = (x) => isText(x) && !/\s/.test(x);
 
 function time(text, where) {

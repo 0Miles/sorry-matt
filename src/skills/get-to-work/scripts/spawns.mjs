@@ -86,8 +86,7 @@ export const ROLE_OF_AGENT = Object.freeze(
 // The file-name marker is described in the header: its start, its slug and its end.
 const WORD = '\\p{L}\\p{N}_';
 const SLUG = '[^\\s\\/\\\\,;:()\\[\\]{}<>"\'`，、。；：（）「」]';
-const TICKET = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'u');
-const TICKETS = new RegExp(TICKET.source, 'gu');
+const TICKETS = new RegExp(`#\\d+|(?<![${WORD}.-])\\d+-${SLUG}*\\.md(?!\\.?[${WORD}-])`, 'gu');
 const optionalString = (value) => value === null || value === undefined || typeof value === 'string';
 
 /** The role word a description starts with (ROLES), or null. */
@@ -102,11 +101,11 @@ export function category({ type, description }) {
   return roleOf(description) ?? 'general-purpose';
 }
 
-/** The first ticket a description names, or null. */
-export const ticketOf = (description) => TICKET.exec(String(description ?? ''))?.[0] ?? null;
-
 /** Every distinct ticket a description names, in the order they appear (#173). */
 export const ticketsOf = (description) => [...new Set(Array.from(String(description ?? '').matchAll(TICKETS), (m) => m[0]))];
+
+/** The first ticket a description names, or null. */
+export const ticketOf = (description) => ticketsOf(description)[0] ?? null;
 
 /** The summary of parsed counters; throws when they are not in the counters format. */
 export function summarize(counters, path = 'the input') {
