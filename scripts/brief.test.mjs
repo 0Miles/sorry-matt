@@ -521,7 +521,7 @@ test('descriptions from implement and expand tally under their role and ticket i
   const r = parse(spawnsMain([put(dir, 'r.counters.json', { spawns: log.length, log })]));
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.byType, { implement: 2, expand: 1, merge: 1 });
-  assert.deepEqual(r.json.byTicket, { '#72': { implement: 2, merge: 1 }, '#75': { expand: 1 } });
+  assert.deepEqual(r.json.byTicket, { '#72': { implement: 2, merge: 1 }, '#75': { expand: 1 }, '#83': { expand: 1 } }, 'the expansion agent counts under each of its tickets (#173)');
 });
 
 test('a template whose placeholders changed apart from the script exits 1 and writes nothing', async (t) => {

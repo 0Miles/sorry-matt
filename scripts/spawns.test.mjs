@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main } from '../src/skills/get-to-work/scripts/spawns.mjs';
+import { main, ticketOf, ticketsOf } from '../src/skills/get-to-work/scripts/spawns.mjs';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'src/skills/get-to-work/scripts/spawns.mjs');
 
@@ -43,7 +43,7 @@ test('general-purpose spawns are tallied by the role word and by ticket', (t) =>
 test('a fallback to the general-purpose agent shows as its role, apart from the named agent type', (t) => {
   const r = summarize(t, counters([gp('expand #75 #83'), entry('sorry-matt:expander', 'expand #76')]));
   assert.deepEqual(r.json.byType, { expand: 1, 'sorry-matt:expander': 1 });
-  assert.deepEqual(r.json.byTicket, { '#75': { expand: 1 }, '#76': { 'sorry-matt:expander': 1 } }, 'the first ticket marker is the ticket');
+  assert.deepEqual(r.json.byTicket, { '#75': { expand: 1 }, '#83': { expand: 1 }, '#76': { 'sorry-matt:expander': 1 } }, 'a spawn counts under every ticket it names');
 });
 
 test('every role word is a category; the word is matched whole, first, in any case', (t) => {
@@ -81,7 +81,7 @@ test('every role word is a category; the word is matched whole, first, in any ca
   assert.equal(r.json.spawns, 19);
 });
 
-test('tickets: the first #N or NN-slug.md marker; a spawn without one is in no ticket', (t) => {
+test('tickets: every #N or NN-slug.md marker; a spawn without one is in no ticket', (t) => {
   const r = summarize(
     t,
     counters([
@@ -97,7 +97,9 @@ test('tickets: the first #N or NN-slug.md marker; a spawn without one is in no t
   assert.deepEqual(r.json.byTicket, {
     '03-add-login.md': { implement: 1, finder: 1 },
     '#12': { merge: 1 },
+    '#9': { merge: 1 },
     '10-b.md': { fix: 1 },
+    '#4': { fix: 1 },
   });
   assert.equal(total(r.json.byType), 7);
 });
@@ -134,12 +136,28 @@ test('a ticket file name next to punctuation is still the ticket', (t) => {
   }
 });
 
-test('with several markers the first one is the ticket', (t) => {
-  const first = (description) => Object.keys(summarize(t, counters([gp(description)])).json.byTicket);
-  assert.deepEqual(first('expand 03-a.md, 04-b.md, 05-c.md'), ['03-a.md']);
-  assert.deepEqual(first('implement 03-x.md, #12'), ['03-x.md']);
-  assert.deepEqual(first('implement #12, 03-x.md'), ['#12']);
-  assert.deepEqual(first('expand 03-登入.md、04-登出.md'), ['03-登入.md']);
+test('#173: with several markers ticketOf is the first and ticketsOf every distinct one, in order', () => {
+  const cases = [
+    ['expand 03-a.md, 04-b.md, 05-c.md', ['03-a.md', '04-b.md', '05-c.md']],
+    ['implement 03-x.md, #12', ['03-x.md', '#12']],
+    ['implement #12, 03-x.md', ['#12', '03-x.md']],
+    ['expand 03-登入.md、04-登出.md', ['03-登入.md', '04-登出.md']],
+    ['merge #12 into #9 after #12', ['#12', '#9']],
+    ['implement 03-x.md.txt and 04-y.md', ['04-y.md']],
+    ['ci-fix the red line', []],
+  ];
+  for (const [description, all] of cases) {
+    assert.deepEqual(ticketsOf(description), all, description);
+    assert.equal(ticketOf(description), all[0] ?? null, description);
+  }
+  assert.deepEqual(ticketsOf(null), []);
+  assert.equal(ticketOf(null), null);
+});
+
+test('#173: a spawn naming several tickets counts under each in byTicket and once in byType', (t) => {
+  const r = summarize(t, counters([gp('expand #1 #2 #3'), gp('implement #2'), gp('finder #2 and #2 again')]));
+  assert.deepEqual(r.json.byType, { expand: 1, implement: 1, finder: 1 });
+  assert.deepEqual(r.json.byTicket, { '#1': { expand: 1 }, '#2': { expand: 1, implement: 1, finder: 1 }, '#3': { expand: 1 } });
 });
 
 test('where a ticket file name ends: dots inside the slug belong to it, another extension makes it no ticket', (t) => {

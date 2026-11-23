@@ -59,10 +59,10 @@ function world(t, { session = 's-1', run: RUN = 'run-1', dir = scratch(t) } = {}
   S('set', '2026-03-10T12:00:00Z', '#2', '--snapshot', SNAP);
   S('stage', '2026-03-10T12:10:00Z', 'implementing', '#1', '#2');
   S('stage', '2026-03-10T12:40:00Z', 'in-review', '#1', '#2');
-  S('review', '2026-03-10T13:00:00Z', '#1', '--mode', 'initial', '--verdict', 'fix', '--tier', 'full', '--tier-reasons', 'sensitive', '--findings', 'F1', '--candidates', '6', '--confirmed', '2', '--invalid', '4', '--blocking', '1');
+  S('review', '2026-03-10T13:00:00Z', '#1', '--mode', 'initial', '--verdict', 'fix', '--tier', 'full', '--tier-reason', 'sensitive', '--tier-reason', 'src/x.mjs#a b', '--tier-reason', 'c,d', '--findings', 'F1', '--candidates', '6', '--confirmed', '2', '--invalid', '4', '--blocking', '1');
   S('stage', '2026-03-10T13:00:00Z', 'fixing', '#1');
   S('stage', '2026-03-10T13:20:00Z', 'in-review', '#1');
-  S('review', '2026-03-10T13:30:00Z', '#1', '--mode', 'recheck', '--verdict', 'pass', '--tier', 'full', '--tier-reasons', 'sensitive', '--candidates', '0', '--confirmed', '0', '--invalid', '0', '--blocking', '0');
+  S('review', '2026-03-10T13:30:00Z', '#1', '--mode', 'recheck', '--verdict', 'pass', '--tier', 'full', '--tier-reason', 'sensitive', '--candidates', '0', '--confirmed', '0', '--invalid', '0', '--blocking', '0');
   S('stage', '2026-03-10T13:30:00Z', 'queued', '#1');
   S('stage', '2026-03-10T13:35:00Z', 'integrating', '#1');
   S('merge', '2026-03-10T13:40:00Z', '#1', SHA1);
@@ -271,7 +271,9 @@ test('record keeps the review, counts, stage times and merge of each ticket', (t
   const [one, two] = w.rows();
   assert.equal(one.endState, 'delivered');
   assert.equal(one.tier, 'full');
-  assert.deepEqual(one.tierReasons, ['sensitive']);
+  // #173: reasons with a space or a comma reach the row whole, one entry each
+  assert.deepEqual(one.tierReasons, ['sensitive', 'src/x.mjs#a b', 'c,d']);
+  assert.deepEqual(one.reviews.map((r) => r.tierReasons), [['sensitive', 'src/x.mjs#a b', 'c,d'], ['sensitive']]);
   assert.equal(one.verdict, 'pass');
   assert.deepEqual(one.findingCounts, { candidates: 6, confirmed: 2, invalid: 4, blocking: 1 });
   assert.deepEqual(one.reviews.map((r) => [r.mode, r.verdict, r.findings]), [['initial', 'fix', 1], ['recheck', 'pass', null]]);
@@ -282,6 +284,77 @@ test('record keeps the review, counts, stage times and merge of each ticket', (t
   assert.deepEqual(one.profile.review, 'full');
   assert.equal(two.endState, 'stuck');
   assert.deepEqual([two.tier, two.verdict, two.findingCounts, two.mergeSha, two.deliveredAt], [null, null, null, null, null]);
+});
+
+/** The world with a third ticket and spawns that name several tickets (#173). */
+function multiTicketWorld(t) {
+  const w = world(t);
+  const r = state(['add', w.statePath, '#3', '--line', 'run-1/line-a', '--now', '2026-03-10T12:00:00Z']);
+  assert.equal(r.code, 0, r.err);
+  const counters = JSON.parse(readFileSync(w.counters, 'utf8'));
+  counters.log.push(
+    { id: 'a7', type: 'sorry-matt:expander', description: 'expand #1 #2 #3', at: '2026-03-10T12:05:00Z' },
+    { id: null, type: 'general-purpose', description: 'expand #2 #3', at: '2026-03-10T12:06:00Z' },
+    { id: 'a9', type: 'sorry-matt:expander', description: 'expand #98 #99', at: '2026-03-10T12:07:00Z' },
+  );
+  counters.spawns = counters.log.length;
+  writeFileSync(w.counters, JSON.stringify(counters));
+  write(join(w.projects, 'D--code-repo', 's-1', 'subagents', 'agent-a7.jsonl'), jsonl([msg('e1', [10, 100, 1000, 10000])]));
+  return w;
+}
+
+test("#173: an agent naming several tickets of the run is in the agents and byKind of each; one naming none of them is the run's", (t) => {
+  const w = multiTicketWorld(t);
+  ok(w.record());
+  const rows = w.rows();
+  assert.deepEqual(rows.map((r) => r.ticket), ['#1', '#2', '#3']);
+  const expanders = (r) => r.agents.filter((a) => a.kind === 'expand').map((a) => [a.id, a.description]);
+  assert.deepEqual(expanders(rows[0]), [['a7', 'expand #1 #2 #3']]);
+  assert.deepEqual(expanders(rows[1]), [['a7', 'expand #1 #2 #3'], [null, 'expand #2 #3']]);
+  assert.deepEqual(expanders(rows[2]), [['a7', 'expand #1 #2 #3'], [null, 'expand #2 #3']]);
+  const e = { input: 10, output: 100, cacheWrite: 1000, cacheRead: 10000 };
+  assert.deepEqual(rows[0].byKind.expand, { spawns: 1, tokens: e });
+  assert.deepEqual(rows[2].byKind, { expand: { spawns: 2, tokens: null, reason: 'the counters log has no agent id' } });
+  // `expand #98 #99` names no ticket of this run
+  assert.deepEqual(rows[0].runAgents.map((a) => a.id), ['a6', 'a9']);
+  assert.deepEqual(rows[2].runAgents, rows[0].runAgents);
+});
+
+test('#173: the report counts an agent listed on several rows of its run once', (t) => {
+  const w = multiTicketWorld(t);
+  ok(w.record());
+  const [g] = JSON.parse(ok(main(['report', '--retro', w.retro, '--json'], w.deps))).groups;
+  // a7 on three rows, once: 10 + 100 + 1000 + 10000
+  assert.deepEqual(g.tokensByStage.expand, { input: 10, output: 100, cacheWrite: 1000, cacheRead: 10000, total: 11110 });
+  // a4 (no transcript), fix #2 (no id), expand #2 #3 (no id, on two rows: once), a9 (no transcript, the run's)
+  assert.equal(g.unknownAgents, 4);
+});
+
+test('#173: a tier counts the review tokens of an agent of a run once; another run with the same id is another agent', (t) => {
+  const shared = { id: 'x', kind: 'review', description: 'review #1 #2', at: '2026-03-10T12:00:00Z', tokens: tokens(0, 0, 0, 100) };
+  const counted = [review('initial', 1)];
+  const rows = [
+    row({ run: 'r', ticket: '#1', tier: 'full', agents: [shared], reviews: counted }),
+    row({ run: 'r', ticket: '#2', tier: 'full', agents: [shared], reviews: counted }),
+    row({ run: 'r2', ticket: '#1', tier: 'full', agents: [shared], reviews: counted }),
+    row({ run: 'r2', ticket: '#2', tier: 'light', agents: [shared], reviews: counted }),
+  ];
+  const [g] = reportOf(t, rows).groups;
+  assert.equal(g.tokensByStage.review.total, 200, 'once in r, once in r2');
+  assert.equal(g.byTier.full.reviewTokens, 200);
+  assert.equal(g.byTier.light.reviewTokens, 100, "r2's agent is also on a light row");
+  // without an id: the run, the description and the spawn time say who it is
+  const noId = (description, at) => ({ id: null, kind: 'review', description, at, tokens: tokens(0, 0, 0, 10) });
+  const rows2 = [
+    row({ ticket: '#1', agents: [noId('review #1 #2', 'T1'), noId('review #1', 'T1')], reviews: counted }),
+    row({ ticket: '#2', agents: [noId('review #1 #2', 'T1'), noId('review #1 #2', 'T2')], reviews: counted }),
+  ];
+  const [h] = reportOf(t, rows2).groups;
+  assert.equal(h.tokensByStage.review.total, 30);
+  assert.equal(h.byTier.standard.reviewTokens, 30);
+  // --by tier: an agent on rows of two groups counts once in each
+  const byTier = reportOf(t, rows.slice(2), ['--by', 'tier']).groups.map((x) => [x.key, x.tokensByStage.review.total]);
+  assert.deepEqual(byTier, [['full', 100], ['light', 100]]);
 });
 
 test('a missing transcript or agent id leaves that sum null with its reason; nothing is estimated', (t) => {
@@ -372,12 +445,13 @@ function reportOf(t, rows, args = [], deps = {}) {
 }
 
 test('report: tokens by stage, review over implement + fix, and per tier the tokens per confirmed finding and the zero-confirmed share', (t) => {
+  // every agent has its own id, as record writes it: the report counts an agent of a run once (#173)
   const rows = [
-    row({ ticket: '#1', tier: 'full', agents: [{ kind: 'implement', tokens: tokens(1, 10, 100, 1000) }, { kind: 'review', tokens: tokens(2, 20, 200, 2000) }, { kind: 'sorry-matt:verifier', tokens: tokens(1, 1, 1, 1) }], reviews: [review('initial', 2), review('recheck', 0)] }),
-    row({ ticket: '#2', tier: 'full', agents: [{ kind: 'fix', tokens: tokens(0, 0, 0, 1000) }, { kind: 'finder', tokens: null, reason: 'x' }], reviews: [review('initial', 0)] }),
-    row({ ticket: '#3', tier: 'light', agents: [{ kind: 'review', tokens: tokens(0, 0, 0, 500) }], reviews: [{ mode: 'initial', kind: 'minimal', verdict: 'pass', findingCounts: null, findings: null }] }),
+    row({ ticket: '#1', tier: 'full', agents: [{ id: 'g1', kind: 'implement', tokens: tokens(1, 10, 100, 1000) }, { id: 'g2', kind: 'review', tokens: tokens(2, 20, 200, 2000) }, { id: 'g3', kind: 'sorry-matt:verifier', tokens: tokens(1, 1, 1, 1) }], reviews: [review('initial', 2), review('recheck', 0)] }),
+    row({ ticket: '#2', tier: 'full', agents: [{ id: 'g4', kind: 'fix', tokens: tokens(0, 0, 0, 1000) }, { id: 'g5', kind: 'finder', tokens: null, reason: 'x' }], reviews: [review('initial', 0)] }),
+    row({ ticket: '#3', tier: 'light', agents: [{ id: 'g6', kind: 'review', tokens: tokens(0, 0, 0, 500) }], reviews: [{ mode: 'initial', kind: 'minimal', verdict: 'pass', findingCounts: null, findings: null }] }),
     // a prove-it review recorded without its counts: its tokens bought findings no one counted
-    row({ ticket: '#4', tier: 'full', agents: [{ kind: 'review', tokens: tokens(0, 0, 0, 2000) }], reviews: [{ mode: 'initial', kind: 'full', verdict: 'pass', findingCounts: null, findings: null }] }),
+    row({ ticket: '#4', tier: 'full', agents: [{ id: 'g7', kind: 'review', tokens: tokens(0, 0, 0, 2000) }], reviews: [{ mode: 'initial', kind: 'full', verdict: 'pass', findingCounts: null, findings: null }] }),
   ];
   const [g] = reportOf(t, rows).groups;
   assert.equal(g.key, 'all');
