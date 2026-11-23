@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { classify } from '../hooks/classify.mjs';
 import { decide as decideWith, confirmCommand, confirmInvocation, enterCommand, enterInvocation, unattended, unattendedFile } from '../hooks/decision.mjs';
@@ -17,6 +17,7 @@ import { enter } from '../hooks/enter-unattended.mjs';
 import { fileStore, tokenFor, TTL } from '../hooks/confirm-state.mjs';
 import { approve } from '../hooks/confirm.mjs';
 import { onPromptSubmit, onStop, turnOrigin, REREAD_MS } from '../hooks/unattended-return.mjs';
+import { onExpansion as onSwitchExpansion, onStop as onSwitchStop, COMMAND as SWITCH_COMMAND, PREFIX as SWITCH_PREFIX } from '../hooks/unattended-switch.mjs';
 import { onPermissionRequest, waitMinutes, answeredIn } from '../hooks/unattended-timeout.mjs';
 
 // Unless a test says otherwise the user is at the keyboard, whatever switch file this machine has.
@@ -711,7 +712,7 @@ test('hooks.json wires the guard to every tool it classifies', () => {
   const entry = config.hooks.PreToolUse.find((e) => e.hooks.some((h) => h.command.includes('hooks/guard.mjs')));
   assert.ok(entry, 'PreToolUse has the guard');
   const matcher = new RegExp(`^(${entry.matcher})$`);
-  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__gmail__send_email']) {
+  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'mcp__gmail__send_email', 'AskUserQuestion']) {
     assert.ok(matcher.test(tool), tool);
   }
   assert.ok(!matcher.test('Agent'), 'Agent is left to its own entry');
@@ -1083,9 +1084,11 @@ test('a state file that cannot be read is never written over: the entry and the 
       assert.throws(() => unreadable.enter({ at: 40, reason: 'later', by: 'agent', session: 's3' }), { code });
       // Reading still never throws, and the hook still denies under the user's switch.
       assert.equal(unreadable.active(), false);
-      assert.deepEqual(unreadable.read(), { entered: null, pending: [], blocked: [] });
+      assert.deepEqual(unreadable.read(), { entered: null, pending: [], pendingOff: [], blocked: [] });
       assert.throws(() => unreadable.clear(), { code });
+      assert.throws(() => unreadable.clearAll(), { code });
       assert.throws(() => unreadable.defer({ session: 's3', prompt_id: 'p1' }), { code });
+      assert.throws(() => unreadable.deferOff({ session: 's3', prompt_id: 'p1' }), { code });
       assert.equal(decisionOf(decideWith(event('npm publish'), { SORRY_MATT_UNATTENDED: 'on' }, { state: unreadable, store: memoryStore(), now: 50, home })), 'deny', code);
       assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, code);
     }
@@ -1296,6 +1299,118 @@ test('the entry line is the handed-out text byte for byte: no Git Bash /c/ spell
       assert.equal(enterInvocation({ tool_name, tool_input: { command: line }, cwd: CWD }, PLUGIN), 'away', tool_name);
       assert.equal(enterInvocation({ tool_name, tool_input: { command: enterCommand(PLUGIN, ' 睡了 (2h); 晚點見 ') }, cwd: CWD }, PLUGIN), '睡了 (2h); 晚點見', tool_name);
     }
+  });
+});
+
+// ---------- unattended: AskUserQuestion (#93) ----------
+
+// Shaped like Claude Code's AskUserQuestion input: one to four questions, each with a header and options.
+const asking = (questions = ['要用哪個資料庫？', '要不要保留舊 API？'], extra = {}) => JSON.stringify({
+  hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', session_id: 's4', cwd: CWD, permission_mode: 'default',
+  tool_input: { questions: questions.map((question, i) => ({ question, header: `Q${i + 1}`, multiSelect: false, options: [{ label: '是', description: 'a' }, { label: '否', description: 'b' }] })) },
+  ...extra,
+});
+const AWAY = {
+  'the switch file': (home) => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(unattendedFile(home), '');
+    return {};
+  },
+  SORRY_MATT_UNATTENDED: () => ({ SORRY_MATT_UNATTENDED: 'on' }),
+  'the automatic state': (home) => {
+    autoState(home).enter(ENTERED);
+    return {};
+  },
+};
+
+test('unattended, from any source, a question is denied: three ways on, no waiting, and it is listed with its text', () => {
+  for (const [source, setUp] of Object.entries(AWAY)) {
+    withDir((home) => {
+      const env = setUp(home);
+      const store = memoryStore();
+      const result = out(decideWith(asking(), env, { home, store, now: 42 }));
+      assert.equal(result.permissionDecision, 'deny', source);
+      assert.equal(result.updatedInput, undefined, source);
+      const reason = result.permissionDecisionReason;
+      assert.match(reason, /^sorry-matt guard 無人值守模式：/, source);
+      assert.ok(reason.includes('要用哪個資料庫？') && reason.includes('要不要保留舊 API？'), reason);
+      // The three ways on of ASKING.md section 4, then the rest of the work.
+      assert.match(reason, /依自己的判斷代答，並記錄/, source);
+      assert.match(reason, /列為待裁決/, source);
+      assert.match(reason, /列進人工作業清單/, source);
+      assert.match(reason, /然後繼續做其他做得了的事/, source);
+      assert.match(reason, /不要停下來等/, source);
+      assert.match(reason, /不要重問/, source);
+      assert.doesNotMatch(reason, /這個動作需要使用者確認/, 'not the generic park text');
+      // How each source ends, and that the agent touches neither file.
+      assert.match(reason, /不要刪除、改寫或搬移開關檔與自動進入的狀態檔/, source);
+      assert.ok(reason.includes(unattendedFile(home).replace(/\\/g, '/')), reason);
+      assert.deepEqual(store.sessions, {}, 'no two-step token');
+      assert.deepEqual(savedState(home).blocked, [{ session: 's4', at: 42, subject: 'AskUserQuestion: 要用哪個資料庫？ / 要不要保留舊 API？', reason: '無人值守期間的提問' }], source);
+    });
+  }
+});
+
+test('a blocked question is listed by each of its questions, or by the tool name when it has none', () => {
+  withDir((home) => {
+    const deps = (now) => ({ home, store: memoryStore(), now });
+    const env = { SORRY_MATT_UNATTENDED: '1' };
+    assert.equal(decisionOf(decideWith(asking(['只有一題']), env, deps(1))), 'deny');
+    assert.equal(decisionOf(decideWith(asking([], { tool_input: {} }), env, deps(2))), 'deny');
+    assert.equal(decisionOf(decideWith(asking([], { tool_input: { questions: 'broken' } }), env, deps(3))), 'deny');
+    // Blank and whitespace-only questions are left out of the subject and the deny text.
+    const blanks = out(decideWith(asking(['', '  ', '只有一題']), env, deps(4))).permissionDecisionReason;
+    assert.ok(blanks.includes('被擋下的提問：只有一題\n'), blanks);
+    assert.deepEqual(savedState(home).blocked.map((b) => b.subject), ['AskUserQuestion: 只有一題', 'AskUserQuestion', 'AskUserQuestion', 'AskUserQuestion: 只有一題']);
+  });
+});
+
+test('a blocked question stays denied when the list cannot be written', () => {
+  const state = { active: () => true, record: () => { throw new Error('EACCES'); }, enter: () => { throw new Error('EACCES'); } };
+  const result = out(decideWith(asking(), {}, { state, store: memoryStore(), now: 1, home: '/nowhere' }));
+  assert.equal(result.permissionDecision, 'deny');
+  assert.match(result.permissionDecisionReason, /列為待裁決/);
+  const off = { ...state, active: () => false };
+  assert.equal(decisionOf(decideWith(asking(), { SORRY_MATT_UNATTENDED: '1' }, { state: off, store: memoryStore(), now: 1, home: '/nowhere' })), 'deny');
+});
+
+test('with nobody away a question is left alone and nothing is written; with the guard off, even while away', () => {
+  withDir((home) => {
+    assert.equal(decideWith(asking(), {}, { home, store: memoryStore(), now: 1 }), null);
+    assert.equal(decideWith(asking(), { SORRY_MATT_UNATTENDED: 'off' }, { home, store: memoryStore(), now: 1 }), null);
+    assert.deepEqual(readdirSync(home), [], 'nothing was written under the home directory');
+  });
+  for (const [source, setUp] of Object.entries(AWAY)) {
+    withDir((home) => {
+      const env = { ...setUp(home), SORRY_MATT_GUARD: 'off' };
+      const before = existsSync(autoStateFile(home)) ? readFileSync(autoStateFile(home), 'utf8') : null;
+      assert.equal(decideWith(asking(), env, { home, store: memoryStore(), now: 1 }), null, source);
+      assert.equal(existsSync(autoStateFile(home)) ? readFileSync(autoStateFile(home), 'utf8') : null, before, source);
+    });
+  }
+});
+
+test('a question end to end: the hook process lets it be, then denies and lists it once the user is away', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const guard = (extraEnv = {}) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', 'guard.mjs')], { input: asking(), encoding: 'utf8', env: { ...env, ...extraEnv } });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+    };
+    assert.equal(guard(), null);
+    assert.equal(existsSync(autoStateFile(home)), false);
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(unattendedFile(home), '');
+    assert.equal(guard({ SORRY_MATT_GUARD: 'off' }), null);
+    assert.equal(existsSync(autoStateFile(home)), false, 'the guard off writes nothing');
+    const denied = guard();
+    assert.equal(denied.hookEventName, 'PreToolUse');
+    assert.equal(denied.permissionDecision, 'deny');
+    assert.match(denied.permissionDecisionReason, /列為待裁決/);
+    assert.deepEqual(savedState(home).blocked.map((b) => [b.session, b.subject, b.reason]), [['s4', 'AskUserQuestion: 要用哪個資料庫？ / 要不要保留舊 API？', '無人值守期間的提問']]);
   });
 });
 
@@ -1639,6 +1754,506 @@ test('sessions back at the same moment get the list once between them', async ()
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// ---------- unattended: the user's switch command (/sorry-matt:unattended, UserPromptExpansion) ----------
+
+// A UserPromptExpansion event as Claude Code builds it for a typed `/sorry-matt:unattended <args>`.
+const expansion = (command_args, extra = {}) => JSON.stringify({
+  hook_event_name: 'UserPromptExpansion', session_id: 's3', transcript_path: join(tmpdir(), 'sorry-matt-no-such-transcript.jsonl'),
+  cwd: CWD, prompt_id: 'p1', permission_mode: 'default', expansion_type: 'slash_command', command_name: 'sorry-matt:unattended',
+  command_args, command_source: 'plugin', prompt: `/sorry-matt:unattended ${command_args}`.trim(), ...extra,
+});
+const contextOf = (result) => {
+  assert.deepEqual(Object.keys(result), ['hookSpecificOutput'], 'JSON additionalContext, nothing else');
+  assert.equal(result.hookSpecificOutput.hookEventName, 'UserPromptExpansion');
+  assert.ok(result.hookSpecificOutput.additionalContext.startsWith(SWITCH_PREFIX));
+  return result.hookSpecificOutput.additionalContext;
+};
+const switchOn = (home, content = '') => {
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  writeFileSync(unattendedFile(home), content);
+};
+const noRead = () => assert.fail('the transcript is not read here');
+const publishDecision = (home, env = {}) => decisionOf(decideWith(event('npm publish', { session_id: 's9' }), env, { home, store: memoryStore(), now: 9 }));
+// Every file under home, with its content and modification time.
+const snapshot = (home) => {
+  const files = {};
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const info = statSync(path);
+      if (info.isDirectory()) walk(path);
+      else files[path] = [readFileSync(path, 'utf8'), info.mtimeMs];
+    }
+  };
+  walk(home);
+  return files;
+};
+
+test('/sorry-matt:unattended on creates the switch file, leaves the automatic state alone, and the guard then denies', () => {
+  for (const args of ['on', '', ' ON ']) {
+    withDir((home) => {
+      const context = contextOf(onSwitchExpansion(expansion(args), {}, { home, read: noRead }));
+      assert.match(context, /已開啟無人值守：建立了開關檔 .*\.claude\/sorry-matt-unattended/, args);
+      assert.equal(existsSync(unattendedFile(home)), true, args);
+      assert.equal(existsSync(autoStateFile(home)), false, `${args}: the automatic state file is not written`);
+      assert.equal(publishDecision(home), 'deny', args);
+    });
+  }
+  withDir((home) => {
+    // Already on: still a success, and the file keeps what it held; the automatic state file is byte for byte the same.
+    switchOn(home, 'kept');
+    autoState(home).enter(ENTERED);
+    const before = readFileSync(autoStateFile(home), 'utf8');
+    const context = contextOf(onSwitchExpansion(expansion('on'), {}, { home, read: noRead }));
+    assert.match(context, /原本就在，維持開啟/);
+    assert.equal(readFileSync(unattendedFile(home), 'utf8'), 'kept');
+    assert.equal(readFileSync(autoStateFile(home), 'utf8'), before);
+  });
+  withDir((home) => {
+    // `on` asks no transcript, even from a scheduled turn.
+    const transcript = writeTranscript(home, TRANSCRIPTS.scheduled);
+    contextOf(onSwitchExpansion(expansion('on', { transcript_path: transcript }), {}, { home }));
+    assert.equal(existsSync(unattendedFile(home)), true);
+  });
+  withDir((home) => {
+    // A switch file that cannot be made (its home is a file): told so, and nothing is on.
+    writeFileSync(join(home, 'blocker'), '');
+    const failed = contextOf(onSwitchExpansion(expansion('on'), {}, { home: join(home, 'blocker') }));
+    assert.match(failed, /無法建立開關檔.*無人值守沒有開啟。請使用者自己執行 `touch ~\/\.claude\/sorry-matt-unattended`/);
+    assert.doesNotMatch(failed, /已開啟/);
+  });
+  withDir((home) => {
+    // Another command, or no command name: no output, nothing read or written.
+    for (const command_name of ['sorry-matt:get-to-work', 'unattended', 'other-plugin:unattended', 'sorry-matt:unattended-x', undefined]) {
+      assert.equal(onSwitchExpansion(expansion('on', { command_name }), {}, { home, read: noRead }), null, command_name);
+    }
+    assert.equal(onSwitchExpansion('not json', {}, { home }), null);
+    assert.deepEqual(readdirSync(home), []);
+  });
+});
+
+test('/sorry-matt:unattended status lists each source that holds and writes nothing', () => {
+  withDir((home) => {
+    // None of the three.
+    const context = contextOf(onSwitchExpansion(expansion('status'), {}, { home, read: noRead }));
+    assert.match(context, /無人值守未開啟/);
+    assert.deepEqual(readdirSync(home), []);
+  });
+  withDir((home) => {
+    // The switch file and the automatic state, with two blocked actions.
+    switchOn(home);
+    awayHome(home);
+    const before = snapshot(home);
+    const context = contextOf(onSwitchExpansion(expansion('status'), {}, { home, read: noRead }));
+    assert.match(context, /無人值守開著/);
+    assert.match(context, /\n- 開關檔：.*\.claude\/sorry-matt-unattended\n/);
+    assert.match(context, /\n- 自動進入：進入時間 2023-11-14T22:13:20\.000Z，原因：使用者說要去睡了，session s0\n/);
+    assert.match(context, /擋下清單目前有 2 筆/);
+    assert.doesNotMatch(context, /環境變數：/);
+    assert.deepEqual(snapshot(home), before, 'content and modification time unchanged');
+  });
+  withDir((home) => {
+    // The environment variable with the switch file: both listed, and `off` cannot end the variable.
+    switchOn(home);
+    const before = snapshot(home);
+    const context = contextOf(onSwitchExpansion(expansion('status'), { SORRY_MATT_UNATTENDED: 'on' }, { home, read: noRead }));
+    assert.match(context, /\n- 開關檔：/);
+    assert.match(context, /\n- 環境變數：SORRY_MATT_UNATTENDED=on\n/);
+    assert.doesNotMatch(context, /自動進入：/);
+    assert.match(context, /擋下清單目前有 0 筆/);
+    assert.match(context, /off 清不掉它；要關掉，請使用者從 settings 的 "env" 拿掉 SORRY_MATT_UNATTENDED/);
+    assert.deepEqual(snapshot(home), before);
+  });
+});
+
+test('/sorry-matt:unattended off on a person\'s turn removes the switch file, ends the automatic state and hands over the list', () => {
+  for (const args of ['off', '']) {
+    withDir((home) => {
+      switchOn(home);
+      awayHome(home);
+      // A pending turn of the automatic state and a pending `off` from another session both go with it.
+      autoState(home).defer({ session: 's7', prompt_id: 'p7' });
+      autoState(home).deferOff({ session: 's8', prompt_id: 'p8' });
+      const transcript = writeTranscript(home, TRANSCRIPTS.human);
+      const context = contextOf(onSwitchExpansion(expansion(args, { transcript_path: transcript }), {}, { home, ...fakeClock() }));
+      assert.match(context, /刪掉了開關檔 .*\.claude\/sorry-matt-unattended/, args);
+      assert.match(context, /自動進入的無人值守已解除（進入時間 2023-11-14T22:13:20\.000Z，原因：使用者說要去睡了，session s0）/, args);
+      assert.match(context, /無人值守已關閉/, args);
+      assert.match(context, /擋下了 2 個需要使用者確認的動作（清單已清空）。請把下面的清單完整告訴使用者/, args);
+      assert.match(context, /1\. session s0，1970-01-01T00:00:03\.000Z\n {3}原指令：npm publish\n {3}理由：sorry-matt guard 確認：這是發布版本/, args);
+      assert.match(context, /2\. session s2，1970-01-01T00:00:04\.000Z\n {3}原指令：rm -rf ~\n {3}理由：.*不經資源回收筒/, args);
+      assert.equal(existsSync(unattendedFile(home)), false, args);
+      assert.deepEqual(savedState(home), { blocked: [] }, `${args}: entered, both pending lists and the list are gone`);
+      assert.equal(publishDecision(home), 'ask', args);
+    });
+  }
+  withDir((home) => {
+    // Only the switch file: what was blocked under it is handed over and emptied too.
+    switchOn(home);
+    assert.equal(decisionOf(decideWith(event('npm publish', { session_id: 's1' }), {}, { home, store: memoryStore(), now: 5000 })), 'deny');
+    assert.equal(autoState(home).active(), false);
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: writeTranscript(home, TRANSCRIPTS.human) }), {}, { home }));
+    assert.doesNotMatch(context, /自動進入/);
+    assert.match(context, /擋下了 1 個/);
+    assert.match(context, /1\. session s1，1970-01-01T00:00:05\.000Z\n {3}原指令：npm publish/);
+    assert.equal(existsSync(unattendedFile(home)), false);
+    assert.deepEqual(savedState(home), { blocked: [] });
+    assert.equal(publishDecision(home), 'ask');
+  });
+  withDir((home) => {
+    // Only the automatic state, nothing blocked.
+    autoState(home).enter(ENTERED);
+    const context = contextOf(onSwitchExpansion(expansion('', { transcript_path: writeTranscript(home, TRANSCRIPTS.human) }), {}, { home }));
+    assert.doesNotMatch(context, /開關檔/);
+    assert.match(context, /自動進入的無人值守已解除/);
+    assert.match(context, /沒有擋下任何動作/);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+  withDir((home) => {
+    // SORRY_MATT_UNATTENDED set: the files are cleared all the same, and the variable still holds.
+    const env = { SORRY_MATT_UNATTENDED: '1' };
+    switchOn(home);
+    awayHome(home);
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: writeTranscript(home, TRANSCRIPTS.human) }), env, { home }));
+    assert.match(context, /刪掉了開關檔/);
+    assert.match(context, /無人值守仍因環境變數 SORRY_MATT_UNATTENDED 開著/);
+    assert.doesNotMatch(context, /無人值守已關閉/);
+    assert.match(context, /擋下了 2 個/);
+    assert.equal(existsSync(unattendedFile(home)), false);
+    assert.deepEqual(savedState(home), { blocked: [] });
+    assert.equal(publishDecision(home, env), 'deny');
+  });
+  withDir((home) => {
+    // Only the variable: the toggle goes the `off` way, says it cannot end it, and creates nothing.
+    const env = { SORRY_MATT_UNATTENDED: 'on' };
+    const transcript = writeTranscript(home, TRANSCRIPTS.human);
+    const context = contextOf(onSwitchExpansion(expansion('', { transcript_path: transcript }), env, { home }));
+    assert.match(context, /無人值守仍因環境變數 SORRY_MATT_UNATTENDED 開著/);
+    assert.equal(existsSync(unattendedFile(home)), false, 'not turned on');
+  });
+  withDir((home) => {
+    // None of the three: said so, nothing changed.
+    const transcript = writeTranscript(home, TRANSCRIPTS.human);
+    const before = snapshot(home);
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript }), {}, { home }));
+    assert.match(context, /無人值守本來就沒開/);
+    assert.deepEqual(snapshot(home), before);
+  });
+  withDir((home) => {
+    // A switch file that cannot be removed: the list is still handed over, and the user is told to remove it.
+    switchOn(home);
+    awayHome(home);
+    const remove = () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: writeTranscript(home, TRANSCRIPTS.human) }), {}, { home, remove }));
+    assert.match(context, /刪不掉（EPERM），仍然開著；請使用者執行 `rm ~\/\.claude\/sorry-matt-unattended`/);
+    assert.doesNotMatch(context, /無人值守已關閉/);
+    assert.match(context, /擋下了 2 個/);
+  });
+});
+
+test('/sorry-matt:unattended off on a turn that cannot be told a person\'s changes nothing and points at the switch file', () => {
+  const RM_HINT = /沒有關閉無人值守：.*請使用者在終端機執行 `rm ~\/\.claude\/sorry-matt-unattended`/;
+  const cases = [
+    ...['scheduled', 'task_notification', 'peer', 'sdk', 'other', 'missingField'].map((kind) => [kind, (home) => ({ transcript_path: writeTranscript(home, TRANSCRIPTS[kind]) })]),
+    ['transcript is a directory', (home) => {
+      mkdirSync(join(home, 'dir.jsonl'));
+      return { transcript_path: join(home, 'dir.jsonl') };
+    }],
+    ['no prompt_id', (home) => ({ transcript_path: writeTranscript(home, TRANSCRIPTS.human), prompt_id: undefined })],
+    ['no transcript_path', () => ({ transcript_path: undefined })],
+    ['empty transcript_path', () => ({ transcript_path: '' })],
+  ];
+  for (const args of ['off', '']) {
+    for (const [name, extra] of cases) {
+      withDir((home) => {
+        switchOn(home);
+        awayHome(home);
+        const fields = extra(home);
+        const before = snapshot(home);
+        const clock = fakeClock();
+        const context = contextOf(onSwitchExpansion(expansion(args, fields), {}, { home, ...clock }));
+        assert.match(context, RM_HINT, `${args} ${name}`);
+        assert.equal(clock.slept, 0, `${args} ${name}: no reread`);
+        assert.deepEqual(snapshot(home), before, `${args} ${name}: nothing changed`);
+        assert.equal(publishDecision(home), 'deny', `${args} ${name}`);
+      });
+    }
+  }
+  withDir((home) => {
+    // A read that fails.
+    switchOn(home);
+    const before = snapshot(home);
+    const eacces = () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    assert.match(contextOf(onSwitchExpansion(expansion('off', { transcript_path: join(home, 'x.jsonl') }), {}, { home, read: eacces, ...fakeClock() })), RM_HINT);
+    assert.deepEqual(snapshot(home), before);
+  });
+});
+
+test('an `off` whose entry is not written yet is reread for up to 500 ms, then decided by that session\'s Stop', () => {
+  for (const args of ['off', '']) {
+    withDir((home) => {
+      switchOn(home);
+      awayHome(home);
+      const before = savedState(home);
+      const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+      const clock = fakeClock();
+      const context = contextOf(onSwitchExpansion(expansion(args, { transcript_path: transcript }), {}, { home, ...clock }));
+      assert.equal(clock.slept, 500, 'reread until 500 ms, and no longer');
+      assert.match(context, /還判不出是不是使用者親自送出的，所以先記成待判定/);
+      assert.equal(existsSync(unattendedFile(home)), true);
+      assert.deepEqual(savedState(home), { ...before, pendingOff: [{ session: 's3', prompt_id: 'p1' }] });
+
+      // Another session's Stop leaves it alone.
+      assert.equal(onSwitchStop(stop(transcript, { session_id: 's4' }), {}, { home }), null);
+      assert.deepEqual(savedState(home).pendingOff, [{ session: 's3', prompt_id: 'p1' }]);
+
+      // A person's turn by the time it stops: the `off` runs there and its result is the block reason.
+      writeTranscript(home, TRANSCRIPTS.human);
+      const blocked = onSwitchStop(stop(transcript), {}, { home });
+      assert.deepEqual(Object.keys(blocked), ['decision', 'reason']);
+      assert.equal(blocked.decision, 'block');
+      assert.match(blocked.reason, /^\[sorry-matt unattended\] /);
+      assert.match(blocked.reason, /刪掉了開關檔/);
+      assert.match(blocked.reason, /自動進入的無人值守已解除/);
+      assert.match(blocked.reason, /1\. session s0，1970-01-01T00:00:03\.000Z\n {3}原指令：npm publish/);
+      assert.match(blocked.reason, /2\. session s2，1970-01-01T00:00:04\.000Z\n {3}原指令：rm -rf ~/);
+      assert.equal(existsSync(unattendedFile(home)), false);
+      assert.deepEqual(savedState(home), { blocked: [] });
+      assert.equal(publishDecision(home), 'ask');
+      // The stop that block causes finds nothing to do.
+      assert.equal(onSwitchStop(stop(transcript, { stop_hook_active: true }), {}, { home }), null);
+    });
+  }
+  withDir((home) => {
+    // With only the switch file there is no automatic state, and the pending `off` is kept all the same.
+    switchOn(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript }), {}, { home, ...fakeClock() }));
+    assert.deepEqual(savedState(home), { pendingOff: [{ session: 's3', prompt_id: 'p1' }], blocked: [] });
+    // A person's turn at Stop in the automatic hook does not touch it; this hook's Stop does.
+    writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onStop(stop(transcript), {}, { home }), null);
+    assert.deepEqual(savedState(home).pendingOff, [{ session: 's3', prompt_id: 'p1' }]);
+    assert.equal(onSwitchStop(stop(transcript), {}, { home }).decision, 'block');
+    assert.equal(existsSync(unattendedFile(home)), false);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+  for (const kind of ['scheduled', 'task_notification', 'notYet']) {
+    withDir((home) => {
+      // Any other answer at Stop only drops the pending `off`.
+      switchOn(home);
+      awayHome(home);
+      const before = savedState(home);
+      const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+      contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript }), {}, { home, ...fakeClock() }));
+      writeTranscript(home, TRANSCRIPTS[kind]);
+      assert.equal(onSwitchStop(stop(transcript), {}, { home }), null, kind);
+      assert.deepEqual(savedState(home), before, kind);
+      assert.equal(existsSync(unattendedFile(home)), true, kind);
+    });
+  }
+  withDir((home) => {
+    // A Stop without a transcript path drops it too.
+    switchOn(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript }), {}, { home, ...fakeClock() }));
+    assert.equal(onSwitchStop(stop(undefined), {}, { home }), null);
+    assert.deepEqual(savedState(home), { blocked: [] });
+    assert.equal(existsSync(unattendedFile(home)), true);
+  });
+  withDir((home) => {
+    // An entry that shows up during the rereads decides the `off` right there.
+    switchOn(home);
+    let reads = 0;
+    const read = () => (++reads < 3 ? TRANSCRIPTS.notYet : TRANSCRIPTS.human).join('\n');
+    const clock = fakeClock();
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: join(home, 'session.jsonl') }), {}, { home, read, ...clock }));
+    assert.match(context, /刪掉了開關檔/);
+    assert.equal(clock.slept, 50);
+  });
+});
+
+test('an `on` drops every pending `off` typed before it, so a later Stop cannot remove the new switch file', () => {
+  for (const [label, onSession, stopSession] of [['same session', 's3', 's3'], ['across sessions', 'b', 's3']]) {
+    withDir((home) => {
+      // Session s3 leaves an `off` pending (p1); its Stop does not come before the user types `on` (p2).
+      switchOn(home);
+      const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+      contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript }), {}, { home, ...fakeClock() }));
+      assert.deepEqual(savedState(home).pendingOff, [{ session: 's3', prompt_id: 'p1' }], label);
+      rmSync(unattendedFile(home));
+      const on = contextOf(onSwitchExpansion(expansion('on', { session_id: onSession, prompt_id: 'p2' }), {}, { home, read: noRead }));
+      assert.match(on, /已開啟無人值守：建立了開關檔/, label);
+      assert.deepEqual(savedState(home), { blocked: [] }, `${label}: the pending off is gone`);
+      // p1 shows up as the person's turn by the time s3 stops: nothing is removed.
+      writeTranscript(home, TRANSCRIPTS.human);
+      assert.equal(onSwitchStop(stop(transcript, { session_id: stopSession }), {}, { home }), null, label);
+      assert.equal(existsSync(unattendedFile(home)), true, label);
+      assert.equal(decisionOf(decideWith(event('rm -rf ~', { session_id: 's9' }), {}, { home, store: memoryStore(), now: 9 })), 'deny', label);
+    });
+  }
+  withDir((home) => {
+    // A pending `off` that cannot be dropped: `on` still turns on, and says the old `off` may still remove the file.
+    const state = { read: () => ({ entered: null, pending: [], pendingOff: [{ session: 's3', prompt_id: 'p1' }], blocked: [] }), dropOffs: () => { throw new Error('EBUSY'); } };
+    const on = contextOf(onSwitchExpansion(expansion('on'), {}, { home, state }));
+    assert.match(on, /已開啟無人值守/);
+    assert.match(on, /尚未判定的 \/sorry-matt:unattended off 清不掉（EBUSY）/);
+    assert.equal(existsSync(unattendedFile(home)), true);
+  });
+});
+
+test('the turn that types /sorry-matt:unattended is left to the switch hook by the automatic hook', () => {
+  for (const prompt of ['/sorry-matt:unattended', '/sorry-matt:unattended off', '  /sorry-matt:unattended status']) {
+    withDir((home) => {
+      // Only the automatic state: UserPromptSubmit runs first and must not end it, so the toggle still sees a source.
+      const before = awayHome(home);
+      const transcript = writeTranscript(home, TRANSCRIPTS.human);
+      assert.equal(onPromptSubmit(submit(transcript, { prompt }), {}, { home, exists: noSwitch }), null, prompt);
+      assert.equal(readFileSync(autoStateFile(home), 'utf8'), before, prompt);
+    });
+  }
+  withDir((home) => {
+    awayHome(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.human);
+    assert.equal(onPromptSubmit(submit(transcript, { prompt: '/sorry-matt:unattended' }), {}, { home, exists: noSwitch }), null);
+    const context = contextOf(onSwitchExpansion(expansion('', { transcript_path: transcript }), {}, { home }));
+    assert.doesNotMatch(context, /已開啟/);
+    assert.match(context, /自動進入的無人值守已解除/);
+    assert.match(context, /擋下了 2 個/);
+    assert.equal(existsSync(unattendedFile(home)), false, 'not turned on');
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+  withDir((home) => {
+    // Any other prompt, including another command or text that only mentions it, still ends the automatic state.
+    for (const prompt of ['/sorry-matt:unattended-x', 'run /sorry-matt:unattended later']) {
+      awayHome(home);
+      const transcript = writeTranscript(home, TRANSCRIPTS.human);
+      assert.match(onPromptSubmit(submit(transcript, { prompt }), {}, { home, exists: noSwitch }).hookSpecificOutput.additionalContext, /已解除/, prompt);
+    }
+  });
+});
+
+test('an `off` that can be left neither decided nor pending, and an `off` with nothing on, change nothing', () => {
+  withDir((home) => {
+    // No session id: the turn cannot be left for a Stop.
+    switchOn(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    const clock = fakeClock();
+    const context = contextOf(onSwitchExpansion(expansion('off', { transcript_path: transcript, session_id: undefined }), {}, { home, ...clock }));
+    assert.equal(clock.slept, 500);
+    assert.match(context, /這一輪的 transcript 紀錄還沒寫入，也無法留到這一輪結束時再判定/);
+    assert.deepEqual(autoState(home).read().pendingOff, []);
+    assert.equal(existsSync(autoStateFile(home)), false);
+    assert.equal(existsSync(unattendedFile(home)), true);
+  });
+  for (const [label, fields] of [
+    ['no prompt_id', (home) => ({ transcript_path: writeTranscript(home, TRANSCRIPTS.human), prompt_id: undefined })],
+    ['entry not written yet', (home) => ({ transcript_path: writeTranscript(home, TRANSCRIPTS.notYet) })],
+    ['scheduled turn', (home) => ({ transcript_path: writeTranscript(home, TRANSCRIPTS.scheduled) })],
+  ]) {
+    withDir((home) => {
+      // None of the three sources: nothing to end, so the turn is not even judged.
+      const clock = fakeClock();
+      const context = contextOf(onSwitchExpansion(expansion('off', fields(home)), {}, { home, read: noRead, ...clock }));
+      assert.match(context, /無人值守本來就沒開/, label);
+      assert.equal(clock.slept, 0, label);
+      assert.equal(existsSync(autoStateFile(home)), false, label);
+      assert.equal(existsSync(unattendedFile(home)), false, label);
+    });
+  }
+});
+
+test('/sorry-matt:unattended with the guard off, or with an argument it does not know, changes nothing', () => {
+  withDir((home) => {
+    switchOn(home);
+    awayHome(home);
+    const transcript = writeTranscript(home, TRANSCRIPTS.notYet);
+    const before = snapshot(home);
+    for (const args of ['on', 'off', 'status', '']) {
+      const context = contextOf(onSwitchExpansion(expansion(args, { transcript_path: transcript }), { SORRY_MATT_GUARD: 'off' }, { home }));
+      assert.match(context, /sorry-matt guard 已關閉（SORRY_MATT_GUARD=off），無人值守沒有作用，所以沒有改任何檔/, args);
+    }
+    assert.equal(onSwitchStop(stop(transcript), { SORRY_MATT_GUARD: 'off' }, { home }), null);
+    for (const args of ['of', 'enable', 'on now', 'statu']) {
+      const context = contextOf(onSwitchExpansion(expansion(args, { transcript_path: transcript }), {}, { home }));
+      assert.match(context, new RegExp(`不認得的參數「${args}」，沒有改任何檔`), args);
+      for (const form of ['/sorry-matt:unattended on', '/sorry-matt:unattended off', '/sorry-matt:unattended status', '/sorry-matt:unattended（不帶參數']) {
+        assert.ok(context.includes(form), `${args}: ${form}`);
+      }
+    }
+    assert.deepEqual(snapshot(home), before);
+  });
+});
+
+test('the automatic clear keeps the pending `off` turns; clearAll takes everything once', () => {
+  withDir((home) => {
+    const state = autoState(home);
+    assert.equal(state.clearAll(), null);
+    assert.equal(existsSync(autoStateFile(home)), false, 'nothing written');
+    state.enter(ENTERED);
+    state.record({ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' });
+    state.defer({ session: 's3', prompt_id: 'p1' });
+    assert.equal(state.deferOff({ session: 's4', prompt_id: 'p2' }), true);
+    assert.equal(state.deferOff({ session: 's4', prompt_id: 'p2' }), true);
+    assert.deepEqual(state.clear(), { entered: ENTERED, pending: [{ session: 's3', prompt_id: 'p1' }], blocked: [{ session: 's1', at: 10, subject: 'npm publish', reason: 'r1' }] });
+    assert.deepEqual(savedState(home), { pendingOff: [{ session: 's4', prompt_id: 'p2' }], blocked: [] });
+    state.record({ session: 's1', at: 11, subject: 'gh release create', reason: 'r2' });
+    assert.deepEqual(state.clearAll(), { entered: null, pending: [], pendingOff: [{ session: 's4', prompt_id: 'p2' }], blocked: [{ session: 's1', at: 11, subject: 'gh release create', reason: 'r2' }] });
+    assert.equal(state.clearAll(), null);
+    assert.equal(state.settleOff({ session: 's4', prompt_id: 'p2' }), false);
+    assert.deepEqual(savedState(home), { blocked: [] });
+  });
+});
+
+test('hooks.json registers unattended-switch.mjs on the unattended command\'s expansion and on every Stop', () => {
+  const config = JSON.parse(readFileSync(join(root, 'hooks/hooks.json'), 'utf8'));
+  const command = 'node "${CLAUDE_PLUGIN_ROOT}/hooks/unattended-switch.mjs"';
+  const [expansionEntry, ...more] = config.hooks.UserPromptExpansion;
+  assert.equal(more.length, 0);
+  assert.deepEqual(expansionEntry.hooks, [{ type: 'command', command }]);
+  assert.equal(SWITCH_COMMAND, 'sorry-matt:unattended');
+  assert.match(SWITCH_COMMAND, new RegExp(expansionEntry.matcher), 'the matcher lets the command through');
+  for (const other of ['sorry-matt:get-to-work', 'unattended-x', 'x-unattended']) assert.doesNotMatch(other, new RegExp(expansionEntry.matcher), other);
+  const stops = config.hooks.Stop.filter((e) => e.hooks.some((h) => h.command === command));
+  assert.equal(stops.length, 1);
+  assert.equal(stops[0].matcher, undefined);
+});
+
+test('the switch command end to end: the hook process turns unattended on and off and the guard follows', () => {
+  withDir((home) => {
+    const env = { ...process.env, TMPDIR: home, TEMP: home, TMP: home, HOME: home, USERPROFILE: home, CLAUDE_PLUGIN_ROOT: root };
+    delete env.SORRY_MATT_GUARD;
+    delete env.SORRY_MATT_UNATTENDED;
+    const hook = (script, input) => {
+      const result = spawnSync(process.execPath, [join(root, 'hooks', script)], { input, encoding: 'utf8', env });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout ? JSON.parse(result.stdout) : null;
+    };
+    const guard = (command) => hook('guard.mjs', JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: CWD, session_id: 'a', permission_mode: 'default' }))?.hookSpecificOutput.permissionDecision ?? null;
+    const switchHook = (args, extra) => contextOf(hook('unattended-switch.mjs', expansion(args, extra)));
+
+    assert.equal(guard('npm publish'), 'ask');
+    assert.match(switchHook('on'), /已開啟無人值守/);
+    assert.equal(existsSync(join(home, '.claude', 'sorry-matt-unattended')), true);
+    assert.equal(guard('npm publish'), 'deny');
+    assert.match(switchHook('status'), /\n- 開關檔：.*\n擋下清單目前有 1 筆/);
+    // A scheduled turn does not turn it off.
+    assert.match(switchHook('off', { transcript_path: writeTranscript(home, TRANSCRIPTS.scheduled, 'a.jsonl') }), /沒有關閉無人值守/);
+    assert.equal(guard('npm publish'), 'deny');
+    // The user's own turn does.
+    const off = switchHook('', { transcript_path: writeTranscript(home, TRANSCRIPTS.human, 'b.jsonl') });
+    assert.match(off, /刪掉了開關檔/);
+    assert.match(off, /擋下了 2 個/);
+    assert.equal(existsSync(join(home, '.claude', 'sorry-matt-unattended')), false);
+    assert.equal(guard('npm publish'), 'ask');
+    // Other commands and other events: nothing.
+    assert.equal(hook('unattended-switch.mjs', expansion('on', { command_name: 'sorry-matt:get-to-work' })), null);
+    assert.equal(hook('unattended-switch.mjs', stop(join(home, 'b.jsonl'), { session_id: 'a' })), null);
+    assert.equal(hook('unattended-switch.mjs', JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'a' })), null);
+    assert.equal(existsSync(join(home, '.claude', 'sorry-matt-unattended')), false);
+  });
 });
 
 // ---------- unattended: a permission dialog nobody answers (PermissionRequest) ----------

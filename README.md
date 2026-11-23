@@ -25,6 +25,7 @@ grill them
 | `make-the-ui-fast` | When the UI is slow, measure first, name the bottleneck, change one thing, and measure again. |
 | `make-this-shit-pretty` | Rework an existing piece of UI in small verified steps, with behavior unchanged. |
 | `set-up-ui-skills` | Map a frontend project's component library, tokens, shared components, and conventions into `docs/agents/ui.md` for the frontend skills. Run once per project. |
+| `unattended` | Toggle the sorry-matt guard's unattended mode by hand with on, off or status; no argument flips it |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
@@ -158,7 +159,9 @@ asked, saying why.
 **Unattended.** A prompt waits for an answer for as long as it takes, so an agent left running overnight stops at
 the first one. Before you walk away, create the switch file; every call the guard would ask about is then denied
 instead, with a message telling the agent to put it on the human-work list (or in its final report) and carry on.
-Two-step actions are denied before any confirmation is recorded. Remove the file to be asked again. The guard
+Two-step actions are denied before any confirmation is recorded. An `AskUserQuestion` is denied too, without the
+question box: the agent answers it on its own judgment and records that, marks it awaiting ruling, or puts it on
+the human-work list, and carries on. Remove the file to be asked again. The guard
 reads it on every call, so it takes effect in sessions that are already running. Setting `SORRY_MATT_UNATTENDED=on`
 in the `env` of your settings does the same for new sessions. This only makes the guard stricter; prompts that
 come from your own permission settings are not the guard's and still appear (in `auto` mode the classifier decides
@@ -168,6 +171,11 @@ those instead).
 touch ~/.claude/sorry-matt-unattended   # going to bed
 rm ~/.claude/sorry-matt-unattended      # back
 ```
+
+Or type `/sorry-matt:unattended on`, `off` or `status` (no argument flips it). A hook does the switching when you
+type the command, not the agent, which cannot run it. `off` also ends the automatic state, hands the agent the
+list of what was blocked under either source, and works only on a turn you sent yourself; when that cannot be told,
+nothing changes and you are told to remove the file. It cannot end `SORRY_MATT_UNATTENDED`, and says so.
 
 To turn the guard off, set it in the `env` of your Claude Code settings:
 
