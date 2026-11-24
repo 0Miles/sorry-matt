@@ -299,7 +299,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
-import { parseWorktrees } from './freeze.mjs';
 import { ticketOwners } from './merges.mjs';
 import { description as roleDescription, fallbackPath, AGENT_TYPES, reportField } from './brief.mjs';
 import { MARKER } from './acceptance.mjs';
@@ -393,7 +392,18 @@ function readJsonFile(deps, path) {
 
 // ---- git ------------------------------------------------------------------------------------------------------------
 
-function gitView(root, deps) {
+/** One row per ref of `git for-each-ref`: its name, object type, object and the worktree it is checked out in. */
+const REF_FORMAT = ['%(refname)', '%(objecttype)', '%(objectname)', '%(worktreepath)'].join('%00');
+
+/**
+ * What one `next` reads of git. #160: the branch and origin refs, which worktree each branch is checked out in, and
+ * whether `root` is a repository come from one `git for-each-ref`; on Windows each git process costs tens of
+ * milliseconds, and `next` runs many times a wake-up. Only a ref that is not a commit (rev-parse peels it), `origin`
+ * without remote-tracking refs (configured but never fetched, or not there), ancestry, merges and MERGE_HEAD ask git
+ * again. A branch's worktree counts while its `.git` is there: `git worktree list` calls one whose `.git` is gone
+ * prunable, and a bare main worktree has none.
+ */
+export function gitView(root, deps) {
   const memo = new Map();
   const tryGit = (cwd, args) => {
     const k = `${cwd}\0${args.join('\0')}`;
@@ -408,17 +418,31 @@ function gitView(root, deps) {
     }
     return memo.get(k);
   };
-  const top = tryGit(root, ['rev-parse', '--show-toplevel']);
-  if (top === null) throw new Error(`${root} is not a git working tree`);
-  const worktrees = parseWorktrees(tryGit(root, ['worktree', 'list', '--porcelain']) ?? '').filter((w) => !w.bare && !w.prunable);
-  const hasOrigin = tryGit(root, ['remote', 'get-url', 'origin']) !== null;
-  const ref = (b) => (b ? tryGit(root, ['rev-parse', '-q', '--verify', `refs/heads/${b}^{commit}`]) : null);
+  const listed = tryGit(root, ['for-each-ref', `--format=${REF_FORMAT}`, 'refs/heads', 'refs/remotes/origin']);
+  if (listed === null) throw new Error(`${root} is not a git working tree`);
+  const refs = new Map(); // ref name → its commit, or undefined when it names another object (rev-parse peels it)
+  const checkedOut = new Map(); // branch → the worktree it is checked out in
+  for (const row of listed.split('\n')) {
+    if (!row) continue;
+    const [name, type, sha, wt] = row.split('\0');
+    refs.set(name, type === 'commit' ? sha : undefined);
+    if (wt && name.startsWith('refs/heads/')) checkedOut.set(name.slice('refs/heads/'.length), wt);
+  }
+  const commitOf = (name) => (!refs.has(name) ? null : (refs.get(name) ?? tryGit(root, ['rev-parse', '-q', '--verify', `${name}^{commit}`])));
+  let origin;
+  const hasOrigin = () => (origin ??= [...refs.keys()].some((k) => k.startsWith('refs/remotes/origin/')) || tryGit(root, ['remote', 'get-url', 'origin']) !== null);
+  const ref = (b) => (b ? commitOf(`refs/heads/${b}`) : null);
   const view = {
     root,
-    hasOrigin,
-    wtOf: (branch) => worktrees.find((w) => w.branch === branch)?.path ?? null,
+    get hasOrigin() {
+      return hasOrigin();
+    },
+    wtOf: (branch) => {
+      const wt = checkedOut.get(branch);
+      return wt && deps.exists(join(wt, '.git')) ? wt : null;
+    },
     ref,
-    remote: (b) => (hasOrigin ? tryGit(root, ['rev-parse', '-q', '--verify', `refs/remotes/origin/${b}^{commit}`]) : null),
+    remote: (b) => (b && hasOrigin() ? commitOf(`refs/remotes/origin/${b}`) : null),
     commit: (r) => tryGit(root, ['rev-parse', '-q', '--verify', `${r}^{commit}`]),
     ancestor: (a, b) => tryGit(root, ['merge-base', '--is-ancestor', a, b]) !== null,
     mergeHead: (wt) => (wt ? tryGit(wt, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']) : null),
