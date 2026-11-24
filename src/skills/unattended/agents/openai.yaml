@@ -1,6 +1,0 @@
-interface:
-  display_name: "Unattended"
-  short_description: "Toggle the sorry-matt guard's unattended mode"
-  default_prompt: "Use $unattended to relay the result of the sorry-matt unattended switch to the user."
-policy:
-  allow_implicit_invocation: false
