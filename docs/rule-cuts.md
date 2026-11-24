@@ -588,3 +588,20 @@ run `2026-11-19-backlog-sweep` 的三張純文字票（#16、#49、#50），每�
 28aa17b 寫進 `prove-it` 的表（該表依 run `2026-11-19-all-issues` 的檢討訂定），以 `judge` 的旗標覆寫。校正留給
 #97 第 4 組：依據是 `get-to-work` 的 `spawns.mjs` 輸出的 `byTicket`（每票的 `finder`、`verifier`、`fix-verifier`
 數）對照各票審查區塊的 `tier`。#80 提案 4（只升不降、升級重審）與 5（驗收對照補缺的情境）不在這張票重新展開後的範圍。
+
+## #183：guard 只直接擋下災難級操作
+
+使用者 2026-11-24 裁決：guard 比對的是指令文字，永遠繞得過；把它縮到最小。本節取代「guard 從『永久例外一律擋下』
+改為『該問的才問』」、「guard 的無人值守模式」與「guard 不為普通指令跳框」三節描述的行為，那三節只留作歷史。
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| 兩段確認類（災難級、對外發訊、金流）與 `confirm.mjs`／`confirm-state.mjs` | 刪；災難級只留三類，直接 deny：遞迴刪除檔案系統根目錄、系統目錄或家目錄；刪除遠端 main／master；force-push 遠端 main／master | 只從常見寫法認得出、誤判少的才擋；不問，所以沒有確認機制要保護。 |
+| 確認一次類（發布、正式部署、寫入 Claude Code 設定、會觸發部署的合併）與 `deploy-on-merge.mjs` | 刪；交給使用者自己的權限設定 | 從文字判斷不可靠，問了也只會變成反射性按 allow。 |
+| 無人值守模式（開關檔、`SORRY_MATT_UNATTENDED`、PermissionRequest 逾時、擋下 `AskUserQuestion`、`unattended` skill） | 整個刪除 | guard 不再問，就沒有要在人不在時改成 deny 的 ask。 |
+| `shell.mjs` 的變數展開與直譯器（`bash -c`、`pwsh -Command`、`eval`）、`$( )` 內文解析 | 刪；只讀頂層的簡單指令 | 不為繞過做防禦；README「What it is not」寫明看不到哪些寫法。 |
+
+hooks：`hooks/hooks.json` 的 guard matcher 縮成 `Bash|PowerShell`，拿掉 SessionStart 的無人值守提示、PermissionRequest、
+UserPromptExpansion、UserPromptSubmit 與 Stop。`SORRY_MATT_GUARD=off` 全關開關保留；budget 與 reread hook 不動。
+`ASKING.md` 第 5 節改為「授權與災難級操作」。測試：`scripts/guard.test.mjs` 改寫，刪除 `scripts/deploy-on-merge.test.mjs`
+與 `scripts/unattended.live.mjs`。

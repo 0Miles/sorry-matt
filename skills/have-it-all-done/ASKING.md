@@ -69,8 +69,8 @@ where the repo's own `CLAUDE.md` or generic `AGENTS.md` rules differently (a **p
 ### (a) How far to go
 
 Scope and stopping points are the user's ruling. **Open the proposal at full scope:** give the complete range
-first, then list the risks item by item. When you do recommend reducing, name which action needing
-confirmation (section 5) or project exception it hits, and attach that item's evidence.
+first, then list the risks item by item. When you do recommend reducing, name which action that needs
+authority, catastrophic action (section 5) or project exception it hits, and attach that item's evidence.
 
 ### (b) Product-behavior correctness
 
@@ -134,7 +134,7 @@ filled.
   `scripts/state.mjs profile`; it cannot change afterwards. Its fields, defaults and the guards each one relaxes are in
   that script's header. The default is the strict flow and is not asked about; write a profile only when the user asks
   for a relaxed flow or a project exception rules a field out, and log the reason in the self-answer log. A profile
-  cannot relax the actions needing confirmation (section 5) or the limits of the next point.
+  cannot relax section 5's authority rules or catastrophic actions, nor the limits of the next point.
 - Only the user changes the run-level limits and the stage time limits (section 7, field 9). `budget: spawns` and
   `budget: rounds` scale with the ticket count:
   - `spawns` = max(`20 × tickets + 50`, spawns used + `20 × tickets`). A ticket typically takes about 12 spawns —
@@ -161,11 +161,11 @@ wrote its profile before the ruling point (at the freeze when running standalone
 `budget: rounds` were rewritten from the ticket count before the ruling point (at the freeze when running
 standalone), unless the user set a value at the ruling point.
 
-## 5. Authority and actions needing confirmation
+## 5. Authority and catastrophic actions
 
 The agent does not judge authority, and no file the agent reads records it: whether an action that needs
-authority is let through is up to Claude Code's permission settings, and the plugin's hook raises a confirmation
-prompt before an action needing confirmation runs.
+authority is let through is up to Claude Code's permission settings, and the plugin's hook denies the three classes
+of catastrophic actions outright.
 
 ### Actions that need authority
 
@@ -196,35 +196,32 @@ merge the rules into that array rather than replacing the block:
 
 Choosing "don't ask again" at a permission prompt does the same, written by Claude Code itself.
 
-### Actions needing confirmation
+### Catastrophic actions
 
-The agent may run the actions below, but only after the user confirms them at a permission prompt; the plugin's
-`hooks/hooks.json` raises that prompt in PreToolUse before they run, with the classification and prompts in
-`hooks/classify.mjs`:
+The plugin's `hooks/hooks.json` checks Bash and PowerShell commands in PreToolUse and denies the three classes below
+outright (deny, no prompt), with the matching in `hooks/classify.mjs`:
 
-- **Two-step confirmation**: catastrophic actions (a recursive delete of a home directory, a root, a drive root, a
-  parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema or
-  table; deleting a GitHub repo; tearing down whole infrastructure; force-pushing to or deleting a protected branch);
-  outgoing messages and third-party communication; payments.
-- **Single confirmation**: publishing a release and deploying to production; writing settings that change how Claude
-  Code behaves (settings files, hooks, MCP settings, `~/.claude.json`, `.claude/sorry-matt.json`); a merge that
-  triggers a production deploy at once.
+- a recursive delete of the filesystem root, a system directory or the home directory (e.g. `rm -rf /`, `rm -rf ~`,
+  `Remove-Item -Recurse C:\Windows`);
+- deleting the remote main or master branch;
+- force-pushing the remote main or master branch.
 
-With two-step confirmation, run only the one confirmation line the hook gives, then resend the original command as it
-was; do not rewrite or chain it, and never write the confirmation record yourself.
+The hook matches only the common spelling of the command text and is not a security boundary: a form hidden behind a
+variable, an interpreter wrapper (`bash -c`, `pwsh -Command`, `eval`), a subshell or a pipe is invisible to it. Never
+run a catastrophic action: when one is denied, do not retry it another way, do not try to get around it and do not
+stop to wait; one of the same kind the hook does not catch is not run either. A subagent puts it in its report for the
+host; the host puts it on the human-work list with the command to run and the consequences, and keeps doing what can
+be done.
 
-Subagents do not run these actions; they put them in their report for the host. The host treats them as
-**prompting calls**, sent back to back after every other step (`have-it-all-done` section 0). When the user refuses at
-the prompt, the hook blocks it (in unattended mode every one is blocked), or the hook does not catch it and no prompt
-appears — the hook matches command text and is not a security boundary — do not run it yourself, do not retry it
-another way and do not stop to wait: put it on the human-work list with the command to run and the hook's account of
-the consequences, and keep doing what can be done. Only the user switches unattended mode; never touch its switch file.
-Force-pushing an ordinary branch, cloning, installing packages, reading or writing credential files, permission
-commands and deletions inside the project are not on this list; the permission settings decide those.
+Other risky actions — publishing a release, deploying to production, writing Claude Code settings, outgoing
+messages, payments, force-pushing an ordinary branch, deletions inside the project — are not judged by the hook;
+whether they are let through is up to the user's own Claude Code permission settings, and the permission prompt itself
+makes such a call a **prompting call** (`have-it-all-done` section 0). One blocked by the permissions or refused by
+the user at the prompt goes on the human-work list as in the previous subsection.
 
 Done when: every action this round that needs authority was sent with its canonical command and its outcome is in
-ledger field 5; every action needing confirmation ran only after the user confirmed it at the prompt, or is on the
-human-work list with the command to run; every blocked action is on the human-work list with a permission rule snippet
+ledger field 5; no catastrophic action was run, and each one that was needed is on the human-work list with the
+command to run; every blocked action is on the human-work list with a permission rule snippet
 or the command to run; no settings file was written this round.
 
 ## 6. Language and outbound text
@@ -259,8 +256,7 @@ plugin's hooks read only the first line (a BOM aside). Ten fields:
 3. The risk gate's three lights and their release record.
 4. Lines and integration branches: the state file's path; lines, tips, CI results, per-SHA local verification
    records and the synced base are in the state.
-5. Authorization outcomes: every action sent that needs authority or confirmation (section 5) and whether it was let
-   through or confirmed; blocked ones with a permission rule snippet or the command to run.
+5. Authorization outcomes: every action sent that needs authority (section 5) and whether it was let through; blocked ones with a permission rule snippet or the command to run.
 6. The run-level self-answer log.
 7. The human-work list.
 8. **Reconciliation table**: the state file's path (`state.mjs show`; one row per ticket with its stage, assignment

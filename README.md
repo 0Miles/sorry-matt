@@ -25,7 +25,6 @@ grill them
 | `make-the-ui-fast` | When the UI is slow, measure first, name the bottleneck, change one thing, and measure again. |
 | `make-this-shit-pretty` | Rework an existing piece of UI in small verified steps, with behavior unchanged. |
 | `set-up-ui-skills` | Map a frontend project's component library, tokens, shared components, and conventions into `docs/agents/ui.md` for the frontend skills. Run once per project. |
-| `unattended` | Toggle the sorry-matt guard's unattended mode by hand with on, off or status; no argument flips it |
 
 The tracker-aware workflows support both GitHub Issues and Matt's Local Markdown tracker. The repository's
 `docs/agents/issue-tracker.md` selects the active provider and defines its conventions.
@@ -96,86 +95,25 @@ npx modern-web-guidance@latest install
 ## Guard hook
 
 The plugin ships a PreToolUse hook (`hooks/hooks.json` → `hooks/guard.mjs`, needs Node.js 20+ on `PATH`) on
-`Bash`, `PowerShell`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and MCP tools. It runs in **every session
-where the plugin is enabled**, not only sorry-matt runs. It does not decide what an agent may do — your permission
-settings do — it adds a prompt before a few things that should not happen unseen. Each call gets one of three
-levels:
+`Bash` and `PowerShell`. It runs in **every session where the plugin is enabled**, not only sorry-matt runs. It does
+not decide what an agent may do — your permission settings do. It never asks: it **denies outright** three classes of
+catastrophic command, read from plain, common command text, and says nothing about everything else:
 
-| Level | What | Covers |
-| --- | --- | --- |
-| **double** | two-step confirmation, with the consequences spelled out | catastrophic actions: a recursive delete of `~`, `/`, a drive root, `.`, `..` or a path outside the project; `format`, `mkfs*`, `dd of=/dev/…`, `diskpart`; `dropdb`, SQL `DROP DATABASE/SCHEMA/TABLE`, `TRUNCATE`, `FLUSHALL`/`FLUSHDB`, `dropDatabase()`; `gh repo delete`, the API/GraphQL repo deletes and MCP `delete_repository`; `terraform`/`tofu`/`pulumi destroy`; `gcloud projects delete`, `az group delete`; `kubectl delete namespace`, `aws s3 rb` and `aws cloudformation delete-stack` aimed at prod; a force-push to, or delete of, `main`, `master` or the remote's default branch. Outgoing messages: mailers, `git send-email`, chat and mail APIs through `curl` and friends (a plain GET only reads, except APIs that send on GET such as Telegram's `sendMessage`), MCP send/post actions. Payments: `stripe` writes, non-GET calls to payment APIs, MCP payment actions |
-| **ask** | asked once | releases and production deploys: `npm`/`pnpm`/`yarn`/`bun` publish (recursive and workspace forms too), `cargo publish`, `gem push`, `dotnet nuget push`, `twine upload`, `vsce publish`, `gh release create`, `terraform`/`pulumi` apply, `fly deploy`, `wrangler deploy`, `firebase deploy`, other deploy tools and SQL writes aimed at prod, also through `npx`/`bunx`/`pnpm dlx`, `gh workflow run` with prod. Not asked: `--dry-run`, and targets explicitly named as non-production (`-var-file=staging.tfvars`, `TF_WORKSPACE=dev`, `fly deploy -a shop-staging`, `wrangler deploy --env staging`, `firebase deploy -P app-dev`), and `ssh prod-host <read-only command>` such as `uptime`, `tail` or `systemctl status`. Writes to files that change how Claude Code behaves: `.claude/settings*.json`, `managed-settings.json`, `.claude/hooks/`, `~/.claude.json`, `.mcp.json`, `managed-mcp.json`, `.claude/sorry-matt.json` (reading, printing, testing, opening or committing them is not a write, and a copy writes only its destination). A merge that deploys to production right away (below) |
-| none | let through to your permission settings | everything else: force-pushing a feature branch, `git reset --hard`, `git clean`, deletes inside the project, cloning, installing packages or extensions, `curl … \| sh`, reading or writing credential files, `sudo`, `chmod`, `icacls` |
+| Denied | Examples |
+| --- | --- |
+| a recursive delete of the filesystem root, a system directory or the home directory | `rm -rf /`, `rm -rf /*`, `rm -rf ~`, `rm -rf $HOME`, `sudo rm -rf /etc`, `Remove-Item -Recurse -Force C:\Windows`, `Remove-Item -Recurse C:\`, `rd /s /q C:\` |
+| deleting the remote `main` or `master` branch | `git push origin --delete main`, `git push origin :main`, `git push -d origin master` |
+| force-pushing the remote `main` or `master` branch | `git push --force origin main`, `git push -f origin master`, `git push --force-with-lease origin main`, `git push origin +main` |
 
-**What it is not.** The guard matches command text; it is not a security boundary. It does not see through an
-interpreter wrapper (`node -e`, `python -c`), variable expansion, scripts that do the work for it, or commands like
-`find / -delete`. The two-step confirmation guards against a misjudgment or a slip, not against an agent set on
-getting around it. And it only adds a prompt; whether that prompt is shown depends on the rest of the setup:
+Everything else is left to your permission settings: deletes inside the project or under a system directory
+(`rm -rf node_modules`, `rm -rf /tmp/build`), force-pushing a feature branch, a plain push to `main`, `npm publish`,
+`gh pr merge`, deploys, writes to Claude Code settings, outgoing messages and payments.
 
-- Without managed settings, another plugin's or your own hook that returns `allow` for the same call can keep the
-  prompt from appearing.
-- In `dontAsk` mode, or with prompts turned into denials, an `ask` becomes a deny.
-- In `bypassPermissions` mode nothing guarantees a prompt: the guard denies double-level calls outright, and the
-  single-confirmation ones mostly run without a prompt.
-
-**Two-step confirmation.** The first time a double-level shell command comes in, the hook asks with the
-consequences ("recursive delete of /home/me: no recycle bin, unrecoverable without a backup") and swaps the command
-for `node "<plugin>/hooks/confirm.mjs" <token>`. Allowing that prompt runs only `confirm.mjs`, which records the
-approval and asks the agent to resend the original command unchanged; refusing records nothing. The resend — same
-session, same tool, same input, within 10 minutes — gets the second prompt, and only allowing that one runs it. An
-approval is spent on that second prompt. MCP tools cannot have their input swapped, so their first call is denied
-with the `confirm.mjs` command to run first. The state lives in `<os temp dir>/sorry-matt-guard/<session>.json`; if
-it cannot be read or written the call is never let through on that account. Only the exact command the guard hands
-out may run `confirm.mjs`: any other command that names `confirm.mjs`, `confirm-state` or the state directory
-(chained, rewritten, another path, an interpreter one-liner, a redirect), and any file-tool write into the state
-directory, is denied; reading the scripts or committing them is not. In `auto` mode and every other attended mode
-the flow above applies, since a PreToolUse `ask` goes to the permission prompt.
-
-**Merges that deploy.** `gh pr merge` (with `--admin` or `--auto` too) and every direct write to a protected branch
-(`git push` to it, `gh api` merge, ref and contents endpoints, GraphQL `mergePullRequest`,
-`enablePullRequestAutoMerge`, `enqueuePullRequest`, `createCommitOnBranch`, MCP merge and push tools) are asked
-only when the merge would deploy right away. The hook takes, in order:
-
-1. `SORRY_MATT_MERGE_DEPLOYS` (`yes`/`no`) in the environment, or `{"mergeDeploysProduction": true|false}` in the
-   repo's `.claude/sorry-matt.json` (that file only speaks for its own clone's origin);
-2. otherwise detection, on the workflows the merge leaves on the base branch: for a PR, `gh pr view` gives the base
-   and the head, and the head's `.github/workflows/*.y*ml` are read (the base's when the head is not available
-   locally, which the prompt says); for a PR in another repo than this clone's origin (`--repo`), the same files
-   are read from GitHub with `gh api graphql`; for a push, the tree of the ref being pushed. A variable set earlier
-   on the same command line (`R=owner/repo; gh pr merge 1 --repo $R`) is read as its value. A workflow that a push to the base
-   triggers deploys when a job has `environment: prod`/`production`, uses a known deploy action
-   (`actions/deploy-pages`, `peaceiris/actions-gh-pages`, `cloudflare/wrangler-action`,
-   `FirebaseExtended/action-hosting-deploy`, …), calls a reusable workflow named like a deploy or release, or runs
-   `vercel --prod`, `fly deploy`, `wrangler deploy`, `firebase deploy`, `netlify deploy --prod`, `npm publish`,
-   `cargo publish`, `gh release create`, or `kubectl apply`/`helm upgrade` with prod — unless that job or step is
-   gated on a release tool's output (release-please's `release_created`, changesets' `published`) or on a tag.
-   Merging the release tool's own release PR (head `release-please--*` or `changeset-release/*`, or the
-   `autorelease: pending` label) lifts that gate: it releases right away.
-
-Detected: asked, naming the workflow and the signal. Clearly not: let through to your permission settings. A lookup
-that fails, or a job or step named like a deploy, release or publish whose action the hook does not recognize:
-asked, saying why.
-
-**Unattended.** A prompt waits for an answer for as long as it takes, so an agent left running overnight stops at
-the first one. Before you walk away, create the switch file; every call the guard would ask about is then denied
-instead, with a message telling the agent to put it on the human-work list (or in its final report) and carry on.
-Two-step actions are denied before any confirmation is recorded. An `AskUserQuestion` is denied too, without the
-question box: the agent answers it on its own judgment and records that, marks it awaiting ruling, or puts it on
-the human-work list, and carries on. Remove the file to be asked again. The guard
-reads it on every call, so it takes effect in sessions that are already running. Setting `SORRY_MATT_UNATTENDED=on`
-in the `env` of your settings does the same for new sessions. This only makes the guard stricter; prompts that
-come from your own permission settings are not the guard's and still appear (in `auto` mode the classifier decides
-those instead).
-
-```bash
-touch ~/.claude/sorry-matt-unattended   # going to bed
-rm ~/.claude/sorry-matt-unattended      # back
-```
-
-Or type `/sorry-matt:unattended on`, `off` or `status` (no argument flips it). A hook does the switching when you
-type the command, not the agent, which cannot run it. `off` also ends the automatic state, hands the agent the
-list of what was blocked under either source, and works only on a turn you sent yourself; when that cannot be told,
-nothing changes and you are told to remove the file. It cannot end `SORRY_MATT_UNATTENDED`, and says so.
+**What it is not.** The guard matches command text; it is not a security boundary and does not try to be one. It
+does not handle a command hidden behind a variable (`T=/; rm -rf $T`), an interpreter wrapper (`bash -c`,
+`pwsh -Command`, `node -e`, `eval`), a subshell (`$( )`, backticks), a pipe (`echo / | xargs rm -rf`), a script that
+does the work for it, `find / -delete`, or a force-push with no refspec while `main` is checked out. It guards
+against a slip on the obvious line, not against an agent set on getting around it.
 
 To turn the guard off, set it in the `env` of your Claude Code settings:
 
@@ -185,7 +123,7 @@ To turn the guard off, set it in the `env` of your Claude Code settings:
 }
 ```
 
-Whether `gh pr merge` goes ahead otherwise is up to your permission settings, and sorry-matt sends the aggregate PR's
+Whether `gh pr merge` goes ahead is up to your permission settings, and sorry-matt sends the aggregate PR's
 merge only when a rule allows it or you told it to merge in that run. To let it merge aggregate PRs without a
 prompt, add these rules to `.claude/settings.local.json` (one repo) or `~/.claude/settings.json` (every project),
 merging them into an existing `permissions.allow` if there is one; to be asked every time put them under `ask`,
@@ -304,7 +242,7 @@ Restart Claude Code after updating so the new skill definitions are loaded.
   `check-structure.mjs` reconciles `src/` with `skills/`, and `check-vendored.mjs` verifies each vendored file's
   SHA-256 against its `NOTICE.md`.
 - `hooks/` holds the guard hook, the compaction reminder, the run budget hooks, and `end-run.mjs`, the command
-  that ends an abnormally stopped run; `scripts/guard.test.mjs`, `scripts/deploy-on-merge.test.mjs`,
+  that ends an abnormally stopped run; `scripts/guard.test.mjs`,
   `scripts/reread.test.mjs`, `scripts/budget.test.mjs`, and `scripts/end-run.test.mjs` test them in the same CI run.
 - Skill scripts live in the owning skill's `scripts/` directory, byte-identical in `src/` and `skills/`; their tests
   (`scripts/frontier.test.mjs`, `scripts/mutate.test.mjs`,

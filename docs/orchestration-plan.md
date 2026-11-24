@@ -215,7 +215,7 @@ ledger 的 ended 標記是 `ledger --ended`。
 | | 中途事項都有落點 | 保留文字（判斷） |
 | | `budget: spawns`／`rounds` 已在裁決點前依票數改寫 | 保留文字（數值是判斷；行的存在見 `ledger/budget-limits`） |
 | §5 授權 | 需要授權的動作以正規指令送出，結果記進第 5 欄 | 保留文字（guard hook 擋，紀錄是敘事） |
-| | 需要確認的動作在確認後才執行或列進人工作業清單 | 保留文字（guard hook） |
+| | 沒有執行災難級操作，需要的已列進人工作業清單 | 保留文字（guard hook 擋常見寫法） |
 | | 被擋下的動作在人工作業清單並附片段或指令 | 保留文字（內容） |
 | | 沒有寫入任何設定檔 | 保留文字（guard hook 擋） |
 | §6 語言與對外文字 | 每個提問與對外文字符合四條 | 保留文字（判斷） |
@@ -375,8 +375,8 @@ run profile 的宣告點（#100）寫進了裁決點。第 5 節留下的「需�
 | --- | --- | --- |
 | 第 4 節：上限照 `get-to-work`「預算與斷路」停下、時限照「時限」延長或停下 | `deadline.mjs`、`tick.mjs` | `deadline.test.mjs`、`tick.test.mjs` |
 | 第 4 節：已用 spawn 數取自第 9 欄 | `state.mjs usage`（讀 `counters.json`） | `state.test.mjs` |
-| 第 5 節：兩段確認的機制（`confirm.mjs`、MCP 的擋下訊息） | `hooks/confirm.mjs`、`hooks/guard.mjs` | `guard.test.mjs` |
-| 第 5 節：各類動作的指令細目（`terraform`／`pulumi destroy`、部署工具、`git send-email`…） | `hooks/classify.mjs` | `guard.test.mjs`、`deploy-on-merge.test.mjs` |
+| 第 5 節：兩段確認的機制（`confirm.mjs`、MCP 的擋下訊息） | 已移除（#183）：guard 不再確認，只直接擋下災難級操作 | — |
+| 第 5 節：各類動作的指令細目（`terraform`／`pulumi destroy`、部署工具、`git send-email`…） | 已移除（#183）；災難級三類的判斷在 `hooks/classify.mjs` | `guard.test.mjs` |
 | 第 5 節：hook 認不出的寫法與各權限模式的行為 | `hooks/classify.mjs`；規則本身（沒攔下也不自己執行）留在文字 | `guard.test.mjs` |
 | 第 7 節：第 4 欄（線、tip、CI、本機驗證紀錄、基底） | `state.mjs` 的 `lines` | `state.test.mjs` |
 | 第 7 節：第 8 欄對帳表的欄位 | `state.mjs` 的 `tickets` | `state.test.mjs` |

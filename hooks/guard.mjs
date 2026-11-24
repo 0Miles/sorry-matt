@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// PreToolUse hook entry: the event on stdin, an ask or deny decision on stdout or nothing. Only an entry
+// PreToolUse hook entry: the event on stdin, a deny decision on stdout or nothing. Only an entry
 // point — the logic lives in decision.mjs — so it runs whatever path it was started from.
 import { decide } from './decision.mjs';
 

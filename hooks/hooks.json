@@ -1,9 +1,9 @@
 {
-  "description": "sorry-matt guards: ask before releases, production deploys, Claude Code settings writes and merges that deploy, and confirm catastrophic deletes, outgoing messages and payments twice; at every session start, hand the agent the one line that enters unattended mode; when a permission dialog goes unanswered for SORRY_MATT_UNATTENDED_AFTER minutes (default 10), take it back and enter unattended mode, and while unattended deny every permission dialog and every AskUserQuestion at once; when the user sends a message in any session, end the automatic unattended state and hand the agent the list of what was blocked meanwhile; when the user types /sorry-matt:unattended on, off or status, flip or show the user's own switch (off only on a turn the user sent) and hand the agent the result; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
+  "description": "sorry-matt guards: deny outright, from plain command text, a recursive delete of the filesystem root, a system directory or the home directory, and deleting or force-pushing the remote main or master branch; while a run is in progress, count its host session's subagents and deny that session a spawn past the ledger's spawn limit; after a compaction, point an in-progress run back at its ledger and rule files",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion|mcp__.*",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs\"" }
         ]
@@ -24,48 +24,9 @@
     ],
     "SessionStart": [
       {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-intro.mjs\"" }
-        ]
-      },
-      {
         "matcher": "compact",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/reread.mjs\"" }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/permission-request.mjs\"", "timeout": 3700 }
-        ]
-      }
-    ],
-    "UserPromptExpansion": [
-      {
-        "matcher": "^sorry-matt:unattended$",
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-switch.mjs\"" }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-return.mjs\"" }
-        ]
-      },
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/unattended-switch.mjs\"" }
         ]
       }
     ]

@@ -91,7 +91,7 @@ node -e "import('./hooks/runs.mjs').then(async r=>{const b=await import('./hooks
   `reminder()`，固定兩行加每個 ledger 與規則檔各一行；一個 ledger、一個規則檔時是 244 bytes 加兩個路徑的長度。
 - `hooks/spawns.mjs`（PreToolUse `Agent` 與 SubagentStart）：只有超過 spawn 上限時印 deny 的理由
   （`hooks/budget.mjs` 的 `denyReason()`），535 bytes 加 ledger 路徑與三個數字的長度。
-- `hooks/guard.mjs`（PreToolUse）：只有需要確認或擋下的呼叫才印理由（`hooks/decision.mjs`）。
+- `hooks/guard.mjs`（PreToolUse）：只有擋下的災難級操作才印理由（`hooks/decision.mjs`）。
 - `hooks/hooks.json` 的 `description` 是給人看的，不進 context。
 
 屬於 runtime 或使用者、plugin 改不了的：Claude Code 的系統提示、內建工具與 MCP 工具的定義、其他 plugin 與內建 skill

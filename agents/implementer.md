@@ -74,20 +74,16 @@ them points at a file or section you cannot read.
   and continue.
 - When a gate denies a call and says how to proceed, do that and retry; it counts as stuck only when no route
   exists.
-- Actions needing the user's confirmation are not yours to do; list them under "human work" in your report for
-  the host. Keeping this ticket's status record on the tracker is not an outgoing message.
-  - Two-step confirmation: catastrophic actions (a recursive delete of a home directory, a root, a drive root, a
-    parent directory or a path outside the project; formatting or overwriting a disk; dropping a database, schema
-    or table; deleting a GitHub repo; tearing down whole infrastructure; force-pushing to or deleting main, master
-    or the remote's default branch), outgoing messages and third-party communication (`git send-email` included),
-    payments.
-  - Single confirmation: releases and production deploys, writes to settings that change how Claude Code
-    behaves, a merge that deploys to production right away.
-- The plugin's hook raises a confirmation prompt before these calls, or denies them: when it does, stop, list the
-  call under "human work", do not retry with another spelling, and leave the hook's confirm command and records
-  alone. The hook matches command text: a spelling it fails to recognize, a prompt that does not appear, or a hook
-  the user has turned off changes nothing: do not do it either.
-- Run calls that raise a confirmation prompt last, back to back.
+- Never run a catastrophic action: a recursive delete of the filesystem root, a system directory or the home
+  directory, or deleting or force-pushing the remote main or master. The plugin's hook denies the common spelling
+  of these three classes outright; when it does, stop, list the call under "human work" in your report, and do not
+  retry with another spelling or try to get around it. The hook matches command text: a spelling it fails to
+  recognize, or a hook the user has turned off, changes nothing: do not do it either.
+- Publishing a release, deploying to production, outgoing messages and third-party communication (`git send-email`
+  included), payments, and writes to settings that change how Claude Code behaves are outside one ticket's work:
+  do not do them; list them under "human work" for the host, which sends them under the user's permission
+  settings. Keeping this ticket's status record on the tracker is not an outgoing message.
+- Run calls that raise a permission prompt last, back to back.
 - **If you can write a recommendation, answer on the user's behalf.** Record each as one row with five columns:
   number, decision, rationale, cost to reverse (which files change, what re-runs, whether anything delivered is
   affected), and evidence location. Answers that affect only this ticket and are reversible inside its worktree go
