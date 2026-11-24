@@ -1,7 +1,7 @@
-// A command line read the way a guard needs it: every simple command it would run, with its words,
-// redirection targets, and the operator that joined it to the one before. Not a shell: it follows
-// quotes, escapes, separators, subshells, `$( )` and backticks, redirections and heredocs; anything
-// else it still splits on whitespace, so a hidden command shows up as words instead of vanishing.
+// A command line read the way the guard needs it: every top-level simple command, with its words, redirection
+// targets, and the operator that joined it to the one before. Not a shell: it follows quotes, escapes, separators,
+// redirections and heredocs, and keeps `$( )` and backticks inside the word they sit in. It does not look inside
+// them, inside a script handed to another interpreter (`bash -c`, `pwsh -Command`, `eval`), or through variables.
 
 const SEPARATORS = new Set([';', '&', '|', '\n', '(', ')']);
 
@@ -16,22 +16,19 @@ const PREFIX_OPTIONS = {
   timeout: new Set(['-s', '-k']),
   xargs: new Set(['-I', '-n', '-P', '-L', '-d', '-E', '-s', '-a']),
 };
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish']);
-const POWERSHELLS = new Set(['pwsh', 'powershell']);
 
 // `C:\Program Files\Git\bin\git.exe` -> `git`.
 export const commandName = (word = '') =>
   word.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|ps1)$/i, '').toLowerCase();
 
 /**
- * Every simple command in `line`, nested ones (`bash -c`, `$( )`, heredocs fed to a shell) included.
+ * Every top-level simple command in `line`.
  * @param {string} line
  * @param {'bash'|'powershell'|'cmd'} dialect cmd: `^` escapes, a backslash is a path separator, `'` and `#` are plain
  * @returns {{argv: string[], redirects: string[], op: string, heredoc: string}[]}
  */
 export function parse(line, dialect = 'bash') {
   const segments = [];
-  const nested = [];
   const escape = { powershell: '`', cmd: '^' }[dialect] ?? '\\';
   const cmd = dialect === 'cmd';
   const heredocs = [];
@@ -69,15 +66,11 @@ export function parse(line, dialect = 'bash') {
     }
     return j;
   };
-  const substitution = (start) => {
-    const end = closeParen(start);
-    nested.push(line.slice(start, end - 1));
-    return end;
-  };
+  // `$( )` and backticks stay part of the word they sit in; their text is not read as commands.
+  const substitution = closeParen;
   const backtick = (start) => {
     let j = start;
     while (j < line.length && line[j] !== '`') j += line[j] === '\\' ? 2 : 1;
-    nested.push(line.slice(start, j));
     return j + 1;
   };
   // After a newline: read the bodies of the heredocs opened on the line that just ended.
@@ -202,63 +195,7 @@ export function parse(line, dialect = 'bash') {
     i++;
   }
   endSegment('');
-  expandVariables(segments, dialect);
-
-  const out = [];
-  for (const s of segments) {
-    out.push(s);
-    const inner = innerScript(s.argv);
-    if (inner) out.push(...parse(inner.text, inner.dialect));
-    const shell = interpreter(s.argv);
-    if (s.heredoc && shell) out.push(...parse(s.heredoc, shell));
-  }
-  for (const text of nested) out.push(...parse(text, dialect));
-  return out;
-}
-
-// `R=owner/repo; gh pr merge 1 --repo $R`: a variable given a plain value earlier on the same line is read as that
-// value from then on. A name given two different values, or a value that is itself an expansion, stays as written,
-// and so does anything inside `$( )`, backticks or a nested script.
-const NAME = '[A-Za-z_][A-Za-z0-9_]*';
-function assignments(argv, dialect) {
-  if (dialect === 'cmd') return null;
-  if (dialect === 'powershell') {
-    let m;
-    if (argv.length === 3 && argv[1] === '=' && (m = new RegExp(`^\\$(${NAME})$`).exec(argv[0]))) return [[m[1], argv[2]]];
-    if (argv.length === 1 && (m = new RegExp(`^\\$(${NAME})=(.*)$`, 's').exec(argv[0]))) return [[m[1], m[2]]];
-    return null;
-  }
-  const words = ['export', 'local', 'readonly', 'declare', 'typeset'].includes(argv[0]) ? argv.slice(1) : argv;
-  if (!words.length || !words.every((w) => new RegExp(`^${NAME}=`).test(w))) return null;
-  return words.map((w) => [w.slice(0, w.indexOf('=')), w.slice(w.indexOf('=') + 1)]);
-}
-
-function expandVariables(segments, dialect) {
-  const key = (name) => (dialect === 'powershell' ? name.toLowerCase() : name);
-  const seen = new Map();
-  for (const seg of segments) {
-    for (const [name, value] of assignments(seg.argv, dialect) ?? []) {
-      const k = key(name);
-      seen.set(k, seen.has(k) && seen.get(k) !== value ? null : value);
-    }
-  }
-  const values = new Map();
-  const expand = (word) =>
-    word.replace(new RegExp(`\\$\\{(${NAME})\\}|\\$(${NAME})(?![A-Za-z0-9_])`, 'g'), (whole, braced, bare) => {
-      const k = key(braced ?? bare);
-      return values.has(k) ? values.get(k) : whole;
-    });
-  for (const seg of segments) {
-    const set = assignments(seg.argv, dialect);
-    if (values.size) {
-      seg.argv = seg.argv.map(expand);
-      seg.redirects = seg.redirects.map(expand);
-    }
-    for (const [name, value] of set ?? []) {
-      const k = key(name);
-      if (seen.get(k) !== null && !/[$`]/.test(value)) values.set(k, value);
-    }
-  }
+  return segments;
 }
 
 /**
@@ -284,44 +221,4 @@ export function unwrap(argv) {
     } else break;
   }
   return { argv: argv.slice(k), wrappers };
-}
-
-const interpreter = (argv) => {
-  const name = commandName(unwrap(argv).argv[0]);
-  if (SHELLS.has(name)) return 'bash';
-  if (POWERSHELLS.has(name)) return 'powershell';
-  return null;
-};
-
-// The script a command hands to another interpreter: `bash -c '...'`, `pwsh -Command ...`,
-// `pwsh -EncodedCommand <base64>`, `cmd /c ...`, `eval ...`, `Invoke-Expression ...`, `wsl -- ...`.
-function innerScript(rawArgv) {
-  const argv = unwrap(rawArgv).argv;
-  const name = commandName(argv[0]);
-  const rest = argv.slice(1);
-  if (SHELLS.has(name)) {
-    const c = rest.findIndex((w) => /^-[a-z]*c[a-z]*$/i.test(w));
-    return c !== -1 && rest[c + 1] !== undefined ? { text: rest[c + 1], dialect: 'bash' } : null;
-  }
-  if (POWERSHELLS.has(name)) {
-    const enc = rest.findIndex((w) => /^-(e|ec|enc|encodedcommand)$/i.test(w));
-    if (enc !== -1 && rest[enc + 1]) {
-      return { text: Buffer.from(rest[enc + 1], 'base64').toString('utf16le'), dialect: 'powershell' };
-    }
-    const c = rest.findIndex((w) => /^-(c|command)$/i.test(w));
-    return c !== -1 ? { text: rest.slice(c + 1).join(' '), dialect: 'powershell' } : null;
-  }
-  if (name === 'cmd') {
-    const c = rest.findIndex((w) => /^\/[ck]$/i.test(w));
-    return c !== -1 ? { text: rest.slice(c + 1).join(' '), dialect: 'cmd' } : null;
-  }
-  if (name === 'eval') return rest.length ? { text: rest.join(' '), dialect: 'bash' } : null;
-  if (name === 'invoke-expression' || name === 'iex') {
-    return rest.length ? { text: rest.join(' '), dialect: 'powershell' } : null;
-  }
-  if (name === 'wsl') {
-    const dd = rest.findIndex((w) => w === '--' || w === '-e' || w === '--exec');
-    return dd !== -1 && rest.length > dd + 1 ? { text: rest.slice(dd + 1).join(' '), dialect: 'bash' } : null;
-  }
-  return null;
 }
