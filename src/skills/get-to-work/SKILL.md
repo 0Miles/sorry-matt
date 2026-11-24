@@ -67,11 +67,11 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`，每個送來完成通知的 agent 加一個
    `--reported <agent id>`。收不收它的回報由 tick 判。`run` 反覆跑 `next`，把每份清單 batch 1 的 exec 依序在 bash
    跑完並 record，直到 batch 1 還剩 spawn、judge、ask 或留給你的 exec，或 `then` 是 `end`／`done`。留給你的 exec
-   由 plugin 的 guard hook 的動作分類決定，不看步驟名稱：guard 會要求確認的（例如推到受保護分支）才留下。輸出是
+   是 tick 標了 `host` 的：推到受保護分支（main、master 或 run 的基底分支）的 push，其他都由 `run` 代跑。輸出是
    剩下的清單，`ran` 列出它跑過的 exec（id、結束代碼、錯誤輸出的 log 檔；被訊號殺掉的另有 `signal`，結束代碼記成
    128 加訊號編號，不算正常結束），`lists` 依序列出它做過的每份清單的 `reports`、`reconcile`、`dispatch`、`wrote`
    與從那份清單跑的 exec：較早清單收下的回報、對帳與寫出的檔都從這裡讀，不只看最後一份。`run` 以 1 結束、訊息說
-   bash 不能用或 guard hook 的分類載不到時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
+   bash 不能用時，這次喚醒改跑 `next`，exec 自己照抄 `command`。
 
    Bash tool 把 `run` 移到背景時，等它結束、讀到它的輸出，才處理清單。**背景化的 `run` 結束前不可再開一個**
    `run`，也不跑 `next` 或 `record`：兩者會搶寫同一份 state 檔。
@@ -89,7 +89,7 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 2. 照 `actions` 做，但一份清單只送出 `batch` 為 1 的動作，在同一回合一起送出。每做完一個就跑它 `record` 欄的
    指令。較後的 batch 這次不做：前面的動作 record 後，它們會在之後的清單再發下來（tick 只把 batch 1 的背景 spawn
    當成已發出）。沒做的不記，不做沒發下來的事。`reference` 是這個動作要讀的段落。
-   - **exec**：`run` 已代跑。留在清單裡的 exec 是 guard hook 會要求確認的，留給你跑，guard 才看得到：在 bash
+   - **exec**：`run` 已代跑。留在清單裡的 exec 帶 `host`（推到受保護分支），用你自己的 Bash tool 跑，讓使用者的權限設定看得到：在 bash
      （Windows 是 Git Bash）照抄 `command`，以結束代碼 record。帶 `ran` 的 exec 已經跑過、只是沒記成：不再跑，
      照 `note` 處理後跑它 `record` 欄的指令（已帶結束代碼）。不在 `okExit` 的結束代碼會在下一份清單變成要你處理的 `failed`
      judge，`run` 跑的 exec 由它的 `do` 指名 log 檔。

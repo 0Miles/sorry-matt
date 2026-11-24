@@ -4,11 +4,10 @@
 // which agents to extend or stop, which ticket to integrate, whether a dispatch point runs and what it dispatches,
 // what the finish does, and how long the fallback wake-up waits. Every action points to the reference it needs.
 // The host runs the actions and writes each result back with `tick.mjs record`; `tick.mjs run` does that for the
-// exec actions but those the guard hook would ask about. tick spawns nothing and stops no agent. `next` and `record`
+// exec actions but those marked `host` (a push to a protected branch). tick spawns nothing and stops no agent. `next` and `record`
 // run no network call and change no branch; `run` executes exec actions, which may reach the network (ci.mjs, gh)
 // and merge branches (integrate.mjs).
-// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash and the plugin's
-// hooks/classify.mjs).
+// No dependencies: runs on a bare Node 20+ with git on PATH (and, for `run`, bash).
 //
 // Usage
 //   node tick.mjs setup  <state> --tracker github|local --root <repo working tree> --base <base branch>
@@ -224,10 +223,9 @@
 //   `--now`, each `next` and record reads the clock again (the deadline scan and the fallback wake-up are of the time
 //   that list is made). It stops after a list whose batch 1 holds a spawn, a judge, an ask or an exec left to the host,
 //   or whose `then` is "end" or "done": the host's actions. It records no wakeup-end. An exec is left to the host when
-//   the guard hook's classification (hooks/classify.mjs, `classify` on the Bash call of its `command`) gives it a
-//   verdict, whatever its step: the host runs it with its own Bash tool, so the guard sees it (a push to a protected
-//   branch is; a push of a line is not, and run pushes it). Without that classification (the plugin's hooks are not
-//   two levels above this skill) run runs no exec: exit 1, as without bash. An exit not in `okExit` is recorded as it
+//   it carries `host: true`: a push to a protected branch (main, master or the run's base branch), which the host runs
+//   with its own Bash tool, under the user's own permission settings. A push of a line has no `host`, and run
+//   pushes it. tick sets `host` itself; it reads no hook. An exit not in `okExit` is recorded as it
 //   is; the next list carries its `failed` judge, which stops run; nothing is retried. An exec killed by a signal
 //   is no normal end: it is recorded as 128 + the signal number (no `okExit` holds it) and its log says so.
 //   Each exec's stderr (and its stdout when its `stdout` is null) goes to `<run>/tick/run/<action id as a file
@@ -295,7 +293,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, wri
 import { constants as osConstants } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
@@ -317,20 +315,9 @@ const doc = (file, part) => ({
   part,
 });
 
-// The guard hook's classification (hooks/classify.mjs, its `classify`): `run` leaves to the host each exec it gives a
-// verdict (#146). The plugin's hooks are two levels above this skill (dist: <plugin>/hooks; src: the repo's hooks/).
-// It cannot be one static import (src and dist sit at different depths), so it is loaded here; null when it is not
-// there or does not load, and then `run` runs no exec (exit 1, as without bash).
-const PLUGIN = resolve(SKILL, '..', '..');
-export const GUARD_FILE = join(basename(PLUGIN) === 'src' ? dirname(PLUGIN) : PLUGIN, 'hooks', 'classify.mjs');
-let GUARD = null;
-let GUARD_WHY = 'it is not there';
-try {
-  if (existsSync(GUARD_FILE)) GUARD = (await import(pathToFileURL(GUARD_FILE).href)).classify ?? null;
-  if (existsSync(GUARD_FILE)) GUARD_WHY = GUARD ? null : 'it exports no classify';
-} catch (e) {
-  GUARD_WHY = `it did not load: ${e.message}`;
-}
+// Protected branches: main, master and the run's base branch. A push to one is marked `host`: `run` leaves it to the
+// host's own Bash tool (#129, #146), as integrate.mjs leaves its push of one (isProtected there).
+const isProtected = (c, branch) => branch === 'main' || branch === 'master' || branch === c.cfg.base;
 
 const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
 const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
@@ -480,8 +467,8 @@ function mergedSha(c, id, t, target) {
 
 // ---- the registry -----------------------------------------------------------------------------------------------------
 
-function exec(id, step, argv, { stdout = null, cwd = null, okExit = [0], tickets = [], line = null, after = [], note = null } = {}) {
-  return { id, kind: 'exec', step, tickets, line, after, argv, stdout, cwd, okExit, command: commandLine(argv, stdout, cwd), ...(note ? { note } : {}) };
+function exec(id, step, argv, { stdout = null, cwd = null, okExit = [0], tickets = [], line = null, after = [], note = null, host = false } = {}) {
+  return { id, kind: 'exec', step, tickets, line, after, argv, stdout, cwd, okExit, command: commandLine(argv, stdout, cwd), ...(note ? { note } : {}), ...(host ? { host: true } : {}) };
 }
 function judge(id, step, what, outcomes, reference, { tickets = [], line = null, after = [], kind = 'judge', meta = null, needs = null } = {}) {
   return { id, kind, step, tickets, line, after, do: what, outcomes, reference, ...(meta ? { meta } : {}), ...(needs ? { needs } : {}) };
@@ -517,7 +504,7 @@ export const OPERATIONS = {
       ],
       { stdout: c.tick('merge', `${keyOf(id)}-${slugOf(tag)}.json`), okExit: [0, 4], tickets: [id], line: t.line },
     ),
-  push: (c, { target, tag, after }) => exec(`push:${target}:${tag}`, 'push', ['git', '-C', c.git.wtOf(target) ?? c.cfg.root, 'push', '-u', 'origin', target], { line: target, after }),
+  push: (c, { target, tag, after }) => exec(`push:${target}:${tag}`, 'push', ['git', '-C', c.git.wtOf(target) ?? c.cfg.root, 'push', '-u', 'origin', target], { line: target, after, host: isProtected(c, target) }),
   // verify.mjs: local verification of one SHA and its per-SHA record
   verifyLocal: (c, { line, sha, reason, wt, tag, selfFound = null }) =>
     exec(
@@ -1740,8 +1727,8 @@ function stepIntegration(c) {
       }
     }
     if (busy || !tip) continue;
-    // integrate.mjs pushes a line itself; a push to the base branch (integrate: direct) is the host's, so the
-    // guard hook sees it. One push per integration, before the next merge.
+    // integrate.mjs pushes a line itself; a push to the base branch (integrate: direct) is the host's (`host`).
+    // One push per integration, before the next merge.
     if (c.profile.integrate === 'direct' && c.git.hasOrigin && c.git.remote(target) !== tip && tickets.some(([, t]) => t.merges.length)) {
       c.emit(OPERATIONS.push(c, { target, tag: `@${tip}`, after: [] }));
       continue;
@@ -2865,19 +2852,6 @@ export function record(path, id, flags, now, deps) {
 
 /** Where `run` writes one exec's error output: `<run>/tick/run/<action id as a file name>.log`. */
 const runLog = (path, run, id) => join(runDir(path, run), 'tick', 'run', `${keyOf(id)}.log`);
-/**
- * Whether `run` leaves an exec to the host: the guard hook gives its command a verdict (an action needing
- * confirmation), so it must run in the host's own tool call where the guard sees it (#146). The guard's own
- * classification decides, not the step: a push of a line runs here, a push to a protected branch does not. A
- * classification that throws leaves it to the host, as the guard fails closed.
- */
-function leftToHost(a, classify) {
-  try {
-    return classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
-  } catch {
-    return true;
-  }
-}
 const RUN_LISTS = 500;
 /** What the host does when `run` exits 3 (#147, #146): the `do` of its output. */
 const RUN_REFUSED =
@@ -2892,7 +2866,7 @@ function markRan(path, a, result, now) {
 }
 
 /**
- * `next` again and again: each list's batch-1 execs (those the guard hook classifies aside) run through deps.execute
+ * `next` again and again: each list's batch-1 execs (those marked `host` aside) run through deps.execute
  * in list order, each kept as run and recorded with its exit code as `record --exit` does; `next` runs again only
  * while batch 1 held nothing else and `then` is "tick". An exec an earlier run ran and could not record is recorded,
  * not run. The output is the last list less the execs run, plus `ran`; its batch-1 spawns count as handed out only
@@ -2911,13 +2885,7 @@ export function run(path, reported, now, deps) {
       lists.push(list);
       const first = out.actions.filter((a) => a.batch === 1);
       const todo = [];
-      for (const a of first.filter((x) => x.kind === 'exec')) {
-        if (!a.ran && !deps.classify) {
-          blocked = { id: a.id, step: a.step, at: 'execute', exit: null, log: runLog(path, out.run, a.id), record: a.record };
-          throw new Error(`the guard hook's classification ${GUARD_FILE} cannot be used (${GUARD_WHY ?? 'none was given'}): run next and the execs by hand`);
-        }
-        if (a.ran || !leftToHost(a, deps.classify)) todo.push(a);
-      }
+      for (const a of first.filter((x) => x.kind === 'exec')) if (a.ran || !a.host) todo.push(a);
       for (const a of todo) {
         let result = a.ran; // ran before, its record failed: record it, do not run it again
         blocked = { id: a.id, step: a.step, at: result ? 'record' : 'execute', exit: result?.exit ?? null, log: result?.log ?? runLog(path, out.run, a.id), record: a.record };
@@ -3077,7 +3045,6 @@ export function defaultDeps() {
     stateMain,
     clock: () => Date.now(),
     execute: bashExecutor(), // run: (action, log file) => { code, signal? }
-    classify: GUARD, // run: the guard hook's classification of an exec's command, or null when it is not there
   };
 }
 
