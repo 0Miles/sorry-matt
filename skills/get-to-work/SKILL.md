@@ -80,14 +80,12 @@ Each wake-up:
 1. `node "${CLAUDE_SKILL_DIR}/scripts/tick.mjs" run <state>`, with one `--reported <agent id>` for each agent whose
    completion notice arrived. Whether its report is taken is tick's call. `run` runs `next` again and again: it runs
    each list's batch-1 execs in bash, in order, and records them, until batch 1 still holds a spawn, a judge, an ask
-   or an exec left to you, or `then` is `end` or `done`. Which execs are left to you is the plugin guard hook's action
-   classification, not the step name: only those the guard would ask you to confirm (a push to a protected branch,
-   say) stay. Its output is the list that is left, with `ran` naming the execs it ran (id, exit code, the log file of
+   or an exec left to you, or `then` is `end` or `done`. The execs left to you are those tick marks `host`: a push to a
+   protected branch (main, master or the run's base branch); `run` runs every other exec. Its output is the list that is left, with `ran` naming the execs it ran (id, exit code, the log file of
    their error output; one killed by a signal also has `signal`, and its exit code is recorded as 128 plus the signal
    number: not a normal end) and `lists` giving, in order, each list it made: its `reports`, `reconcile`, `dispatch`,
    `wrote` and the execs run from it. Read the reports taken, the reconciliations and the files written by earlier
-   lists there, not only the last one. When `run` exits 1 saying bash cannot be used or the guard hook's
-   classification could not be loaded, run `next` instead this wake-up and run the execs' `command` yourself.
+   lists there, not only the last one. When `run` exits 1 saying bash cannot be used, run `next` instead this wake-up and run the execs' `command` yourself.
 
    When the Bash tool moves `run` to the background, wait for it to end and read its output before acting on the
    list. **Never start another `run` before a backgrounded one has ended**, and run no `next` or `record` meanwhile:
@@ -110,8 +108,8 @@ Each wake-up:
    command in its `record` field. Leave the later batches this time: once the actions before them are recorded, they
    are handed out again in a later list (tick counts only a batch-1 background spawn as handed out). Record nothing
    you did not do, and do nothing that was not handed out. `reference` is what that action needs you to read.
-   - **exec**: `run` has run them. An exec left in the list is one the guard hook would ask you to confirm, left for
-     you so the guard sees it: run `command` as written in bash (Git Bash on Windows) and record its exit code. An
+   - **exec**: `run` has run them. An exec left in the list carries `host` (a push to a protected branch): run it with
+     your own Bash tool, so the user's permission settings see it. Run `command` as written in bash (Git Bash on Windows) and record its exit code. An
      exec with `ran` already ran and was not recorded: do not run it again; handle its `note`, then run the command in
      its `record` field (the exit code is filled in). An exit code not in `okExit` comes
      back in the next list as a `failed` judge, whose `do` names the log file of an exec `run` ran.

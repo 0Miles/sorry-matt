@@ -85,9 +85,9 @@
 //                           open for the aggregate PR).
 //                4. stage   integrating → delivered; then the line's tip in the state becomes the worktree's HEAD.
 //                5. push    Only with `--push`: `git push -u origin <line>`. Skipped without an `origin` remote
-//                           ("no-origin"). A push to a protected branch (main, master, origin's default branch: the
-//                           guard hook's rule, so only under integrate: direct) is never run here: the output
-//                           gives the command for the host to run, so the guard hook decides it ("host").
+//                           ("no-origin"). A push to a protected branch (main, master, origin's default branch;
+//                           only under integrate: direct) is never run here: the output gives the command for the
+//                           host to run with its own tool, under the user's permission settings ("host").
 //                6. clean   Removes the ticket's worktree (`git worktree remove`, never forced) and the local ticket
 //                           branch (`git branch -d`). A worktree with changes is refused; the earlier steps stay
 //                           done, and a rerun after it is cleaned finishes.
@@ -252,7 +252,7 @@ function worktrees(cwd) {
 }
 
 // Protected branches: main, master, and origin's default branch when the clone knows it. A push to one of them is
-// left to the host, so the guard hook (hooks/classify.mjs) sees a force-push or delete of main and master.
+// left to the host's own tool, under the user's permission settings; tick.mjs marks its own such push `host`.
 function isProtected(cwd, branch) {
   if (branch === 'main' || branch === 'master') return true;
   const head = tryGit(cwd, 'symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD');

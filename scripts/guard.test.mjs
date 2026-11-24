@@ -75,9 +75,8 @@ test('other tools pass through, and so does the opt-out', () => {
   assert.equal(decision('Bash', 'rm -rf /', { SORRY_MATT_GUARD: 'off' }), null);
 });
 
-test('a plain push to main is let through, marked for tick.mjs run to leave to the host', () => {
-  const vs = classify({ tool_name: 'Bash', tool_input: { command: 'git -C /repo push -u origin main' } });
-  assert.deepEqual(vs.map((v) => [v.category, v.deny]), [['main-push', false]]);
+test('a plain push to main gets no verdict and is let through', () => {
+  assert.deepEqual(classify({ tool_name: 'Bash', tool_input: { command: 'git -C /repo push -u origin main' } }), []);
   assert.equal(decision('Bash', 'git -C /repo push -u origin main'), null);
   assert.deepEqual(classify({ tool_name: 'Bash', tool_input: { command: 'git push -u origin run/line-a' } }), []);
 });

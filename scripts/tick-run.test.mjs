@@ -8,7 +8,6 @@ import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { main as tick, defaultDeps, bashExecutor, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
-import { classify } from '../hooks/classify.mjs';
 import { LINE, git, write, Crash, BASH, NO_BASH, world, ids, stage, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
 // ---- #129: tick.mjs run ----------------------------------------------------------------------------------------------
 
@@ -19,9 +18,8 @@ const runOut = (h, ...args) => {
   assert.equal(r.err, '');
   return JSON.parse(r.out);
 };
-/** An exec run leaves to the host: one the guard hook's classification gives a verdict, so the guard sees it (#146). */
-const guarded = (a) => classify({ tool_name: 'Bash', tool_input: { command: a.command }, cwd: process.cwd() }).length > 0;
-const leftForHost = (a) => a.kind === 'exec' && guarded(a);
+/** An exec run leaves to the host: one tick marks `host`, a push to a protected branch (#146). */
+const leftForHost = (a) => a.kind === 'exec' && a.host === true;
 
 test('#129: run checks its arguments as next does; with no exec to run it lists what next lists, and ran is []', (t) => {
   const h = world(t);
@@ -207,6 +205,7 @@ test('#129: run leaves a push to the host: integrate: direct lists push:main as 
   assert.equal(push.id, `push:main:@${main}`);
   assert.equal(push.batch, 1);
   assert.equal(push.kind, 'exec');
+  assert.equal(push.host, true, 'marked for the host');
   assert.ok(push.command.includes('push') && push.record.includes('--exit'));
   assert.ok(!out.ran.some((x) => x.id === push.id), 'run did not run it');
   assert.notEqual(git(h.repo, 'rev-parse', 'origin/main'), main, 'origin main is not pushed');
@@ -535,8 +534,8 @@ test('#146: an exec whose record failed is not run again: the next run records i
   assert.ok(Object.values(counts).every((n) => n === 1), 'no exec ran twice');
 });
 
-test("#146: which execs run leaves to the host is the guard hook's classification, not the step: a push of a line is run, a flagged exec is left", (t) => {
-  // a push of the integration branch: no verdict from the guard, so run runs it (#144's ci-fix commit)
+test("#146: run leaves to the host only the execs tick marks host: a push of a line is run, no other exec is marked", (t) => {
+  // a push of the integration branch: not a protected branch, so no `host`, and run runs it (#144's ci-fix commit)
   const h = world(t);
   unmatchedRed(h);
   h.runWake();
@@ -549,22 +548,8 @@ test("#146: which execs run leaves to the host is the guard hook's classificatio
   assert.equal(git(h.repo, 'rev-parse', `origin/${LINE}`), fixed);
   assert.ok(!h.log.some((a) => a.step === 'push'), 'the host was not handed the push');
 
-  // an exec the guard gives a verdict, whatever its step: left to the host at batch 1, not run
-  const g = world(t);
-  const flagged = (event) => (/frontier\.mjs/.test(event.tool_input.command) ? [{ category: 'release-deploy', level: 'ask', detail: 'x' }] : []);
-  const r = tick(['run', g.path, '--now', g.iso()], { ...defaultDeps(), classify: flagged, execute: (a) => ({ code: g.exec(a) }) });
-  assert.equal(r.code, 0, r.err);
-  const out = JSON.parse(r.out);
-  const frontier = out.actions.find((a) => a.step === 'frontier');
-  assert.ok(frontier && frontier.batch === 1 && frontier.kind === 'exec', 'the flagged exec is listed for the host');
-  assert.ok(!out.ran.some((x) => x.id === frontier.id), 'run did not run it');
 
-  // no classification to go by (the plugin's hooks are not beside the skill): run runs nothing, exit 1, as without bash
-  const n = world(t);
-  const r2 = tick(['run', n.path, '--now', n.iso()], { ...defaultDeps(), classify: null, execute: () => assert.fail('nothing runs') });
-  assert.equal(r2.code, 1);
-  assert.match(r2.err, /classify\.mjs/);
-  const o2 = JSON.parse(r2.out);
-  assert.deepEqual(o2.ran, []);
-  assert.equal(o2.blocked.at, 'execute');
+  // no exec but a push to a protected branch is marked host: everything else run runs itself
+  const marked = h.log.concat(outs.flatMap((o) => o.actions)).filter((a) => a.kind === 'exec' && a.host);
+  assert.deepEqual(marked, [], 'nothing marked host on a line that only pushes itself');
 });

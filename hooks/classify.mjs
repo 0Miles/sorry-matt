@@ -5,9 +5,7 @@
 //   - force-pushing the remote main or master branch
 // It reads the words as written. A command hidden behind a variable, an interpreter (`bash -c`, `pwsh -Command`,
 // `eval`), a subshell or a pipe is not looked for: the guard is a seat belt for the obvious line, not a sandbox.
-// Those verdicts carry `deny: true`, and decision.mjs denies them. One more verdict, `main-push` with `deny: false`,
-// marks a plain push to main or master: the guard lets it through, and get-to-work's `tick.mjs run` reads it to leave
-// that push to the host's own Bash tool, where the user's permission settings see it.
+// Every verdict carries `deny: true`, and decision.mjs denies it. Nothing outside the guard reads these verdicts.
 // Everything else gets no verdict and is left to Claude Code's own permission settings.
 import { homedir } from 'node:os';
 import { parse, unwrap, commandName } from './shell.mjs';
@@ -16,7 +14,7 @@ const verdict = (detail, consequence) => ({ category: 'catastrophic', deny: true
 
 /**
  * @param {{tool_name: string, tool_input?: object}} event
- * @returns {Array<{category: 'catastrophic' | 'main-push', deny: boolean, detail: string, consequence: string}>}
+ * @returns {Array<{category: 'catastrophic', deny: boolean, detail: string, consequence: string}>}
  */
 export function classify(event) {
   const tool = event.tool_name || '';
@@ -118,7 +116,5 @@ function gitRule(args, line) {
   if (deleting) return null;
   const forced = mains((r) => force || r.startsWith('+'));
   if (forced.length) return verdict(line, `強制推送遠端的 ${forced.join('、')} 分支：改寫共享歷史，其他人的 commit 可能遺失。`);
-  const pushed = mains(() => true);
-  if (pushed.length) return { category: 'main-push', deny: false, detail: line, consequence: `推送到遠端的 ${pushed.join('、')} 分支。` };
   return null;
 }
