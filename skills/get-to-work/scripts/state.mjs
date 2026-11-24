@@ -146,8 +146,8 @@
 //   simplify   true (default) | false.
 //              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
 //              still needs its merge SHA).
-// A profile holds these fields only: it cannot relax the guard hook's actions needing confirmation (pushing to a
-// branch that deploys, writing settings files) or the budget and breaker limits, which stay in the ledger's
+// A profile holds these fields only: it cannot relax the guard hook's denies of catastrophic actions (deleting or
+// force-pushing the remote main, a recursive delete of a root) or the budget and breaker limits, which stay in the ledger's
 // `budget:` lines; an unknown field is refused.
 //
 // Commands

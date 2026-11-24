@@ -16,8 +16,8 @@
 - `skills/<name>/references/upstream/` — 與 src 相同的 pinned 上游原文
 - `skills/<name>/scripts/` — 與 src 逐位元組相同的腳本(不翻譯)
 - `skills/<name>/<REFERENCE>.md` — 與 src 對應的英文 dist 版自有 reference
-- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 PreToolUse guard(需要確認的動作:兩段確認與確認一次,
-  含會立即觸發正式部署的合併);不分 src/dist,測試在 `scripts/guard.test.mjs` 與 `scripts/deploy-on-merge.test.mjs`
+- `hooks/hooks.json`、`hooks/*.mjs` — plugin 自帶的 hooks:PreToolUse guard(從指令文字直接擋下三類災難級操作)、
+  spawn 預算與壓縮後提醒;不分 src/dist,guard 的測試在 `scripts/guard.test.mjs`
 - `agents/*.md` — plugin 自帶的 agent 定義檔(frontmatter 帶模型與工具限制),英文,plugin 實際載入的是這份。
   每份都是 dist:原稿在 `src/agents/<name>.md`(繁中),照 skill 的規則從 src 重寫 —— `prove-it` 的 `finder.md`、
   `architect.md`、`verifier.md`、`fix-verifier.md`,以及 `get-to-work` 的 `implementer.md`、`expander.md`(#126,
@@ -136,9 +136,6 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 反轉成本 | cost to reverse |
 | 環境事實 | environment facts |
 | 專案例外 | project exception |
-| 需要確認的動作 | actions needing confirmation |
-| 兩段確認 | two-step confirmation |
-| 確認一次 | single confirmation |
 | 災難級操作 | catastrophic actions |
 | 硬停 | hard stop |
 | 確認呼叫 | prompting call |

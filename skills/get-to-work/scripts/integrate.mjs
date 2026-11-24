@@ -251,8 +251,8 @@ function worktrees(cwd) {
   return out;
 }
 
-// The guard hook's protected branches (hooks/classify.mjs): main, master, and origin's default branch when the
-// clone knows it. A push to one of them is left to the host so the guard sees it.
+// Protected branches: main, master, and origin's default branch when the clone knows it. A push to one of them is
+// left to the host, so the guard hook (hooks/classify.mjs) sees a force-push or delete of main and master.
 function isProtected(cwd, branch) {
   if (branch === 'main' || branch === 'master') return true;
   const head = tryGit(cwd, 'symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD');
