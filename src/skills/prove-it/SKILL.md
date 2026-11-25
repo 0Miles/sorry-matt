@@ -27,13 +27,17 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 - **驗收快照與比對**：實作開工前存下的驗收快照，與交付後對它的比對輸出（兩者都是
   `sorry-matt/acceptance@1`，比對輸出多一個 `check`）。快照的 `items` 是本次的驗收項，每項標出處：
   `from: original` 來自原票，`from: expansion` 是展開時補上的，附 `by`、`run`、`round`。
-- **fixed point**：線整合分支。
+- **fixed point**：依流程設定的 `integrate` 而定。
+  - `aggregate-pr` 與 `direct`：線整合分支。
+  - `ticket-pr`（每張票一支票級 PR，沒有整合分支）：不疊的票是 `origin/<基底分支>`；疊在上游上的票是上游的 ticket
+    分支。審查範圍照樣是 `<fixed point>...<ticket 分支>`，所以疊的票只審這張票自己那一層，不審上游的改動。
 - **待審 ref**：ticket 分支。
 - **針對性檢查結果**：實作 agent 回報的指令、結果與它跑的 SHA（派工檔的 `targeted checks` 與 `targeted checks ran at`；
   後者是 `not reported` 時等於沒有 SHA）。開審前確認它是綠的；`light` 與 `standard` 在 SHA 等於審查 head 時沿用它當
   實跑與突變基準，其餘情況審查方自己跑（第 3 節）。
 - **CI 覆蓋**：這條線的整合分支整併後有沒有 CI 跑全套 —— `covered`、`uncovered`（呼叫方已定案為 CI 不涵蓋整合
-  分支）或 `no-origin`（沒有 `origin`）。沒給時由第 3 節的範圍指令依有沒有 `origin` 判。它只寫進 `live run` 行，
+  分支）或 `no-origin`（沒有 `origin`）。`ticket-pr` 沒有整合分支：CI 覆蓋就是這張票的票級 PR 的 CI，值同樣是這三種。
+  沒給時由第 3 節的範圍指令依有沒有 `origin` 判。它只寫進 `live run` 行，
   不改實跑範圍（第 3 節）。
 - **模式**：`initial`（初審），或 `recheck`（集中修正後的複驗，走第 7 節）。
 - **審查分級**：呼叫方審查前已判好的審查分級，與它來自的判級指令輸出檔（`tier.mjs judge` 的 JSON）。給了就照那份
@@ -168,7 +172,8 @@ Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktre
 ### 實跑
 
 **審查只跑受影響範圍，全套不在審查裡跑。** 有 CI 的線由 CI 在整併後跑全套；CI 不涵蓋整合分支或沒有 `origin`
-的線，由呼叫方在收官跑一次全套（`get-to-work` 的本機驗證）。CI 覆蓋不改變範圍。
+的線，由呼叫方在收官跑一次全套（`get-to-work` 的本機驗證）。`ticket-pr` 沒有整合分支，全套由這張票的票級 PR 的
+CI 跑。CI 覆蓋不改變範圍。
 
 **同一組測試在一次審查裡至多跑一次。** 實作 agent 已經跑過針對性檢查；審查依審查分級決定沿用還是自己跑：
 

@@ -30,7 +30,12 @@ The caller supplies:
   diff output taken against it after delivery (both `sorry-matt/acceptance@1`; the diff output adds a `check`). The
   snapshot's `items` are this review's acceptance criteria, each with its source: `from: original` came from the
   original ticket, `from: expansion` was added at expansion, with `by`, `run` and `round`.
-- **Fixed point:** the line integration branch.
+- **Fixed point:** depends on the run profile's `integrate`.
+  - `aggregate-pr` and `direct`: the line integration branch.
+  - `ticket-pr` (one ticket-level PR per ticket, no integration branch): `origin/<base branch>` for a ticket that is
+    not stacked; the upstream ticket branch for a ticket stacked on an upstream. The review range is still
+    `<fixed point>...<ticket branch>`, so a stacked ticket is reviewed for its own layer only, not for the upstream's
+    changes.
 - **Ref under review:** the ticket branch.
 - **Targeted-check results:** the commands, results and SHA the implementation agent reported (the spawn file's
   `targeted checks` and `targeted checks ran at`; `not reported` in the latter means there is no SHA). Before the
@@ -39,7 +44,8 @@ The caller supplies:
   (section 3).
 - **CI coverage:** whether CI runs the full suite on the line's integration branch after integration — `covered`,
   `uncovered` (the caller ruled "CI does not cover the integration branch") or `no-origin` (there is no `origin`).
-  When it is not given, section 3's scope command decides from whether `origin` exists. It goes into the `live run`
+  `ticket-pr` has no integration branch: CI coverage is the CI of this ticket's ticket-level PR, with the same three
+  values. When it is not given, section 3's scope command decides from whether `origin` exists. It goes into the `live run`
   line only; it does not change the live run's scope (section 3).
 - **Mode:** `initial`, or `recheck` (the recheck after a batched fix; it follows section 7).
 - **Review tier:** the review tier the caller judged before the review, with the tier command output it comes from
@@ -214,7 +220,8 @@ The reviewer does this step; it is never handed to the implementer.
 
 **The review runs only the affected scope; the full suite is never run in a review.** On a line with CI, CI runs it
 after integration; on a line CI does not cover, or one without `origin`, the caller runs it once at the finish
-(get-to-work's local verification). CI coverage does not change the scope.
+(get-to-work's local verification). `ticket-pr` has no integration branch: the CI of this ticket's ticket-level PR
+runs the full suite. CI coverage does not change the scope.
 
 **One set of tests runs at most once in a review.** The implementation agent has already run the targeted checks; the
 review tier decides whether the review reuses them or runs its own:
