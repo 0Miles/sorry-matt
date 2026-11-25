@@ -74,7 +74,8 @@
 
 **最終輸出**：每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源、涵蓋全部初始
 票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄；合票的成員票各佔一列，終局、merge SHA
-與接續紀錄同主票，並寫明屬於哪個合票）、**本 run 的計量與預算**（state 的
+與接續紀錄同主票，並寫明屬於哪個合票；`ticket-pr` 下合票的每張成員票同列它那一支 PR 的連結與合併狀態
+<!-- pending #200 -->）、**本 run 的計量與預算**（state 的
 `usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄）、**跳過精簡的線**（`wrap-up` 的
 `meta.simplifySkipped`，每條附理由；沒有就不列），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。

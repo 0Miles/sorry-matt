@@ -101,7 +101,8 @@ final tip, mark the item in that ticket "still present" or "resolved by <ticket>
 **Final output**: each line's aggregate PR or integration branch, the synced base SHA (or that it is unsynced), the full
 verification's SHA and source, the **reconciliation table** covering every initial ticket (`state.mjs show`, with each
 ticket's send-back count, each row pointing to its status record; each member of a bundle has its own row, with the
-lead's end state, merge SHA and status record, and says which bundle it is in), **this run's metrics and budget** (the state's
+lead's end state, merge SHA and status record, and says which bundle it is in; under `ticket-pr` each member of a
+bundle shows that bundle's one PR link and merge state <!-- pending #200 -->), **this run's metrics and budget** (the state's
 `usage`, with `stop` after a stop) with the **spawn breakdown**, the authorization outcomes (ledger field 5), the
 **lines that skipped the simplify pass** (the `wrap-up`'s `meta.simplifySkipped`, each with its reason; left out when
 there are none), and the list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and

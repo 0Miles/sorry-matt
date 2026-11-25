@@ -192,7 +192,10 @@ A bundle's tickets are done by one implementation agent on one ticket branch, re
 on the whole diff) and integrated once; each ticket keeps its identity: criteria name their ticket, and the end state
 and merge SHA are the lead's and every member's.
 
-`freeze.mjs` only lists candidates and the overlap evidence (`overlaps`, `edges`, `through`); you rule:
+`freeze.mjs` only lists candidates and the overlap evidence (`overlaps`, `edges`, `through`); you rule. When the
+connected tickets exceed the cap (the plan's `bundleCap`, 3 by default), the script cuts them in candidate order into
+groups, each with `cutFrom` (the whole group); when that cut does not suit, write the tickets you pick in `bundles`
+directly, checked against the same cap and conditions.
 
 - **Bundle**: the reviews would read the same code; a later ticket rewrites or removes what an earlier one adds (an
   expand–contract on the same files, say); or reviewing them apart would only repeat the same observation.
@@ -206,6 +209,12 @@ A bundle is this run's scheduling only: the tracker's tickets are not merged, cl
 record carries the bundle's review block; the implementation agent leaves a one-line pointer to it in every other
 member's status record. At delivery every member is closed (the aggregate PR and FINISH.md's reconciliation table list
 each one).
+
+Under `integrate: ticket-pr` a bundle is one ticket-level PR: its body's summary lists every member, each with its own
+`Closes #N` line, so merging it closes the whole bundle. <!-- pending #193 --> Stacked with `gh stack`, the bundle is
+one layer: a downstream ticket that depends on any member waits for that layer's PR, and `stackParent` and
+`waitingOn` name the lead; when judging "exactly one unmerged upstream", several upstreams in one bundle count as
+one. <!-- pending #198 -->
 
 ### Close-out checks and review
 

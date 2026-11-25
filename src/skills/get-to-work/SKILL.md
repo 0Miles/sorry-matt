@@ -152,7 +152,9 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 或審查回報了另一張票本來就會改掉的東西。合了的票由一個實作 agent 在一條 ticket 分支上做完，只審一次（審查分級
 以整組的 diff 判），只整併一次；每張票保留身分：驗收項標出處，終局與 merge SHA 是主票的、也是每張成員票的。
 
-`freeze.mjs` 只列候選與重疊證據（`overlaps`、`edges`、`through`），合不合由你判：
+`freeze.mjs` 只列候選與重疊證據（`overlaps`、`edges`、`through`），合不合由你判。連在一起的票超過上限（計畫檔的
+`bundleCap`，預設 3）時，腳本依候選順序切成幾組，每組帶 `cutFrom`（原本的整組）；切法不合用就在 `bundles` 直接寫
+你挑的幾張，同樣受上限與候選條件檢查。
 
 - **合**：審查會讀到同一段程式碼；後一張會改寫或刪掉前一張加的東西（例如同一批檔案上的 expand–contract）；或拆開審
   只會讓同一則觀察重複出現。
@@ -162,6 +164,10 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 
 合票只是本 run 的排程：tracker 上的票不合併、不關、不改寫。主票的接續紀錄帶整組的審查區塊；實作 agent 在其他
 成員票的接續紀錄留一行指到主票。交付時每張成員票都要關（總 PR 與 FINISH.md 的對帳表逐張列出）。
+
+`integrate: ticket-pr` 下合票是一支票級 PR：body 的摘要逐張列出成員票，每張各一行 `Closes #N`，合併後一次關掉
+整組。<!-- pending #193 --> 疊進 `gh stack` 時整組是一層：下游依賴任一張成員票，等的都是這一層的 PR，`stackParent`
+與 `waitingOn` 記主票；判「恰有一張未合併上游」時，同一個合票的幾張上游算一張。<!-- pending #198 -->
 
 ### 收票的檢查與審查
 

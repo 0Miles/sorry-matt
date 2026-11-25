@@ -650,3 +650,26 @@ test('a stalled or excluded ticket cannot be bundled, and symbol-disjoint entrie
   assert.equal(none.code, 0, none.err);
   assert.deepEqual(none.json.bundleCandidates, []);
 });
+
+test('a connected group over the cap is cut in candidate order into parts of at most the cap', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  // a chain of overlaps #1-#2-#3-#4-#5 on one line; #4 unlocks the most, so it leads the candidate order
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2'], ['#3'], ['#4'], ['#5'], ['#6', { blockers: ['#4'] }]]),
+    files: { '#1': 'a\n', '#2': 'a\nb\n', '#3': 'b\nc\n', '#4': 'c\nd\n', '#5': 'd\n', '#6': 'z\n' },
+    extra: { bundleCap: 2 },
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(r.json.bundleCandidates.map((b) => [b.tickets, b.cutFrom]), [
+    [['#1', '#2'], ['#1', '#2', '#3', '#4', '#5']],
+    [['#3', '#4'], ['#1', '#2', '#3', '#4', '#5']],
+  ]);
+  assert.deepEqual(r.json.bundleCandidates[1].overlaps, [{ tickets: ['#3', '#4'], paths: ['c'] }]);
+  // with the default cap of 3: #4 first, then the next overlapping it or a part member in candidate order (#3, then
+  // #2); #1 and #5 are left alone and are no candidate
+  const three = run(dir, { repo, frontier: frontierOf([['#1'], ['#2'], ['#3'], ['#4'], ['#5'], ['#6', { blockers: ['#4'] }]]), files: { '#1': 'a\n', '#2': 'a\nb\n', '#3': 'b\nc\n', '#4': 'c\nd\n', '#5': 'd\n', '#6': 'z\n' } });
+  assert.deepEqual(three.json.bundleCandidates.map((b) => b.tickets), [['#2', '#3', '#4']]);
+  assert.ok(!('cutFrom' in run(dir, { repo, frontier: frontierOf([['#1'], ['#2']]), files: { '#1': 'a\n', '#2': 'a\n' } }).json.bundleCandidates[0]));
+});
