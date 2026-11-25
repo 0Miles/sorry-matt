@@ -271,6 +271,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     'red-light': () => 'handled',
     'file-issue': () => ({ outcome: 'filed', value: '#99' }),
     observations: () => ({ outcome: 'filed', value: '#90' }),
+    'observations-final': () => 'checked',
     'verify-local': () => 'green',
     'deliver-ticket': () => 'done',
     'deliver-line': () => 'done',
@@ -308,7 +309,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       // the minimal reviewer writes its report to the file its brief names (#128); the review host writes a block
       if (a.meta.kind === 'minimal') h.writeReport(reportOf(a), `verdict: ${v.outcome}\n${(v.findings ?? '').split(',').filter(Boolean).map((f) => `${f}: a.txt:1 wrong (evidence)\n`).join('')}`);
       // #142: a prove-it review's report line `counts:` gives the observations and pre-existing counts
-      const counts = a.meta.kind === 'minimal' ? [] : ['--observations', String(v.observations ?? 0), '--pre-existing', String(v.preExisting ?? 0), ...findingCountFlags(v)];
+      const counts = a.meta.kind === 'minimal' ? [] : ['--observations', String(v.observations ?? 0), '--pre-existing', String(v.preExisting ?? 0), ...findingCountFlags(v), ...(v.covered !== undefined ? ['--covered', String(v.covered)] : [])];
       return ['--agent', agent, '--outcome', v.outcome, ...(v.findings ? ['--findings', v.findings] : []), ...counts];
     }
     if (a.step === 'simplify') {

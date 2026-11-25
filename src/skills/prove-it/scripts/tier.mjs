@@ -65,13 +65,13 @@
 //        Reviewers: `reviewers` lists the sets of reviewers the review runs. Always "primary" (the Finders above);
 //        full adds "architecture", the specialist reviewer of the high-risk tier (agents/architect.md, #105).
 // batch  Splits candidates (stage verify) or findings (stage fix) into one batch per subagent.
-//          verify  Candidates whose `suspected` is spec or pre-existing form one batch of their own (the short path);
+//          verify  Candidates whose `suspected` is spec, pre-existing or covered (#205) form one batch of their own (the short path);
 //                  the rest group by `file`. light puts everything into one batch. When the batches exceed
 //                  `verifiers.max`, the file groups with the fewest candidates fold into one (the short batch counts
 //                  toward the max). Each batch has `short` and `normal` id lists; one verifier takes the whole batch.
 //          fix     light and standard: one batch; full: one batch per file.
 //        Items (JSON): an array, or { "items": [...] }, of { "id": "C1", "file": "src/a.js", "suspected": "none" }.
-//        `id` and `file` are strings; `suspected` is spec, pre-existing or none (default none; ignored for fix).
+//        `id` and `file` are strings; `suspected` is spec, pre-existing, covered or none (default none; ignored for fix).
 //
 // Output (stdout, JSON; fields are only ever added, never renamed)
 //   judge: { "format": "sorry-matt/tier@1", "base", "head", "tier", "reasons": [...],
@@ -509,7 +509,7 @@ export function batchItems({ tier, stage = 'verify', items, maxVerifiers }) {
     const groups = tier === 'full' ? byFile(items) : [items];
     return groups.map((g) => ({ files: filesOf(g), ids: g.map((i) => i.id) }));
   }
-  const isShort = (i) => i.suspected === 'spec' || i.suspected === 'pre-existing';
+  const isShort = (i) => i.suspected === 'spec' || i.suspected === 'pre-existing' || i.suspected === 'covered';
   const short = items.filter(isShort);
   const normal = items.filter((i) => !isShort(i));
   const max = tier === 'light' ? 1 : maxVerifiers ?? (tier === 'standard' ? DEFAULT_THRESHOLDS.standardMaxVerifiers : Infinity);
@@ -584,7 +584,7 @@ function readItems(deps, path) {
     if (ids.has(item.id)) throw new UsageError(`${at}: id ${item.id} appears twice`);
     ids.add(item.id);
     const suspected = item.suspected ?? 'none';
-    if (!['spec', 'pre-existing', 'none'].includes(suspected)) throw new UsageError(`${at}: suspected must be spec, pre-existing or none`);
+    if (!['spec', 'pre-existing', 'covered', 'none'].includes(suspected)) throw new UsageError(`${at}: suspected must be spec, pre-existing, covered or none`);
     return { id: item.id, file: item.file, suspected };
   });
 }

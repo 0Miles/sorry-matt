@@ -42,6 +42,8 @@
      `compare` 連結、commit 數與 `stat`，紅燈修正的 `-ci` merge 另列；改了什麼 —— 對每個 `range` 各跑一次
      `git log --format=%B <range>` 彙整，不以票號搜尋 commit（別票 commit body 提到的票號會被抓進來）；接續紀錄的
      連結；`resolved` 的 merge 附 `remergeDiff` 指令並註明只能在本機（git 2.36 以上）看；退回次數；節末 `Closes #N`。
+     合票（#205，state 的 `members`）是一節：標題列出整組的票號，主票在前，再逐張寫票名與它的驗收項，節末每張票
+     各一行 `Closes #N`。
   3. **線級 commit**：`lineCommits` 逐項附連結與用途，含衝突解法的附 `remergeDiff` 指令。
   4. **缺口**：卡住與待裁決的票，不寫 `Closes`；在線上有 merge 的附它的 commit 範圍。
 
@@ -62,12 +64,18 @@
 **關票**在 `gh pr merge` 送出之後做。GitHub 只在 PR 指向 repo 預設分支時解析 `Closes`；預設分支以
 `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name` 查得：
 
-- 總 PR 已合併：確認每張完成票都已關閉。基底不是預設分支，或合併後仍 open 的票，由主持人依 tracker 契約的 Close
+- 總 PR 已合併：確認每張完成票都已關閉，合票的每張成員票也算。基底不是預設分支，或合併後仍 open 的票，由主持人依 tracker 契約的 Close
   逐張關閉，留言指向總 PR。
 - 總 PR 留給人合併、且基底不是預設分支：人工作業清單列出合併後要執行的關票指令。
 
+**線的觀察票**（#205）：一條線的審查觀察與 pre-existing 都在同一張 raw ticket。收官時 tick 發下
+`observations-final` judge：對照線的最終 tip 逐項讀程式碼，在那張票上標「仍存在」或「已由 <票>（<SHA>）解決」，
+不加新項目；記 `checked`。收尾 judge 等它記完才發。
+
 **最終輸出**：每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源、涵蓋全部初始
-票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄）、**本 run 的計量與預算**（state 的
+票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄；合票的成員票各佔一列，終局、merge SHA
+與接續紀錄同主票，並寫明屬於哪個合票；`ticket-pr` 下合票的每張成員票同列它那一支 PR 的連結與合併狀態
+<!-- pending #200 -->）、**本 run 的計量與預算**（state 的
 `usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄）、**跳過精簡的線**（`wrap-up` 的
 `meta.simplifySkipped`，每條附理由；沒有就不列），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。

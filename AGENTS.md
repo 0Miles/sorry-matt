@@ -433,6 +433,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | agent 回報(實作或修正 agent 交回的) | agent report |
 | 針對性檢查結果 | targeted-check results |
 | 回顧紀錄（`retro.mjs` 的跨 run 總表） | retro record |
+| 合票 | bundle |
+| 合票候選 | bundle candidate |
+| 主票 | lead ticket |
+| 成員票 | member |
+| 兄弟票範圍 | sibling scope |
+| 由他票涵蓋 | covered by another ticket |
+| 線的觀察票 | a line's observation ticket |
 
 ## 外部語義來源
 

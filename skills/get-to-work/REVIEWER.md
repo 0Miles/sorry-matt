@@ -37,6 +37,10 @@ This review's values are below the last rule of this file (the labels `brief.mjs
 - `scratchpad`: an absolute path
 - `review tier`: the review tier tick judged before the review and its tier command output, which `prove-it` goes by
   instead of judging again; with `none given`, `prove-it` judges it
+- `bundle`: `none`, or every ticket of a bundle (#205), the lead first: one review covers the whole bundle's diff and
+  every ticket's criteria
+- `sibling scope`: `none`, or the file listing the run's other tickets not at an end state, which `prove-it` judges
+  `covered` by
 
 ## 1. Host the review
 
@@ -62,7 +66,7 @@ restating of findings, observations or reasoning:
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```

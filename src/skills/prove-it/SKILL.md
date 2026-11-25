@@ -48,12 +48,17 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
   `sorry-matt:review` 區塊，由你自己讀。其餘的初審沒有。
 - **reviewer**：預設只有 `primary`，也就是本 skill 自己的 Finder 組。`full` 級的 `architecture` 專項 reviewer 由你
   依判級輸出的 `reviewers` 加上（第 2 節），不由呼叫方給。
+- **合票**（#205，派工檔的 `bundle`）：`none`，或同一次實作、同一條 ticket 分支上的幾張票，主票在前。合票只審一次：
+  diff 是整組的，驗收快照與比對輸出的 `items` 與 `check` 每項帶 `ticket` 欄標明出自哪張票，票面檔依序收了每張票的
+  全文。`acceptance` finding 照樣逐項對照，位置寫比對輸出的路徑並寫出是哪張票的驗收項。
+- **兄弟票範圍**（#205，派工檔的 `sibling scope`）：`none`，或一個檔案，列出同 run 還沒到終局、不在本組的每張票：
+  識別碼、標題、預計檔案與讀全文的方式。它只用來判 `covered`（第 2、4 節），不擴大審查範圍。
 
 逐項確認，任一項不成立就不開審，以第 6 節格式輸出 `verdict: stuck` 並寫明是哪一項：
 
 - `git rev-parse` 解得到 fixed point 與 ticket 分支，`git diff <fixed point>...<ticket 分支>` 非空。
 - 針對性檢查是綠的。紅燈是實作 agent 的事，審查只收綠燈的票。
-- 驗收快照與比對輸出都在，`id` 是這張票，快照至少有一項驗收。
+- 驗收快照與比對輸出都在，`id` 是這張票（合票時是主票，`bundle` 列出整組），快照至少有一項驗收。
 - 你有 Agent tool。spawn 深度到了上限（Claude Code 的 `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`）時拿不到它；這時
   不自己兼任 finder、verifier 或 Fix Verifier —— 證據鏈要的是各自獨立的 agent —— `stuck` 的原因寫 `no Agent tool`。
 
@@ -143,8 +148,9 @@ spawn 被拒 —— 拿不到 Agent tool，或被 plugin 的 hook 以預算為�
 Finder 看不到目前對話，派工內容只有值：repo 與審查用 worktree 的絕對路徑、fixed point、ticket 分支、diff 檔路徑、
 票面全文、筆記目錄，以及它套用的每個 lens 的全文（上列）。向外追查的範圍、只找不裁決、回報欄位與每個 finder
 至多六則都寫在定義檔。回報的每則候選有 `file`、`line`（新檔行號）、`lens`、`summary`、`failure_scenario` 與
-`suspected`（疑似 spec 層級或既有）；`suspected` 是 `spec`（附被指定的原文）、`pre-existing`（附 fixed point 上的
-位置）或 `none`。
+`suspected`（疑似 spec 層級、既有或由他票涵蓋）；`suspected` 是 `spec`（附被指定的原文）、`pre-existing`（附 fixed
+point 上的位置）、`covered`（附兄弟票的識別碼與它票面的原文；只在派工給了兄弟票範圍時）或 `none`。派工有兄弟票範圍時，
+派工內容多給它的檔案路徑。
 
 每位 reviewer 是一個候選來源，候選帶 `by` 欄標明來自哪位：Finder 的是 `primary`，第 1 節的 `acceptance` finding
 與第 3 節的實跑、突變候選也算 `primary`。
@@ -300,15 +306,15 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/revie
 ```
 
 判級指令失敗時以 `--tier full` 取代 `--tier-file`。輸出的 `batches` 每批交給一個 verifier（`sorry-matt:verifier`），
-全部並行派出，`description` 是 `verifier` 後接票的識別碼。標了 `suspected` 的候選整批交給一個 verifier（批的
+全部並行派出，`description` 是 `verifier` 後接票的識別碼。標了 `suspected`（`spec`、`pre-existing` 或 `covered`）的候選整批交給一個 verifier（批的
 `short`），其餘依檔案分組（批的 `normal`），總批數不超過判級輸出的 `verifiers.max`。合批只決定 verifier 的數量，
 不合併候選。
 
 派工內容只有值：repo 與審查用 worktree 的絕對路徑、ticket 分支、fixed point、票面與驗收快照（或兩者的檔案路徑）、
-筆記目錄，以及該批候選的欄位。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給。裁決規則
+兄弟票範圍的檔案（有的話）、筆記目錄，以及該批候選的欄位。省略 finder 的推理，避免錨定偏誤；`suspected` 與它附的原文或位置照給。裁決規則
 —— 簡化流程、反駁優先與三關、四種裁決、五條 blocking 判準、修法方向與回報格式 —— 都在定義檔，派工不重述。
 
-Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**、**spec 層級**或**不成立**，附 `file:line` 證據；
+Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**、**spec 層級**、**由他票涵蓋**或**不成立**，附 `file:line` 證據；
 成立的寫出命中的 `rule`（`acceptance`、`regression`、`red`、`safety`、`unpinned` 之一，沒命中寫 `none`），命中的
 就是 blocking，附修法方向；最後一行 `noticed` 是它裁決途中看到的其他問題，由你當成觀察。引用與它標明的
 來源對不上時，才換一個 verifier 重驗。
@@ -319,11 +325,14 @@ Verifier 對批內每個候選回報一項裁決：**成立**、**pre-existing**
 - **成立但不 blocking** → 觀察。
 - **spec 層級** → 觀察，句末標 `(spec-level)`。
 - **pre-existing** → 列進 `pre-existing`。
+- **由他票涵蓋**（#205）→ 列進 `covered`，寫出涵蓋它的票。它不是 finding，也不是觀察：呼叫方不為它開票。命中
+  `acceptance`、`regression`、`red` 或 `safety` 的候選不會得到這個裁決 —— 每張票各自落地，中間狀態會進基底。
 - **不成立** → 丟棄；突變候選的處置寫進突變紀錄（例如「等價 mutant，不成立」）。
 
-觸發修正的只有 finding。觀察與 pre-existing 由呼叫方依 get-to-work 的期間開票處理，這張票照結論往下走。
+觸發修正的只有 finding。觀察與 pre-existing 由呼叫方依 get-to-work 的期間開票處理，這張票照結論往下走；`covered`
+只留在區塊裡。
 
-完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的兩項；同批的
+完成判準：每個候選恰有一項裁決，附 `file:line` 證據，以及三關結果或簡化流程查過的各項；同批的
 候選也逐條裁決；每則 finding 都有命中的 `rule`、它的引用與可證偽的修法方向；每個 mutant 在突變紀錄都有處置。
 
 ## 5. 結論
@@ -363,6 +372,8 @@ observations:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
+covered:
+- <file>:<line> <one sentence> (covered by: <ticket>; evidence: <the sibling ticket's text it quotes>)
 
 live run: scope=<affected | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> [reused=<sha>] -> green | red (<log path>)
 - <command> -> green | red
@@ -430,15 +441,15 @@ Markdown 寫進票檔的 `## sorry-matt status` 區塊。這是給下一個 agen
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
 
 `verdict`、`review`、`mode`、`tier` 與區塊裡的相同；`counts` 的前三個數的是區塊裡的條目，沒有寫 0。後四個數的是這一輪的
 裁決（#156，供事後回顧每個成立的 finding 花了多少）：`candidates` 是送去裁決的候選數（Finder、architect 與突變的候選），
-`confirmed` 與 `invalid` 是 verifier 判成立與不成立的數（pre-existing 與 spec 層級兩者都不算），`blocking` 是成立且
-blocking 的數。複驗沒有 Finder：`candidates`、`confirmed` 與 `blocking` 都數 Fix Verifier 回報的本輪新 finding，
+`confirmed` 與 `invalid` 是 verifier 判成立與不成立的數（pre-existing、spec 層級與由他票涵蓋都不算），`blocking` 是成立且
+blocking 的數。`covered`（#205）是區塊 `covered` 段的條目數，沒有寫 0。複驗沒有 Finder：`candidates`、`confirmed` 與 `blocking` 都數 Fix Verifier 回報的本輪新 finding，
 `invalid` 寫 0。寫不進接續紀錄時
 （tracker 拒絕、檔案被鎖），`verdict` 寫 `stuck`、`block` 寫你存下的區塊檔的路徑，原因寫寫入失敗的訊息。
 

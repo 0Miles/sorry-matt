@@ -28,6 +28,8 @@
 - `reviewer`：這次的 reviewer
 - `scratchpad`：絕對路徑
 - `review tier`：tick 審查前判好的審查分級與它的判級輸出檔，`prove-it` 照它不再自己判；`none given` 時由 `prove-it` 判
+- `bundle`：`none`，或合票（#205）的每張票，主票在前：一次審查涵蓋整組的 diff 與每張票的驗收項
+- `sibling scope`：`none`，或同 run 其他還沒到終局的票的清單檔，`prove-it` 用它判 `covered`
 
 ## 1. 主持審查
 
@@ -50,7 +52,7 @@ architect（`full` 級才有）、verifier 與 Fix Verifier 由你以前景 spaw
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```

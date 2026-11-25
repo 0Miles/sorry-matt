@@ -31,6 +31,8 @@
 //                spawn file from `review` below), and the minimal reviewer of review: minimal
 //     simplify   the simplify agent, spawned in the foreground at the finish; its target is the line's integration
 //                branch
+//   implement, fix and review of a bundle (#205) name every ticket of it, the lead first, as in `implement #72 #73`;
+//   the other role words take one target.
 //   prove-it's finder, architect, verifier and fix-verifier, which the review host spawns, are named by prove-it's own
 //   rules.
 //   A ticket target is the tracker identifier: `#N` on GitHub, the ticket's file name (not its path) for Local
@@ -92,9 +94,13 @@
 //     "previous":     true | false,   // the previous review block is in the status record; a recheck always has it
 //     "reviewer":     "primary" | "<the reviewer and the risk it looks at>",
 //     "scratchpad":   "<absolute path>",
-//     "tier":         "<prove-it's tier.mjs judge output>" | null }   // #139, label `review tier`: the tier and
+//     "tier":         "<prove-it's tier.mjs judge output>" | null,    // #139, label `review tier`: the tier and
 //                                                    // that file, which prove-it then reads instead of judging;
 //                                                    // null: none given, prove-it judges it (section 1)
+//     "bundle":       ["#72", "#73"] | null,          // #205, label `bundle`: every ticket of a bundle, the lead
+//                                                    // first; null or missing: one ticket
+//     "siblings":     "<file>" | null }               // #205, label `sibling scope`: the run's other open tickets
+//                                                    // (tick writes it); null or missing: none
 //   The `targeted checks` value is the report's `targeted checks:` line (agents/implementer.md section 5), with its
 //   `commit:` line when there is one and the report's path; a report without that line is no implementation agent's
 //   report (exit 1). The label after it, `targeted checks ran at` (#140), is the SHA that line's `sha=` names (7 to 40
@@ -156,11 +162,15 @@ export function ticketName(id) {
   return ticketOf(name) === name ? name : null;
 }
 
+/** The role words whose spawn may name several tickets. */
+const MANY = ['expand', 'implement', 'fix', 'review'];
+
 /** The `description` for a spawn of `role` working on `targets`; throws a UsageError when the rule is broken. */
 export function description(role, targets) {
   if (!ROLES.includes(role)) throw new UsageError(`unknown role word ${JSON.stringify(role)}; one of ${ROLES.join(', ')}`);
   if (!targets.length) throw new UsageError(`${role} needs a target`);
-  if (role !== 'expand' && targets.length !== 1) throw new UsageError(`${role} takes one target, got ${targets.length}`);
+  // expand covers several tickets; implement, fix and review cover a bundle's (#205); the rest one target
+  if (!MANY.includes(role) && targets.length !== 1) throw new UsageError(`${role} takes one target, got ${targets.length}`);
   const branchAllowed = role === 'ci-fix' || role === 'merge' || role === 'simplify';
   const names = targets.map((target) => {
     const name = ticketName(target);
@@ -363,9 +373,14 @@ function review(values) {
   const reviewer = need(values, 'reviewer');
   const scratchpad = need(values, 'scratchpad', absolute, 'an absolute path');
   const tierFile = need(values, 'tier', orNull(text), 'a file path or null');
-  const desc = description('review', [ticket]);
+  // #205: a bundle's tickets and the run's other open tickets; older values files have neither
+  const bundle = values.bundle ?? null;
+  if (bundle !== null && !(Array.isArray(bundle) && bundle.length > 1 && bundle.every(text) && bundle[0] === ticket)) throw new UsageError('bundle: expected the ticket ids of the bundle, the lead (ticket) first, or null');
+  const siblings = values.siblings ?? null;
+  if (siblings !== null && !text(siblings)) throw new UsageError('siblings: expected a file path or null');
+  const desc = description('review', bundle ?? [ticket]);
 
-  for (const file of [bodyFile, snapshot, against]) if (!existsSync(file)) throw new Error(`${file} does not exist`);
+  for (const file of [bodyFile, snapshot, against, ...(siblings ? [siblings] : [])]) if (!existsSync(file)) throw new Error(`${file} does not exist`);
   const checks = targetedChecks(checksReport);
   const tier = tierFile === null ? 'none given: judge it yourself (prove-it section 1)' : `${judgedTier(tierFile)} (tier.mjs judge output: ${resolve(tierFile)})`;
   const filled = [
@@ -389,6 +404,8 @@ function review(values) {
       `- reviewer: ${reviewer}`,
       `- scratchpad: ${scratchpad}`,
       `- review tier: ${tier}`,
+      `- bundle: ${bundle ? `${bundle.join(', ')} (one review of the whole diff against every ticket's criteria; each criterion names its ticket)` : 'none'}`,
+      `- sibling scope: ${siblings ? resolve(siblings) : 'none'}`,
     ].join('\n'),
   ].join('\n\n');
   return { out, kind: 'review', role: 'review', desc, filled: `${filled.replace(/[ \t]+$/gm, '')}\n` };

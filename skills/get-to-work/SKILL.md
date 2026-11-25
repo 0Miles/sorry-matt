@@ -49,6 +49,11 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
      human-work list, and every initial ticket is awaiting ruling, released when the base turns green. "Continue":
      a red the base brought in is judged by red-light handling as mapping to no ticket
      ([`RED-LIGHT.md`](RED-LIGHT.md) point 2).
+   - **Bundles** (#205): the output's `bundleCandidates` are tickets of one line linked by overlapping predicted
+     files. Rule on each group by the criteria of section 2, "Bundles" — whether to bundle and which of its tickets —
+     write the rulings into the plan's `bundles` (one array of ticket ids per bundle), and rerun `freeze.mjs`: a group
+     that does not qualify exits 2 with the reason; put it right. Log each ruling and its reason in the self-answer log;
+     do not ask the user.
 5. **Merge authority**: only when this run's `integrate` is `ticket-pr` (the profile step 6 will write; when none is
    written, the default `state.mjs`'s header gives for the tracker). Under `ticket-pr` a merge counts as authorized by
    default, and the authority is obtained at the start, not discovered blocked at the finish.
@@ -71,7 +76,8 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
      opened and stacked as usual, but every merge is left for a human, and no merge command is sent.
 6. `state.mjs init`; if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
    when composed, the one written at the ruling point stands). `state.mjs add` each line's tickets,
-   `state.mjs line --lines` for the joined lines, then `scripts/integrate.mjs line-init` for each line.
+   `state.mjs line --lines` for the joined lines, `state.mjs bundle <state> <lead> <the other tickets>...` for each of
+   `freeze.mjs`'s `bundles`, then `scripts/integrate.mjs line-init` for each line.
 7. When `docs/agents/commands.md` does not exist, generate it by the generation rules of `ASKING.md` section 0 and
    commit it on each line's integration branch (subject without a ticket ID), never on the user's current branch.
 8. Standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket count per
@@ -82,7 +88,8 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 **Hard rail**: the frozen initial set never grows; tickets found or filed during the run are background only.
 
 Done when: the tracker mode is chosen and verified; every initial ticket has its publication source, tracker-native
-identifier and blocker map; every excluded ticket has its holder and release condition; a `base-ci` warning has the
+identifier and blocker map; every excluded ticket has its holder and release condition; every group of
+`bundleCandidates` has its ruling, bundled or not, in the self-answer log, and every bundle is `state.mjs bundle`d; a `base-ci` warning has the
 ruling point's choice, the user's answer or an on-behalf answer on record; when `integrate` is `ticket-pr` and the
 permission settings do not cover both merge commands, ledger field 5 has the merge authority outcome (yes, refused or
 no answer), and when standalone the freeze's questions were asked in one go; `check freeze` passes; when standalone,
@@ -177,12 +184,47 @@ files stay off the list**: files every ticket adds a line to (glossaries, index 
 manifest arrays) would make every ticket exclusive; the merge agent keeps both sides' lines. The list only grows: at
 expansion, and wider after a send-back.
 
+### Bundles
+
+A bundle exists to save **reviews that are wasted or repeated**: one review surface reviewed once per ticket, the
+same observation reported again in each ticket's review, or a review reporting what another ticket would change anyway.
+A bundle's tickets are done by one implementation agent on one ticket branch, reviewed once (the review tier judged
+on the whole diff) and integrated once; each ticket keeps its identity: criteria name their ticket, and the end state
+and merge SHA are the lead's and every member's.
+
+`freeze.mjs` only lists candidates and the overlap evidence (`overlaps`, `edges`, `through`); you rule. When the
+connected tickets exceed the cap (the plan's `bundleCap`, 3 by default), the script cuts them in candidate order into
+groups, each with `cutFrom` (the whole group); when that cut does not suit, write the tickets you pick in `bundles`
+directly, checked against the same cap and conditions.
+
+- **Bundle**: the reviews would read the same code; a later ticket rewrites or removes what an earlier one adds (an
+  expand–contract on the same files, say); or reviewing them apart would only repeat the same observation.
+- **Do not bundle**: one of them is a delivery the user would want to land on its own; together their criteria clearly
+  exceed what one review can cover (about 8; a blocked ticket not yet expanded is estimated from its scope); or one of
+  them is unclear enough to hold the rest up — when one is stuck, the whole bundle is.
+- A group whose `through` is not empty cannot be bundled whole: only a part that no such path crosses. When unsure, do
+  not bundle: one more review costs less than a whole bundle stuck.
+
+A bundle is this run's scheduling only: the tracker's tickets are not merged, closed or rewritten. The lead's status
+record carries the bundle's review block; the implementation agent leaves a one-line pointer to it in every other
+member's status record. At delivery every member is closed (the aggregate PR and FINISH.md's reconciliation table list
+each one).
+
+Under `integrate: ticket-pr` a bundle is one ticket-level PR: its body's summary lists every member, each with its own
+`Closes #N` line, so merging it closes the whole bundle. <!-- pending #193 --> Stacked with `gh stack`, the bundle is
+one layer: a downstream ticket that depends on any member waits for that layer's PR, and `stackParent` and
+`waitingOn` name the lead; when judging "exactly one unmerged upstream", several upstreams in one bundle count as
+one. <!-- pending #198 -->
+
 ### Close-out checks and review
 
 - **Targeted checks**: review only once the affected-scope checks the implementation agent reports are green; red goes
   back to the same agent. Before recording green (fixed, for a fix round a recheck follows), write the report it
   returned, verbatim, to the file the collect names: the review's spawn file takes its targeted checks from there,
   and the record is refused without it.
+- **Bundles**: the lead stands for the bundle. The spawn files' ticket face, acceptance snapshot and comparison are the
+  whole bundle's, each criterion naming its `ticket`; tick dispatches only once every member has its acceptance
+  snapshot and predicted files.
 - **Review method**: before the review tick hands out an exec that judges the **review tier** with `prove-it`'s
   `tier.mjs judge` (once per initial review; a recheck and a retry after stuck keep it), then picks the review method
   by the profile's `review`: under `review: minimal` always the minimal review; under `review: full` light gets the
@@ -198,8 +240,11 @@ expansion, and wider after a send-back.
   report (six lines at most), and record its verdict with `--outcome` and the report's `counts:` line as
   `--observations <n> --pre-existing <n>` (both, 0 when there are none; with one missing the record is refused with
   2), and `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>` (#156: all four together, some of them
-  refused with 2; none when the report's `counts:` line has none of them). A minimal review reports blocking findings
-  only and takes none of these counts.
+  refused with 2; none when the report's `counts:` line has none of them), and `--covered <n>` (#205: when the report
+  has `covered=`). A minimal review reports blocking findings only and takes none of these counts.
+- **Sibling scope**: the prove-it review's spawn file carries `sibling scope`, the run's other tickets not at an end
+  state and not in this bundle. What one of them is to do anyway the review rules `covered`: not a finding and not an
+  observation — unless it hits `acceptance`, `regression`, `red` or `safety`: each ticket lands on its own.
 - **The review's assignment record**: before the spawn tick writes the assignment record (`deadline.mjs record` in the
   ticket worktree with the `timeout-review` limit, then `state.mjs assign`), so the review host agent has a time limit
   like every other agent. When its report comes back with the spawn, record `--agent`, `--outcome` and the counts above;
@@ -208,11 +253,12 @@ expansion, and wider after a send-back.
   same, and when its completion notice arrives you pass it to tick with `--reported`, and a `collect` records the
   verdict, again with `--observations <n> --pre-existing <n>` (refused with 2 when one is missing).
 - **Act on the report**: `findings` go to the batched fix. When `observations` or `pre-existing` is not 0, tick hands
-  you an `observations` judge: read only those two parts of the review block, file one raw ticket for them ("Filing
-  along the way") and record it with `--value <issue id>`. When a later review of the same ticket (a recheck, a retry)
-  brings more, the judge tick hands out names that raw ticket: the new items go into it, not into another, and
-  recording a different id is refused (3). The judge does not hold the ticket up: the review's verdict goes on as
-  usual. The spawn file's reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier
+  you an `observations` judge: read only those two parts of the review block, file one raw ticket for the line
+  ("Filing along the way") and record it with `--value <issue id>`. When a later review on the same line (another
+  ticket's, a recheck, a retry) brings more, the judge tick hands out names that raw ticket: the new items go into it,
+  not into another, and recording a different id is refused (3). An item at the same location or about the same
+  problem is not written again: its sources gain the ticket. One such judge at a time per line. The judge does not
+  hold the ticket up: the review's verdict goes on as usual. The spawn file's reviewer is `primary`; `prove-it` adds the specialist reviewer itself by review tier
   (`architecture` at `full`).
 
 ### Batched fix
@@ -242,9 +288,10 @@ criterion, with the line on one side and the base on the other.
 ### Filing along the way
 
 Out-of-scope bugs, prefactors, tech debt, flaky reds whose root cause lies out of scope, and the review's `observations`
-and `pre-existing` (when tick's `observations` judge hands them out: one ticket per reviewed ticket, each item with its
-location, one sentence and evidence path; those a recheck brings go into the same one) get a raw ticket only, linked
-back to the source:
+and `pre-existing` (when tick's `observations` judge hands them out: one ticket per line, each item with its location,
+one sentence, evidence path and source ticket; what later reviews on the line bring goes into the same one, duplicates
+merged into one item; at the finish tick hands out an `observations-final` judge to mark each item, against the line's
+final tip, "still present" or "resolved by <ticket> (<SHA>)") get a raw ticket only, linked back to the source:
 
 - **GitHub**: `gh issue create`, without `ready-for-agent`; the body polished per `ASKING.md` section 6.
 - **Local Markdown**: the next unused number by the tracker's convention, `Status` set to `needs-triage`, committed to
@@ -258,8 +305,8 @@ When a `judge`'s `reference` points to one of these, read it in full and follow 
 [`RED-LIGHT.md`](RED-LIGHT.md), timeouts [`TIMEOUTS.md`](TIMEOUTS.md), send-back and stuck [`SEND-BACK.md`](SEND-BACK.md),
 the finish [`FINISH.md`](FINISH.md).
 
-Done when: every fix got the `findings` by location, verbatim; every ticket with observations or pre-existing items
-has one raw ticket; every conflict resolution lives only in its merge commit, its trade-offs logged; every raw ticket links its source and stays out of the frozen set.
+Done when: every fix got the `findings` by location, verbatim; every line with observations or pre-existing items
+has exactly one raw ticket, checked item by item against the final tip at the finish; every conflict resolution lives only in its merge commit, its trade-offs logged; every raw ticket links its source and stays out of the frozen set.
 
 ## 3. Rulings and stopping
 

@@ -497,6 +497,10 @@ test('description builds every role word, and spawns.mjs reads back the role and
     [['review', '#72'], 'review #72', '#72'],
     [['review', '03-add-login.md'], 'review 03-add-login.md', '03-add-login.md'],
     [['simplify', 'r1/line-a'], 'simplify r1/line-a', null], // #153: the simplify agent works on the line
+    // #205: a bundle's implement, fix and review name every ticket of it, the lead first
+    [['implement', '#72', '#73'], 'implement #72 #73', '#72'],
+    [['fix', '#72', '#73'], 'fix #72 #73', '#72'],
+    [['review', '#72', '#73'], 'review #72 #73', '#72'],
   ];
   for (const [args, expected, ticket] of cases) {
     const r = parse(main(['description', ...args]));
@@ -505,7 +509,7 @@ test('description builds every role word, and spawns.mjs reads back the role and
     assert.equal(category({ type: 'general-purpose', description: expected }), args[0]);
     assert.equal(ticketOf(expected), ticket);
   }
-  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', '#73'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words'], ['review', 'r1/line-a'], ['review', '#72', '#73'], ['simplify'], ['simplify', 'two words'], ['simplify', 'r1/line-a', 'r1/line-b']])
+  for (const args of [[], ['finder', '#72'], ['implement'], ['implement', '#72', 'r1/line-a'], ['implement', 'r1/line-a'], ['fix', 'my notes.md'], ['merge', 'two words'], ['merge', '#72', '#73'], ['ci-fix', '#72', '#73'], ['review', 'r1/line-a'], ['simplify'], ['simplify', 'two words'], ['simplify', 'r1/line-a', 'r1/line-b']])
     assert.equal(main(['description', ...args]).code, 2, JSON.stringify(args));
 });
 

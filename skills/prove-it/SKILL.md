@@ -58,6 +58,14 @@ The caller supplies:
   other initial review has none.
 - **Reviewers:** by default only `primary`, this skill's own set of Finders. The `architecture` specialist reviewer
   of the `full` tier is added by you from the tier output's `reviewers` (section 2), not supplied by the caller.
+- **Bundle** (#205, the spawn file's `bundle`): `none`, or several tickets done in one implementation on one ticket
+  branch, the lead first. A bundle is reviewed once: the diff is the whole bundle's, every `items` entry and `check`
+  item of the acceptance snapshot and comparison carries a `ticket` field naming its ticket, and the ticket face file
+  holds each ticket's full text in turn. `acceptance` findings are checked item by item as ever; their location is the
+  comparison's path, and they name whose criterion it is.
+- **Sibling scope** (#205, the spawn file's `sibling scope`): `none`, or a file listing the run's other tickets not at
+  an end state and not in this bundle: identifier, title, predicted files and how to read the full text. It is only
+  for judging `covered` (sections 2 and 4); it does not widen the review.
 
 Check each item; if any fails, do not open the review — output `verdict: stuck` in the section 6 format, naming
 which one:
@@ -65,8 +73,8 @@ which one:
 - `git rev-parse` resolves the fixed point and the ticket branch, and `git diff <fixed point>...<ticket branch>`
   is non-empty.
 - The targeted checks are green. A red light belongs to the implementation agent; review only takes green tickets.
-- The acceptance snapshot and the acceptance diff output are both present, their `id` is this ticket, and the
-  snapshot holds at least one criterion.
+- The acceptance snapshot and the acceptance diff output are both present, their `id` is this ticket (the lead for a
+  bundle, with `bundle` listing all of it), and the snapshot holds at least one criterion.
 - You have the Agent tool. At Claude Code's spawn depth limit (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`) you do not get
   it; then do not stand in as finder, verifier or Fix Verifier yourself — the evidence chain needs separate agents —
   and the `stuck` reason is `no Agent tool`.
@@ -186,9 +194,10 @@ Finders cannot see this conversation; the spawn prompt holds only values: the ab
 worktree, the fixed point, the ticket branch, the diff file path, the full ticket text, the notes directory, and the
 full text of every lens it applies (listed above). The scope to trace outward, raising candidates without ruling, the
 report fields and the cap of six per finder are written in the definition. Each reported candidate has `file`, `line`
-(new-file line number), `lens`, `summary`, `failure_scenario` and `suspected` (suspected spec-level or
-pre-existing); `suspected` is `spec` (with the text that specifies it), `pre-existing` (with its location on the
-fixed point) or `none`.
+(new-file line number), `lens`, `summary`, `failure_scenario` and `suspected` (suspected spec-level, pre-existing
+or covered by another ticket); `suspected` is `spec` (with the text that specifies it), `pre-existing` (with its
+location on the fixed point), `covered` (with the sibling ticket's identifier and the text of it that says so; only
+when the spawn file gave a sibling scope) or `none`. With a sibling scope, the spawn prompt also gives its file's path.
 
 Each reviewer is one source of candidates, and every candidate carries a `by` field naming its reviewer: the
 Finders' is `primary`, and so are section 1's `acceptance` finding and section 3's live-run and mutation candidates.
@@ -379,19 +388,19 @@ node "${CLAUDE_SKILL_DIR}/scripts/tier.mjs" batch --tier-file <scratchpad>/revie
 
 When the tier command failed, pass `--tier full` instead of `--tier-file`. Each batch in the output's `batches` goes
 to one verifier (`sorry-matt:verifier`), all dispatched in parallel, with `verifier` followed by the ticket's
-identifier as the `description`. Candidates marked `suspected` go together to one verifier (the batch's `short`); the
+identifier as the `description`. Candidates marked `suspected` (`spec`, `pre-existing` or `covered`) go together to one verifier (the batch's `short`); the
 rest are grouped by file (the batch's `normal`), and the batches never outnumber the tier output's `verifiers.max`.
 Batching only sets the number of verifiers and never merges candidates.
 
 The spawn prompt holds only values: the absolute paths of the repo and the review worktree, the ticket branch, the fixed
-point, the ticket text and acceptance snapshot (or their file paths), the notes directory, and the fields of that
-batch's candidates. Leave out the finder's reasoning to avoid anchoring; pass `suspected` and the text or location
-attached to it as they are. The ruling rules — the short path, disprove-first and the three gates, the four rulings,
+point, the ticket text and acceptance snapshot (or their file paths), the sibling scope's file (when there is one),
+the notes directory, and the fields of that batch's candidates. Leave out the finder's reasoning to avoid anchoring; pass `suspected` and the text or location
+attached to it as they are. The ruling rules — the short path, disprove-first and the three gates, the five rulings,
 the five blocking rules, the fix direction and the report format — live in the definition, and the spawn prompt does not
 restate them.
 
-For every candidate in its batch a verifier reports one ruling — **confirmed**, **pre-existing**, **spec-level** or
-**invalid** — with `file:line` evidence; a confirmed one names the `rule` it meets (one of `acceptance`, `regression`,
+For every candidate in its batch a verifier reports one ruling — **confirmed**, **pre-existing**, **spec-level**,
+**covered by another ticket** or **invalid** — with `file:line` evidence; a confirmed one names the `rule` it meets (one of `acceptance`, `regression`,
 `red`, `safety`, `unpinned`, or `none`), and one that meets a rule is blocking and carries a fix direction. The last
 line, `noticed`, holds other problems it saw while ruling, which you treat as observations. Only when a
 citation does not match the source it names, have another verifier re-check that candidate.
@@ -403,14 +412,17 @@ into the `primary` section):
 - **Confirmed but not blocking** → an observation.
 - **Spec-level** → an observation marked `(spec-level)` at the end of its sentence.
 - **Pre-existing** → listed under `pre-existing`.
+- **Covered by another ticket** (#205) → listed under `covered`, naming the ticket that covers it. It is neither a
+  finding nor an observation: the caller files nothing for it. A candidate that meets `acceptance`, `regression`,
+  `red` or `safety` never gets this ruling — each ticket lands on its own, and a halfway state reaches the base.
 - **Invalid** → dropped; for a mutation candidate, its disposition goes into the mutation record (for example
   "equivalent, invalid").
 
 Only findings trigger a fix. Observations and pre-existing items go to the caller for get-to-work's filing along the
-way, and the ticket moves on by the verdict.
+way, and the ticket moves on by the verdict; `covered` stays in the block.
 
 Done when: every candidate has exactly one ruling with `file:line` evidence, and either the result of each gate or
-the two checks of the short path; candidates in a batch were each ruled on separately; every finding has the `rule`
+the checks of the short path; candidates in a batch were each ruled on separately; every finding has the `rule`
 it meets, that rule's quote and a falsifiable fix direction; every mutant has a disposition in the mutation record.
 
 ## 5. Verdict
@@ -456,6 +468,8 @@ observations:
 - <file>:<line> <one sentence> (evidence: <file:line>)
 pre-existing:
 - <file>:<line> <one sentence> (evidence: <file:line>)
+covered:
+- <file>:<line> <one sentence> (covered by: <ticket>; evidence: <the sibling ticket's text it quotes>)
 
 live run: scope=<affected | findings> ci=<covered | uncovered | no-origin> source=<commands.md | self-found> [reused=<sha>] -> green | red (<log path>)
 - <command> -> green | red
@@ -536,7 +550,7 @@ message is the following, six lines at most, with nothing added:
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```
@@ -544,8 +558,8 @@ stuck: <reason (clear: <how to clear it>; completed: <last section done, or none
 `verdict`, `review`, `mode` and `tier` match the block; the first three `counts` count the block's entries, writing 0
 for none. The last four count this round's rulings (#156, so a retro can tell what each confirmed finding cost):
 `candidates` is the candidates sent for a ruling (from the Finders, the architect and mutation), `confirmed` and
-`invalid` the verifier's confirmed and invalid rulings (pre-existing and spec-level count as neither), `blocking` the
-confirmed, blocking ones. A recheck has no Finders: `candidates`, `confirmed` and `blocking` each count the Fix
+`invalid` the verifier's confirmed and invalid rulings (pre-existing, spec-level and covered count as neither),
+`blocking` the confirmed, blocking ones. `covered` (#205) counts the block's `covered` entries, 0 for none. A recheck has no Finders: `candidates`, `confirmed` and `blocking` each count the Fix
 Verifier's new findings of this round, and `invalid` is 0. When
 the block cannot be written into the status record (the tracker refuses, the file is locked), `verdict` is `stuck`,
 `block` is the path of the block file you saved, and the reason is the write failure's message.

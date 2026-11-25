@@ -64,6 +64,25 @@
 //              whose paths overlap, with those paths.
 //   candidates The frontier's ready tickets that were not excluded, those that block the most open tickets of
 //              the remaining set first (direct in-set blockers only); equal counts keep the frontier's order.
+//   bundleCandidates  (#205) Groups of open tickets on one line, none excluded or stalled, connected by pairs whose
+//              predicted entries overlap (overlap.mjs's sense, so symbol-disjoint entries are no pair and index
+//              files, left out of the lists, never link). Each has its `overlaps` (the pairs and their paths), its
+//              `edges` (direct open in-set blocker edges inside it, `[blocker, ticket]`) and `through`: open tickets
+//              outside it on a blocker path between two of its tickets — merging such a group would be a cycle, so
+//              only a part of it without such a path can be a bundle. A connected group of more than `bundleCap`
+//              tickets is cut in candidate order (the `candidates` order first, then the frontier's): each part
+//              grows from its first ticket by the next ticket that overlaps one already in it, up to the cap, and a
+//              ticket left alone is no candidate; each part has `cutFrom`, the whole group. The script rules on none
+//              of them.
+//   bundles    The plan's `bundles` (the host's rulings), checked: each lists 2 to `bundleCap` tickets, all of them
+//              bundleable (as above) and on one line, connected by overlapping pairs among themselves, with no
+//              blocker path between two of them through an open ticket outside it, and no ticket in two bundles.
+//              Any failure exits 2 naming the bundle and why. A bundle's `lead` is its first ticket in the
+//              frontier's order; `tickets` are all of them, the lead first.
+//
+// plan.json may also have
+//     "bundles":   [["#5", "#6"], ...],     // the bundles the host ruled on; default none
+//     "bundleCap": 3                         // the most tickets in a bundle; default 3, at least 2
 //
 // Output (stdout, JSON, format "sorry-matt/freeze@1"; fields are only ever added, never renamed)
 //   {
@@ -83,9 +102,14 @@
 //     "stalled":    [{ "id": "#13", "stalled": "blocked-external", "by": ["#12"] }],
 //     "lines":      [{ "id": "#5", "members": ["#5", "#9"], "tickets": ["#5", "#6", "#9"],
 //                      "files": ["src/a"], "joins": [{ "tickets": ["#6", "#9"], "paths": ["src/a"] }] }],
-//     "candidates": [{ "id": "#5", "line": "#5", "unlocks": 2 }]
+//     "candidates": [{ "id": "#5", "line": "#5", "unlocks": 2 }],
+//     "bundleCandidates": [{ "line": "#5", "tickets": ["#5", "#6"], "overlaps": [{ "tickets": ["#5", "#6"],
+//                            "paths": ["src/a"] }], "edges": [["#5", "#6"]], "through": [],
+//                            "cutFrom": ["#5", "#6", "#7", "#8"] }],   // cutFrom only on a part of a larger group
+//     "bundleCap":  3,
+//     "bundles":    [{ "lead": "#5", "tickets": ["#5", "#6"], "line": "#5" }]
 //   }
-//   `held` through `candidates` are null when the preflight fails. Paths are sorted, `/` is the whole
+//   `held` through `candidates`, `bundleCandidates` and `bundles` are null when the preflight fails. Paths are sorted, `/` is the whole
 //   repository, an entry that names a symbol is written `path#symbol`; lines, their tickets and members follow the frontier's ticket order.
 //
 // Exit codes: 0 output written (read `preflight.ok`); 1 a list, git or gh read failed after the preflight;
@@ -98,6 +122,7 @@ import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
 import { baseVerdict } from './ci.mjs';
 
 export const FORMAT = 'sorry-matt/freeze@1';
+export const BUNDLE_CAP = 3;
 const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
 
 const uniqueSorted = (xs) => [...new Set(xs)].sort();
@@ -178,7 +203,11 @@ export function readPlan(path, read, cwd = process.cwd()) {
     const file = resolve(dir, h.files);
     return { id: h.id, files: parseList(read(file), file), release: h.release };
   });
-  return { repo, frontier, predicted, ignore, held, base };
+  const bundleCap = plan.bundleCap ?? BUNDLE_CAP;
+  if (!Number.isInteger(bundleCap) || bundleCap < 2) throw new UsageError(`${path}: bundleCap is a whole number of at least 2`);
+  const bundles = plan.bundles ?? [];
+  if (!Array.isArray(bundles)) throw new UsageError(`${path}: bundles is an array of ticket id arrays`);
+  return { repo, frontier, predicted, ignore, held, base, bundles, bundleCap };
 }
 
 // ---------- preflight ----------
@@ -336,7 +365,7 @@ function heldFiles({ top, tracker, source, ignore, hostHeld }, { git, gh }) {
 
 const pathsOverlapping = (mine, theirs) => mine.filter((p) => theirs.some((q) => overlaps(p, q)));
 
-export function freezeTickets({ frontier, predicted, held }) {
+export function freezeTickets({ frontier, predicted, held, bundleCap: cap = BUNDLE_CAP }) {
   const order = new Map(frontier.tickets.map((t, i) => [t.id, i]));
   const byOrder = (a, b) => order.get(a) - order.get(b);
   // Held files as entries: git reports whole files; only a host-known holder's list can name symbols.
@@ -427,7 +456,116 @@ export function freezeTickets({ frontier, predicted, held }) {
     .map((id) => ({ id, line: lineOf.get(id), unlocks: unlocks(id) }))
     .sort((a, b) => b.unlocks - a.unlocks || byOrder(a.id, b.id));
 
-  return { excluded, stalled, lines, candidates };
+  // Bundle candidates (#205): within a line, the open tickets still able to start, connected by overlapping
+  // predicted entries. The script lists them; the host rules which become bundles.
+  const byId = new Map(kept.map((t) => [t.id, t]));
+  const bundleable = new Set(kept.filter((t) => t.state === 'open' && !t.stalled && !stalledBy.has(t.id)).map((t) => t.id));
+  const overlapOf = (a, b) => uniqueSorted([...pathsOverlapping(predicted.get(a), predicted.get(b)), ...pathsOverlapping(predicted.get(b), predicted.get(a))].map(display));
+  const pairs = [];
+  const ids = [...bundleable].sort(byOrder);
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      if (lineOf.get(ids[i]) !== lineOf.get(ids[j])) continue;
+      const paths = overlapOf(ids[i], ids[j]);
+      if (paths.length) pairs.push({ tickets: [ids[i], ids[j]], paths });
+    }
+  }
+  // Open in-set blocker edges, for the paths a bundle must not leave.
+  const blocks = new Map(kept.map((t) => [t.id, []])); // blocker -> the open tickets it blocks
+  for (const t of kept) if (t.state === 'open') for (const b of inSetBlockers(t)) if (byId.get(b)?.state === 'open') blocks.get(b).push(t.id);
+  const reach = (from, next) => {
+    const seen = new Set();
+    const todo = [...from];
+    while (todo.length) for (const x of next(todo.pop()) ?? []) if (!seen.has(x)) seen.add(x), todo.push(x);
+    return seen;
+  };
+  const blockedByOpen = (x) => (byId.get(x) ? inSetBlockers(byId.get(x)).filter((b) => byId.get(b)?.state === 'open') : []);
+  // An open ticket outside the group on a blocker path between two of its members: merging them would be a cycle.
+  const through = (group) => {
+    const g = new Set(group);
+    const down = reach(group, (x) => blocks.get(x));
+    const up = reach(group, blockedByOpen);
+    return [...down].filter((x) => !g.has(x) && up.has(x)).sort(byOrder);
+  };
+  const components = new Map();
+  const cp = new Map(ids.map((x) => [x, x]));
+  const cfind = (x) => (cp.get(x) === x ? x : cfind(cp.get(x)));
+  for (const { tickets: [a, b] } of pairs) {
+    const [ra, rb] = [cfind(a), cfind(b)].sort(byOrder);
+    if (ra !== rb) cp.set(rb, ra);
+  }
+  for (const x of ids) {
+    const r = cfind(x);
+    if (!components.has(r)) components.set(r, []);
+    components.get(r).push(x);
+  }
+  // A connected group larger than the cap is cut in candidate order (the candidates' order first, then the
+  // frontier's): each part grows from its first ticket by the next ticket overlapping one already in it, up to the
+  // cap; a ticket left alone is no candidate.
+  const rank = new Map([...candidates.map((x) => x.id), ...frontier.tickets.map((x) => x.id)].filter((x, i, all) => all.indexOf(x) === i).map((x, i) => [x, i]));
+  const byRank = (a, b) => rank.get(a) - rank.get(b);
+  const linkedTo = (x, ys) => pairs.some((p) => p.tickets.includes(x) && p.tickets.some((y) => y !== x && ys.includes(y)));
+  const cut = (g) => {
+    if (g.length <= cap) return [g];
+    const left = [...g].sort(byRank);
+    const parts = [];
+    while (left.length) {
+      const part = [left.shift()];
+      for (let i = 0; i < left.length && part.length < cap; ) {
+        if (linkedTo(left[i], part)) {
+          part.push(...left.splice(i, 1));
+          i = 0;
+        } else i += 1;
+      }
+      if (part.length > 1) parts.push(part);
+    }
+    return parts;
+  };
+  const bundleCandidates = [...components.values()]
+    .filter((g) => g.length > 1)
+    .flatMap((g) => cut(g).map((part) => ({ part: part.sort(byOrder), whole: [...g].sort(byOrder) })))
+    .sort((a, b) => byOrder(a.part[0], b.part[0]))
+    .map(({ part: g, whole }) => ({
+      line: lineOf.get(g[0]),
+      tickets: g,
+      overlaps: pairs.filter((p) => g.includes(p.tickets[0]) && g.includes(p.tickets[1])),
+      edges: g.flatMap((t) => blockedByOpen(t).filter((b) => g.includes(b)).map((b) => [b, t])),
+      through: through(g),
+      ...(whole.length > g.length ? { cutFrom: whole } : {}),
+    }));
+
+  const checkBundle = (group, cap) => {
+    const why = [];
+    if (!Array.isArray(group) || group.length < 2 || group.some((x) => typeof x !== 'string')) return ['a bundle lists at least two ticket ids'];
+    if (new Set(group).size !== group.length) why.push('a ticket is listed twice');
+    if (group.length > cap) why.push(`more than ${cap} tickets (bundleCap)`);
+    for (const x of group) if (!bundleable.has(x)) why.push(`${x} is not an open ticket of the frozen set that can still start`);
+    if (why.length) return why;
+    if (new Set(group.map((x) => lineOf.get(x))).size > 1) why.push('its tickets are on different lines');
+    const linked = reach([group[0]], (x) => pairs.filter((p) => p.tickets.includes(x)).map((p) => p.tickets.find((y) => y !== x)).filter((y) => group.includes(y)));
+    linked.add(group[0]);
+    if (group.some((x) => !linked.has(x))) why.push('its tickets are not connected by overlapping predicted entries');
+    const t = through(group);
+    if (t.length) why.push(`a blocker path between its tickets goes through ${t.join(', ')}, outside it`);
+    return why;
+  };
+
+  return { excluded, stalled, lines, candidates, bundleCandidates, checkBundle };
+}
+
+/** The plan's bundles checked against the candidates; a bundle's lead is its first ticket in the frontier's order. */
+export function freezeBundles(result, plan, order) {
+  const taken = new Map();
+  return (plan.bundles ?? []).map((group, i) => {
+    const why = result.checkBundle(group, plan.bundleCap);
+    for (const x of Array.isArray(group) ? group : []) {
+      if (taken.has(x)) why.push(`${x} is already in bundle ${taken.get(x)}`);
+      else taken.set(x, i);
+    }
+    if (why.length) throw new UsageError(`bundles[${i}] (${Array.isArray(group) ? group.join(', ') : group}): ${why.join('; ')}`);
+    const tickets = [...group].sort((a, b) => order.get(a) - order.get(b));
+    return { lead: tickets[0], tickets, line: result.lines.find((l) => l.tickets.includes(tickets[0])).id };
+  });
 }
 
 // ---------- main ----------
@@ -436,9 +574,12 @@ export function freeze(plan, deps) {
   const { frontier } = plan;
   const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source, base: plan.base }, deps);
   const out = { format: FORMAT, tracker: frontier.tracker, source: frontier.source, repo: top, preflight: result };
-  if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null };
+  if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null, bundleCandidates: null, bundles: null };
   const held = heldFiles({ top, tracker: frontier.tracker, source: frontier.source, ignore: plan.ignore, hostHeld: plan.held }, deps);
-  return { ...out, held, ...freezeTickets({ frontier, predicted: plan.predicted, held }) };
+  const { checkBundle, ...tickets } = freezeTickets({ frontier, predicted: plan.predicted, held, bundleCap: plan.bundleCap });
+  const order = new Map(frontier.tickets.map((t, i) => [t.id, i]));
+  const bundles = freezeBundles({ ...tickets, checkBundle }, plan, order);
+  return { ...out, held, ...tickets, bundleCap: plan.bundleCap, bundles };
 }
 
 export function defaultDeps() {
