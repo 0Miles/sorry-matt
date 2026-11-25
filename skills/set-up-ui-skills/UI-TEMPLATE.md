@@ -28,6 +28,7 @@ with nothing to say reads "None" instead of being removed. Angle brackets mark w
 
 - Wrappers: <whether library components are wrapped, and the wrapper layer's naming and location>
 - New shared components: go in `<path>`; come with <barrel export, types, story, or whatever the project requires>
+- Global styles: `<path of the global stylesheet the entry point loads>` (several files separated by commas; "None" when there is none)
 - Duplicates: `<Name>` in `<losing path>` is not for new use; use `<source-of-truth path>` instead
 
 ## Mechanical checks
@@ -77,8 +78,8 @@ package lacks a library, leave out the "None" entry.
 A single-package project, or a monorepo where every frontend package's library is the same, writes no "Scope"
 line and follows the first template; its format is unchanged.
 
-The "Tokens" section, the "New shared components" line of "Conventions", the "Shared components" table, and the
-"Mechanical checks" section are each judged on their own: one whose content is the same in every package follows
+The "Tokens" section, the "New shared components" and "Global styles" lines of "Conventions", the "Shared
+components" table, and the "Mechanical checks" section are each judged on their own: one whose content is the same in every package follows
 the first template and writes no "Scope"; one whose content differs between packages is written as below.
 "Scope" is written the same way as in the "Component library" section.
 
@@ -88,6 +89,8 @@ the first template and writes no "Scope"; one whose content differs between pack
 - **New shared components**: one "New shared components" line per distinct value, each with a "Scope" line
   indented under it; the packages with no shared directory get one "New shared components: None" line holding
   only a "Scope" line.
+- **Global styles**: one "Global styles" line per distinct value, each with a "Scope" line indented under it; the
+  packages with no global stylesheet get one "Global styles: None" line holding only a "Scope" line.
 - **Shared components table**: when some component cannot be used from every package, add a "Scope" column at
   the end of the table, each row giving the paths of the packages that can use that component; it is still one
   table, one row each, sorted by name.
@@ -118,6 +121,10 @@ the first template and writes no "Scope"; one whose content differs between pack
   - Scope: `<path of package B>`
 - New shared components: None
   - Scope: `<path of the package with no shared directory>`
+- Global styles: `<path of package A's global stylesheet>`
+  - Scope: `<path of package A>`
+- Global styles: None
+  - Scope: `<path of the package with no global stylesheet>`
 - Duplicates: `<Name>` in `<losing path>` is not for new use; use `<source-of-truth path>` instead
 
 ## Mechanical checks
@@ -137,7 +144,9 @@ the first template and writes no "Scope"; one whose content differs between pack
 - **Only the truly shared**: a component goes in the table only when two or more different pages or features use
   it; one used on a single page does not. The losing copy of a duplicate stays out of the table and goes in
   "Conventions".
-- **A map, not props**: no props, variants, or class names; those are read from source every time.
+- **A map, not props**: no props, variants, or class names; those are read from source every time. Global styles
+  too: the "Global styles" line records file locations, not the classes inside them; styling to share becomes a
+  shared component in the table, not a class name registered here.
 - **Use when / Instead**: these map to `use` / `instead` in the component contract of master-co/ui's `master-ui`
   — the first is the job the component does, the second is the component or approach to switch to when the job
   does not fit.
