@@ -11,6 +11,8 @@
 //   {
 //     "repo":     "<working tree>",                 // optional; default the current directory
 //     "base":     "<base branch>",                  // the branch the lines merge into, e.g. "main"; needed
+//     "integrate": "aggregate-pr" | "direct" | "ticket-pr",   // optional; default "aggregate-pr"; the run profile's
+//                                                             // integrate, which decides the ticket-pr checks below
 //     "frontier": "<frontier output file>" | { ...frontier.mjs output... },   // format sorry-matt/frontier@1
 //     "files":    { "#11": "<predicted-files list>", ... },                   // one per open ticket
 //     "ignore":   ["<worktree path>" | "<branch>" | "#<pr>"],                // optional holders to leave out
@@ -38,7 +40,20 @@
 //              has no CI to read: `base-ci` is then no warning, with `ci` null, and gh is not called. `base-ci`
 //              never fails (`ok` is always true): when that verdict is red or query-failed its `warning` is true
 //              and the freeze goes on (what the host does with a warning is in SKILL.md, freeze step 4); any other
-//              verdict is no warning. When a check fails, `ok` is false and everything below is null.
+//              verdict is no warning.
+//              With integrate "ticket-pr" (each ticket gets its own PR into the base) three more; "aggregate-pr" and
+//              "direct" add none and never call `gh repo view` or `gh stack`:
+//              - tracker "github": `default-branch`: `gh repo view <source> --json defaultBranchRef` reads the default
+//                branch; it fails when the plan's `base` (without a leading `origin/`, `refs/remotes/origin/` or
+//                `refs/heads/`) is not it, since a PR's `Closes #N` only closes its issue on the default branch, and
+//                when the query fails (the detail carries gh's message). Its detail names `aggregate-pr`.
+//              - tracker "local": `tracker` fails: Local Markdown has no PR to open; its detail names `aggregate-pr`.
+//              - either tracker: `gh-stack`: `gh stack --version` with `GH_STACK_NO_UPDATE_NOTIFIER=1` in the
+//                environment, with `stack` (true when it exited 0) and `version` (its first line, null when not
+//                installed). It never fails (`ok` is always true): without gh stack every ticket with an unmerged
+//                upstream waits for that upstream to merge, and the detail names the install command, `gh extension
+//                install github/gh-stack`, which a human runs (freeze never downloads and runs it).
+//              When a check fails, `ok` is false and everything below is null.
 //   held       Files other work is changing, each holder with a release condition:
 //              - every other worktree of the repo (not bare, not prunable): `git diff --name-only --no-renames
 //                <merge-base of HEAD and its HEAD>` inside it (committed, staged, unstaged) plus its untracked
@@ -71,11 +86,13 @@
 //     "tracker":    "github" | "local",
 //     "source":     "<owner>/<repo>" | "<git-ref>" | "worktree",
 //     "repo":       "<top level of the working tree>" | null,
-//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match" | "base-ci",
+//     "preflight":  { "ok": true, "checks": [{ "name": "git-repo" | "clean" | "gh-auth" | "repo-match" | "base-ci"
+//                                                      | "default-branch" | "tracker" | "gh-stack",
 //                                              "ok": true, "detail": "..." }] },
 //                   // base-ci also has "warning": true | false and "ci": ci.mjs base's output without format and
 //                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed }), or null when a local
-//                   // tracker's repo has no origin
+//                   // tracker's repo has no origin; gh-stack (ticket-pr only, like default-branch and tracker) also
+//                   // has "stack": true | false and "version": "<gh stack --version's first line>" | null
 //     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
 //                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
 //     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
@@ -99,6 +116,8 @@ import { baseVerdict } from './ci.mjs';
 
 export const FORMAT = 'sorry-matt/freeze@1';
 const FRONTIER_FORMAT = 'sorry-matt/frontier@1';
+const INTEGRATE = ['aggregate-pr', 'direct', 'ticket-pr'];
+const GH_STACK_INSTALL = 'gh extension install github/gh-stack';
 
 const uniqueSorted = (xs) => [...new Set(xs)].sort();
 const z = (out) => out.split('\0').filter(Boolean);
@@ -171,6 +190,8 @@ export function readPlan(path, read, cwd = process.cwd()) {
   const base = plan.base ?? null;
   if (base !== null && (typeof base !== 'string' || !base)) throw new UsageError(`${path}: base is a non-empty string`);
   if (!base) throw new UsageError(`${path}: a plan needs base, the branch the lines merge into`);
+  const integrate = plan.integrate === undefined ? 'aggregate-pr' : plan.integrate;
+  if (!INTEGRATE.includes(integrate)) throw new UsageError(`${path}: integrate is one of ${INTEGRATE.join(', ')}`);
   const held = hostHeld.map((h, i) => {
     if (!h || typeof h.id !== 'string' || !h.id) throw new UsageError(`${path}: held[${i}] has no id`);
     if (typeof h.files !== 'string' || !h.files) throw new UsageError(`${path}: held ${h.id} has no files list`);
@@ -178,7 +199,7 @@ export function readPlan(path, read, cwd = process.cwd()) {
     const file = resolve(dir, h.files);
     return { id: h.id, files: parseList(read(file), file), release: h.release };
   });
-  return { repo, frontier, predicted, ignore, held, base };
+  return { repo, frontier, predicted, ignore, held, base, integrate };
 }
 
 // ---------- preflight ----------
@@ -189,7 +210,7 @@ export function remoteSlug(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
-export function preflight({ repo, tracker, source, base }, { git, gh }) {
+export function preflight({ repo, tracker, source, base, integrate = 'aggregate-pr' }, { git, gh }) {
   const checks = [];
   let top = null;
   try {
@@ -230,7 +251,9 @@ export function preflight({ repo, tracker, source, base }, { git, gh }) {
           : { name: 'repo-match', ok: false, detail: `no remote points at ${source}; remotes: ${urls.join(', ') || 'none'}` },
       );
     }
-    checks.push(baseCheck(baseVerdict({ base, repo: source }, gh)));
+    const v = baseVerdict({ base, repo: source }, gh);
+    checks.push(baseCheck(v));
+    if (integrate === 'ticket-pr') checks.push(defaultBranchCheck(source, v.branch, gh));
   } else if (top) {
     // The base's CI comes from the git remote, not the tracker: gh, run in the repository, finds the GitHub
     // repository from its remotes. No `origin`: no CI to read (the lines go on local verification, as in tick).
@@ -246,7 +269,53 @@ export function preflight({ repo, tracker, source, base }, { git, gh }) {
         : { name: 'base-ci', ok: true, warning: false, detail: `${base}: the repository has no origin remote, no CI to read`, ci: null },
     );
   }
+  if (integrate === 'ticket-pr') {
+    if (tracker === 'local') {
+      checks.push({
+        name: 'tracker',
+        ok: false,
+        detail: 'integrate ticket-pr opens a pull request per ticket, and a Local Markdown (local) tracker has none to open; use integrate aggregate-pr',
+      });
+    }
+    checks.push(ghStackCheck(gh));
+  }
   return { top, result: { ok: checks.every((c) => c.ok), checks } };
+}
+
+// ticket-pr: a PR's `Closes #N` only closes the issue when the PR merges into the default branch.
+function defaultBranchCheck(source, branch, gh) {
+  let name;
+  try {
+    name = String(gh(['repo', 'view', source, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'])).trim();
+    if (!name) throw new Error('gh repo view printed no default branch');
+  } catch (e) {
+    return { name: 'default-branch', ok: false, detail: `the default branch of ${source} could not be read: ${detail(e)}` };
+  }
+  return name === branch
+    ? { name: 'default-branch', ok: true, detail: `${branch} is the default branch of ${source}` }
+    : {
+        name: 'default-branch',
+        ok: false,
+        detail: `the base ${branch} is not the default branch ${name} of ${source}, so a ticket PR's Closes #N would not close its issue; use integrate aggregate-pr, or base ${name}`,
+      };
+}
+
+// ticket-pr: whether gh stack can stack a ticket's PR on its upstream's. Never fails the preflight: without it,
+// every ticket with an unmerged upstream waits for that upstream to merge, and installing it is the user's.
+function ghStackCheck(gh) {
+  try {
+    const out = String(gh(['stack', '--version'], undefined, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }));
+    const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
+    return { name: 'gh-stack', ok: true, stack: true, version, detail: `gh stack is installed: ${version ?? '(no version printed)'}` };
+  } catch (e) {
+    return {
+      name: 'gh-stack',
+      ok: true,
+      stack: false,
+      version: null,
+      detail: `gh stack is not installed (${detail(e)}); tickets with an unmerged upstream wait for it to merge; to stack them, a human runs: ${GH_STACK_INSTALL}`,
+    };
+  }
 }
 
 // A red base, or one whose CI could not be read, is a warning: `ok` stays true and the freeze goes on.
@@ -434,7 +503,7 @@ export function freezeTickets({ frontier, predicted, held }) {
 
 export function freeze(plan, deps) {
   const { frontier } = plan;
-  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source, base: plan.base }, deps);
+  const { top, result } = preflight({ repo: plan.repo, tracker: frontier.tracker, source: frontier.source, base: plan.base, integrate: plan.integrate }, deps);
   const out = { format: FORMAT, tracker: frontier.tracker, source: frontier.source, repo: top, preflight: result };
   if (!result.ok) return { ...out, held: null, excluded: null, stalled: null, lines: null, candidates: null };
   const held = heldFiles({ top, tracker: frontier.tracker, source: frontier.source, ignore: plan.ignore, hostHeld: plan.held }, deps);
@@ -442,11 +511,13 @@ export function freeze(plan, deps) {
 }
 
 export function defaultDeps() {
-  const exec = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
+  const exec = (cmd, args, cwd, env) =>
+    execFileSync(cmd, args, { cwd, env: env && { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
   return {
     read: (p) => readFileSync(p, 'utf8'),
     git: (cwd, args) => exec('git', ['-C', cwd, ...args]),
-    gh: (args, cwd) => exec('gh', args, cwd), // cwd: a local tracker's base CI, which gh reads from the repository's remotes
+    // cwd: a local tracker's base CI, which gh reads from the repository's remotes; env: added to the environment
+    gh: (args, cwd, env) => exec('gh', args, cwd, env),
   };
 }
 
