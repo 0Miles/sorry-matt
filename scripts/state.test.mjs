@@ -860,3 +860,53 @@ test('parallel writers through the CLI lose no update and leave no lock or temp 
   const { readdirSync } = await import('node:fs');
   assert.deepEqual(readdirSync(r.dir).sort(), ['run-1.state.json']);
 });
+
+// ---- bundles (#205) ------------------------------------------------------------------------------------------------
+
+test('bundle folds members into the lead; a member is then named by its lead', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '#3', '--line', LINE);
+  const out = r.ok('bundle', '#1', '#3', '#2');
+  assert.deepEqual(out.tickets['#1'].members, ['#3', '#2']);
+  assert.deepEqual(Object.keys(r.state().tickets), ['#1']);
+  r.refused(/member of bundle #1: name its lead/, 'stage', 'implementing', '#2');
+  r.refused(/already a member of bundle #1/, 'add', '#3', '--line', LINE);
+  const res = r.ok('resume');
+  assert.deepEqual(res.bundles, { '#1': ['#3', '#2'] });
+  assert.deepEqual(res.open[0].members, ['#3', '#2']);
+  // the lead goes the whole path for all of them
+  r.ok('set', '#1', '--snapshot', SNAP);
+  r.ok('stage', 'implementing', '#1');
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass', '--observations', '1', '--covered', '2');
+  assert.equal(r.state().tickets['#1'].reviews[0].covered, 2);
+});
+
+test('bundle is refused once a ticket left candidate, across lines, twice, or for an unknown ticket', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '#4', '--line', LINE);
+  r.ok('add', '#3', '--line', 'run-1/line-b');
+  r.refused(/on run-1\/line-b, the lead on run-1\/line-a/, 'bundle', '#1', '#3');
+  r.refused(/not a ticket of this run/, 'bundle', '#1', '#9');
+  r.ok('set', '#2', '--snapshot', SNAP);
+  r.ok('stage', 'implementing', '#2');
+  r.refused(/never left candidate can be bundled; it is implementing/, 'bundle', '#1', '#2');
+  r.ok('bundle', '#1', '#4');
+  r.ok('add', '#5', '--line', LINE);
+  r.refused(/already leads bundle/, 'bundle', '#1', '#5');
+  assert.equal(r.cmd('bundle', '#1').code, 2);
+  assert.equal(r.cmd('review', '#2', '--mode', 'initial', '--verdict', 'pass', '--covered', 'x').code, 2);
+});
+
+test('a state whose members are also tickets, or in two bundles, is not a state file', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '--line', LINE);
+  const s = r.state();
+  s.tickets['#1'].members = ['#2'];
+  writeFileSync(r.path, JSON.stringify(s));
+  assert.equal(r.cmd('show').code, 1);
+  delete s.tickets['#2'];
+  s.tickets['#3'] = { ...s.tickets['#1'], members: ['#2'] };
+  writeFileSync(r.path, JSON.stringify(s));
+  assert.equal(r.cmd('show').code, 1);
+});

@@ -40,6 +40,9 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
      錯誤訊息記進自答清單。
    - 「先修基底」：不凍結。基底的紅燈（分支、SHA、`ci.failed` 的 run id）進人工作業清單，初始票全數標待裁決，
      解除條件是基底轉綠。「繼續」：基底帶進來的紅由紅燈處置判為對不到票（[`RED-LIGHT.md`](RED-LIGHT.md) 第 2 點）。
+   - **合票**（#205）：輸出的 `bundleCandidates` 是同一條線上、預計檔案重疊而連在一起的票。逐組依第 2 節「合票」
+     的判準決定合不合、合哪幾張，寫進計畫檔的 `bundles`（每組一個票號陣列），重跑 `freeze.mjs`：不合格的組以 2
+     結束並寫明原因，照它改。決定與理由記進自答清單，不問使用者。
 5. **合併授權**：只在本 run 的 `integrate` 是 `ticket-pr` 時做（第 6 步要寫的 profile；沒另寫就是 `state.mjs`
    檔頭依 tracker 給的預設）。`ticket-pr` 下合併預設視為授權，授權在開局就拿到，不等到收官才被擋。
    - **讀設定**：讀權限設定 —— `~/.claude/settings.json`、repo 的 `.claude/settings.json` 與
@@ -55,8 +58,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
    - **同意**：算「使用者本 run 指示合併」（`ASKING.md` 第 5 節），記進 ledger 第 5 欄（題目、答案與時間）。
      **拒絕或沒回應**：也記進 ledger 第 5 欄；PR 照常開、照常疊，但合併一律留給人，不送合併指令。
 6. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
-   沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，再對每條線跑
-   `scripts/integrate.mjs line-init`。
+   沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，對 `freeze.mjs` 輸出的每個
+   `bundles` 跑 `state.mjs bundle <state> <lead> <其餘的票>...`，再對每條線跑 `scripts/integrate.mjs line-init`。
 7. `docs/agents/commands.md` 不存在時照 `ASKING.md` 第 0 節的產生規則產生，在每條線的整合分支上 commit
    （subject 不帶票 ID），不 commit 到使用者目前的分支。
 8. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
@@ -66,7 +69,7 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 **硬護欄**：初始票集一經凍結便不再擴張；執行期間新發現或新開的票只作為背景。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票有發布出處、tracker 原生識別與 blocker map；被排除的票都有
-佔用來源與解除條件；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`integrate` 是 `ticket-pr` 且權限設定沒涵蓋兩條合併
+佔用來源與解除條件；每組 `bundleCandidates` 的合或不合都在自答清單上，合了的都已 `state.mjs bundle`；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`integrate` 是 `ticket-pr` 且權限設定沒涵蓋兩條合併
 指令時，ledger 第 5 欄有合併授權的結果（同意、拒絕或沒回應），獨立執行時凍結期間的提問合成了一次；`check freeze` 通過；獨立執行時
 兩行 `budget:` 已依凍結票數寫定。
 
@@ -143,11 +146,30 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 **索引檔留在清單外**：每張票各加一行的檔 —— 詞彙表、索引表、CI 的測試清單、README 的表格、manifest 的陣列 ——
 列進去會讓所有票互斥，兩張票各加一行的衝突由整併 agent 兩邊都保留。清單只加不減：展開時補、退回重做時加寬。
 
+### 合票
+
+合票（bundle）要省的是**無效與重複的審查**：同一個審查面被好幾張票各審一次，同一則觀察在每張票的審查裡再報一次；
+或審查回報了另一張票本來就會改掉的東西。合了的票由一個實作 agent 在一條 ticket 分支上做完，只審一次（審查分級
+以整組的 diff 判），只整併一次；每張票保留身分：驗收項標出處，終局與 merge SHA 是主票的、也是每張成員票的。
+
+`freeze.mjs` 只列候選與重疊證據（`overlaps`、`edges`、`through`），合不合由你判：
+
+- **合**：審查會讀到同一段程式碼；後一張會改寫或刪掉前一張加的東西（例如同一批檔案上的 expand–contract）；或拆開審
+  只會讓同一則觀察重複出現。
+- **不合**：某張是使用者會想分開落地的獨立交付；合起來的驗收項明顯超過一次審查審得完的量（約 8 項；被阻塞、還沒
+  展開的票依範圍估）；某張範圍不清，可能拖住整組 —— 一張卡住，整組一起卡住。
+- `through` 不是空的組不能整組合：只能挑不跨過它的幾張。拿不準就不合：多審一次的代價，比整組一起卡住小。
+
+合票只是本 run 的排程：tracker 上的票不合併、不關、不改寫。主票的接續紀錄帶整組的審查區塊；實作 agent 在其他
+成員票的接續紀錄留一行指到主票。交付時每張成員票都要關（總 PR 與 FINISH.md 的對帳表逐張列出）。
+
 ### 收票的檢查與審查
 
 - **針對性檢查**：實作 agent 回報的受影響範圍檢查是綠的才進審查；紅的交回原 agent 修到綠。記 green（複驗前的
   修正輪記 fixed）之前，先把它回報的全文原樣寫進 collect 指名的檔：審查的派工檔從那裡取 targeted checks，
   沒寫就記不進去。
+- **合票**：主票代表整組。派工檔的票面、驗收快照與比對輸出都是整組的，每項驗收標 `ticket`；tick 會等每張成員票的
+  驗收快照與預計檔案都齊了才派票。
 - **審查方式**：審查前 tick 先發一個 exec，以 `prove-it` 的 `tier.mjs judge` 判**審查分級**（每次初審判一次，
   複驗與 stuck 後的 retry 沿用同一個），再依流程設定 `review` 決定審查方式：`review: minimal` 一律走 minimal
   審查；`review: full` 下 light 走 minimal 審查 —— 沿用它的報告檔、`--kind minimal` 記錄與新鮮度檢查，record
@@ -159,16 +181,21 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
   發出，不填值、不加規則。它呼叫 `prove-it`；你不載入 `prove-it`，只收它至多六行的審查回報，以 `--outcome`
   記下結論，並照回報的 `counts:` 行帶 `--observations <n> --pre-existing <n>`（兩個都要帶，沒有就寫 0；少一個
   record 以 2 拒絕），以及 `--candidates <n> --confirmed <n> --invalid <n> --blocking <n>`（#156：四個一起帶，只帶
-  幾個以 2 拒絕；回報的 `counts:` 行沒有這四個時都不帶）。minimal 審查只回報擋下整併的 finding，這些計數都不帶。
+  幾個以 2 拒絕；回報的 `counts:` 行沒有這四個時都不帶）與 `--covered <n>`（#205：回報有 `covered=` 時帶）。
+  minimal 審查只回報擋下整併的 finding，這些計數都不帶。
+- **兄弟票範圍**：prove-it 審查的派工檔帶 `sibling scope`，列出同 run 還沒到終局、不在本組的票。某張兄弟票本來就要
+  做的事，審查判為 `covered`，不算 finding、也不進觀察 —— 除非它命中 `acceptance`、`regression`、`red` 或
+  `safety`：每張票各自落地。
 - **審查的派送紀錄**：spawn 之前 tick 先寫派送紀錄（`deadline.mjs record` 在 ticket worktree、時限
   `timeout-review`，再 `state.mjs assign`），審查主持 agent 和其他 agent 一樣有時限。回報隨 spawn 回來時，record
   帶 `--agent`、`--outcome` 與上面的計數；Agent tool 把它放到背景、spawn 只回 agent id 時，record 只帶 `--agent`
   （這時帶計數會以 2 拒絕）：它在途，tick 照樣掃時限、排 fallback 喚醒，完成通知來了以 `--reported` 交給 tick，由
   `collect` 記結論，同樣帶 `--observations <n> --pre-existing <n>`（少一個以 2 拒絕）。
 - **照回報落地**：`findings` 交集中修正。`observations` 或 `pre-existing` 不是 0 時，tick 發下一個 `observations`
-  judge，要你只讀審查區塊的這兩段，開一張 raw ticket（「期間開票」），以 `--value <issue id>` 記下；同一張票之後
-  的審查（複驗、retry）再帶出的，tick 發下的 judge 指名那張 raw ticket，新項目補進去，不另開，記別的 id 會被拒絕
-  （3）。這個 judge 不擋這張票：審查的結論照常往下走。派工檔的 reviewer 是 `primary`；專項 reviewer 由
+  judge，要你只讀審查區塊的這兩段，為這條線開一張 raw ticket（「期間開票」），以 `--value <issue id>` 記下；同一條線
+  之後的審查（別張票的、複驗、retry）再帶出的，tick 發下的 judge 指名那張 raw ticket，新項目補進去，不另開，記別的
+  id 會被拒絕（3）。位置相同或講同一件事的項目不重寫：在既有那項補上來源票。同一條線一次只發一個這種 judge。
+  這個 judge 不擋這張票：審查的結論照常往下走。派工檔的 reviewer 是 `primary`；專項 reviewer 由
   `prove-it` 依審查分級自己加（`full` 級的 `architecture`）。
 
 ### 集中修正
@@ -194,8 +221,9 @@ merge commit 裡，不改寫 ticket 分支。它逐塊回報取捨，你記進�
 ### 期間開票
 
 範圍外的 bug、前置重構、技術債、根因落在範圍外的偶發紅燈，以及審查的 `observations` 與 `pre-existing`（tick 的
-`observations` judge 發下時才做：一張票合開一張，逐則列出位置、一句話與證據路徑，複驗帶出的補進同一張），只建立
-raw ticket，連回來源：
+`observations` judge 發下時才做：一條線合開一張，逐則列出位置、一句話、證據路徑與來源票，同一條線之後的審查帶出的
+補進同一張、重複的併成一項；收官時 tick 再發一個 `observations-final` judge，對照線的最終 tip 逐項標「仍存在」或
+「已由 <票>（<SHA>）解決」），只建立 raw ticket，連回來源：
 
 - **GitHub**：`gh issue create`，不加 `ready-for-agent`；body 依 `ASKING.md` 第 6 節潤稿。
 - **Local Markdown**：依 tracker 慣例建下一個未使用編號的 ticket 檔，`Status` 設為 `needs-triage`，commit 到
@@ -208,7 +236,7 @@ raw ticket，連回來源：
 `judge` 的 `reference` 指到下列檔案時全文讀取並照做：紅燈處置 [`RED-LIGHT.md`](RED-LIGHT.md)、超時處置
 [`TIMEOUTS.md`](TIMEOUTS.md)、退回重做與標卡住 [`SEND-BACK.md`](SEND-BACK.md)、收官 [`FINISH.md`](FINISH.md)。
 
-完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的票都有一張 raw ticket；每個衝突解法只在
+完成判準：交修的都是 `findings` 原文的位置；有觀察或 pre-existing 的線都恰有一張 raw ticket，收官時逐項對照過最終 tip；每個衝突解法只在
 merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來源連結，
 沒有混入凍結票集。
 

@@ -15,6 +15,8 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
 1. 讀票，開頭先寫出票名。所有指令都用 worktree 的絕對路徑；只 commit 到 ticket 分支，不
    push、不開 PR、不動其他分支或其他 worktree。
 2. 讀 worktree 根目錄的 `CLAUDE.md` 或 `AGENTS.md`（有的話）並遵守。
+   票面檔開頭是 `# Bundle` 時，這是一個**合票**：幾張票一起做，同一條 ticket 分支，之後只審一次。票面檔依序收了每張票
+   的全文，驗收快照每項帶 `ticket` 標明出自哪張；每張票的驗收都要成立。
 3. **驗收項只讀不改。** 票面的驗收項與派工檔的展開區塊（開頭是 `<!-- sorry-matt:expansion -->`，
    GitHub 上是票的一則留言），都在你開工前由別人寫好；展開區塊的 `rulings` 跟票面一樣是要照做的裁定。不修改、不刪除、不改寫
    它們，也不在 tracker 或票檔另寫一份取代。某項做不到、互相矛盾或需要改，回報為**待裁決**並寫出
@@ -48,8 +50,8 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
 - 不做審查：不呼叫 `prove-it` 或 `code-review`，也不自己跑突變。獨立審查與突變由主持人在收票
   做一次，審自己剛寫的程式沒有獨立性。
 - 完成後把成果 commit 到 ticket 分支。每個 commit 的 subject 帶票 ID（GitHub 為 `#N`，Local
-  Markdown 為票檔名）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足哪幾項
-  驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整總 PR 的摘要。不寫
+  Markdown 為票檔名；合票時帶這個 commit 涉及的每張票）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足
+  哪幾項驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整總 PR 的摘要。不寫
   `Closes`、`Fixes` 這類關閉關鍵字：關票交給總 PR。
 
 ## 3. 自主規則與代答
@@ -76,6 +78,7 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
   （`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`），不要
   每次新增。
 - **Local Markdown**：票檔裡的 `## sorry-matt status` 區塊。
+- **合票**：寫在主票（票面檔第一張）上；其他每張票的接續紀錄只寫一行，指向主票的接續紀錄。
 
 六欄：目前版本（分支與 SHA）、關鍵決定（含本票層代答）、進度、阻擋、驗證結果、證據路徑。
 這是給下一個 agent 讀的機器紀錄，不用潤稿。交付前寫到最新。

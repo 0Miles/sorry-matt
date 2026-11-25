@@ -453,6 +453,14 @@ test('batch verify: light is one verifier; suspected candidates form their own s
   assert.deepEqual(batchItems({ tier: 'standard', items: [] }), []);
 });
 
+test('batch verify: a candidate another open ticket covers (#205) goes on the short path', () => {
+  const items = [C('C1', 'a.js', 'covered'), C('C2', 'b.js')];
+  assert.deepEqual(batchItems({ tier: 'full', items }), [
+    { files: ['a.js'], short: ['C1'], normal: [] },
+    { files: ['b.js'], short: [], normal: ['C2'] },
+  ]);
+});
+
 test('batch verify: standard folds the file groups with the fewest candidates so the total stays at the max', () => {
   const items = [C('C1', 'a.js'), C('C2', 'a.js'), C('C3', 'b.js'), C('C4', 'c.js'), C('C5', 'c.js'), C('C6', 'c.js'), C('C7', 'd.js', 'pre-existing')];
   const batches = batchItems({ tier: 'standard', items });

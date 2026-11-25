@@ -587,3 +587,66 @@ test('a list of a done ticket is ignored; a failing gh pr list after the preflig
   assert.equal(r.code, 1);
   assert.match(r.err, /^freeze: HTTP 502/);
 });
+
+// ---------- bundle candidates (#205) ----------
+
+test('bundle candidates: tickets of a line connected by overlapping entries, with their edges', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  // #1 -> #2 (#2 blocked by #1), both on src/a.md; #3 shares src/b.md with #2; #4 touches only docs.md.
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2', { blockers: ['#1'] }], ['#3'], ['#4']]),
+    files: { '#1': 'src/a.md\n', '#2': 'src/a.md\nsrc/b.md\n', '#3': 'src/b.md\n', '#4': 'docs.md\n' },
+  });
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(
+    r.json.bundleCandidates.map((b) => [b.line, b.tickets, b.edges, b.through]),
+    [['#1', ['#1', '#2', '#3'], [['#1', '#2']], []]],
+  );
+  assert.deepEqual(r.json.bundleCandidates[0].overlaps, [
+    { tickets: ['#1', '#2'], paths: ['src/a.md'] },
+    { tickets: ['#2', '#3'], paths: ['src/b.md'] },
+  ]);
+  assert.deepEqual(r.json.bundles, []);
+  assert.equal(r.json.bundleCap, 3);
+});
+
+test('bundles from the plan: lead is the first in frontier order; invalid groups are refused', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const frontier = frontierOf([['#1'], ['#2', { blockers: ['#1'] }], ['#3'], ['#4'], ['#5', { blockers: ['#1'] }], ['#6', { blockers: ['#5'] }]]);
+  const files = { '#1': 'src/a.md\n', '#2': 'src/a.md\n', '#3': 'src/b.md\n', '#4': 'docs.md\n', '#5': 'docs.md\n', '#6': 'src/a.md#x\n' };
+  const ok = run(dir, { repo, frontier, files, extra: { bundles: [['#2', '#1']] } });
+  assert.equal(ok.code, 0, ok.err);
+  assert.deepEqual(ok.json.bundles, [{ lead: '#1', tickets: ['#1', '#2'], line: '#1' }]);
+  // #1 and #6 overlap, but #6 waits on #5, which waits on #1: the path goes outside the bundle.
+  const through = run(dir, { repo, frontier, files, extra: { bundles: [['#1', '#6']] } });
+  assert.equal(through.code, 2);
+  assert.match(through.err, /goes through #5/);
+  const apart = run(dir, { repo, frontier, files, extra: { bundles: [['#1', '#3']] } });
+  assert.equal(apart.code, 2);
+  assert.match(apart.err, /different lines|not connected/);
+  const big = run(dir, { repo, frontier, files, extra: { bundles: [['#1', '#2', '#6']], bundleCap: 2 } });
+  assert.equal(big.code, 2);
+  assert.match(big.err, /more than 2/);
+  const twice = run(dir, { repo, frontier, files, extra: { bundles: [['#1', '#2'], ['#2', '#6']] } });
+  assert.equal(twice.code, 2);
+  assert.match(twice.err, /already in bundle/);
+});
+
+test('a stalled or excluded ticket cannot be bundled, and symbol-disjoint entries are no candidate', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1'], ['#2', { stalled: 'missing' }], ['#3']]),
+    files: { '#1': 'SKILL.md#a\n', '#2': 'SKILL.md#a\n', '#3': 'SKILL.md#b\n' },
+    extra: { bundles: [['#1', '#2']] },
+  });
+  assert.equal(r.code, 2);
+  assert.match(r.err, /#2 is not an open ticket/);
+  const none = run(dir, { repo, frontier: frontierOf([['#1'], ['#3']]), files: { '#1': 'SKILL.md#a\n', '#3': 'SKILL.md#b\n' } });
+  assert.equal(none.code, 0, none.err);
+  assert.deepEqual(none.json.bundleCandidates, []);
+});

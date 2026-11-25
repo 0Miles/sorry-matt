@@ -17,6 +17,9 @@ them points at a file or section you cannot read.
 1. Read the ticket and state its title first. Use the worktree's absolute path in every command; commit only to
    the ticket branch — do not push, open a PR, or touch any other branch or worktree.
 2. Read the worktree root's `CLAUDE.md` or `AGENTS.md`, where present, and follow it.
+   When the ticket face file starts with `# Bundle`, this is a **bundle**: several tickets done together on one ticket
+   branch, reviewed once afterwards. The face file holds each ticket's full text in turn, and each item of the
+   acceptance snapshot names its `ticket`; every ticket's criteria must hold.
 3. **The acceptance criteria are read-only.** The criteria in the ticket text, and the spawn file's expansion block
    (it starts with `<!-- sorry-matt:expansion -->`; on GitHub it is a comment on the ticket), were written by
    someone else before you started; the expansion block's `rulings` are binding rulings, just like the ticket text.
@@ -63,7 +66,7 @@ them points at a file or section you cannot read.
 - Do not review: do not call `prove-it` or `code-review`, and do not run mutation yourself. The host runs the
   independent review and mutation once during close-out; reviewing code you just wrote is not independent.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
-  the ticket file name in Local Markdown); its body says what that commit changed, and a commit that makes
+  the ticket file name in Local Markdown; for a bundle, every ticket the commit touches); its body says what that commit changed, and a commit that makes
   acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
   aggregate PR summary from all of this ticket's commits. Write no closing keyword such as `Closes` or `Fixes`:
   closing tickets is the aggregate PR's job.
@@ -99,6 +102,8 @@ This ticket's single source of truth for state, kept where the tracker keeps thi
 - **GitHub:** one comment whose first line is `<!-- sorry-matt:status -->`, updated in place
   (`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@<file>`), never appended anew.
 - **Local Markdown:** a `## sorry-matt status` section in the ticket file.
+- **Bundle:** on the lead (the first ticket of the face file); every other ticket's status record holds one line
+  pointing to the lead's.
 
 Six fields: current version (branch and SHA), key decisions (including this ticket's self-answers), progress,
 blockers, verification results, evidence paths. It is a machine record for the next agent, with no polish pass.
