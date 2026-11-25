@@ -18,10 +18,12 @@
 - `ticket`：票的識別碼，與存放票面全文與展開區塊的檔案
 - `status record`：接續紀錄的位置
 - `acceptance snapshot`、`comparison`：驗收快照與這次比對輸出的絕對路徑
-- `fixed point`：線整合分支；`ticket branch`：ticket 分支
+- `fixed point`：`aggregate-pr` 與 `direct` 下是線整合分支；`ticket-pr`（票級 PR，沒有整合分支）下，不疊的票是
+  `origin/<基底分支>`，疊的票是上游的 ticket 分支 —— 審查範圍是 `<fixed point>...<ticket 分支>`，只看這張票自己那一層；
+  `ticket branch`：ticket 分支
 - `targeted checks`：實作 agent 回報的針對性檢查指令與結果、它跑的 commit，以及它回報全文的檔案
 - `targeted checks ran at`：那些針對性檢查跑的 SHA，回報沒寫時是 `not reported`；`prove-it` 第 3 節依它決定沿用或重跑
-- `CI coverage`：`covered`、`uncovered` 或 `no-origin`
+- `CI coverage`：`covered`、`uncovered` 或 `no-origin`；`ticket-pr` 下是這張票的票級 PR 的 CI
 - `previous review block`：`in the status record` 時上一次的審查區塊在接續紀錄裡，`none` 時沒有
 - `reviewer`：這次的 reviewer
 - `scratchpad`：絕對路徑
