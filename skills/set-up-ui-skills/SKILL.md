@@ -48,6 +48,9 @@ each frontend package separately.
 - **Storybook**: whether `.storybook/` exists, and which components have `*.stories.*`.
 - **Tokens and theme files**: design tokens, theme objects, files defining CSS custom properties, a utility
   framework's theme config; record their location and naming rule.
+- **Global stylesheets**: the stylesheets the entry point (such as `main.ts` or a root layout) loads that no
+  component scope contains, such as `app.css` or `globals.css`; when the token file also holds other global
+  rules, record it in both places. Record locations; do not list the classes inside.
 - **Wrapper convention**: whether shared components wrap library components, and how the wrapper layer is named
   and where it lives.
 - **Lint rules restricting imports**: for example `no-restricted-imports`, `no-restricted-syntax`, or
@@ -89,10 +92,11 @@ evidence still matches it. Recommended answer: the one with more imports; when t
 a shared directory, with a story, or with a barrel export.
 
 **C. Conventions.** Wrapper convention, where new shared components go, what they must come with (barrel export,
-types, story), and the mechanical check commands: where there is evidence, write what it shows and do not ask. Values
+types, story), where the global stylesheets are, and the mechanical check commands: where there is evidence, write what it shows and do not ask. Values
 that differ between packages (two packages each with its own shared directory, for example) are not evidence
 disagreeing with itself; do not ask: write one line each in the per-package form of `UI-TEMPLATE.md`, with a
-"Scope" line, and give a package with no shared directory one "New shared components: none" line. Ask only when
+"Scope" line, give a package with no shared directory one "New shared components: none" line, and a package with no
+global stylesheet one "Global styles: none" line. Ask only when
 the evidence disagrees with itself inside one package (for example two shared directories in the same package
 both gaining new components, or half the components with stories and half without); the recommended answer is the practice recent commits follow.
 When an existing `ui.md` already records the ruling on this question and the evidence still matches it, do not
@@ -105,7 +109,7 @@ when evidence does contradict it, raise one question for it per **Existing `ui.m
 **Existing `ui.md`.** On a re-run, use it as the base for comparison: content that matches the evidence, or that
 the evidence does not speak to (usually a manual edit), stays as written and raises no question. Content the
 evidence contradicts (for example a recorded component whose file no longer exists) gets one question per spot,
-with the evidence in the recommended answer. Three exceptions raise no question: list each as a finding, complete the
+with the evidence in the recommended answer. Four exceptions raise no question: list each as a finding, complete the
 draft as below, and show the diff against the existing version as step 3 requires.
 
 - The existing `ui.md`'s "Component library" section has a single entry with no "Scope" line, and the evidence
@@ -116,10 +120,12 @@ draft as below, and show the diff against the existing version as step 3 require
   contradicts, with the recommended answer being to delete that entry and record again per rule A.
 - The existing `ui.md`'s "Component library" section has several entries, each with a "Scope" line, but the
   packages with no library have no entry: add the "none" entry with a "Scope" line to the draft.
-- The existing `ui.md`'s "Tokens" section, or the "New shared components" line of "Conventions", is in the
-  single-line form (no "Scope"), and the evidence shows the values differ between packages: the draft upgrades it
+- The existing `ui.md`'s "Tokens" section, or the "New shared components" or "Global styles" line of
+  "Conventions", is in the single-line form (no "Scope"), and the evidence shows the values differ between packages: the draft upgrades it
   to the per-package form of `UI-TEMPLATE.md`. The "Shared components" table and the "Mechanical checks" section
   are outside this exception and follow the general rule above.
+- The existing `ui.md`'s "Conventions" section has no "Global styles" line (it was made before the template had
+  one): the draft adds it from the evidence.
 
 **Instructions file.** When neither `CLAUDE.md` nor `AGENTS.md` exists, ask which one to create; the recommended
 answer is the one the current runtime reads natively. When either exists, do not ask.
@@ -131,8 +137,8 @@ Done when: the findings and every question go out in one message; every question
 basis; the question list holds none that a rule says not to ask (no library or only one, frontend packages
 whose libraries are not all the same (a package with no library counts), a library question an existing `ui.md`
 already ruled on, an existing `ui.md` library section missing its "Scope" lines or its "none" entry, an existing
-`ui.md` "Tokens" section or "New shared components" line in the single-line form while the values differ between
-packages, no duplicated component or one an existing `ui.md` already ruled on, a convention whose values differ
+`ui.md` "Tokens" section, "New shared components" line, or "Global styles" line in the single-line form while the
+values differ between packages, an existing `ui.md` missing its "Global styles" line, no duplicated component or one an existing `ui.md` already ruled on, a convention whose values differ
 between packages, no conflicting convention inside one package or one an existing `ui.md` already ruled on, an
 instructions file that already exists).
 

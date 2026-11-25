@@ -198,6 +198,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 審查門檻 | review threshold |
 | 還在跑 | still running |
 | 沒有 run | no run |
+| 全域樣式 | global styles |
+| 全域樣式越界 | global style overreach |
+| 查重 | duplicate check |
 | 查詢失敗 | query failed |
 | 被取消 | cancelled |
 | CI 不涵蓋整合分支 | CI does not cover the integration branch |
