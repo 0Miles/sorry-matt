@@ -49,8 +49,9 @@
 //                when the query fails (the detail carries gh's message). Its detail names `aggregate-pr`.
 //              - tracker "local": `tracker` fails: Local Markdown has no PR to open; its detail names `aggregate-pr`.
 //              - either tracker: `gh-stack`: `gh stack --version` with `GH_STACK_NO_UPDATE_NOTIFIER=1` in the
-//                environment, with `stack` (true when it exited 0) and `version` (its first line, null when not
-//                installed). It never fails (`ok` is always true): without gh stack every ticket with an unmerged
+//                environment, with `stack` (true when it exited 0 and printed a version on stdout: without the
+//                extension gh 2.91 exits 0 with an empty stdout and the install hint on stderr) and `version` (the
+//                first non-empty stdout line, null when not installed). It never fails (`ok` is always true): without gh stack every ticket with an unmerged
 //                upstream waits for that upstream to merge, and the detail names the install command, `gh extension
 //                install github/gh-stack`, which a human runs (freeze never downloads and runs it).
 //              When a check fails, `ok` is false and everything below is null.
@@ -302,20 +303,26 @@ function defaultBranchCheck(source, branch, gh) {
 
 // ticket-pr: whether gh stack can stack a ticket's PR on its upstream's. Never fails the preflight: without it,
 // every ticket with an unmerged upstream waits for that upstream to merge, and installing it is the user's.
+// Installed means a version on stdout: without the extension, gh 2.91 exits 0 with an empty stdout and prints
+// the install hint on stderr.
 function ghStackCheck(gh) {
+  const missing = (why) => ({
+    name: 'gh-stack',
+    ok: true,
+    stack: false,
+    version: null,
+    detail: `gh stack is not installed (${why}); tickets with an unmerged upstream wait for it to merge; to stack them, a human runs: ${GH_STACK_INSTALL}`,
+  });
+  let out;
   try {
-    const out = String(gh(['stack', '--version'], undefined, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }));
-    const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
-    return { name: 'gh-stack', ok: true, stack: true, version, detail: `gh stack is installed: ${version ?? '(no version printed)'}` };
+    out = String(gh(['stack', '--version'], undefined, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }));
   } catch (e) {
-    return {
-      name: 'gh-stack',
-      ok: true,
-      stack: false,
-      version: null,
-      detail: `gh stack is not installed (${detail(e)}); tickets with an unmerged upstream wait for it to merge; to stack them, a human runs: ${GH_STACK_INSTALL}`,
-    };
+    return missing(detail(e));
   }
+  const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
+  if (!version) return missing('gh stack --version exited 0 but printed no version');
+  if (out.includes(GH_STACK_INSTALL)) return missing('gh stack --version printed the install hint');
+  return { name: 'gh-stack', ok: true, stack: true, version, detail: `gh stack is installed: ${version}` };
 }
 
 // A red base, or one whose CI could not be read, is a warning: `ok` stays true and the freeze goes on.

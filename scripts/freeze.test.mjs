@@ -598,6 +598,21 @@ test('ticket-pr: gh stack not installed never fails the preflight and names the 
   assert.deepEqual(r.json.candidates.map((c) => c.id), ['#1']);
 });
 
+// gh 2.91 without the extension: `gh stack --version` exits 0, prints nothing on stdout and the install hint on
+// stderr (measured). A hint on stdout is not a version either.
+test('ticket-pr: gh stack exiting 0 without a version is not installed', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const stack of ['', 'gh stack is available as an official extension.\nTo install it, run:\n  gh extension install github/gh-stack']) {
+    const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { integrate: 'ticket-pr' }, gh: ghTicketPr({ stack }) });
+    assert.equal(r.code, 0, r.err);
+    const check = r.json.preflight.checks.find((c) => c.name === 'gh-stack');
+    assert.deepEqual([check.ok, check.stack, check.version], [true, false, null], JSON.stringify(stack));
+    assert.match(check.detail, /gh extension install github\/gh-stack/);
+    assert.equal(r.json.preflight.ok, true);
+  }
+});
+
 // ---------- held files and exclusion ----------
 
 test('another worktree, an unmerged branch and an open PR hold files; overlapping tickets are excluded', (t) => {
