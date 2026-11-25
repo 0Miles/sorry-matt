@@ -40,8 +40,10 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
      such question (the base was not red at the ruling point), answer "continue" on the user's behalf and log it in
      the self-answer log.
    - Standalone, when it is red, list the question "continue, or fix the base first" (`ASKING.md` section 2(a);
-     recommend "continue" and state that every line's CI will carry this red), ask it in one go with the merge
-     authority question of step 5, and record the answer in ledger field 2; when it could not be read, answer
+     recommend "continue" and state that every line's CI will carry this red). When step 5 will ask the merge
+     authority question, hold it until step 5 and ask both in one go; when step 5 asks nothing (`integrate` is not
+     `ticket-pr`, or the permission settings already cover it), ask it here. Record the answer in ledger field 2;
+     when it could not be read, answer
      "continue" on the user's behalf and log it, with the error message, in the self-answer log.
    - "Fix the base first": do not freeze. The base's red (branch, SHA, the run ids in `ci.failed`) goes on the
      human-work list, and every initial ticket is awaiting ruling, released when the base turns green. "Continue":
