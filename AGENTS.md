@@ -171,6 +171,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 整併佇列 | integration queue |
 | 預計檔案 | predicted files |
 | 檔案重疊 | file overlap |
+| 票級 PR | ticket-level PR |
+| 疊/不疊(票級 PR 疊在上游 ticket 分支上) | stacked / not stacked |
 | 退回重做 | send back for a redo |
 | 退回紀錄 | send-back record |
 | 退回次數 | send-back count |

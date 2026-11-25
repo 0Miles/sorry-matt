@@ -118,10 +118,25 @@ Record the question's outcome (branch, SHA, choice) in ledger field 2; `get-to-w
 "fix the base first", do not go on to step 3: the base's red goes on the human-work list, every ticket is awaiting
 ruling, released when the base turns green, and the run goes straight to the handoff.
 
+**Merge authority**: when this run's `integrate` is `ticket-pr` (the profile the ruling point will write; when none
+is written, the default the header of `get-to-work`'s `scripts/state.mjs` gives for the tracker), before the ruling
+point read the permission settings as `get-to-work`'s `SKILL.md` section 0, freeze step 5, says, and see whether
+`permissions.allow` covers `gh pr merge` and `gh stack merge`. Covered is standing authority: list no question.
+Reading the settings decides only whether to ask; whether a merge goes through is still decided by the permission
+settings at the prompting call (`ASKING.md` section 5). When not covered, list one question at the ruling point,
+"for the tickets frozen in this run, once a ticket's PR has passed review and its CI is green, may I send the
+merge?", recommending "yes", with the permission rule snippet from `ASKING.md` section 5, "From now on"; it goes
+through the pre-ask check and is ordered by cost to reverse together with the ruling point's other questions.
+Record the outcome in ledger field 5: "yes" counts as "the user said to merge during this run"; when refused,
+unanswered, or cut by the four-question limit (a cut is logged in the self-answer log), every merge is left for a
+human, and PRs are still opened and stacked as usual. `get-to-work` follows field 5 at the freeze and does not ask
+again.
+
 Done when: tickets are published to the configured tracker and every blocker edge is explicit; the kickoff
 agent's requirements context points to the same grilling result selected in step 1; the ruling point ran exactly
 once; when the base is red, the ruling point has the question "continue, or fix the base first" and its outcome is
-recorded in ledger field 2.
+recorded in ledger field 2; when `integrate` is `ticket-pr` and the permission settings do not cover both merge
+commands, the ruling point has the merge authority question and its outcome is recorded in ledger field 5.
 
 ## 3. Clear the tickets
 

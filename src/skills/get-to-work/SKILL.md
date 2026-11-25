@@ -34,23 +34,40 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
    `warning` 是 true（基底紅，或 CI 讀不到）時：
    - 由 `have-it-all-done` 組合時照 ledger 第 2 欄裁決點的選擇走；第 2 欄沒有這題（裁決點時基底不紅）就代答
      「繼續」，記進自答清單。
-   - 獨立執行時，紅就在這裡問使用者「繼續，或先修基底」（`ASKING.md` 第 2 節 (a)，建議「繼續」，寫明每條線的
-     CI 都會帶著這個紅），答案記進 ledger 第 2 欄；讀不到就代答「繼續」，連同錯誤訊息記進自答清單。
+   - 獨立執行時，紅就列一題「繼續，或先修基底」（`ASKING.md` 第 2 節 (a)，建議「繼續」，寫明每條線的
+     CI 都會帶著這個紅）。第 5 步要問合併授權時，延到第 5 步和它合成一次問；第 5 步不問（`integrate` 不是
+     `ticket-pr`，或權限設定已涵蓋）就在這裡問。答案記進 ledger 第 2 欄；讀不到就代答「繼續」，連同
+     錯誤訊息記進自答清單。
    - 「先修基底」：不凍結。基底的紅燈（分支、SHA、`ci.failed` 的 run id）進人工作業清單，初始票全數標待裁決，
      解除條件是基底轉綠。「繼續」：基底帶進來的紅由紅燈處置判為對不到票（[`RED-LIGHT.md`](RED-LIGHT.md) 第 2 點）。
-5. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
+5. **合併授權**：只在本 run 的 `integrate` 是 `ticket-pr` 時做（第 6 步要寫的 profile；沒另寫就是 `state.mjs`
+   檔頭依 tracker 給的預設）。`ticket-pr` 下合併預設視為授權，授權在開局就拿到，不等到收官才被擋。
+   - **讀設定**：讀權限設定 —— `~/.claude/settings.json`、repo 的 `.claude/settings.json` 與
+     `.claude/settings.local.json` —— 的 `permissions.allow`，看它涵不涵蓋 `gh pr merge` 與 `gh stack merge` 兩條
+     指令。`Bash(...)` 與 `PowerShell(...)` 兩種寫法都讀，以主持人送合併時用的那個 shell 的寫法判定；兩條都有
+     allow 規則涵蓋、且沒有同指令的 `ask` 或 `deny` 規則，就是**常設授權**，不問。讀設定只決定要不要問：合併送不送，
+     仍由權限設定在確認呼叫時決定（`ASKING.md` 第 5 節，agent 不判斷授權）。
+   - **沒涵蓋**：獨立執行時只問一次「本 run 凍結的這串票，每張票的 PR 審查過、CI 綠了，可以由我送出合併
+     （`gh pr merge`，疊在 `gh stack` 裡的用 `gh stack merge`）嗎」，建議「可以」，附上 `ASKING.md` 第 5 節
+     「以後都這樣」的權限規則片段，說明加進設定之後的 run 就不再問。這題照 `ASKING.md` 第 1 節的提問前置檢查，
+     並和凍結的其他問題（第 4 步基底 CI 那題）合成一次提問，一次問完。由 `have-it-all-done` 組合時不問：照
+     ledger 第 5 欄裁決點記下的結果走；第 5 欄沒有這題，就依「拒絕」處理，記進自答清單。
+   - **同意**：算「使用者本 run 指示合併」（`ASKING.md` 第 5 節），記進 ledger 第 5 欄（題目、答案與時間）。
+     **拒絕或沒回應**：也記進 ledger 第 5 欄；PR 照常開、照常疊，但合併一律留給人，不送合併指令。
+6. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
    沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，再對每條線跑
    `scripts/integrate.mjs line-init`。
-6. `docs/agents/commands.md` 不存在時照 `ASKING.md` 第 0 節的產生規則產生，在每條線的整合分支上 commit
+7. `docs/agents/commands.md` 不存在時照 `ASKING.md` 第 0 節的產生規則產生，在每條線的整合分支上 commit
    （subject 不帶票 ID），不 commit 到使用者目前的分支。
-7. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
-8. `tick.mjs setup`，再跑 `state.mjs check <state> freeze --base <基底>`。gate 以 4 結束時照輸出列的每一項補齊
+8. 獨立執行時，照 `ASKING.md` 第 4 節以凍結票數改寫 ledger 第 9 欄的 `budget: spawns` 與 `budget: rounds`。
+9. `tick.mjs setup`，再跑 `state.mjs check <state> freeze --base <基底>`。gate 以 4 結束時照輸出列的每一項補齊
    再跑，過了才進第 1 節。
 
 **硬護欄**：初始票集一經凍結便不再擴張；執行期間新發現或新開的票只作為背景。
 
 完成判準：已選定且驗證 tracker 模式；每張初始票有發布出處、tracker 原生識別與 blocker map；被排除的票都有
-佔用來源與解除條件；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`check freeze` 通過；獨立執行時
+佔用來源與解除條件；`base-ci` 的警告已有裁決點的選擇、使用者的答案或代答紀錄；`integrate` 是 `ticket-pr` 且權限設定沒涵蓋兩條合併
+指令時，ledger 第 5 欄有合併授權的結果（同意、拒絕或沒回應），獨立執行時凍結期間的提問合成了一次；`check freeze` 通過；獨立執行時
 兩行 `budget:` 已依凍結票數寫定。
 
 ## 1. 用 tick 推進流水線
