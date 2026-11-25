@@ -31,12 +31,15 @@ Re-run the scenario the finding's `evidence` records, then answer both, each wit
 
 1. What is the observable result of that scenario now? It matches the after-fix result `fix` describes → **closed**;
    otherwise **open**.
-2. Among the changed lines of the fix diff, is there a defect that meets one of the five blocking rules? If so, rule it
-   by the three gates, with the second gate's fixed point replaced by the previous head. A confirmed one is a new
-   finding of this round, with the `rule` it meets, that rule's quote and a fix direction.
+2. Among the changed lines of the fix diff, is there a defect that meets `acceptance`, `regression`, `red` or
+   `safety`? If so, rule it by the three gates, with the second gate's fixed point replaced by the previous head. A
+   confirmed one is a new finding of this round, with the `rule` it meets, that rule's quote and a fix direction.
+   **A recheck does not use `unpinned`:** make no new mutants on the fix diff, and "the fix's lines are not pinned by a
+   test" is not a new finding. Every fix round adds new lines; demanding that each round's lines be pinned by
+   mutation again means the fixing never ends.
 
-Other ways the same finding shows up, lines outside the fix diff, and problems that meet no rule go on the `noticed`
-line, one line each; prove-it records them as observations.
+Other ways the same finding shows up, lines outside the fix diff, problems that meet no rule, and doubts that the
+fix's lines are pinned by tests go on the `noticed` line, one line each; prove-it records them as observations.
 
 ## 3. Report
 
@@ -45,5 +48,5 @@ At most four lines per finding: closed or open with its `file:line` evidence; th
 `noticed: none`. Reasoning and probe output stay in files under the notes directory, and the report gives their paths.
 
 Done when: every finding of the batch is closed or open, with `file:line` evidence from re-running its scenario; every
-new finding sits on a changed line of the fix diff and names the `rule` it meets; nothing outside the notes directory was
-changed.
+new finding sits on a changed line of the fix diff and names the `rule` it meets, never `unpinned`; nothing outside the
+notes directory was changed.
