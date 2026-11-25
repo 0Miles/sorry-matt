@@ -92,6 +92,13 @@ With the newly published spec as input, cut **tracer-bullet** vertical slices:
   cram — do not fold distinct behaviours into one criterion, and do not drop an outcome that needs checking just to
   get down to five. For a blocked ticket whose criteria are deferred, estimate from its scope, and split it now if it
   clearly exceeds five.
+- **Slices that can only run in sequence and change the same files become one ticket.** When the cut tickets form a
+  single blocker chain and change the same module and its tests, splitting buys no parallelism. It only makes each
+  ticket pay for its own implementation, independent review and integration, plus transitional code written so the
+  earlier ticket is green on its own and deleted by the next. Merge them into one ticket, and do not split it even with
+  more than five acceptance criteria: group the outcomes of one behaviour under one criterion, without dropping any
+  outcome that needs checking. There are only two reasons to split: the slices can run in parallel, or one ticket would
+  not fit in a single fresh context window.
 - **Wide refactors are the exception:** when one mechanical change (renaming a field, changing a shared type)
   fans across the whole codebase and no vertical slice can land green, sequence it as **expand–contract**. First
   add the new form beside the old (expand); then migrate call sites in batches sized by blast radius, each batch

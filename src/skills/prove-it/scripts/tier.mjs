@@ -12,6 +12,11 @@
 //          files          changed paths (`--no-renames`: a rename counts as its old and its new path)
 //          added/deleted  lines from `git diff --numstat -M` (rename detection on, so a moved file counts only the
 //                         lines it changed); a binary file counts 0; changedLines is their sum
+//          testLines      the part of changedLines in test files (isTest: a directory such as test/, tests/,
+//                         __tests__/, spec/ or one ending in .Tests or -tests, or a file name such as *.test.*,
+//                         *.spec.*, *_test.*, test_*.py, *Tests.cs); codeLines = changedLines - testLines. The line
+//                         thresholds below compare codeLines, so pinning behaviour with more tests never buys a
+//                         ticket a heavier review
 //          docsOnly       every changed path is documentation: an extension in DOC_EXTENSIONS
 //          sensitive      changed paths (old or new) that match a sensitive pattern. Patterns are the union of the
 //                         `## Sensitive paths` section of docs/agents/commands.md on base and on head, so a ticket
@@ -43,8 +48,8 @@
 //          full      a sensitive path, documentation or not (#139: an agent definition is   (sensitive, over-lines)
 //                    Markdown, and what it grants is the permission boundary)
 //          light     docsOnly                                                   (reason docs-only)
-//          full      changedLines > --full-over-lines (400)                     (over-lines)
-//          light     changedLines <= --light-max-lines (50)                     (few-lines)
+//          full      codeLines > --full-over-lines (400)                        (over-lines)
+//          light     codeLines <= --light-max-lines (50)                        (few-lines)
 //          standard  everything else                                            (default)
 //        Finders: one per inner array of `finders`, which lists that finder's lenses (LENSES). Groups per tier:
 //          light     [all five]
@@ -70,7 +75,8 @@
 //
 // Output (stdout, JSON; fields are only ever added, never renamed)
 //   judge: { "format": "sorry-matt/tier@1", "base", "head", "tier", "reasons": [...],
-//            "signals": { "files", "added", "deleted", "changedLines", "docsOnly", "sensitive": [paths],
+//            "signals": { "files", "added", "deleted", "changedLines", "testLines", "codeLines", "docsOnly",
+//                         "sensitive": [paths],
 //                         "sensitiveSource": "commands.md" | "default", "signatureChanged", "ruleFiles": [paths] },
 //            "thresholds": { "lightMaxLines", "fullOverLines", "standardMaxVerifiers", "lightCap", "standardCap",
 //                            "fullCap" },
@@ -146,6 +152,23 @@ export const DECLARATION = new RegExp(
 class UsageError extends Error {}
 
 const unquote = (p) => (p.startsWith('"') && p.endsWith('"') ? JSON.parse(p) : p);
+
+// A test file, or any file under a test directory. Paths use forward slashes.
+const TEST_DIR = /^(?:tests?|__tests__|__mocks__|specs?)$|[.\-_]tests?$/i;
+const TEST_FILE = /\.(?:test|spec)\.[^./]+$|_(?:test|spec)\.[^./]+$|^test_[^/]*\.py$|(?:Tests?|Spec)\.(?:cs|fs|vb|java|kt|scala|swift|php)$/;
+export const isTest = (path) => {
+  const parts = path.split('/');
+  const name = parts.pop();
+  return parts.some((d) => TEST_DIR.test(d)) || TEST_FILE.test(name);
+};
+
+// The new path in a `git diff --numstat -M` path column: `old => new` or `pre{old => new}post`.
+export const numstatNewPath = (column) => {
+  const p = unquote(column);
+  if (/\{[^{}]* => [^{}]*\}/.test(p)) return p.replace(/\{[^{}]* => ([^{}]*)\}/g, '$1').replace(/\/{2,}/g, '/');
+  const arrow = p.indexOf(' => ');
+  return arrow >= 0 ? p.slice(arrow + 4) : p;
+};
 
 export const isDoc = (path) => {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
@@ -386,19 +409,20 @@ export function finderPlan(tier, signals) {
   return { finders: groups.map((g) => g.filter((l) => !drop.has(l))).filter((g) => g.length > 0), pruned };
 }
 
-// Signals + thresholds -> the judge report minus base/head.
+// Signals + thresholds -> the judge report minus base/head. Signals without codeLines count every changed line.
 export function judgeTier(signals, thresholds = DEFAULT_THRESHOLDS) {
   const t = { ...DEFAULT_THRESHOLDS, ...thresholds };
+  const codeLines = signals.codeLines ?? signals.changedLines;
   let tier;
   let reasons;
   const full = [
     ...(signals.sensitive.length > 0 ? ['sensitive'] : []),
-    ...(signals.changedLines > t.fullOverLines ? ['over-lines'] : []),
+    ...(codeLines > t.fullOverLines ? ['over-lines'] : []),
   ];
   if (signals.sensitive.length > 0) [tier, reasons] = ['full', full];
   else if (signals.docsOnly) [tier, reasons] = ['light', ['docs-only']];
   else if (full.length) [tier, reasons] = ['full', full];
-  else if (signals.changedLines <= t.lightMaxLines) [tier, reasons] = ['light', ['few-lines']];
+  else if (codeLines <= t.lightMaxLines) [tier, reasons] = ['light', ['few-lines']];
   else [tier, reasons] = ['standard', ['default']];
   const { finders, pruned } = finderPlan(tier, signals);
   return {
@@ -416,18 +440,22 @@ export function judgeTier(signals, thresholds = DEFAULT_THRESHOLDS) {
   };
 }
 
-// `git diff --numstat -M` (rename detection on) -> { added, deleted }. Only the two count columns are read, so the
-// rename forms of the path column (`a => b`, `{a => b}/c`) do not matter.
+// `git diff --numstat -M` (rename detection on) -> { added, deleted, testLines }. The path column is read only to
+// tell test files apart, by the new path of a rename form (`a => b`, `{a => b}/c`).
 export function countLines(numstatText) {
   let added = 0;
   let deleted = 0;
+  let testLines = 0;
   for (const line of numstatText.split('\n')) {
-    const m = /^(\d+|-)\t(\d+|-)\t/.exec(line.replace(/\r$/, ''));
+    const m = /^(\d+|-)\t(\d+|-)\t(.*)$/.exec(line.replace(/\r$/, ''));
     if (!m) continue;
-    if (m[1] !== '-') added += Number(m[1]);
-    if (m[2] !== '-') deleted += Number(m[2]);
+    const a = m[1] === '-' ? 0 : Number(m[1]);
+    const d = m[2] === '-' ? 0 : Number(m[2]);
+    added += a;
+    deleted += d;
+    if (isTest(numstatNewPath(m[3]))) testLines += a + d;
   }
-  return { added, deleted };
+  return { added, deleted, testLines };
 }
 
 // numstat: --no-renames -z (paths, old and new); counts: -M (line counts as a rename-aware diff reports them).
@@ -436,8 +464,12 @@ export function countLines(numstatText) {
 export function collectSignals({ numstat, counts, diffText, base: baseContract, head: headContract, treePaths, fileAt = () => null }) {
   const rows = parseNumstat(numstat);
   const paths = [...new Set(rows.map((r) => r.path))];
-  const { added, deleted } = counts == null
-    ? { added: rows.reduce((n, r) => n + r.added, 0), deleted: rows.reduce((n, r) => n + r.deleted, 0) }
+  const { added, deleted, testLines } = counts == null
+    ? {
+        added: rows.reduce((n, r) => n + r.added, 0),
+        deleted: rows.reduce((n, r) => n + r.deleted, 0),
+        testLines: rows.filter((r) => isTest(r.path)).reduce((n, r) => n + r.added + r.deleted, 0),
+      }
     : countLines(counts);
   const lists = [parseSensitive(baseContract), parseSensitive(headContract)].filter((l) => l && l.length > 0);
   const sensitiveSource = lists.length ? 'commands.md' : 'default';
@@ -451,6 +483,8 @@ export function collectSignals({ numstat, counts, diffText, base: baseContract, 
     added,
     deleted,
     changedLines: added + deleted,
+    testLines,
+    codeLines: added + deleted - testLines,
     docsOnly: paths.length > 0 && paths.every(isDoc),
     sensitive: paths.filter(isSensitive).sort(),
     sensitiveSource,

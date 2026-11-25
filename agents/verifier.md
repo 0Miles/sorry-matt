@@ -71,10 +71,12 @@ name the `rule` it meets and quote the text or output it rests on:
 | `regression` | a behaviour that holds at the fixed point, and that neither the ticket nor an acceptance item asked to change, breaks on the ticket branch | the output at the fixed point and on the ticket branch |
 | `red` | the live run is red | the path of the live-run output |
 | `safety` | data loss, leaked credentials or permissions, or a failed check on a sensitive path | the input that triggers it and the result |
-| `unpinned` | a surviving mutant is confirmed: the tests do not pin the behaviour this ticket changed | the path of the mutation output |
+| `unpinned` | a surviving mutant is confirmed, and what it breaks is a behaviour an item of the acceptance snapshot requires, or it causes a consequence in the `safety` row: the tests do not pin a behaviour this ticket promises | the path of the mutation output, plus that acceptance item's text or the input and result that trigger the `safety` consequence |
 
 A confirmed candidate that meets none of the five is an observation: hardening for edge inputs, message wording,
-scenarios no acceptance item covers, other spots that deserve the same check.
+scenarios no acceptance item covers, other spots that deserve the same check. A surviving mutant whose broken
+behaviour no acceptance item requires and that causes no `safety` consequence is an observation too: whether to add the
+test is the implementer's call, and it does not block the ticket.
 
 ## 6. Fix direction
 

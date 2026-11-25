@@ -580,13 +580,13 @@ step 1 below.
    paths of the repo and the review worktree, the ticket branch, the previous head, the fix diff's path, the notes
    directory, and each finding's `summary`, `evidence`, `rule` and `fix`; leave out the implementer's explanation. The
    answering rules — re-run the scenario recorded in `evidence`, the two questions, the second one ruled by the
-   verifier's three gates and five blocking rules with the previous head standing in for the fixed point at the
-   second gate — live in the definition, and the spawn prompt does not restate them.
+   verifier's three gates and the four blocking rules other than `unpinned`, with the previous head standing in for
+   the fixed point at the second gate — live in the definition, and the spawn prompt does not restate them.
 
    For each finding it reports **closed** or **open** with `file:line`, and any confirmed new finding of this round on
    the fix diff's changed lines that meets a rule (with its `rule` and fix direction). The report's last line,
-   `noticed`, holds other spellings of the same finding, lines outside the fix diff, and problems that meet no rule,
-   which you treat as observations.
+   `noticed`, holds other spellings of the same finding, lines outside the fix diff, problems that meet no rule, and
+   doubts that the fix's lines are pinned by tests, which you treat as observations.
 2. **Live run:** run only the findings' scope — the tests covering the finding lines, plus any tests the fix added.
    Whatever the tier, do not rerun the initial review's `affected`, do not run `scope.mjs`, and do not reuse the
    results the fix agent reported. The `live run` line says `scope=findings`, `ci` as section 1's CI coverage, and
@@ -594,7 +594,9 @@ step 1 below.
 3. **Mutation:** rerun only the mutants that survived last time; this time each must be killed. Where the line's
    content changed, apply the same operator to the line that replaced it. Use a new ledger for this round. The
    baseline reuses step 2: when `--cmd` is verbatim a command green in step 2, add `--green-at <the fixed head>`
-   (section 3). Lines the fix added are covered by question 2 of step 1.
+   (section 3). Lines the fix added get no new mutants: only the four rules of question 2 in step 1 guard them, and
+   **a recheck has no `unpinned` finding**. Every fix round adds new lines; demanding that they be pinned by mutation
+   again means the fixing never ends.
 4. **Acceptance diff:** read the new acceptance diff output the caller attached. The `acceptance` finding is closed
    only when `check.changed` is false; when it is true the finding stays open, and if there was none before, record
    one as a new finding in this round per section 1.
@@ -610,4 +612,4 @@ as the earlier ones.
 Done when: every earlier finding has one Fix Verifier ruling with evidence (an `acceptance` finding is ruled on by
 the new acceptance diff output); the live run ran only the findings' scope and did not rerun `affected`, and mutation reran only
 the mutants that survived last time; every new finding of this round sits on a changed line of the fix diff and
-carries a `rule`; the verdict and block are written into the status record per section 6.
+carries a `rule` other than `unpinned`; the verdict and block are written into the status record per section 6.

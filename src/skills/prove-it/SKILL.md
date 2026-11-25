@@ -466,18 +466,19 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。複驗不派 Finder �
    一項裁決。`description` 是 `fix-verifier` 後接票的識別碼。修正 commit 的 diff 存成
    `<scratchpad>/review-<票>-r<round>-fix.diff`。派工內容只有值：repo 與審查用 worktree 的絕對路徑、ticket 分支、
    上次的 head、修正 diff 的路徑、筆記目錄，以及每則 finding 的 `summary`、`evidence`、`rule` 與 `fix`；省略實作者的
-   說明。作答規則 —— 重跑 `evidence` 記的情境、兩題、第二題照 verifier 的三關與五條 blocking 判準且第二關的
-   fixed point 換成上次的 head —— 在定義檔，派工不重述。
+   說明。作答規則 —— 重跑 `evidence` 記的情境、兩題、第二題照 verifier 的三關與 `unpinned` 以外的四條 blocking
+   判準且第二關的 fixed point 換成上次的 head —— 在定義檔，派工不重述。
 
    它對每則 finding 回報**已關閉**或**未關閉**，附 `file:line`，以及修正 diff 的改動行裡命中判準、成立的本輪新
    finding（附 `rule` 與修法方向）。回報最後一行 `noticed`：同一則 finding 的其他寫法、修正 diff 以外的行、沒命中
-   判準的問題，由你當成觀察。
+   判準的問題、修正行沒被測試釘住的疑慮，由你當成觀察。
 2. **實跑**：只跑 findings 的範圍 —— 涵蓋 finding 行的測試，加上修正新增的測試。不論審查分級，都不重跑初審的
    `affected`、不跑 `scope.mjs`，也不沿用修正 agent 回報的結果。`live run` 行寫 `scope=findings`，`ci` 照第 1 節的
    CI 覆蓋，`source` 是這幾條指令的來源。
 3. **突變**：只重跑上次存活的 mutant，這次必須被殺掉；該行內容變了，就在取代它的那一行做同一個運算子的
    mutant。用本輪新的 ledger。基準沿用第 2 步：`--cmd` 是第 2 步綠過的指令原文時加 `--green-at <修正後的 head>`
-   （第 3 節）。修正新增的行由第 1 步第 2 題把關。
+   （第 3 節）。修正新增的行不做新的 mutant：它們只由第 1 步第 2 題的四條判準把關，**複驗沒有 `unpinned`
+   finding**。每一輪修正都會多出新的行，要求它們再被突變釘住，修正就收不了尾。
 4. **驗收比對**：讀呼叫方附上的新比對輸出。`check.changed` 為 false，`acceptance` finding 才算
    關閉；為 true 時它維持未關閉，原本沒有的就依第 1 節記成本輪新 finding。
 
@@ -489,5 +490,5 @@ ticket 分支尖端，不另建；`tier` 沿用初審的。複驗不派 Finder �
 卡住；本輪新 finding 與舊 finding 算在同一個輪數裡。
 
 完成判準：每則舊 finding 都有一項 Fix Verifier 裁決與證據（`acceptance` finding 以新的比對輸出裁決）；實跑只跑
-findings 的範圍、沒有重跑 `affected`，突變只重跑上次存活的 mutant；本輪新 finding 都落在修正 diff 的改動行上並帶 `rule`；
-結論與區塊已依第 6 節寫進接續紀錄。
+findings 的範圍、沒有重跑 `affected`，突變只重跑上次存活的 mutant；本輪新 finding 都落在修正 diff 的改動行上並帶
+`unpinned` 以外的 `rule`；結論與區塊已依第 6 節寫進接續紀錄。

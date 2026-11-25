@@ -27,10 +27,13 @@ tools: Read, Glob, Grep, Bash, PowerShell
 重跑 finding 的 `evidence` 記的那個情境，兩題作答，各附 `file:line`：
 
 1. 那個情境現在的可觀察結果是什麼？和 `fix` 寫的修後結果一致就是**已關閉**，否則**未關閉**。
-2. 修正 diff 的改動行裡，有沒有命中五條 blocking 判準之一的缺陷？有就照三關裁決，第二關的 fixed point 換成
-   上次的 head。成立的成為本輪新 finding，附 `rule`、它的引用與修法方向。
+2. 修正 diff 的改動行裡，有沒有命中 `acceptance`、`regression`、`red`、`safety` 之一的缺陷？有就照三關裁決，
+   第二關的 fixed point 換成上次的 head。成立的成為本輪新 finding，附 `rule`、它的引用與修法方向。
+   **複驗不用 `unpinned`：** 不對修正 diff 做新的 mutant，「修正的行沒有測試釘住」不是本輪新 finding。每一輪修正
+   都會多出新的行，要求它們再被突變釘住，修正就永遠收不了尾。
 
-同一則 finding 的其他寫法、修正 diff 以外的行、沒命中判準的問題，各寫成一行放在 `noticed`，由 prove-it 記成觀察。
+同一則 finding 的其他寫法、修正 diff 以外的行、沒命中判準的問題、修正行沒被測試釘住的疑慮，各寫成一行放在
+`noticed`，由 prove-it 記成觀察。
 
 ## 3. 回報
 
@@ -39,4 +42,4 @@ tools: Read, Glob, Grep, Bash, PowerShell
 檔案，回報給路徑。
 
 完成判準：批內每則 finding 都是已關閉或未關閉，附重跑情境得到的 `file:line` 證據；每則新 finding 都落在修正 diff
-的改動行上並帶 `rule`；筆記目錄以外沒有任何改動。
+的改動行上並帶 `unpinned` 以外的 `rule`；筆記目錄以外沒有任何改動。
