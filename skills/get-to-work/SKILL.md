@@ -39,29 +39,51 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
    - Composed by `have-it-all-done`, follow the choice the ruling point recorded in ledger field 2; when field 2 has no
      such question (the base was not red at the ruling point), answer "continue" on the user's behalf and log it in
      the self-answer log.
-   - Standalone, when it is red, ask the user here "continue, or fix the base first" (`ASKING.md` section 2(a);
-     recommend "continue" and state that every line's CI will carry this red), and record the answer in ledger
-     field 2; when it could not be read, answer "continue" on the user's behalf and log it, with the error message,
-     in the self-answer log.
+   - Standalone, when it is red, list the question "continue, or fix the base first" (`ASKING.md` section 2(a);
+     recommend "continue" and state that every line's CI will carry this red), ask it in one go with the merge
+     authority question of step 5, and record the answer in ledger field 2; when it could not be read, answer
+     "continue" on the user's behalf and log it, with the error message, in the self-answer log.
    - "Fix the base first": do not freeze. The base's red (branch, SHA, the run ids in `ci.failed`) goes on the
      human-work list, and every initial ticket is awaiting ruling, released when the base turns green. "Continue":
      a red the base brought in is judged by red-light handling as mapping to no ticket
      ([`RED-LIGHT.md`](RED-LIGHT.md) point 2).
-5. `state.mjs init`; if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
+5. **Merge authority**: only when this run's `integrate` is `ticket-pr` (the profile step 6 will write; when none is
+   written, the default `state.mjs`'s header gives for the tracker). Under `ticket-pr` a merge counts as authorized by
+   default, and the authority is obtained at the start, not discovered blocked at the finish.
+   - **Read the settings**: read `permissions.allow` in the permission settings — `~/.claude/settings.json` and the
+     repo's `.claude/settings.json` and `.claude/settings.local.json` — and see whether it covers both `gh pr merge`
+     and `gh stack merge`. Read both the `Bash(...)` and the `PowerShell(...)` forms, and judge by the form of the
+     shell the host will send the merges with; when both commands are covered by an allow rule and no `ask` or `deny`
+     rule names the same command, that is **standing authority**: do not ask. Reading the settings decides only
+     whether to ask: whether a merge goes through is still decided by the permission settings at the prompting call
+     (`ASKING.md` section 5; the agent does not judge authority).
+   - **Not covered**: standalone, ask once "for the tickets frozen in this run, once a ticket's PR has passed review
+     and its CI is green, may I send the merge (`gh pr merge`, or `gh stack merge` for one stacked with `gh stack`)?",
+     recommending "yes", with the permission rule snippet from `ASKING.md` section 5, "From now on", and the note
+     that once it is in the settings later runs no longer ask. The question goes through the pre-ask check of
+     `ASKING.md` section 1 and is asked in one go with the freeze's other questions (step 4's base CI question).
+     Composed by `have-it-all-done`, do not ask: follow the outcome the ruling point recorded in ledger field 5; when
+     field 5 has no such question, treat it as a refusal and log that in the self-answer log.
+   - **Yes**: it counts as "the user said to merge during this run" (`ASKING.md` section 5); record it in ledger
+     field 5 (question, answer and time). **Refused or no answer**: record that in ledger field 5 too; PRs are still
+     opened and stacked as usual, but every merge is left for a human, and no merge command is sent.
+6. `state.mjs init`; if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
    when composed, the one written at the ruling point stands). `state.mjs add` each line's tickets,
    `state.mjs line --lines` for the joined lines, then `scripts/integrate.mjs line-init` for each line.
-6. When `docs/agents/commands.md` does not exist, generate it by the generation rules of `ASKING.md` section 0 and
+7. When `docs/agents/commands.md` does not exist, generate it by the generation rules of `ASKING.md` section 0 and
    commit it on each line's integration branch (subject without a ticket ID), never on the user's current branch.
-7. Standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket count per
+8. Standalone, rewrite `budget: spawns` and `budget: rounds` in ledger field 9 from the frozen ticket count per
    `ASKING.md` section 4.
-8. `tick.mjs setup`, then `state.mjs check <state> freeze --base <base>`; on exit 4, put right every item it lists
+9. `tick.mjs setup`, then `state.mjs check <state> freeze --base <base>`; on exit 4, put right every item it lists
    and rerun. Section 1 starts once it passes.
 
 **Hard rail**: the frozen initial set never grows; tickets found or filed during the run are background only.
 
 Done when: the tracker mode is chosen and verified; every initial ticket has its publication source, tracker-native
 identifier and blocker map; every excluded ticket has its holder and release condition; a `base-ci` warning has the
-ruling point's choice, the user's answer or an on-behalf answer on record; `check freeze` passes; when standalone,
+ruling point's choice, the user's answer or an on-behalf answer on record; when `integrate` is `ticket-pr` and the
+permission settings do not cover both merge commands, ledger field 5 has the merge authority outcome (yes, refused or
+no answer), and when standalone the freeze's questions were asked in one go; `check freeze` passes; when standalone,
 both `budget:` lines are set from the frozen ticket count.
 
 ## 1. The loop: tick
