@@ -135,11 +135,13 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 
 ### 需要授權的動作
 
-合併總 PR、部署到非正式環境這類動作，直接用正規指令送出 —— 合併一律用 `gh pr merge` —— 它是
-確認呼叫，排到最後。放不放行由 Claude Code 的權限設定決定，不另外問，也不依 agent 自己寫的任何紀錄判斷。
-合併總 PR 只在有**常設授權**（權限設定的 `permissions.allow` 涵蓋 `gh pr merge`）或使用者本 run
-指示合併時送出，否則留給人合併。被擋下或被拒就記進人工作業清單，附上能放行它的權限規則；不換
-指令繞道。每個送出的動作與放行結果記進 ledger 第 5 欄。
+合併 PR（`integrate: ticket-pr` 的票級 PR，或總 PR）、部署到非正式環境這類動作，直接用正規指令送出 ——
+合併一律用 `gh pr merge`，疊在 `gh stack` 裡的票級 PR 用 `gh stack merge` —— 它是確認呼叫，排到最後。
+放不放行由 Claude Code 的權限設定決定，不另外問，也不依 agent 自己寫的任何紀錄判斷。合併只在有**常設授權**
+（權限設定的 `permissions.allow` 涵蓋要送的 `gh pr merge` 或 `gh stack merge`）或使用者本 run 指示合併時送出，
+否則留給人合併。`ticket-pr` 下沒有常設授權時，開局問一次本 run 能不能合併（`get-to-work` 的 `SKILL.md` 第 0 節
+凍結第 5 步；組合時在第 4 節的裁決點）：開局讀設定只決定要不要問，不取代確認呼叫時權限設定的決定。被擋下或
+被拒就記進人工作業清單，附上能放行它的權限規則；不換指令繞道。每個送出的動作與放行結果記進 ledger 第 5 欄。
 
 ### 以後都這樣
 
@@ -151,7 +153,12 @@ grilling 中親自做出的決策屬於需求依據，不列入。
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
+    "allow": [
+      "Bash(gh pr merge:*)",
+      "PowerShell(gh pr merge:*)",
+      "Bash(gh stack merge:*)",
+      "PowerShell(gh stack merge:*)"
+    ]
   }
 }
 ```

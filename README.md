@@ -107,7 +107,7 @@ catastrophic command, read from plain, common command text, and says nothing abo
 
 Everything else is left to your permission settings: deletes inside the project or under a system directory
 (`rm -rf node_modules`, `rm -rf /tmp/build`), force-pushing a feature branch, a plain push to `main`, `npm publish`,
-`gh pr merge`, deploys, writes to Claude Code settings, outgoing messages and payments.
+`gh pr merge`, `gh stack merge`, deploys, writes to Claude Code settings, outgoing messages and payments.
 
 **What it is not.** The guard matches command text; it is not a security boundary and does not try to be one. It
 does not handle a command hidden behind a variable (`T=/; rm -rf $T`), an interpreter wrapper (`bash -c`,
@@ -123,8 +123,12 @@ To turn the guard off, set it in the `env` of your Claude Code settings:
 }
 ```
 
-Whether `gh pr merge` goes ahead is up to your permission settings, and sorry-matt sends the aggregate PR's
-merge only when a rule allows it or you told it to merge in that run. To let it merge aggregate PRs without a
+Whether `gh pr merge` and `gh stack merge` go ahead is up to your permission settings. sorry-matt sends a merge —
+a per-ticket PR under `integrate: ticket-pr` (`gh stack merge` for one stacked with `gh stack`), or the aggregate
+PR — only when a rule allows it or you told it to merge in that run. Under `ticket-pr`, when your rules do not
+cover both commands, it asks you once at the start of the run whether the frozen tickets may be merged; say no, or
+do not answer, and the PRs are still opened and stacked, but every merge is left to you. Reading the settings only
+decides whether to ask: the merge itself still goes through your permission settings. To let it merge without a
 prompt, add these rules to `.claude/settings.local.json` (one repo) or `~/.claude/settings.json` (every project),
 merging them into an existing `permissions.allow` if there is one; to be asked every time put them under `ask`,
 and to never allow it put them under `deny`:
@@ -132,7 +136,12 @@ and to never allow it put them under `deny`:
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
+    "allow": [
+      "Bash(gh pr merge:*)",
+      "PowerShell(gh pr merge:*)",
+      "Bash(gh stack merge:*)",
+      "PowerShell(gh stack merge:*)"
+    ]
   }
 }
 ```

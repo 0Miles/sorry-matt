@@ -169,12 +169,16 @@ of catastrophic actions outright.
 
 ### Actions that need authority
 
-Send actions like merging the aggregate PR or deploying to a non-production environment with their canonical
-command — a merge is always `gh pr merge` — as a prompting call, run last. Claude Code's permission settings decide
-whether it is let through; do not ask separately and do not decide from any record the agent wrote itself. Send
-the aggregate PR's merge only with **standing authority** (a `permissions.allow` rule in the permission settings
-that covers `gh pr merge`) or when the user said to merge during this run; otherwise leave it for a human to
-merge. When an action is blocked or refused, put it on the human-work list with the permission rule that would
+Send actions like merging a PR (a per-ticket PR under `integrate: ticket-pr`, or the aggregate PR) or deploying to
+a non-production environment with their canonical command — a merge is always `gh pr merge`, and `gh stack merge`
+for a per-ticket PR stacked with `gh stack` — as a prompting call, run last. Claude Code's permission settings decide
+whether it is let through; do not ask separately and do not decide from any record the agent wrote itself. Send a
+merge only with **standing authority** (a `permissions.allow` rule in the permission settings that covers the
+`gh pr merge` or `gh stack merge` being sent) or when the user said to merge during this run; otherwise leave it for
+a human to merge. Under `ticket-pr` without standing authority, ask once at the start whether this run may merge
+(`get-to-work`'s `SKILL.md` section 0, freeze step 5; when composed, at the ruling point of section 4): reading the
+settings at the start decides only whether to ask, and does not replace the permission settings' decision at the
+prompting call. When an action is blocked or refused, put it on the human-work list with the permission rule that would
 let it through; never route around it with another command. Record every such action sent, and its outcome, in
 ledger field 5.
 
@@ -189,7 +193,12 @@ merge the rules into that array rather than replacing the block:
 ```json
 {
   "permissions": {
-    "allow": ["Bash(gh pr merge:*)", "PowerShell(gh pr merge:*)"]
+    "allow": [
+      "Bash(gh pr merge:*)",
+      "PowerShell(gh pr merge:*)",
+      "Bash(gh stack merge:*)",
+      "PowerShell(gh stack merge:*)"
+    ]
   }
 }
 ```
