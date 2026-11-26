@@ -10,7 +10,7 @@ prompt 只叫它讀這份檔。實作 agent 的固定規則在 plugin 的 agent 
 （`criteria` 或 `ticket-text`）取 `=` 後的文字，profile 為 `expand: skip` 而驗收快照沒有驗收項時 tick 給 `ticket-text`（快照有驗收項就給 `criteria`）；它的兩段文字與
 定義檔第 1 節第 3 條要一起改。定義檔的規則與 `ASKING.md` 第 3、5 節、第 7 節的回報上限、
 `have-it-all-done` 第 0 節重疊處要一起改；定義檔第 2 節的 commit message 格式與 [`FINISH.md`](FINISH.md) 收官的
-總 PR body 要一起改；定義檔第 1 節的驗收只讀與 `SKILL.md` 派票的驗收快照、展開 agent 定義檔的展開區塊格式、
+總 PR body、`integrate.mjs pr-open` 寫的票級 PR body 要一起改；定義檔第 1 節的驗收只讀與 `SKILL.md` 派票的驗收快照、展開 agent 定義檔的展開區塊格式、
 `prove-it` 第 1 節的驗收比對要一起改；本檔的退回紀錄佔位、定義檔第 1 節的重做規則和
 [`SEND-BACK.md`](SEND-BACK.md) 的退回重做要一起改。定義檔第 1、2 節改寫自 `mattpocock/skills` 的 `implement` 與
 `tdd`（MIT，出處與授權見 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)）。

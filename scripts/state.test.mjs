@@ -486,12 +486,18 @@ test('#188: integrate ticket-pr is written on a github run only; local and unkno
   writeFileSync(old.path, JSON.stringify(s));
   old.refused(/tracker is unknown.*aggregate-pr/, 'profile', '--integrate', 'ticket-pr');
 
-  // the default stays aggregate-pr whichever the tracker
-  for (const tracker of ['github', 'local']) {
+  // #201: the default follows the tracker — ticket-pr on GitHub; Local Markdown and an unknown tracker keep aggregate-pr
+  for (const [tracker, want] of [['github', 'ticket-pr'], ['local', 'aggregate-pr']]) {
     const r = tracked(t, tracker);
-    assert.equal(r.ok('resume').profile.integrate, 'aggregate-pr');
-    assert.equal(r.ok('profile', '--review', 'minimal').profile.integrate, 'aggregate-pr');
+    assert.equal(r.ok('resume').profile.integrate, want);
+    assert.equal(r.ok('profile', '--review', 'minimal').profile.integrate, want);
   }
+  const unknown = run(t);
+  const u = unknown.state();
+  delete u.tracker;
+  writeFileSync(unknown.path, JSON.stringify(u));
+  assert.equal(unknown.ok('resume').profile.integrate, 'aggregate-pr', 'a state from before #188 keeps aggregate-pr');
+  assert.equal(tracked(t, 'github').ok('profile', '--integrate', 'aggregate-pr').profile.integrate, 'aggregate-pr', 'a GitHub run can still choose aggregate-pr');
   assert.equal(tracked(t, 'local').ok('profile', '--integrate', 'direct').profile.integrate, 'direct');
 });
 

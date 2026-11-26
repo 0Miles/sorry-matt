@@ -14,7 +14,7 @@ disable-model-invocation: true
   `/take-this`。承接既有 grilling；沒有時從證據建立需求脈絡，只有重大分歧才開 grill-them，
   再寫成 spec 與 tickets。
 - **Tickets 已備妥，現在要完成它們** → `/get-to-work`。依 tracker 設定逐票平行實作與驗收，
-  每條線交付一支 GitHub 總 PR 或 Local Markdown 整合分支，直到初始票集完成或明確卡住。
+  GitHub 上每張票一支 PR（審查過、CI 綠就合併），Local Markdown 每條線交付一條整合分支，直到初始票集完成或明確卡住。
 - **想把既有 grilling、規劃到實作整段交出去，且範圍可控、需求足以收斂並有可靠驗收** →
   `/have-it-all-done`。通過風險閘門後自主跑完 take-this → get-to-work，只在單一裁決點
   問你要裁的事。

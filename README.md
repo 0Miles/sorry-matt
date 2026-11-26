@@ -12,7 +12,7 @@ grill them
 | `ask-miles` | Route among sorry-matt skills and identify the best next skill for the current situation |
 | `grill-them` | Run an autonomous iterative interview between two agents to refine a plan or design |
 | `take-this` | Carry completed grilling into an executable spec and ticket set for a new task |
-| `get-to-work` | Clear a prepared ticket set as a per-ticket pipeline: ready tickets whose files do not overlap are implemented at once, each one reviewed and integrated as soon as it is done, delivering one aggregate GitHub PR or local integration branch per line |
+| `get-to-work` | Clear a prepared ticket set as a per-ticket pipeline: ready tickets whose files do not overlap are implemented at once, each one reviewed and integrated as soon as it is done: on GitHub every ticket is its own PR (stacked with `gh stack` on its one unmerged upstream), merged once reviewed and green on CI; under Local Markdown each line delivers one local integration branch |
 | `have-it-all-done` | Take over one complete task, carrying prior grilling through planning and implementation to something a human can merge |
 | `issue-chain` | Build a chain from tracker and local evidence, establish blocker edges, and choose exactly one immediately executable next action |
 | `review-pr` | Review a GitHub PR and publish evidenced, directly applicable feedback to it. Use when a user asks to review a PR, post review findings to the PR, or re-review it after fixes. |
@@ -123,8 +123,14 @@ To turn the guard off, set it in the `env` of your Claude Code settings:
 }
 ```
 
+`get-to-work`'s `integrate` decides how a run delivers: `ticket-pr` (the default on GitHub) opens one PR per ticket,
+stacks a ticket with one unmerged upstream on it with `gh stack` (install it with `gh extension install
+github/gh-stack`; without it such a ticket waits for its upstream to merge), and merges each once it is reviewed and
+green on CI; `aggregate-pr` (the default under Local Markdown) delivers one aggregate PR or integration branch per
+line; `direct` merges straight into the base branch.
+
 Whether `gh pr merge` and `gh stack merge` go ahead is up to your permission settings. sorry-matt sends a merge —
-a per-ticket PR under `integrate: ticket-pr` (`gh stack merge` for one stacked with `gh stack`), or the aggregate
+a per-ticket PR under `integrate: ticket-pr` (`gh stack merge` for one in a stack), or the aggregate
 PR — only when a rule allows it or you told it to merge in that run. Under `ticket-pr`, when your rules do not
 cover both commands, it asks you once at the start of the run whether the frozen tickets may be merged; say no, or
 do not answer, and the PRs are still opened and stacked, but every merge is left to you. Reading the settings only

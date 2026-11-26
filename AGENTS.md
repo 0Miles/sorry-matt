@@ -443,6 +443,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 兄弟票範圍 | sibling scope |
 | 由他票涵蓋 | covered by another ticket |
 | 線的觀察票 | a line's observation ticket |
+| 等上游合併 | waiting upstream |
+| 等 CI | awaiting CI |
+| 等合併 | awaiting merge |
+| 留給人合併 | left for a person |
+| 合併授權 | merge authorization |
+| 基底紅（合併後） | base red |
+| 審查沿用 | review kept |
 
 ## 外部語義來源
 
@@ -465,6 +472,12 @@ Apache-2.0)。它們在 runtime 以 Skill tool 呼叫,不 vendor,所以同樣不
 `references/customizing.md`、`references/choosing.md`)與 `master-ui-components` 的
 `references/tiers.md`(寫入時 commit 為 `a06ab9608601cee635b427fc65c2d2004ec062e2`)。規則已一般化
 寫進契約本文,runtime 不讀、不 vendor,所以不進 `references/upstream/`;上游改了就回來對一次。
+
+`get-to-work` 的 `integrate: ticket-pr` 依賴 `gh stack`（官方 extension `github/gh-stack`，MIT，寫入時 `v0.3.0`）
+疊起依賴單一上游的票級 PR。runtime 以 CLI 非互動呼叫（`integrate.mjs` 的 `ghStack`，帶
+`GH_STACK_NO_UPDATE_NOTIFIER=1`），不 vendor、不自動安裝，所以不進 `references/upstream/`。缺席時（`freeze.mjs` 的
+`gh-stack` 檢查沒過）依賴上游的票一律走「等上游合併」（`waiting-upstream`），安裝指令進人工作業清單。實測行為記在
+`docs/agents/environment.md`；gh-stack 改版時回來對一次。
 
 `no-bullshit` 改寫自 `JuliusBrussee/caveman`(Apache-2.0)的 `skills/caveman/SKILL.md`、
 `skills/caveman-review/SKILL.md` 與 `skills/caveman-compress/SKILL.md`(寫入時為 `v4.1.0`,commit

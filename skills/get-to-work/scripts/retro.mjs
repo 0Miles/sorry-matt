@@ -132,7 +132,7 @@ import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
 import { SESSION } from './gates.mjs';
 import { ROLE_OF_AGENT, STAGE_OF_ROLE, category, roleOf, ticketsOf } from './spawns.mjs';
-import { FINDING_COUNTS, PROFILE_DEFAULTS, load, withLock, writeAtomic } from './state.mjs';
+import { FINDING_COUNTS, profileOf, load, withLock, writeAtomic } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
 export const RECORD_FORMAT = 'sorry-matt/retro-record@1';
@@ -311,7 +311,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
   const started = state.usage?.started ?? state.created;
   // #171: the run's end the wrap-up recorded; a run not finished yet has no other bound than --now
   const host = hostUsage(places, session, started, state.tick?.finished ?? now);
-  const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
+  const profile = profileOf(state); // #201: the integrate default follows the run's tracker
   const agents = log.map((entry) => {
     const u = agentUsage(places, entry);
     return {

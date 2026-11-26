@@ -1,6 +1,6 @@
 ---
 name: get-to-work
-description: 以逐票流水線清空一組已開好的 tickets：可開工且檔案不重疊的票同時實作，做完一張就審查與整併，每條線交付一支 GitHub 總 PR 或本地整合分支
+description: 以逐票流水線清空一組已開好的 tickets：可開工且檔案不重疊的票同時實作，做完一張就審查與整併；GitHub 上每張票一支 PR（依賴單一上游的以 gh stack 疊起），審查過、CI 綠就合併，Local Markdown 每條線交付一條本地整合分支
 disable-model-invocation: true
 ---
 
@@ -28,7 +28,9 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 3. 為每張票寫預計檔案（第 2 節「預計檔案」）。
 4. 寫計畫檔跑 `scripts/freeze.mjs`：前置檢查、他線佔用、排除、**合線**與候選順序都由它算。`preflight.ok` 是
    false 就照 `checks` 修好重跑；腳本看不到的佔用（本 session 已知的其他 session）寫進計畫檔的 `held`。
-   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）。
+   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）；`integrate`
+   寫本 run 的 `integrate`（第 6 步要寫的 profile，沒另寫就是 tracker 的預設：GitHub 是 `ticket-pr`）—— 缺了 freeze
+   以 `aggregate-pr` 判，`ticket-pr` 的 default-branch、tracker 與 gh-stack 檢查都不會跑（#202）。
    **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結。CI 來自 git remote，與票放在哪無關：Local Markdown
    也讀（`gh` 在 repo 裡由 remote 認出 GitHub repo）；repo 沒有 `origin` 時沒有 CI 可讀，`ci` 是 null，不是警告。
    `warning` 是 true（基底紅，或 CI 讀不到）時：
@@ -57,7 +59,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
      ledger 第 5 欄裁決點記下的結果走；第 5 欄沒有這題，就依「拒絕」處理，記進自答清單。
    - **同意**：算「使用者本 run 指示合併」（`ASKING.md` 第 5 節），記進 ledger 第 5 欄（題目、答案與時間）。
      **拒絕或沒回應**：也記進 ledger 第 5 欄；PR 照常開、照常疊，但合併一律留給人，不送合併指令。
-6. `state.mjs init`；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
+6. `state.mjs init --run <run> --tracker github|local`（`integrate` 的預設依它：GitHub 是 `ticket-pr`，Local Markdown
+   是 `aggregate-pr`）；這個 run 要放寬流程時，在這裡以 `state.mjs profile` 寫一次（`ASKING.md` 第 4 節；組合時
    沿用裁決點寫好的）。`state.mjs add` 每條線的票、`state.mjs line --lines` 記合線，對 `freeze.mjs` 輸出的每個
    `bundles` 跑 `state.mjs bundle <state> <lead> <其餘的票>...`，再對每條線跑 `scripts/integrate.mjs line-init`。
 7. `docs/agents/commands.md` 不存在時照 `ASKING.md` 第 0 節的產生規則產生，在每條線的整合分支上 commit

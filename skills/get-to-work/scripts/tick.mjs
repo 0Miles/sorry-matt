@@ -327,7 +327,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
-import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
+import { load, update, main as stateMain, TERMINAL, profileOf, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { ticketOwners } from './merges.mjs';
 import { description as roleDescription, fallbackPath, AGENT_TYPES, reportField } from './brief.mjs';
@@ -600,7 +600,7 @@ function context(path, state, now, deps) {
   if (!isObject(state.tick) || state.tick.format !== FORMAT) throw new UsageError(`${path} has no tick configuration: run tick.mjs setup first`);
   const book = structuredClone(state.tick);
   const cfg = book.config;
-  const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
+  const profile = profileOf(state); // #201: the integrate default follows the run's tracker
   const W = runDir(path, state.run);
   const limits = { ...LIMIT_DEFAULTS };
   if (cfg.ledger) {

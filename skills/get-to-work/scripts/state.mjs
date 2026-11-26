@@ -166,10 +166,11 @@
 //              findings in the report — only with that issue recorded (`set --unfixed-issue`).
 //   expand     agent (default) | skip: the ticket's own done-when is the acceptance; expanding is refused. The
 //              snapshot sha256 is still needed for implementing.
-//   integrate  aggregate-pr (default, whichever the tracker) | direct (merge straight into the base branch) |
-//              ticket-pr (a pull request per ticket, #188): written only when the state's tracker is github (init
-//              --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing to
-//              aggregate-pr), by `profile` and by `import` alike;
+//   integrate  ticket-pr (a pull request per ticket, #188; the default when the state's tracker is github, #201) |
+//              aggregate-pr (the default for a local or unknown tracker: a state from before #188 keeps it) | direct
+//              (merge straight into the base branch). ticket-pr is written only when the state's tracker is github
+//              (init --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing
+//              to aggregate-pr), by `profile` and by `import` alike;
 //   ci         read (default) | skip;
 //   simplify   true (default) | false.
 //              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
@@ -348,7 +349,12 @@ const PROFILE_VALUES = {
 };
 /** The trackers a run can record (#188), as acceptance.mjs names them; null in the state: unknown. */
 export const TRACKERS = ['github', 'local'];
-export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
+/**
+ * #201: the integrate default by the run's tracker — ticket-pr on GitHub; Local Markdown, and an unknown tracker (a
+ * state from before #188), keep aggregate-pr. PROFILE_DEFAULTS holds the tracker-less one.
+ */
+export const integrateDefault = (tracker) => (tracker === 'github' ? 'ticket-pr' : PROFILE_DEFAULTS.integrate);
+export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...(state.profile ?? {}) });
 const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];
@@ -959,7 +965,7 @@ function importLedger(path, rest, flags, ctx) {
     state.usage.startedNote = `imported ${ctx.now}: the time before the import is not counted`;
   }
   if (seed.stop !== undefined) state.stop = seed.stop;
-  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, ...seed.profile };
+  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...seed.profile };
   let records = 0;
   if (flags.ledger !== undefined) {
     let text;
@@ -1193,7 +1199,7 @@ function profile(path, rest, flags, ctx) {
     if (moved) {
       throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
     }
-    const profile = { ...PROFILE_DEFAULTS, ...given };
+    const profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...given };
     const integrate = integrateProblem(profile, state.tracker ?? null);
     if (integrate) throw new Refusal(integrate);
     state.profile = profile;

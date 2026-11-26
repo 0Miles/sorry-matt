@@ -68,8 +68,9 @@ them points at a file or section you cannot read.
 - When done, commit your work to the ticket branch. Every commit subject carries the ticket ID (`#N` on GitHub,
   the ticket file name in Local Markdown; for a bundle, every ticket the commit touches); its body says what that commit changed, and a commit that makes
   acceptance criteria hold also names which ones. Batched-fix commits follow the same rule. The host writes the
-  aggregate PR summary from all of this ticket's commits. Write no closing keyword such as `Closes` or `Fixes`:
-  closing tickets is the aggregate PR's job.
+  PR summary from all of this ticket's commits. Write no closing keyword such as `Closes` or `Fixes`: under
+  `ticket-pr`, `Closes #N` goes only in this ticket's PR body (`integrate.mjs pr-open` writes it); under
+  `aggregate-pr`, closing tickets is the aggregate PR's job.
 
 ## 3. Autonomy and answering on the user's behalf
 
