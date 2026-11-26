@@ -849,3 +849,59 @@ test('#197 review observation: a revert PR left for a person does not hold the f
   assert.equal(h.state().tickets[ID1].stage, 'stuck');
   assert.ok(h.state().tick.baseRed.left, 'the episode records the revert as left for a person');
 });
+
+// ---- integrate: ticket-pr — upstreams: stacked, or waiting-upstream (#198) ------------------------------------------
+
+/** #198: the freeze's preflight with the gh-stack check passed (#189), as freeze.json records it. */
+const freezeWithStack = (h, stack = true) => write(join(h.W, 'freeze.json'), `${JSON.stringify({ preflight: { ok: true, checks: [{ name: 'gh-stack', ok: true, stack }] } })}\n`);
+
+test('#198: a ticket with one unmerged upstream is stacked on it once it has a branch: cut from the upstream branch, gh stack init + add, the PR via gh stack submit on the upstream branch', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  freezeWithStack(h);
+  h.blockers[ID2] = [ID1];
+  // #1's PR head CI keeps running: it stays unmerged while #2 builds on it
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? 'running' : 'green');
+  h.wake(); // the first dispatch point: #1 starts; once its branch is there, #2 is stacked on it at the same point
+  let s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'implementing');
+  assert.equal(s.tickets[ID2].stage, 'implementing', '#2 starts while its upstream is under way');
+  assert.ok(s.tickets[ID2].history.some((x) => x.to === 'waiting-upstream'), 'it waited while #1 had no branch');
+  assert.equal(s.tickets[ID2].stackParent, ID1);
+  assert.deepEqual(s.tickets[ID2].waitingOn, []);
+  assert.ok(!h.log.some((a) => a.id === 'gh-stack-missing'), 'gh stack passed the freeze: no install judge');
+  const b1 = s.tickets[ID1].branch;
+  const b2 = s.tickets[ID2].branch;
+  const stackCalls = h.ghCalls.filter((x) => x[0] === 'stack').map((x) => x.slice(0, 3).join(' '));
+  assert.ok(stackCalls.includes(`stack init ${b1}`) && stackCalls.includes(`stack add ${b2}`), stackCalls.join('; '));
+  for (let i = 0; i < 3; i += 1) h.wake();
+  s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'awaiting-ci');
+  assert.equal(s.tickets[ID2].stage, 'queued', 'the reviewed stacked ticket waits in queued: its merge goes up the stack');
+  assert.equal(h.prs[b2].base, b1, "#2's PR is stacked on #1's branch");
+  assert.ok(h.ghCalls.some((x) => x[0] === 'stack' && x[1] === 'submit'), 'the stacked PR is opened with gh stack submit --auto');
+  assert.ok(!h.ghCalls.some((x) => x[0] === 'pr' && x[1] === 'create' && x.includes(b2)), 'never gh pr create for the stacked ticket');
+  // the review tier and the fixed point of the stacked ticket are its upstream branch
+  const tier = distinct(h.log).find((a) => a.step === 'tier' && a.tickets[0] === ID2);
+  assert.equal(tier.argv[tier.argv.indexOf('--base') + 1], b1);
+});
+
+test('#198: without gh stack a ticket with an unmerged upstream waits for it to merge (waiting-upstream), one install judge; then it starts from the new base', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  freezeWithStack(h, false);
+  h.blockers[ID2] = [ID1];
+  h.untilDone();
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'delivered');
+  assert.equal(s.tickets[ID2].stage, 'delivered');
+  assert.ok(s.tickets[ID2].history.some((x) => x.to === 'waiting-upstream'), '#2 waited for its upstream');
+  assert.equal(s.tickets[ID2].stackParent, null, 'never stacked');
+  assert.equal(distinct(h.log).filter((a) => a.id === 'gh-stack-missing').length, 1, 'the install goes on the human-work list once');
+  // #2 started only after #1 merged, from the new base: #1's merge is in #2's history
+  const startAt = s.tickets[ID2].history.findIndex((x) => x.to === 'implementing');
+  assert.ok(s.tickets[ID2].history[startAt].at >= s.tickets[ID1].history.find((x) => x.to === 'delivered').at);
+  git(h.repo, 'merge-base', '--is-ancestor', s.tickets[ID1].merges[0].sha, s.tickets[ID2].merges[0].sha);
+});

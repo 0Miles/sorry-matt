@@ -81,7 +81,13 @@
 //                    stepTicketPr and the verdict read again at the new head. A base that turns red after a merge
 //                    is a base-red episode (#197, prBaseRed): the earliest-red scan runs against the base, the red
 //                    is mapped to the causing ticket by merge order and merge SHA, and integrate.mjs revert opens a
-//                    revert PR (never a base push), merged as a prompting call once its own CI is green
+//                    revert PR (never a base push), merged as a prompting call once its own CI is green.
+//                    Upstreams (#198, prUpstreams): only a merged ticket is done upstream. A ticket with exactly
+//                    one unmerged upstream in this run (a bundle counts once) is stacked on it — stackParent, cut
+//                    from the upstream branch, its PR by gh stack submit — when freeze.json's gh-stack check passed
+//                    and no other live ticket is stacked on that upstream; any other waits at waiting-upstream
+//                    (waitingOn) until its upstreams are merged, then starts from the new base. gh stack missing
+//                    brings one `gh-stack-missing` judge (the install on the human-work list)
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -2565,6 +2571,10 @@ function dueReasons(c) {
       else if (h.from === 'expanding') reasons.add('an expansion agent reported');
     }
     if (t.merges.length > (last.merges[id] ?? 0)) reasons.add('a ticket was merged');
+    // #198: the one upstream a waiting ticket waits on got its branch (it was dispatched): it can be stacked now
+    if (t.stage === 'waiting-upstream' && (t.waitingOn ?? []).length === 1 && c.profile.integrate === 'ticket-pr' && stackFree(c, t.waitingOn[0], id) && ghStackReady(c)) {
+      reasons.add('an upstream can take a stacked ticket');
+    }
   }
   for (const line of last.red) if (!book.red[line]) reasons.add('a red line turned green');
   for (const line of Object.keys(book.failed)) if (!last.failed.includes(line)) reasons.add('a line failed verification');
@@ -2682,6 +2692,8 @@ function dispatchSteps(c, d) {
       stageTo(c, id, t, 'awaiting-ruling', { reason });
     }
   }
+  // 4b. #198: under integrate: ticket-pr, the tickets whose upstreams in this run are not merged: stacked, or waiting
+  const { stacked, held } = profile.integrate === 'ticket-pr' ? prUpstreams(c, info, known, d) : { stacked: [], held: new Set() };
   // 5. candidates, the most unblocking first
   const dependents = (id) => {
     const g = c.group(id);
@@ -2699,9 +2711,11 @@ function dispatchSteps(c, d) {
       ...fr.frontier.map(known).filter(Boolean).map((x) => c.leadOf(x)),
       ...Object.keys(state.tickets).filter((id) => c.members(id).length && groupReady(id)),
     ]),
-  ].filter((id) => !c.members(id).length || groupReady(id));
+  ]
+    .filter((id) => !c.members(id).length || groupReady(id))
+    .concat(stacked.filter((id) => state.tickets[id].stackParent)); // #198: a stacked ticket is ready on its upstream
   const candidates = order
-    .filter((id) => state.tickets[id].stage === 'candidate' && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
+    .filter((id) => state.tickets[id].stage === 'candidate' && !held.has(id) && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
     .map((id, i) => ({ id, i, n: dependents(id) }))
     .sort((x, y) => y.n - x.n || x.i - y.i)
     .map((x) => x.id);
@@ -2753,31 +2767,172 @@ function dispatchSteps(c, d) {
   if (expand.length) expandDispatch(c, r, expand);
   if (pending || !ready.length) return;
   // 6. overlap, then a ticket branch and an implementation agent for each `start`
-  const planPath = join(c.W, 'overlap', `${r}.plan.json`);
-  const outPath = join(c.W, 'overlap', `${r}.json`);
-  const ov = c.done(`overlap:r${r}`) ? readJsonFile(c.deps, outPath) : null;
-  if (!ov) {
-    const running = Object.entries(state.tickets)
-      .filter(([, t]) => OCCUPIES.includes(t.stage))
-      .map(([id, t]) => {
-        let files = predictedOf(c, id);
-        if (!c.deps.exists(files)) {
-          files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
-          c.write(files, '/\n'); // no prediction on record: it holds the whole repository
-        }
-        const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
-        // #196: under ticket-pr the base a running worktree is diffed against is the ticket's own fixed point
-        return { id, files, ...(wt ? { worktree: wt, base: fixedPointOf(c, t) } : {}) };
-      });
-    c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
-    c.emit(exec(`overlap:r${r}`, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
-    return;
+  const ov = overlapRun(c, `overlap:r${r}`, `${r}`, ready);
+  if (!ov) return;
+  // #198: a ticket stacked within this dispatch point, after its overlap ran (its upstream got its branch meanwhile),
+  // gets an overlap run of its own, so it starts now rather than after its upstream merges
+  const covered = new Set([...(ov.start ?? []), ...(ov.wait ?? []).map((w) => w.id)]);
+  const late = ready.filter((x) => !covered.has(x.id) && state.tickets[x.id].stackParent);
+  const ov2 = late.length ? overlapRun(c, `overlap:r${r}:${late.map((x) => keyOf(x.id)).join('+')}`, `${r}-${late.map((x) => keyOf(x.id)).join('+')}`, late) : null;
+  if (late.length && !ov2) return;
+  // #198: a stacked ticket builds on its upstream's branch, so its overlap with the tickets below it in the stack is
+  // no conflict: it starts when those are all it overlaps
+  const chainOf = (id) => {
+    const out = [];
+    for (let p = state.tickets[id]?.stackParent ?? null; p !== null && !out.includes(p); p = state.tickets[p]?.stackParent ?? null) out.push(p);
+    return out;
+  };
+  const starts = new Set();
+  for (const o of [ov, ov2].filter(Boolean)) {
+    for (const id of o.start ?? []) starts.add(id);
+    for (const w of o.wait ?? []) {
+      const chain = chainOf(w.id);
+      if (chain.length && (w.overlaps ?? []).every((x) => chain.includes(x.with))) starts.add(w.id);
+    }
   }
-  for (const id of ov.start ?? []) {
+  for (const { id, title } of ready.filter((x) => starts.has(x.id))) {
     const t = state.tickets[id];
     if (!t || t.stage !== 'candidate') continue;
-    createDispatch(c, id, t, ready.find((x) => x.id === id)?.title);
+    createDispatch(c, id, t, title);
   }
+}
+
+/** overlap.mjs for `cands` against the tickets holding files now: its output, or null while it runs. */
+function overlapRun(c, oid, tag, cands) {
+  const { state } = c;
+  const planPath = join(c.W, 'overlap', `${tag}.plan.json`);
+  const outPath = join(c.W, 'overlap', `${tag}.json`);
+  if (c.done(oid)) return readJsonFile(c.deps, outPath);
+  const running = Object.entries(state.tickets)
+    .filter(([, t]) => OCCUPIES.includes(t.stage))
+    .map(([id, t]) => {
+      let files = predictedOf(c, id);
+      if (!c.deps.exists(files)) {
+        files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
+        c.write(files, '/\n'); // no prediction on record: it holds the whole repository
+      }
+      const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
+      // #196: under ticket-pr the base a running worktree is diffed against is the ticket's own fixed point
+      return { id, files, ...(wt ? { worktree: wt, base: fixedPointOf(c, t) } : {}) };
+    });
+  c.write(planPath, `${JSON.stringify({ running, candidates: cands.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
+  c.emit(exec(oid, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
+  return null;
+}
+
+/** #198: whether gh stack passed the freeze's check (#189: freeze.json's preflight `gh-stack` with `stack` true). */
+function ghStackReady(c) {
+  const f = join(c.W, 'freeze.json');
+  if (!c.deps.exists(f)) return false;
+  return readJsonFile(c.deps, f)?.preflight?.checks?.some((x) => x?.name === 'gh-stack' && x.stack === true) ?? false;
+}
+
+const prMerged = (t) => t.stage === 'delivered' && t.merges.length > 0;
+
+/**
+ * #198: whether ticket `u` can take `id` on top of it in a stack: its ticket branch is there, it is not at an end state
+ * (or it is delivered with its PR left for a person, not merged), and no other live ticket is stacked on it yet —
+ * gh stack is linear, so the first ticket dispatched on it takes it (the open question's recommendation).
+ */
+function stackFree(c, u, id) {
+  const U = c.state.tickets[u];
+  if (!U || !U.branch || !c.git.ref(U.branch)) return false;
+  if (TERMINAL.includes(U.stage) && !(U.stage === 'delivered' && !U.merges.length)) return false;
+  return !Object.entries(c.state.tickets).some(([k, t]) => k !== id && t.stackParent === u && !['stuck', 'awaiting-ruling'].includes(t.stage) && !prMerged(t));
+}
+
+/**
+ * #198: under integrate: ticket-pr, the candidates whose blockers in this run are not all merged (#187 ruling 2). Only
+ * a merged ticket counts as done upstream (a delivered ticket left for a person is not merged). A ticket with exactly
+ * one unmerged upstream — a bundle's tickets count as one, its lead (#205) — is stacked on it when gh stack passed the
+ * freeze's check and the upstream can take it (stackFree): its stackParent is recorded, and it dispatches with the
+ * frontier's ready ones; integrate.mjs ticket-init cuts it from the upstream branch and adds it to the stack. Any
+ * other — two or more unmerged upstreams, gh stack missing, an upstream with no branch yet or already taken — goes to
+ * waiting-upstream with waitingOn naming them; once none is left unmerged it goes back to candidate and starts from
+ * the new base (a later dispatch point may stack it instead, once its one upstream can take it). When every upstream
+ * it waits on is at an end state that is not a merge (stuck, awaiting a ruling, or left for a person), nothing in this
+ * run will merge them: awaiting-ruling. gh stack missing while a ticket could have been stacked brings one judge (not
+ * one per ticket) to put its install on the human-work list. Returns { stacked: the ids stacked this list, held: the
+ * ids that wait (they are not dispatched, whatever the frontier says) }.
+ */
+function prUpstreams(c, info, known, d) {
+  const { state } = c;
+  const canStack = ghStackReady(c);
+  const stacked = [];
+  const held = new Set();
+  const claimed = new Map(); // upstream → the ticket stacked on it in this list
+  let wanted = false;
+  for (const [id, t] of Object.entries(state.tickets)) {
+    if (t.stage !== 'candidate' && t.stage !== 'waiting-upstream') continue;
+    const g = c.group(id);
+    if (g.some((m) => info.get(m)?.stalled)) continue; // step 4 rules on it
+    const ups = new Set();
+    for (const m of g) {
+      for (const b of info.get(m)?.blockedBy ?? []) {
+        if (!b.inSet) continue;
+        const lead = c.leadOf(known(b.id));
+        if (lead === null || lead === id || prMerged(state.tickets[lead])) continue;
+        ups.add(lead);
+      }
+    }
+    const waiting = [...ups].sort();
+    const parent = t.stackParent ?? null;
+    const was = [...(t.waitingOn ?? [])].sort();
+    const setTo = (stack, wait) => {
+      if (parent === stack && was.join(',') === wait.join(',')) return null;
+      return c.emit(
+        exec(`upstream:${id}:h${hist(t)}:${stack ?? 'none'}:${wait.join(',') || 'none'}`, 'upstream', stateArgv(c, 'set', id, '--stack-parent', stack ?? 'none', '--waiting-on', wait.join(',') || 'none'), {
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    };
+    if (!waiting.length) {
+      // nothing unmerged upstream (any more): the frontier's own rules; a wait or a stack recorded before is cleared
+      const s = setTo(null, []);
+      if (t.stage === 'waiting-upstream') {
+        d.touched.push(id);
+        stageTo(c, id, t, 'candidate', { after: [s] });
+      }
+      continue;
+    }
+    const u = waiting.length === 1 ? waiting[0] : null;
+    const free = u !== null && stackFree(c, u, id) && (!claimed.has(u) || claimed.get(u) === id);
+    if (free && canStack) {
+      claimed.set(u, id);
+      const s = setTo(u, []);
+      if (t.stage === 'waiting-upstream') {
+        d.touched.push(id);
+        stageTo(c, id, t, 'candidate', { after: [s] });
+      }
+      stacked.push(id);
+      continue;
+    }
+    if (free) wanted = true;
+    held.add(id);
+    const s = setTo(null, waiting);
+    if (waiting.every((w) => TERMINAL.includes(state.tickets[w].stage))) {
+      d.touched.push(id);
+      stageTo(c, id, t, 'awaiting-ruling', { reason: `waits on ${waiting.join(', ')}, which this run will not merge (${waiting.map((w) => `${w} ${state.tickets[w].stage}`).join(', ')})`, after: [s] });
+      continue;
+    }
+    if (t.stage === 'candidate') {
+      d.touched.push(id);
+      stageTo(c, id, t, 'waiting-upstream', { after: [s] });
+    }
+  }
+  if (wanted) {
+    c.emit(
+      judge(
+        'gh-stack-missing',
+        'gh-stack-missing',
+        `gh stack did not pass the freeze's check (freeze.json preflight gh-stack), so a ticket with one unmerged upstream waits for it to merge (waiting-upstream) instead of stacking on it. Put \`gh extension install github/gh-stack\` on the human-work list (once, not per ticket; never install it yourself) and record listed.`,
+        ['listed'],
+        [doc('SKILL.md', 'section 0 (freeze)')],
+      ),
+    );
+  }
+  return { stacked, held };
 }
 
 /** #205: a ticket's predicted files, or for a bundle one list of all its tickets' (written once each has one). */
@@ -2819,7 +2974,8 @@ function frontier(c, r) {
     const out = c.tick('frontier', `r${r}.json`);
     const read = c.done(`frontier:r${r}`) ? readJsonFile(c.deps, out) : null;
     if (read) return read;
-    const done = ids.filter((id) => c.ticketOf(id).stage === 'delivered').map(numOf);
+    // #198: under ticket-pr only a merged ticket is done upstream (one left for a person to merge is not, yet)
+    const done = ids.filter((id) => c.ticketOf(id).stage === 'delivered' && (c.profile.integrate !== 'ticket-pr' || c.ticketOf(id).merges.length)).map(numOf);
     const stuck = ids.filter((id) => c.ticketOf(id).stage === 'stuck').map(numOf);
     const argv = ['node', js('frontier.mjs'), 'github', '--repo', c.cfg.repo, ...(done.length ? ['--done', done.join(',')] : []), ...(stuck.length ? ['--stuck', stuck.join(',')] : []), ...ids];
     c.emit(exec(`frontier:r${r}`, 'frontier', argv, { stdout: out }));
@@ -2925,7 +3081,7 @@ function stepStop(c) {
   if (!stop) return;
   const u = stop.usage ?? {};
   const reason = `run stopped at ${stop.stoppedBy.join(', ')} (rounds ${u.rounds}, spawns ${u.spawns}, hours ${u.hours === null || u.hours === undefined ? 'unknown' : Number(u.hours).toFixed(1)})`;
-  for (const [id, t] of Object.entries(c.state.tickets)) if (t.stage === 'candidate' || t.stage === 'expanding') stageTo(c, id, t, 'awaiting-ruling', { reason });
+  for (const [id, t] of Object.entries(c.state.tickets)) if (t.stage === 'candidate' || t.stage === 'expanding' || t.stage === 'waiting-upstream') stageTo(c, id, t, 'awaiting-ruling', { reason });
 }
 
 // ---- the finish -----------------------------------------------------------------------------------------------------

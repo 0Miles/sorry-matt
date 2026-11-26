@@ -214,8 +214,23 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   h.prs = {};
   h.prNext = 11;
   h.ghCalls = [];
-  h.gh = (args) => {
+  h.gh = (args, cwd) => {
     h.ghCalls.push(args);
+    // #198: `gh stack`, run by integrate.mjs in the ticket worktree (cwd): init and add record the stack; submit --auto
+    // pushes and opens the stacked draft PR on the parent ticket's branch (idempotent); push pushes; sync is h.stackSync
+    if (args[0] === 'stack') {
+      const branch = cwd ? git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD') : null;
+      if (args[1] === 'init' || args[1] === 'add') return '';
+      if (args[1] === 'push' || args[1] === 'submit') git(cwd, 'push', '-q', '-u', 'origin', branch);
+      if (args[1] === 'submit' && !h.prs[branch]) {
+        const st = h.state();
+        const t = Object.values(st.tickets).find((x) => x.branch === branch);
+        const base = t?.stackParent ? st.tickets[t.stackParent].branch : 'main';
+        h.prs[branch] = { number: h.prNext++, base, title: null, body: null, draft: true, stacked: true };
+      }
+      if (args[1] === 'sync') return h.stackSync ? h.stackSync(cwd, branch) : '';
+      return '';
+    }
     if (args[0] === 'pr' && args[1] === 'list') {
       const pr = h.prs[args[args.indexOf('--head') + 1]];
       return JSON.stringify(pr ? [{ number: pr.number }] : []);
@@ -376,6 +391,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       h.mergePr(a.tickets[0]);
       return 'sent';
     },
+    'gh-stack-missing': () => 'listed', // #198
     'wrap-up': () => 'done',
     'wakeup-end': () => 'done',
   };

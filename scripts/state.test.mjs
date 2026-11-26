@@ -1157,3 +1157,25 @@ test('#196: merge is still refused before integrating, and import takes the wait
   assert.equal(res.code, 3, res.err);
   assert.match(res.err, /queued needs a review/);
 });
+
+// ---- #198: waiting-upstream, the wait for unmerged upstreams under ticket-pr ----------------------------------------
+
+test('#198: candidate → waiting-upstream needs waitingOn, and back to candidate only once it is cleared; ticket-pr only', (t) => {
+  const r = ticketPrRun(t);
+  r.ok('add', '#1', '#2', '--line', LINE);
+  r.refused(/waiting-upstream needs the upstreams it waits on recorded/, 'stage', 'waiting-upstream', '#2');
+  r.ok('set', '#2', '--waiting-on', '#1');
+  const out = r.ok('stage', 'waiting-upstream', '#2');
+  assert.equal(out.tickets['#2'].stage, 'waiting-upstream');
+  assert.deepEqual(r.cmd('resume').code, 0);
+  assert.deepEqual(JSON.parse(r.cmd('resume').out).open.find((x) => x.id === '#2').waitingOn, ['#1'], 'resume shows what it waits on');
+  r.refused(/still waits on #1/, 'stage', 'candidate', '#2');
+  r.refused(/no edge waiting-upstream → implementing/, 'stage', 'implementing', '#2');
+  r.ok('set', '#2', '--waiting-on', 'none');
+  assert.equal(r.ok('stage', 'candidate', '#2').tickets['#2'].stage, 'candidate');
+
+  const a = run(t);
+  a.ok('add', '#1', '#2', '--line', LINE);
+  a.ok('set', '#2', '--waiting-on', '#1');
+  a.refused(/waiting-upstream is the ticket-pr merge path/, 'stage', 'waiting-upstream', '#2');
+});

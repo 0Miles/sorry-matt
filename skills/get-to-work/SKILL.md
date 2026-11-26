@@ -210,11 +210,6 @@ record carries the bundle's review block; the implementation agent leaves a one-
 member's status record. At delivery every member is closed (the aggregate PR and FINISH.md's reconciliation table list
 each one).
 
-Stacked with `gh stack`, the bundle is
-one layer: a downstream ticket that depends on any member waits for that layer's PR, and `stackParent` and
-`waitingOn` name the lead; when judging "exactly one unmerged upstream", several upstreams in one bundle count as
-one. <!-- pending #198 -->
-
 ### Close-out checks and review
 
 - **Targeted checks**: review only once the affected-scope checks the implementation agent reports are green; red goes

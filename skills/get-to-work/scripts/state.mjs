@@ -301,10 +301,13 @@ import { GATES, TARGETS, runGate } from './gates.mjs';
 export const FORMAT = 'sorry-matt/state@1';
 /** The review tiers of prove-it's tier.mjs (#139): a review records the one tick judged. */
 export const TIERS = ['light', 'standard', 'full'];
-export const STAGES = ['candidate', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered', 'stuck', 'awaiting-ruling'];
+export const STAGES = ['candidate', 'waiting-upstream', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered', 'stuck', 'awaiting-ruling'];
 export const TERMINAL = ['delivered', 'stuck', 'awaiting-ruling'];
 const EDGES = {
-  candidate: ['expanding', 'implementing', 'awaiting-ruling', 'stuck'],
+  candidate: ['waiting-upstream', 'expanding', 'implementing', 'awaiting-ruling', 'stuck'],
+  // #198, integrate: ticket-pr: a ticket that cannot be stacked waits for its upstreams (waitingOn) to merge, then
+  // goes back to candidate and starts from the new base
+  'waiting-upstream': ['candidate', 'awaiting-ruling', 'stuck'],
   expanding: ['candidate', 'awaiting-ruling', 'stuck'],
   implementing: ['in-review', 'awaiting-ruling', 'stuck'],
   'in-review': ['fixing', 'queued', 'awaiting-ruling', 'stuck'],
@@ -648,8 +651,13 @@ function stageGuard(id, t, to, from, profile) {
     return `${id}: implementing needs the acceptance snapshot's sha256 recorded (set --snapshot)`;
   }
   // #196: the two waiting stages are the ticket-pr merge path
-  if ((to === 'awaiting-ci' || to === 'awaiting-merge') && profile.integrate !== 'ticket-pr') {
+  if ((to === 'awaiting-ci' || to === 'awaiting-merge' || to === 'waiting-upstream') && profile.integrate !== 'ticket-pr') {
     return `${id}: ${to} is the ticket-pr merge path; this run's profile integrate is ${profile.integrate}`;
+  }
+  // #198: a ticket waits on named upstreams; it leaves the wait only once none is left
+  if (to === 'waiting-upstream' && !(t.waitingOn ?? []).length) return `${id}: waiting-upstream needs the upstreams it waits on recorded (set --waiting-on)`;
+  if (from === 'waiting-upstream' && to === 'candidate' && (t.waitingOn ?? []).length) {
+    return `${id}: candidate: it still waits on ${t.waitingOn.join(', ')} (set --waiting-on none once they are merged)`;
   }
   if (to === 'fixing') {
     // #196: fixing from awaiting-ci needs no review verdict — the PR head's red CI is the reason
