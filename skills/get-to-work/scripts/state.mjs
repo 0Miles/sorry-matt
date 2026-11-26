@@ -23,7 +23,7 @@
 //   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //                           [--pr <number>] [--stack-parent <ticket>|none] [--waiting-on <ticket>,<ticket>|none]
-//   node state.mjs stage   <state> <stage> <ticket>... [--reason <text>]
+//   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full [--tier-reason <reason>]...]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
@@ -328,7 +328,7 @@ const PROFILE_VALUES = {
 };
 /** The trackers a run can record (#188), as acceptance.mjs names them; null in the state: unknown. */
 export const TRACKERS = ['github', 'local'];
-const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
+export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
 const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];

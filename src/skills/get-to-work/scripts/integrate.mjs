@@ -300,8 +300,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
-import { main as stateMain, load, PROFILE_DEFAULTS, TERMINAL } from './state.mjs';
+import { UsageError, run, canonical, failure, parseJson, runIfEntry } from './cli.mjs';
+import { main as stateMain, load, TERMINAL, profileOf } from './state.mjs';
 import { ticketOwners } from './merges.mjs';
 import { scan, ownRows, lastRecordIndex, sectionAt } from './ticket.mjs';
 import { main as gateMain } from './merge-gate.mjs';
@@ -413,7 +413,7 @@ function lineInit(ctx, rest, flags) {
   if (!flags.branch) throw new UsageError('line-init needs --branch');
   const repo = ctx.repo;
   const s = load(ctx.state);
-  const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
+  const mode = profileOf(s).integrate;
   const branch = flags.branch;
   if (mode === 'ticket-pr') {
     if (flags.from !== undefined) throw new UsageError('--from: under integrate: ticket-pr the line has no integration branch; nothing is created');
@@ -460,7 +460,7 @@ function ticketInit(ctx, rest, flags) {
   const [id] = rest;
   const repo = ctx.repo;
   const s = load(ctx.state);
-  const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
+  const mode = profileOf(s).integrate;
   if (flags.base !== undefined && mode !== 'ticket-pr') throw new UsageError('--base is for integrate: ticket-pr');
   const t = ticketOf(s, id);
   if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
@@ -491,7 +491,7 @@ const ghStack = (ctx, cwd, ...args) => ctx.gh(['stack', ...args], cwd, { GH_STAC
 
 /** The run's effective integrate mode; a command that is ticket-pr only refuses any other. */
 function ticketPrOnly(s, command) {
-  const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
+  const mode = profileOf(s).integrate;
   if (mode !== 'ticket-pr') throw new Refusal(`${command} is for integrate: ticket-pr; this run's integrate is ${mode}`);
 }
 
@@ -514,14 +514,17 @@ function ticketInitPr(ctx, id, s, t, flags) {
     const up = s.tickets[parent];
     if (!up) throw new Refusal(`${id}'s stackParent ${parent} is not a ticket of this run`);
     if (!up.branch) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded (ticket-init it first)`);
-    if (branchTip(repo, up.branch) === null) throw new Refusal(`${id} is stacked on ${parent}, whose branch ${up.branch} does not exist`);
     from = up.branch;
   } else {
     if (!flags.base) throw new UsageError('ticket-init under integrate: ticket-pr needs --base (the base branch) for a ticket that is not stacked');
     from = `origin/${flags.base}`;
-    if (commitOf(repo, from) === null) throw new Refusal(`${from} is not a commit; fetch the base branch first`);
   }
   const fromSha = commitOf(repo, from);
+  if (fromSha === null) {
+    throw new Refusal(
+      parent !== null ? `${id} is stacked on ${parent}, whose branch ${from} does not exist` : `${from} is not a commit; fetch the base branch first`,
+    );
+  }
   const made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), from);
   const stack = [];
   if (made.branch && parent !== null) {
@@ -548,26 +551,30 @@ function ticketInitPr(ctx, id, s, t, flags) {
   };
 }
 
-/** The ticket's PR and cut point: { t, branch, parent, fromRef }, shared by pr-open and pr-push. */
-function prTicket(ctx, s, id, base) {
-  const repo = ctx.repo;
-  const t = ticketOf(s, id);
-  if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
+/** The ticket's recorded branch, checked by the ticket branch rule; refused when none is recorded. */
+function recordedBranch(s, id, t, repo) {
   if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded (ticket-init first)`);
   checkTicketBranch(s, id, t, t.branch, repo);
-  if (branchTip(repo, t.branch) === null) throw new Refusal(`${id}'s ticket branch ${t.branch} does not exist`);
-  if (tryGit(repo, 'remote', 'get-url', 'origin') === null) throw new Refusal('the repository has no origin remote; ticket-pr pushes every ticket branch there');
-  const parent = t.stackParent ?? null;
-  let fromRef = null;
-  if (parent === null) {
-    if (base !== undefined) fromRef = `origin/${base}`;
-  } else {
-    fromRef = s.tickets[parent]?.branch ?? null;
-    if (fromRef === null) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
-  }
-  if (fromRef !== null && commitOf(ctx.repo, fromRef) === null) throw new Refusal(`${fromRef} is not a commit`);
-  return { t, branch: t.branch, parent, fromRef };
+  return t.branch;
 }
+
+/** The branch must exist, and an origin remote must be there to push it to. */
+function pushable(repo, id, branch, why) {
+  if (branchTip(repo, branch) === null) throw new Refusal(`${id}'s ticket branch ${branch} does not exist`);
+  if (tryGit(repo, 'remote', 'get-url', 'origin') === null) throw new Refusal(`the repository has no origin remote; ${why}`);
+}
+
+/** The ticket pr-open and pr-push act on: { t, branch, parent }, not at an end state, its branch pushable. */
+function prTicket(ctx, s, id) {
+  const t = ticketOf(s, id);
+  if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
+  const branch = recordedBranch(s, id, t, ctx.repo);
+  pushable(ctx.repo, id, branch, 'ticket-pr pushes every ticket branch there');
+  return { t, branch, parent: t.stackParent ?? null };
+}
+
+/** The number of the open pull request whose head is `branch`, or null. */
+const openPrNumber = (ctx, repo, branch) => parseJson(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo))[0]?.number ?? null;
 
 /** The PR body: the ticket title, this ticket's commit subjects, one final `Closes` line per bundled ticket. */
 function prBody(repo, id, t, title, fromRef, branch) {
@@ -583,17 +590,19 @@ function prOpen(ctx, rest, flags) {
   const repo = ctx.repo;
   const s = load(ctx.state);
   ticketPrOnly(s, 'pr-open');
-  const { t, branch, parent, fromRef } = prTicket(ctx, s, id, flags.base);
-  if (fromRef === null) throw new UsageError('pr-open needs --base (the base branch) for a ticket that is not stacked');
+  const { t, branch, parent } = prTicket(ctx, s, id);
+  if (parent === null && !flags.base) throw new UsageError('pr-open needs --base (the base branch) for a ticket that is not stacked');
 
   // 1. push
   git(repo, 'push', '-q', '-u', 'origin', branch);
 
   // 2. reuse an open PR, else 3. create the draft
-  const open = JSON.parse(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo));
-  let pr = open.length ? open[0].number : null;
+  let pr = openPrNumber(ctx, repo, branch);
   const created = pr === null;
   if (created) {
+    const fromRef = parent === null ? `origin/${flags.base}` : s.tickets[parent]?.branch;
+    if (!fromRef) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
+    if (commitOf(repo, fromRef) === null) throw new Refusal(`${fromRef} is not a commit`);
     const body = prBody(repo, id, t, flags.title, fromRef, branch);
     if (parent === null) {
       const out = String(ctx.gh(['pr', 'create', '--draft', '--base', flags.base, '--head', branch, '--title', flags.title, '--body', body], repo));
@@ -602,9 +611,8 @@ function prOpen(ctx, rest, flags) {
       pr = Number(m[1]);
     } else {
       ghStack(ctx, stackCwd(repo, branch), 'submit', '--auto');
-      const after = JSON.parse(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo));
-      if (!after.length) throw new Refusal(`gh stack submit --auto opened no pull request for ${branch}`);
-      pr = after[0].number;
+      pr = openPrNumber(ctx, repo, branch);
+      if (pr === null) throw new Refusal(`gh stack submit --auto opened no pull request for ${branch}`);
       ctx.gh(['pr', 'edit', String(pr), '--body', body], repo);
     }
   }
@@ -620,7 +628,7 @@ function prPush(ctx, rest, _flags) {
   const repo = ctx.repo;
   const s = load(ctx.state);
   ticketPrOnly(s, 'pr-push');
-  const { branch, parent } = prTicket(ctx, s, id, undefined);
+  const { branch, parent } = prTicket(ctx, s, id);
   if (parent !== null) ghStack(ctx, stackCwd(repo, branch), 'push');
   else git(repo, 'push', '-q', '-u', 'origin', branch);
   return {
@@ -638,22 +646,20 @@ function prMergeTicket(ctx, s, id, delivered) {
   const t = ticketOf(s, id);
   const stages = ['queued', 'integrating', ...(delivered ? ['delivered'] : [])];
   if (!stages.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; pr-merge takes a ticket that is ${stages.join(' or ')}`);
-  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded (ticket-init first)`);
+  const branch = recordedBranch(s, id, t, ctx.repo);
   if ((t.pr ?? null) === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
-  checkTicketBranch(s, id, t, t.branch, ctx.repo);
-  return { t, branch: t.branch, pr: t.pr, parent: t.stackParent ?? null };
+  return { t, branch, pr: t.pr, parent: t.stackParent ?? null };
 }
 
-const prMergeOut = (phase, id, t, branch, pr, parent, rest) => ({
-  command: 'pr-merge', phase, ticket: id, line: t.line, pr, branch, stacked: parent !== null, ...rest,
+const prMergeOut = (phase, id, t, rest) => ({
+  command: 'pr-merge', phase, ticket: id, line: t.line, pr: t.pr, branch: t.branch, stacked: (t.stackParent ?? null) !== null, ...rest,
 });
 
 /** Phase "push": sync the base into the ticket branch, push it, and report the head for tick's CI wake-up. */
 function prMergePush(ctx, id, s, flags) {
   const repo = ctx.repo;
-  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, false);
-  if (branchTip(repo, branch) === null) throw new Refusal(`${id}'s ticket branch ${branch} does not exist`);
-  if (tryGit(repo, 'remote', 'get-url', 'origin') === null) throw new Refusal('the repository has no origin remote; pr-merge pushes the ticket branch there');
+  const { t, branch, parent } = prMergeTicket(ctx, s, id, false);
+  pushable(repo, id, branch, 'pr-merge pushes the ticket branch there');
   const wt = stackCwd(repo, branch);
   let synced;
   if (parent === null) {
@@ -664,7 +670,7 @@ function prMergePush(ctx, id, s, flags) {
     if (isAncestor(repo, fromSha, `refs/heads/${branch}`)) synced = 'already';
     else {
       const m = mergeBranch(wt, from);
-      if (m.files) return { code: CONFLICT, out: prMergeOut('push', id, t, branch, pr, parent, { result: 'conflict', files: m.files }) };
+      if (m.files) return { code: CONFLICT, out: prMergeOut('push', id, t, { result: 'conflict', files: m.files }) };
       synced = `merged ${from}`;
     }
     git(repo, 'push', '-q', '-u', 'origin', branch);
@@ -672,25 +678,25 @@ function prMergePush(ctx, id, s, flags) {
     // A sync that aborted on stack divergence exits 0; its output names the divergence (#187 live-run item).
     const out = String(ghStack(ctx, wt, 'sync'));
     const divergence = out.split(/\r?\n/).filter((l) => /diverg/i.test(l));
-    if (divergence.length) return { code: DIVERGED, out: prMergeOut('push', id, t, branch, pr, parent, { result: 'diverged', divergence }) };
+    if (divergence.length) return { code: DIVERGED, out: prMergeOut('push', id, t, { result: 'diverged', divergence }) };
     synced = 'gh stack sync';
     ghStack(ctx, wt, 'push');
   }
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
-  return { out: prMergeOut('push', id, t, branch, pr, parent, { result: 'pushed', synced, head: branchTip(repo, branch) }) };
+  return { out: prMergeOut('push', id, t, { result: 'pushed', synced, head: branchTip(repo, branch) }) };
 }
 
 /** Phase "ready" (after the host confirms CI green): `gh pr ready`, then merge-gate.mjs decides what may be sent. */
 function prMergeReady(ctx, id, s, flags) {
   const repo = ctx.repo;
-  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, false);
+  const { t, pr, parent } = prMergeTicket(ctx, s, id, false);
   if (!flags.base) throw new UsageError('pr-merge --ready needs --base (the base branch) for merge-gate.mjs');
   ctx.gh(['pr', 'ready', String(pr)], repo);
-  const slug = JSON.parse(String(ctx.gh(['repo', 'view', '--json', 'nameWithOwner'], repo)))?.nameWithOwner;
+  const slug = parseJson(ctx.gh(['repo', 'view', '--json', 'nameWithOwner'], repo))?.nameWithOwner;
   if (typeof slug !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(slug)) throw new Error(`gh repo view printed no nameWithOwner: ${String(slug)}`);
   const r = gateMain(['--repo', slug, '--base', flags.base], {
     cwd: repo,
-    gh: (args, cwd) => ctx.gh(args, cwd),
+    gh: ctx.gh,
     git: (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 }),
   });
   if (r.code !== 0) throw new Error(`merge-gate.mjs exited ${r.code}: ${r.err.trim()}`);
@@ -701,22 +707,23 @@ function prMergeReady(ctx, id, s, flags) {
     ? { status: 'host', command: `${parent !== null ? 'gh stack merge' : 'gh pr merge'} ${pr}` }
     : { status: 'human' };
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
-  return { out: prMergeOut('ready', id, t, branch, pr, parent, { base: flags.base, gate: { decision: gate.decision, reason: gate.reason }, send }) };
+  return { out: prMergeOut('ready', id, t, { base: flags.base, gate: { decision: gate.decision, reason: gate.reason }, send }) };
 }
 
 /** Phase "merged" (after the host reports the merge done): record the merge SHA, deliver, and clean up locally. */
 function prMergeMerged(ctx, id, s) {
   const repo = ctx.repo;
-  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, true);
-  const view = JSON.parse(String(ctx.gh(['pr', 'view', String(pr), '--json', 'mergeCommit,state'], repo)));
+  const { t, branch, pr } = prMergeTicket(ctx, s, id, true);
+  const view = parseJson(ctx.gh(['pr', 'view', String(pr), '--json', 'mergeCommit,state'], repo));
   if (view?.state !== 'MERGED') throw new Refusal(`${id}'s pull request ${pr} is ${view?.state ?? 'in an unknown state'}, not MERGED; the host sends the merge first`);
   const sha = view?.mergeCommit?.oid;
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`gh pr view printed no merge commit for pull request ${pr}`);
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
   if (!t.merges.some((m) => m.sha === sha)) state(ctx, 'merge', id, sha);
-  if (load(ctx.state).tickets[id].stage === 'integrating') state(ctx, 'stage', 'delivered', id);
+  // `state.mjs merge` never moves the stage: after the writes above the ticket is integrating unless it entered delivered.
+  if (t.stage !== 'delivered') state(ctx, 'stage', 'delivered', id);
   const cleanup = cleanBranch(repo, branch, `${id} is merged and recorded`, true);
-  return { out: prMergeOut('merged', id, t, branch, pr, parent, { merge: sha, stage: load(ctx.state).tickets[id].stage, cleanup }) };
+  return { out: prMergeOut('merged', id, t, { merge: sha, stage: 'delivered', cleanup }) };
 }
 
 function prMerge(ctx, rest, flags) {
