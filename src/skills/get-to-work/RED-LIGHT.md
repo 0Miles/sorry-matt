@@ -70,8 +70,13 @@
   推基底**；票標卡住，依賴它的票（`stackParent` 與 `waitingOn`，遞移）以 `--dependent` 交給同一個指令，照
   既有「上游撤回」規則處理。revert PR 照裁決 2 不審查——內容是機械 revert——但要等它自己的 CI 綠，合併同樣
   是確認呼叫：有合併授權就送 `gh pr merge <PR>`（不 `--admin`、不 auto-merge），沒有就 record left-for-human
-  進人工作業清單。之後 tick 每次喚醒重讀基底，綠了這輪紅燈才結束；期間不開新的 push phase，收官也等它。
-  對不到票時（範圍內沒有本 run 的 merge）由主持人裁決，record settled。
+  進人工作業清單。之後 tick 每次喚醒重讀基底（同一次喚醒裡基底 tip 動了也立刻重讀：讀值以 tip 為鍵），綠了
+  這輪紅燈才結束；期間不開新的 push phase，收官也等它（revert 留給人合併時不等，它已在人工作業清單上）。
+  revert 合併後基底仍紅、或在另一個 SHA 轉紅，就是新的一輪：重掃，已在基底上被 revert 的票不再對到，每張票
+  只 revert 一次；前一輪開了 revert PR 還沒合併的票先收完，不被新的紅蓋掉。
+  對不到票時——範圍內沒有本 run 尚未 revert 的 merge，或走到最舊 merge 之下仍沒有綠、而下界本身就是紅（紅在
+  本 run 合併之前就在）——由主持人裁決，record settled，tick 之後每次喚醒照讀基底直到綠。
+  收官前，基底必須在最新 tip 上讀過一次、而且不是 running。
 
 完成判準：撤回都經 `integrate.mjs revert`，依賴票都列為 `--dependent`；驗證未過的線在人工作業清單列出失敗的
 job；每輪的結果都已 record。

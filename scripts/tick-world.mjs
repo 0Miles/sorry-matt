@@ -241,11 +241,23 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     if (args[0] === 'api' && args[1] === 'graphql') return JSON.stringify(h.mergeQueue ?? { data: { repository: { mergeQueue: null } } });
     throw new Error(`no gh stub for: gh ${args.join(' ')}`);
   };
-  /** #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. */
+  /**
+   * #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. #197: as
+   * GitHub's "Create a merge commit" does, always a merge commit whose first parent is main, never a fast-forward:
+   * the base's first-parent history is then the merges, which the base-red attribution walks.
+   */
+  h.mergeBranch = (branch) => {
+    const wt = join(h.dir, `merge-${(h.mergeN = (h.mergeN ?? 0) + 1)}`);
+    git(h.repo, 'fetch', '-q', 'origin');
+    git(h.repo, 'worktree', 'add', '-q', '--detach', wt, 'origin/main');
+    git(wt, 'merge', '-q', '--no-ff', '-m', `Merge pull request #${h.prs[branch]?.number ?? 0} from ${branch}`, branch);
+    git(wt, 'push', '-q', 'origin', 'HEAD:main');
+    git(h.repo, 'worktree', 'remove', '--force', wt);
+    git(h.repo, 'fetch', '-q', 'origin');
+  };
   h.mergePr = (tid) => {
     const branch = h.state().tickets[tid].branch;
-    git(h.repo, 'push', '-q', 'origin', `${branch}:main`);
-    git(h.repo, 'fetch', '-q', 'origin');
+    h.mergeBranch(branch);
     const pr = h.prs[branch];
     pr.merged = true;
     pr.mergeOid = git(h.repo, 'rev-parse', 'origin/main');

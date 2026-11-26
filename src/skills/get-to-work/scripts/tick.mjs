@@ -277,7 +277,10 @@
 //   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
 //   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
 //                                                  "failure" } } },     // the ci-fix of a red light with no ticket
-//   "baseRed": { "sha", "at", "sent"? } | absent,  // #197: the base-red episode under integrate: ticket-pr
+//   "baseRed": { "sha", "at", "n", "sent"?, "left"?, "settled"? } | absent, "baseRedN": <n>,
+//   "baseSeen": { "tip", "verdict" } | absent,     // #197: the base-red episode under integrate: ticket-pr; n counts
+//                                                  // episode instances (it keys the fetch and the unmatched judge);
+//                                                  // baseSeen is the last base read and the tip it was taken at
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
@@ -1961,32 +1964,72 @@ function stepPrMerge(c) {
  * revert PR — never a base push — with the tickets depending on the reverted one (by stackParent and waitingOn,
  * transitively) as --dependent: they get the upstream-reverted handling. The revert PR's own CI is read once per
  * wake-up; once green the merge goes to the host as a prompting call (ruling 2: a mechanical revert, no review),
- * sent under merge authorization or left for a person. The base is then read again each wake-up, and green ends the
- * episode. Returns true while an episode is open: new push phases wait, and the finish does too.
+ * sent under merge authorization or left for a person. The base is then read again each wake-up (and at once when
+ * its tip moves within the wake-up: the read is keyed by the tip); green ends the episode, and a base red at another
+ * SHA (the next causing ticket's red once the revert landed, or red anew) opens a new episode instance, so the scan
+ * reruns and the next ticket is mapped and reverted — tickets whose merges are already reverted on the base are
+ * never mapped again, and a ticket is reverted once. A red that the walk cannot pin above this run's merges (no
+ * green concluded inside the walk, and the base verdict at the lower bound is red: the red was there before the
+ * oldest merge) maps to no ticket, like a stretch with no recorded merge: a `base-red-unmatched` judge, one per
+ * episode instance, and after `settled` the base keeps being read each wake-up until it is green. Returns true
+ * while an episode is open: new push phases wait, and the finish does too (unless the revert is left for a person).
  */
 function prBaseRed(c) {
   if (c.profile.ci === 'skip') return false;
   const merged = Object.entries(c.state.tickets).filter(([, t]) => t.merges.length);
   if (!merged.length) return false;
-  const ep = c.book.baseRed ?? null;
-  if (!ep || ep.sent) {
-    const out = c.tick('ci', `base-w${c.book.wakeup}.json`);
-    const read = c.emit(
-      exec(`base-ci:w${c.book.wakeup}`, 'base-ci', ['node', js('ci.mjs'), 'base', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), c.cfg.base], {
-        stdout: out,
-        cwd: c.cfg.repo ? null : c.cfg.root,
-      }),
-    );
-    if (read !== null) return !!ep;
-    const v = readJsonFile(c.deps, out);
-    if (ep) {
-      if (v?.verdict === 'green') delete c.book.baseRed; // the revert landed (or the red cleared): the episode is over
-      return !!c.book.baseRed;
-    }
-    if (v?.verdict !== 'red' || !v.sha) return false;
-    c.book.baseRed = { sha: v.sha, at: c.now };
+  // The base read is keyed by the wake-up and the base tip as this repository sees it: a merge seen within the
+  // wake-up (a revert PR merged and fetched) is a new read, and a read never outlives the tip it was taken at.
+  const baseTip = c.git.remote(c.cfg.base);
+  const key = `${baseTip ? baseTip.slice(0, 12) : 'none'}-w${c.book.wakeup}`;
+  const out = c.tick('ci', `base-${key}.json`);
+  const read = c.emit(
+    exec(`base-ci:${key}`, 'base-ci', ['node', js('ci.mjs'), 'base', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), c.cfg.base], {
+      stdout: out,
+      cwd: c.cfg.repo ? null : c.cfg.root,
+    }),
+  );
+  if (read !== null) return !!c.book.baseRed;
+  const v = readJsonFile(c.deps, out);
+  c.book.baseSeen = { tip: baseTip, verdict: v?.verdict ?? null }; // the finish waits for a concluded read at the current tip
+  if (v?.verdict === 'green') {
+    delete c.book.baseRed; // the revert landed (or the red cleared): the episode is over
+    return false;
   }
-  const red = c.book.baseRed;
+  const redNow = v?.verdict === 'red' && v.sha ? v.sha : null;
+  if (!redNow) return !!c.book.baseRed; // running, no run or unread: an open episode stays open
+  let red = c.book.baseRed ?? null;
+  // Settled, or the revert sent (or left for a person), at this same red: wait for the base to move. A red at
+  // another SHA — still red after a revert landed, or red anew — opens a new episode instance (F1, F2, review 1):
+  // the scan reruns, and tickets whose merges are already reverted on the base are never mapped again.
+  if (red && red.sha === redNow && (red.sent || red.settled)) return true;
+  if (!red || red.sha !== redNow) red = c.book.baseRed = { sha: redNow, at: c.now, n: (c.book.baseRedN = (c.book.baseRedN ?? 0) + 1) };
+  const sha12 = red.sha.slice(0, 12);
+  // the walk and the mapping read the base's history: fetch it first, once per episode instance
+  if (c.git.hasOrigin && c.emit(exec(`base-fetch:${sha12}:e${red.n}`, 'sync-base', ['git', '-C', c.cfg.root, 'fetch', 'origin', c.cfg.base]))) return true;
+  // a ticket whose merges are all reverted on the base already (an earlier episode's revert PR merged) is never mapped
+  // again; the revert commit may sit on a merged revert PR's side of the history, so the whole history is searched
+  const revertedOnBase = (t) =>
+    t.merges.every((m) => {
+      try {
+        return c.deps.git(c.cfg.root, ['log', '--format=%H', '--fixed-strings', `--grep=This reverts commit ${m.sha}`, `${m.sha}..origin/${c.cfg.base}`]).trim() !== '';
+      } catch {
+        return false;
+      }
+    });
+  // An earlier episode's revert that has not landed on the base yet is finished first, before any new mapping: a
+  // red at a new SHA (another merge landing meanwhile) must not strand a revert PR that was opened and not merged.
+  const pending = merged.find(([id, t]) => c.done(`revert:${keyOf(id)}`) && !revertedOnBase(t));
+  const cause = pending ?? baseRedCause(c, red, merged, revertedOnBase);
+  if (!Array.isArray(cause)) return cause;
+  return baseRedRevert(c, red, cause);
+}
+
+/**
+ * #197: the base-red episode's mapping (ruling 1) — the earliest-red scan against the base, the pre-existing-red
+ * guard, and the causing ticket by merge order and merge SHA. Returns [id, ticket], or prBaseRed's return value.
+ */
+function baseRedCause(c, red, merged, revertedOnBase) {
   const sha12 = red.sha.slice(0, 12);
   // ruling 1: the earliest-red scan against the base; the walk reaches back past the oldest recorded merge
   const shas = merged.flatMap(([, t]) => t.merges.map((m) => m.sha));
@@ -2011,12 +2054,33 @@ function prBaseRed(c) {
   const scanOut = c.tick('ci', `base-${sha12}.json`);
   if (c.emit(exec(`base-scan:${sha12}`, 'base-scan', ['node', js('ci.mjs'), 'earliest-red', plan], { stdout: scanOut, cwd: c.cfg.root })) !== null) return true;
   const scan = readJsonFile(c.deps, scanOut);
-  if (!scan || scan.earliestRed === null) {
-    delete c.book.baseRed; // the base concluded green again, or nothing concluded: it is read afresh next wake-up
-    return false;
+  if (!scan) return true; // the scan's output could not be read; its exec's failure judge leads
+  if (scan.earliestRed === null) {
+    // nothing concluded red in the walk although the base read red: the episode stays open (pushes stay paused)
+    // and the base is read afresh next wake-up, where a new tip or a green read moves it on
+    red.settled = true;
+    return true;
+  }
+  // F3 (review 1): the pre-existing-red guard. The plan's `base` is a raw SHA, so ci.mjs's own baseCi guard cannot
+  // query runs by it; when no green concluded inside the walk (lowerBound kind merge-base), the red may pre-date
+  // this run's merges — the base verdict at the lower bound, a branch-valid query, decides. Red there: the red was
+  // on the base below the oldest merge and belongs to no ticket of this run. Any other verdict (green, no-run,
+  // running, query-failed) changes nothing, as ci.mjs's guard has it.
+  if (scan.lowerBound?.kind === 'merge-base') {
+    const lowOut = c.tick('ci', `base-low-${sha12}.json`);
+    const lowRead = c.emit(
+      exec(`base-low:${sha12}`, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), c.cfg.base, scan.lowerBound.sha], {
+        stdout: lowOut,
+        cwd: c.cfg.repo ? null : c.cfg.root,
+      }),
+    );
+    if (lowRead !== null) return true;
+    if (readJsonFile(c.deps, lowOut)?.verdict === 'red') {
+      return baseRedUnmatched(c, red, `the base was already red at ${scan.lowerBound.sha}, below this run's oldest merge (the scan is in ${scanOut})`);
+    }
   }
   // the causing tickets, by merge order and merge SHA: the recorded merges in the stretch, the oldest merge first
-  let stretch = [];
+  let stretch = null;
   try {
     stretch = c.deps
       .git(c.cfg.root, ['rev-list', '--first-parent', `${scan.lowerBound.sha}..${scan.earliestRed}`])
@@ -2024,22 +2088,21 @@ function prBaseRed(c) {
       .filter(Boolean)
       .reverse();
   } catch {}
+  if (stretch === null) return true; // git could not walk the stretch: tried again at the next list or wake-up
   const at = (t) => Math.min(...t.merges.map((m) => stretch.indexOf(m.sha)).filter((i) => i >= 0));
-  const causing = merged.filter(([, t]) => t.merges.some((m) => stretch.includes(m.sha))).sort((a, b) => at(a[1]) - at(b[1]));
+  const causing = merged.filter(([, t]) => t.merges.some((m) => stretch.includes(m.sha)) && !revertedOnBase(t)).sort((a, b) => at(a[1]) - at(b[1]));
   if (!causing.length) {
-    c.emit(
-      judge(
-        `base-red-unmatched:${sha12}`,
-        'base-red-unmatched',
-        `The base branch ${c.cfg.base} is red at ${red.sha}, and no recorded merge of this run lies in ${scan.lowerBound.sha}..${scan.earliestRed} (the scan is in ${scanOut}). The red did not come in with a ticket's merge: settle it outside this run (a fix on the base, or a person on the human-work list) and record settled; the base is then read again.`,
-        ['settled'],
-        [doc('RED-LIGHT.md', 'the ticket-pr handling (a red base)')],
-        { meta: { sha: red.sha } },
-      ),
-    );
-    return true;
+    return baseRedUnmatched(c, red, `no recorded merge of this run that is not already reverted lies in ${scan.lowerBound.sha}..${scan.earliestRed} (the scan is in ${scanOut})`);
   }
-  const [tid, t] = causing[0];
+  return causing[0];
+}
+
+/**
+ * #197: the revert of the causing ticket — integrate.mjs revert opens the revert PR (once per ticket) with its
+ * dependents, its own CI is read, and green brings the merge as a prompting call (ruling 2).
+ */
+function baseRedRevert(c, red, [tid, t]) {
+  const sha12 = red.sha.slice(0, 12);
   // the tickets depending on the reverted one, by stackParent and waitingOn, transitively
   const seen = new Set([tid]);
   for (let grew = true; grew; ) {
@@ -2056,7 +2119,7 @@ function prBaseRed(c) {
   const out2 = c.tick('pr', `${keyOf(tid)}-revert.json`);
   const revertId = c.emit(
     exec(
-      `revert:${keyOf(tid)}@${sha12}`,
+      `revert:${keyOf(tid)}`, // once per ticket: a later episode that still maps it (its revert not landed) goes on
       'revert',
       [
         'node',
@@ -2099,6 +2162,10 @@ function prBaseRed(c) {
   if (ciRead2 !== null) return true;
   const v2 = readJsonFile(c.deps, ciOut);
   if (v2?.verdict !== 'green') return true; // red, running or unread: read again next wake-up (the fallback waits)
+  if (c.done(`revert-send:${tid}:${pr}`)) {
+    red.sent = true; // sent (or left for a person) already: back to reading the base until it is green (F1, review 1)
+    return true;
+  }
   c.emit(
     judge(
       `revert-send:${tid}:${pr}`,
@@ -2107,6 +2174,25 @@ function prBaseRed(c) {
       ['sent', 'left-for-human'],
       [doc('RED-LIGHT.md', 'the ticket-pr handling (a red base)'), doc('FINISH.md', 'the merge where authority allows')],
       { tickets: [tid], line: t.line, meta: { pr, branch: rbranch, command: `gh pr merge ${pr}` } },
+    ),
+  );
+  return true;
+}
+
+/**
+ * #197: a base red that maps to no ticket, one judge per episode instance (F2, review 1: a per-SHA id could never
+ * come back after `settled` at a red that stays). `settled` keeps the episode in a settled state: the base is read
+ * each wake-up until it is green, and a red at a new SHA re-opens the episode (a new instance, a new judge).
+ */
+function baseRedUnmatched(c, red, why) {
+  c.emit(
+    judge(
+      `base-red-unmatched:${red.sha.slice(0, 12)}:e${red.n ?? 1}`,
+      'base-red-unmatched',
+      `The base branch ${c.cfg.base} is red at ${red.sha}, and ${why}. The red did not come in with a merge this run can revert: settle it outside this run (a fix on the base, or a person on the human-work list) and record settled; tick then keeps reading the base each wake-up until it is green.`,
+      ['settled'],
+      [doc('RED-LIGHT.md', 'the ticket-pr handling (a red base)')],
+      { meta: { sha: red.sha } },
     ),
   );
   return true;
@@ -2848,7 +2934,12 @@ function stepFinish(c) {
   const { state, book, profile } = c;
   const tickets = Object.values(state.tickets);
   if (!tickets.every((t) => TERMINAL.includes(t.stage)) || book.dispatch || book.finished) return;
-  if (profile.integrate === 'ticket-pr' && book.baseRed) return; // #197: the base-red episode (the revert PR) ends first
+  // #197: the base-red episode (the revert PR) ends first — a revert left for a person goes on the human-work list
+  // instead — and the base must have been read at its current tip after the last merge, with a concluded verdict
+  if (profile.integrate === 'ticket-pr' && book.baseRed && !book.baseRed.left) return;
+  if (profile.integrate === 'ticket-pr' && profile.ci !== 'skip' && tickets.some((t) => t.merges.length)) {
+    if (book.baseSeen?.tip !== c.git.remote(c.cfg.base) || book.baseSeen?.verdict === 'running') return;
+  }
   // #196: under integrate: ticket-pr there is no line delivery — every delivered ticket merged its own PR with CI
   // green on the PR head, or is recorded left-for-human; the lines have no branch, base sync or full verification.
   if (profile.integrate !== 'ticket-pr') {
@@ -3514,10 +3605,13 @@ export function record(path, id, flags, now, deps) {
       break;
     // #197: the base-red episode under integrate: ticket-pr
     case 'revert-send':
-      if (book.baseRed) book.baseRed.sent = true; // sent, or left for a person: the base is read until it is green
+      if (book.baseRed) {
+        book.baseRed.sent = true; // sent, or left for a person: the base is read until it is green
+        if (outcome === 'left-for-human') book.baseRed.left = true; // the finish need not wait for a person's merge
+      }
       break;
     case 'base-red-unmatched':
-      delete book.baseRed;
+      if (book.baseRed) book.baseRed.settled = true; // the base keeps being read each wake-up until it is green (F2)
       break;
     case 'timeout': {
       if (meta.stage === 'ci-fix') {

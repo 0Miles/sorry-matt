@@ -95,9 +95,16 @@ procedure above does not apply:
   ruling 2 the revert PR is not reviewed — its content is a mechanical revert — but waits for its own CI to be
   green; its merge is a prompting call all the same: with merge authorization send `gh pr merge <PR>` (never
   `--admin`, never auto-merge), without it record left-for-human onto the human-work list. tick then reads the base
-  again each wake-up, and the red episode ends only once it is green; meanwhile no new push phase starts, and the
-  finish waits too. When it maps to no ticket (no merge of this run in the stretch), the host rules; record
-  settled.
+  again each wake-up (and at once when the base tip moves within a wake-up: the read is keyed by the tip), and the
+  red episode ends only once it is green; meanwhile no new push phase starts, and the finish waits too (not for a
+  revert left for a person: it is on the human-work list already). A base still red after the revert lands, or red
+  at another SHA, is a new episode: the scan reruns, tickets already reverted on the base are never mapped again,
+  and each ticket is reverted once; a ticket whose revert PR an earlier episode opened and that has not merged yet
+  is finished first, never stranded by the new red. When it maps to no ticket — no merge of this run in the stretch
+  that is not reverted already, or no green down past the oldest merge with the lower bound itself red (the red was
+  there before this run's merges) — the host rules; record settled, and tick keeps reading the base each wake-up
+  until it is green. Before the finish, the base must have been read once at its current tip, with a verdict that
+  is not running.
 
 Done when: every revert went through `integrate.mjs revert` with every dependent ticket as a `--dependent`; every line
 that failed verification has its failed jobs on the human-work list; every round's result is recorded.

@@ -708,7 +708,7 @@ test('#197: a base that turns red after a merge maps the red to the causing tick
   };
   h.policy['revert-send'] = (a) => {
     h.revertSend = a;
-    git(h.repo, 'push', '-q', 'origin', `${a.meta.branch}:main`); // the merge of the revert PR
+    h.mergeBranch(a.meta.branch); // the merge of the revert PR
     git(h.repo, 'fetch', '-q', 'origin');
     reverted = true;
     return 'sent';
@@ -749,7 +749,103 @@ test('#197: a base that turns red after a merge maps the red to the causing tick
   assert.match(h.revertSend.do, /never --admin, never auto-merge/);
   assert.ok(h.revertSend.outcomes.includes('sent') && h.revertSend.outcomes.includes('left-for-human'));
 
-  // the finish waits for the episode: the wrap-up comes after the merge was sent and the base read green
-  assert.ok(h.log.find((a) => a.id === 'wrap-up').wakeup > h.log.find((a) => a.step === 'revert-send').wakeup, 'the finish waits for the base-red episode');
+  // the finish waits for the episode: the wrap-up comes after the merge was sent and the base was read again at the
+  // revert's tip (a new read: the read is keyed by the base tip)
+  const sendAt = h.log.findIndex((a) => a.step === 'revert-send');
+  const reread = h.log.findIndex((a, i) => i > sendAt && a.step === 'base-ci');
+  assert.ok(reread > sendAt, 'the base is read again after the revert PR is merged');
+  assert.ok(h.log.findIndex((a) => a.id === 'wrap-up') > reread, 'the finish waits for the base-red episode');
   assert.ok(!h.state().tick.baseRed, 'the episode is over once the base reads green');
+});
+
+test('#197 review F1: a base still red after the first revert re-opens the episode and reverts the second causing ticket', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  const isAncestor = (a, b) => {
+    try {
+      git(h.repo, 'merge-base', '--is-ancestor', a, b);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // both tickets' merges break the base; a merge stops counting once its revert PR is merged
+  h.revertedTickets = new Set();
+  const broken = () =>
+    [ID1, ID2]
+      .filter((id) => !h.revertedTickets.has(id))
+      .map((id) => h.state().tickets[id].merges.at(-1)?.sha)
+      .filter(Boolean);
+  h.ci = (branch, sha) => {
+    if (branch !== 'main') return 'green'; // the PR heads and the revert branches are green
+    return broken().some((m) => m === sha || isAncestor(m, sha)) ? 'red' : 'green';
+  };
+  h.policy['revert-send'] = (a) => {
+    (h.revertSends ??= []).push(a);
+    h.mergeBranch(a.meta.branch); // the merge of the revert PR
+    git(h.repo, 'fetch', '-q', 'origin');
+    h.revertedTickets.add(a.tickets[0]);
+    return 'sent';
+  };
+  for (let i = 0; i < 14 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'stuck');
+  assert.equal(s.tickets[ID2].stage, 'stuck');
+  // each breaking merge got its own revert exec and its own revert PR: the episode re-opened at the second red
+  const reverts = h.log.filter((a) => a.step === 'revert');
+  assert.deepEqual(reverts.map((a) => a.tickets[0]).sort(), [ID1, ID2].sort(), 'both causing tickets are reverted');
+  assert.equal((h.revertSends ?? []).length, 2, 'two revert PRs went out');
+  const sendIdx = h.log.findIndex((a) => a.step === 'revert-send');
+  const firstTicket = h.log.find((a) => a.step === 'revert').tickets[0];
+  const secondIdx = h.log.findIndex((a) => a.step === 'revert' && a.tickets[0] !== firstTicket);
+  assert.ok(secondIdx > sendIdx, "the second causing ticket's revert comes after the first revert was sent");
+  assert.ok(!s.tick.baseRed, 'the episode closes once the base is green');
+});
+
+test('#197 review F2+F3: a base already red below the merges goes to the host, not a revert; after settled the base is read until green and the run finishes', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.blockers[ID2] = [ID1]; // #2 starts only after #1 is done: the episode opens while #2 is still open
+  let outsideRed = false;
+  h.ci = (branch) => (branch === 'main' && outsideRed ? 'red' : 'green');
+  h.policy['base-red-unmatched'] = (a) => {
+    (h.unmatchedJudges ??= []).push(a);
+    return 'settled';
+  };
+  for (let i = 0; i < 8 && stage(h, ID1) !== 'delivered'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'delivered');
+  outsideRed = true; // the base turns red from outside the run: red at every SHA, the lower bound included
+  h.wake();
+  assert.equal(h.unmatchedJudges.length, 1, 'the pre-existing red goes to the host');
+  assert.match(h.unmatchedJudges[0].do, /the base was already red at [0-9a-f]{40}, below this run's oldest merge/);
+  assert.ok(h.log.every((a) => a.step !== 'revert'), 'no ticket is reverted for a red that pre-dates the merges (F3)');
+  assert.equal(h.state().tickets[ID1].stage, 'delivered', 'the innocent ticket keeps its delivery');
+  // settled while still red: the next wake-up reads the base again (F2), and the judge is not issued again
+  h.wake();
+  assert.equal(h.actions(h.wakes.at(-1)).filter((a) => a.step === 'base-ci').length, 1, 'the base is read again after settled while still red');
+  assert.equal(h.unmatchedJudges.length, 1, 'the settled judge is not issued again at the same red');
+  // the base turns green: the episode closes, #2 goes on to deliver, and the run finishes
+  outsideRed = false;
+  for (let i = 0; i < 10 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run reaches finished once the base is green');
+  assert.equal(stage(h, ID2), 'delivered');
+  assert.ok(!h.state().tick.baseRed, 'the episode is closed');
+  assert.ok(h.log.every((a) => a.step !== 'revert'), 'still no revert');
+});
+
+test('#197 review observation: a revert PR left for a person does not hold the finish; the merge is on the human-work list', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1] = h.ids;
+  const initSha = git(h.repo, 'rev-parse', 'origin/main');
+  h.ci = (branch, sha) => (branch === 'main' && sha !== initSha && h.state().tickets[ID1].merges.length ? 'red' : 'green');
+  h.policy['revert-send'] = (a) => {
+    h.revertSend = a;
+    return 'left-for-human';
+  };
+  for (let i = 0; i < 10 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends with the revert PR left for a person');
+  assert.ok(h.revertSend, 'the revert merge went to the host');
+  assert.equal(h.state().tickets[ID1].stage, 'stuck');
+  assert.ok(h.state().tick.baseRed.left, 'the episode records the revert as left for a person');
 });
