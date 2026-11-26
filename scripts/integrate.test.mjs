@@ -1269,14 +1269,18 @@ test('pr-merge --ready: gh pr ready, then merge-gate decides; merge or queue han
   assert.equal(out.phase, 'ready');
   assert.equal(out.base, 'main');
   assert.deepEqual(out.gate, { decision: 'merge', reason: 'no-queue' });
-  assert.deepEqual(out.send, { status: 'host', command: 'gh pr merge 12' }, 'the host sends the merge, never the script');
+  // #199: #2 is stacked on #1, so #1's PR is in a stack too: GitHub takes only gh stack merge for it
+  assert.deepEqual(out.send, { status: 'host', command: 'gh stack merge 12 --yes --squash' }, 'the host sends the merge, never the script');
   assert.deepEqual(gh.of('pr', 'ready')[0].args, ['pr', 'ready', '12']);
   assert.equal(gh.of('api', 'graphql').length, 1, "merge-gate's merge-queue query went through the same gh seam");
   assert.equal(state().tickets['#1'].stage, 'integrating');
 
   const stacked = ok('pr-merge', '#2', '--ready', '--base', 'main');
-  assert.deepEqual(stacked.send, { status: 'host', command: 'gh stack merge 13' });
+  assert.deepEqual(stacked.send, { status: 'host', command: 'gh stack merge 13 --yes --squash' });
   assert.deepEqual(gh.of('pr', 'ready')[1].args, ['pr', 'ready', '13']);
+  // with nothing live stacked on it, #1 is in no stack: plain gh pr merge
+  st('stage', 'stuck', '#2', '--reason', 'gone');
+  assert.deepEqual(ok('pr-merge', '#1', '--ready', '--base', 'main').send, { status: 'host', command: 'gh pr merge 12' });
 
   // A failed gate query decides human: nothing is sent, and the gate's reason is carried.
   graphql = 'not json at all';
@@ -1434,4 +1438,33 @@ test('revert: --base outside integrate: ticket-pr is a usage error; under it a t
   env.refused(/#1 is queued; revert takes a delivered ticket/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
   env.st('stage', 'integrating', '#1');
   env.refused(/#1 has no merge recorded; there is nothing to revert/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
+});
+
+test('patch-id (ticket-pr, #199): the same own change gives the same id after a rebase onto another base; a changed one does not', (t) => {
+  const gh = ghStub();
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, repo, git, ok, st, integrate, work } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  work(wt2, { 'two.md': 'two\n' }, '#2: stacked work');
+  assert.equal(integrate('patch-id', '#2').code, 2, '--from is required');
+  const before = ok('patch-id', '#2', '--from', 'run-1/01-a');
+  assert.match(before.patchId, /^[0-9a-f]{40}$/);
+  assert.equal(before.base, one.tip, 'taken from the merge base with the upstream branch');
+  // #1 lands on main (a merge commit), and #2 is rebased onto it: its own change is the same patch
+  git('merge', '-q', '--no-ff', '-m', 'merge #1', 'run-1/01-a');
+  git('push', '-q', 'origin', 'main');
+  execFileSync('git', ['-C', wt2, 'fetch', '-q', 'origin'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', wt2, 'rebase', '-q', 'origin/main'], { stdio: 'ignore' });
+  const after = ok('patch-id', '#2', '--from', 'origin/main');
+  assert.equal(after.patchId, before.patchId, 'a clean rebase keeps the patch-id');
+  assert.notEqual(after.head, before.head, 'though the SHA changed');
+  work(wt2, { 'two.md': 'two, changed\n' }, '#2: changed');
+  assert.notEqual(ok('patch-id', '#2', '--from', 'origin/main').patchId, before.patchId, 'a changed own change changes it');
+  // outside ticket-pr the command is refused
+  const other = setup(t, { tracker: 'github' });
+  other.st('add', '#9', '--line', LINE);
+  assert.equal(other.integrate('patch-id', '#9', '--from', 'main').code, 3);
 });

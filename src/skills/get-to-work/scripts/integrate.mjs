@@ -10,6 +10,7 @@
 //   node integrate.mjs pr-open     <state> <ticket> --title <text> [--base <base branch>] [--repo <dir>]
 //   node integrate.mjs pr-push     <state> <ticket> [--repo <dir>]
 //   node integrate.mjs pr-merge    <state> <ticket> [--base <base branch>] [--ready | --merged] [--repo <dir>]
+//   node integrate.mjs patch-id    <state> <ticket> --from <ref> [--repo <dir>]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> [--branch <ticket branch>]
 //                                  [--local <ticket file> [--checks <text>]] [--push]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> --ci [--push]
@@ -127,8 +128,10 @@
 //                           `--repo` read from `gh repo view --json nameWithOwner`. The gate's decision and reason
 //                           are carried in the output; on "merge" or "queue" the output gives the merge command for
 //                           the host to run with its own tool ("host", as merge's protected-branch push does):
-//                           `gh pr merge <PR>` for a ticket that is not stacked, `gh stack merge <PR>` for a stacked
-//                           one — never `--admin`, never auto-merge (`gh stack merge` supports neither rule bypass
+//                           `gh pr merge <PR>` for a ticket that is in no stack, `gh stack merge <PR> --yes --squash`
+//                           for one in a stack — stacked itself, or with a live ticket stacked on it (#199: GitHub
+//                           refuses `gh pr merge` for any PR of a stack; the #198 sandbox run merged with exactly
+//                           this) — never `--admin`, never auto-merge (`gh stack merge` supports neither rule bypass
 //                           nor auto-merge). On "human" nothing is sent: human-work list.
 //                           Output: { "format", "command": "pr-merge", "phase": "ready", "ticket", "line", "pr",
 //                                     "branch", "stacked", "base", "gate": { "decision", "reason" },
@@ -141,6 +144,13 @@
 //                           only when the authorization scope allows the host that.
 //                           Output: { "format", "command": "pr-merge", "phase": "merged", "ticket", "line", "pr",
 //                                     "branch", "stacked", "merge": "<sha>", "stage": "delivered", "cleanup" }
+// patch-id     integrate: ticket-pr only (#199). The patch-id of this ticket's own change: `git diff` from the merge
+//              base of `--from` and the ticket branch to the branch, through `git patch-id --stable` (line numbers
+//              and whitespace do not count). tick takes it when a stacked ticket's review passes, against its fixed
+//              point then (the upstream branch), and again after the stack was synced (rebased), against the fixed
+//              point now: the same id means the rebase changed nothing of this ticket's and its review stands.
+//              Output: { "format", "command": "patch-id", "ticket", "branch", "from": "<ref>", "base": "<merge
+//                        base sha>", "head": "<sha>", "patchId": "<id>" | null }   (null: the diff is empty)
 //              Every `gh stack` call these commands make is non-interactive (explicit branch names or flags, no
 //              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Three gh behaviours are
 //              stubbed here per their docs and are #187 live-run items: whether `gh stack submit --auto` is
@@ -719,8 +729,10 @@ function prMergeReady(ctx, id, s, flags) {
   const gate = JSON.parse(r.out);
   // The script never sends the merge: on "merge" or "queue" the command goes to the host, never --admin, never
   // auto-merge; on "human" nothing is sent.
+  // #199: a PR in a stack — stacked itself, or with a live ticket stacked on it — merges with gh stack merge only
+  const inStack = parent !== null || Object.values(s.tickets).some((o) => o.stackParent === id && !['stuck', 'awaiting-ruling'].includes(o.stage));
   const send = ['merge', 'queue'].includes(gate.decision)
-    ? { status: 'host', command: `${parent !== null ? 'gh stack merge' : 'gh pr merge'} ${pr}` }
+    ? { status: 'host', command: inStack ? `gh stack merge ${pr} --yes --squash` : `gh pr merge ${pr}` }
     : { status: 'human' };
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
   return { out: prMergeOut('ready', id, t, { base: flags.base, gate: { decision: gate.decision, reason: gate.reason }, send }) };
@@ -751,6 +763,29 @@ function prMerge(ctx, rest, flags) {
   if (flags.merged) return prMergeMerged(ctx, id, s);
   if (flags.ready) return prMergeReady(ctx, id, s, flags);
   return prMergePush(ctx, id, s, flags);
+}
+
+/** patch-id (#199, see the header): the patch-id of the ticket's own change against `--from`. */
+function patchIdOf(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('patch-id takes exactly one ticket');
+  if (!flags.from) throw new UsageError('patch-id needs --from (the ref the ticket\'s own change is taken against)');
+  const [id] = rest;
+  const repo = ctx.repo;
+  const s = load(ctx.state);
+  ticketPrOnly(s, 'patch-id');
+  const t = ticketOf(s, id);
+  const branch = recordedBranch(s, id, t, repo);
+  if (commitOf(repo, flags.from) === null) throw new Refusal(`${flags.from} is not a commit`);
+  const head = branchTip(repo, branch);
+  const base = git(repo, 'merge-base', flags.from, `refs/heads/${branch}`);
+  const diff = git(repo, 'diff', '--no-color', '--no-ext-diff', base, `refs/heads/${branch}`);
+  let patchId = null;
+  if (diff.trim()) {
+    const r = spawnSync('git', ['patch-id', '--stable'], { cwd: repo, input: `${diff}\n`, encoding: 'utf8', maxBuffer: 256 << 20 });
+    if (r.status !== 0) throw new Error(`git patch-id failed: ${String(r.stderr).trim()}`);
+    patchId = String(r.stdout).trim().split(/\s+/)[0] || null;
+  }
+  return { out: { command: 'patch-id', ticket: id, branch, from: flags.from, base, head, patchId } };
 }
 
 /** The merges on the line's first-parent history, oldest first: [{ sha, parents, subject }]. */
@@ -1592,6 +1627,7 @@ const COMMANDS = {
   'pr-open': [prOpen, { title: 'one', base: 'one', repo: 'one', now: 'one' }],
   'pr-push': [prPush, { repo: 'one', now: 'one' }],
   'pr-merge': [prMerge, { base: 'one', ready: 'bool', merged: 'bool', repo: 'one', now: 'one' }],
+  'patch-id': [patchIdOf, { from: 'one', repo: 'one', now: 'one' }],
   merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
   'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
   revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', base: 'one', repo: 'one', now: 'one' }],

@@ -313,7 +313,9 @@ const EDGES = {
   'in-review': ['fixing', 'queued', 'awaiting-ruling', 'stuck'],
   fixing: ['in-review', 'awaiting-ruling', 'stuck'],
   queued: ['integrating', 'awaiting-ruling', 'stuck'],
-  integrating: ['delivered', 'candidate', 'awaiting-ci', 'awaiting-ruling', 'stuck'],
+  // #199, integrate: ticket-pr: back to in-review for a recheck when the base sync changed the ticket's own change (a
+  // resolved conflict, or a stack rebase whose patch-id moved)
+  integrating: ['delivered', 'candidate', 'awaiting-ci', 'in-review', 'awaiting-ruling', 'stuck'],
   // #196, integrate: ticket-pr: the PR head's CI, then the merge the host (or a person) sends
   'awaiting-ci': ['awaiting-merge', 'fixing', 'awaiting-ruling', 'stuck'],
   'awaiting-merge': ['delivered', 'awaiting-ruling', 'stuck'],

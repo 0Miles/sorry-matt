@@ -905,3 +905,71 @@ test('#198: without gh stack a ticket with an unmerged upstream waits for it to 
   assert.ok(s.tickets[ID2].history[startAt].at >= s.tickets[ID1].history.find((x) => x.to === 'delivered').at);
   git(h.repo, 'merge-base', '--is-ancestor', s.tickets[ID1].merges[0].sha, s.tickets[ID2].merges[0].sha);
 });
+
+// ---- integrate: ticket-pr — the stack merges from the bottom up (#199) ---------------------------------------------
+
+/** #199: #2 stacked on #1, #1's PR head CI held running until #2 has passed its review. */
+function stackedPair(t) {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  freezeWithStack(h);
+  h.blockers[ID2] = [ID1];
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch && !['queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'].includes(stage(h, ID2)) ? 'running' : 'green');
+  h.sends = [];
+  h.policy['pr-send'] = (a) => {
+    h.sends.push({ ticket: a.tickets[0], command: a.meta.command, upstream: stage(h, ID1) });
+    h.mergePr(a.tickets[0]);
+    return 'sent';
+  };
+  return h;
+}
+
+test('#199: a stack merges from the bottom up with gh stack merge; the rebase that keeps the patch keeps the review', (t) => {
+  const h = stackedPair(t);
+  const [ID1, ID2] = h.ids;
+  for (let i = 0; i < 10 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'delivered');
+  assert.equal(s.tickets[ID2].stage, 'delivered');
+  // bottom first: #1's merge is sent while #2 waits in queued; #2's after #1 is merged; both with gh stack merge
+  assert.deepEqual(h.sends.map((x) => x.ticket), [ID1, ID2]);
+  assert.equal(h.sends[0].command, `gh stack merge ${s.tickets[ID1].pr} --yes --squash`, 'a PR with a stacked PR on it merges with gh stack merge');
+  assert.equal(h.sends[1].command, `gh stack merge ${s.tickets[ID2].pr} --yes --squash`);
+  assert.equal(h.sends[1].upstream, 'delivered', "#2's merge goes out once #1 is merged");
+  // #2's sync (the rebase) came after #1's merge, and its own patch did not change: one review, no recheck
+  assert.ok(h.syncs >= 1, 'the stacked ticket was synced');
+  assert.equal(s.tickets[ID2].reviews.length, 1, 'the review is kept across the rebase');
+  const patches = distinct(h.log).filter((a) => a.step === 'patch-id' && a.tickets[0] === ID2);
+  assert.equal(patches.length, 2, 'patch-id at the passed review and after the sync');
+  const [p1, p2] = patches.map((a) => JSON.parse(readFileSync(a.stdout, 'utf8')));
+  assert.equal(p1.from, s.tickets[ID1].branch, 'at the review: against the upstream branch');
+  assert.equal(p2.from, 'origin/main', 'after the upstream merged: against the base');
+  assert.ok(p1.patchId && p1.patchId === p2.patchId);
+  assert.ok(git(h.repo, 'merge-base', '--is-ancestor', s.tickets[ID1].merges[0].sha, s.tickets[ID2].merges[0].sha) === '', '#2 merged on top of #1');
+  // every merged ticket of the stack gets the close check (#196)
+  for (const id of [ID1, ID2]) assert.ok(h.log.some((a) => a.id === `issue-state:${id}`), `${id}'s issue is checked`);
+});
+
+test('#199: a rebase that changes the stacked ticket\'s own patch sends it to a recheck before CI, with the tier of its initial review', (t) => {
+  const h = stackedPair(t);
+  const [, ID2] = h.ids;
+  h.stackSync = (cwd) => {
+    git(cwd, 'fetch', '-q', 'origin');
+    git(cwd, 'rebase', '-q', 'origin/main');
+    if ((h.resolved = (h.resolved ?? 0) + 1) > 1) return ''; // the first sync changes the patch; a later one nothing
+    write(join(cwd, 'b.js'), 'changed while resolving the rebase\n');
+    git(cwd, 'commit', '-q', '-am', 'resolve');
+    return '';
+  };
+  for (let i = 0; i < 12 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends');
+  const s = h.state();
+  assert.equal(s.tickets[ID2].stage, 'delivered');
+  assert.equal(s.tickets[ID2].reviews.length, 2, 'the changed patch costs a recheck');
+  assert.equal(s.tickets[ID2].reviews[1].mode, 'recheck');
+  const back = s.tickets[ID2].history.findIndex((x) => x.from === 'integrating' && x.to === 'in-review');
+  assert.ok(back > 0, 'integrating → in-review');
+  const tiers = distinct(h.log).filter((a) => a.step === 'tier' && a.tickets[0] === ID2);
+  assert.equal(tiers.length, 1, 'the recheck keeps the tier of the initial review');
+});

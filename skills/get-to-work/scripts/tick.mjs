@@ -87,7 +87,14 @@
 //                    from the upstream branch, its PR by gh stack submit — when freeze.json's gh-stack check passed
 //                    and no other live ticket is stacked on that upstream; any other waits at waiting-upstream
 //                    (waitingOn) until its upstreams are merged, then starts from the new base. gh stack missing
-//                    brings one `gh-stack-missing` judge (the install on the human-work list)
+//                    brings one `gh-stack-missing` judge (the install on the human-work list).
+//                    A stack merges from the bottom up (#199): a stacked ticket walks the merge path once the ticket
+//                    below it has merged (its fixed point is then origin/<base>), its push phase (gh stack sync) only
+//                    while no agent is at work in its stack, and a PR in a stack merges with `gh stack merge <PR>
+//                    --yes --squash`. Review freshness: the stacked ticket's own patch-id (integrate.mjs patch-id) is
+//                    taken when its review passes and again after the sync; the same id keeps the review, any other
+//                    is a recheck (integrating → in-review, the initial review's tier) — as is a base sync whose
+//                    conflict a merge agent resolved
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -1512,7 +1519,8 @@ function unfixed(c, id, t, what) {
 }
 
 /** The review a ticket in in-review is due: a recheck when it came back from a fix round, else the initial one. */
-const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial');
+// #199: a review entered from integrating (the base sync changed the ticket's own change) is a recheck too
+const reviewMode = (t) => (['fixing', 'integrating'].includes(t.history[lastEntry(t, 'in-review')]?.from) ? 'recheck' : 'initial');
 
 /**
  * The fixed point of a ticket's review (#191, #195): the line's integration branch (the base branch under
@@ -1521,7 +1529,15 @@ const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixin
  * yet — ticket-init refuses that order, so it does not come up in a run tick drove).
  */
 const fixedPointOf = (c, t) =>
-  c.profile.integrate === 'ticket-pr' ? ((t.stackParent ?? null) !== null && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}` : c.target(t.line);
+  c.profile.integrate === 'ticket-pr'
+    ? // #199: once the upstream is merged the ticket is the stack's bottom, and its fixed point is the base again
+      ((t.stackParent ?? null) !== null && !upstreamMerged(c, t) && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}`
+    : c.target(t.line);
+/** #199: whether a stacked ticket's upstream is merged (delivered with its merge recorded). */
+const upstreamMerged = (c, t) => {
+  const u = c.state.tickets[t.stackParent ?? ''];
+  return !!u && u.stage === 'delivered' && u.merges.length > 0;
+};
 
 function stepInReview(c, id, t) {
   const k = t.history.filter((h) => h.to === 'in-review').length;
@@ -1533,7 +1549,12 @@ function stepInReview(c, id, t) {
   // #143: the review host is in flight (it went to the background): its report, or the deadline scan, comes first
   if (!cr && t.assignment?.deadline && t.assignment.agentId) return;
   if (cr) {
-    if (cr.verdict === 'pass') return stageTo(c, id, t, 'queued');
+    if (cr.verdict === 'pass') {
+      // #199: a stacked ticket's own patch-id at this passed review, against its fixed point now (the upstream
+      // branch): after its stack is synced (rebased) it is compared, and the same id keeps this review
+      const p = stackPatch(c, id, t, `r${t.reviews.length}`);
+      return stageTo(c, id, t, 'queued', { after: [p?.pending ?? null] });
+    }
     if (cr.verdict === 'fix') {
       if (t.fixRounds < c.profile.fixRounds) return stageTo(c, id, t, 'fixing');
       return unfixed(c, id, t, `the ${cr.mode} review still says fix and the ${c.profile.fixRounds} fix rounds are used`);
@@ -1612,7 +1633,8 @@ function stepInReview(c, id, t) {
  */
 function reviewTier(c, id, t) {
   const entries = t.history.filter((h) => h.to === 'in-review');
-  const k = entries.findLastIndex((h) => h.from !== 'fixing') + 1 || entries.length;
+  // #199: a recheck after the base sync (from integrating) keeps the tier of the initial review, as a fix's does
+  const k = entries.findLastIndex((h) => h.from !== 'fixing' && h.from !== 'integrating') + 1 || entries.length;
   const file = c.tick('tier', `${keyOf(id)}-${k}.json`);
   const argv = ['node', TIER_SCRIPT, 'judge', '--base', fixedPointOf(c, t), '--head', t.branch];
   if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
@@ -1954,8 +1976,12 @@ function stepPrMerge(c) {
       busy = true;
     }
     if (busy || paused) continue;
+    // #199: a stacked ticket walks the merge path once the ticket below it has merged (it is then the stack's bottom:
+    // stacks merge from the bottom up, each with gh stack merge), and its push phase — gh stack sync, which rebases
+    // the stack — only while no agent is at work anywhere in its stack (gh stack stops at a dirty or busy worktree)
+    const stackIdle = (id) => stackOf(c, id).every((k) => !(c.state.tickets[k].assignment?.deadline && c.state.tickets[k].assignment.agentId));
     const queued = tickets
-      .filter(([, t]) => t.stage === 'queued' && (t.stackParent ?? null) === null && (t.pr ?? null) !== null && t.branch)
+      .filter(([id, t]) => t.stage === 'queued' && ((t.stackParent ?? null) === null || (upstreamMerged(c, t) && stackIdle(id))) && (t.pr ?? null) !== null && t.branch)
       .sort((x, y) => ((x[1].history[lastEntry(x[1], 'queued')]?.at ?? '') < (y[1].history[lastEntry(y[1], 'queued')]?.at ?? '') ? -1 : 1));
     if (queued.length) prPushPhase(c, queued[0][0], queued[0][1]); // the push phase moves queued → integrating itself
   }
@@ -2262,7 +2288,21 @@ function prPushPhase(c, id, t) {
   const out = c.tick('pr', `${keyOf(id)}-sync-${n}.json`);
   if (c.emit(exec(pid, 'pr-merge', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, okExit: [0, 4, 5], tickets: [id], line: t.line })) !== null) return;
   const done = c.book.done[pid];
-  if (done.exit === 0) return void stageTo(c, id, t, 'awaiting-ci');
+  if (done.exit === 0) {
+    // #199: a resolved conflict of the base sync changed the ticket's own change: a recheck (the initial review's
+    // tier) before the PR head's CI, as for a fix
+    if (n > 1 && c.book.done[`pr-sync:${id}:${n - 1}`]?.exit === 4 && t.reviews.length) return void stageTo(c, id, t, 'in-review');
+    // #199: a stacked ticket's sync rebased it (new SHAs): its own patch-id against its fixed point now is compared
+    // with the one taken when its review passed — the same keeps the review, any other (or none on record) rechecks
+    if ((t.stackParent ?? null) !== null && t.reviews.length) {
+      const now = stackPatch(c, id, t, `s${n}`);
+      if (now.pending) return;
+      const before = readJsonFile(c.deps, c.tick('pr', `${keyOf(id)}-patch-r${t.reviews.length}.json`));
+      const after = readJsonFile(c.deps, now.file);
+      if (!before?.patchId || before.patchId !== after?.patchId) return void stageTo(c, id, t, 'in-review');
+    }
+    return void stageTo(c, id, t, 'awaiting-ci');
+  }
   if (done.exit === 4) {
     // the conflict of merging origin/<base> into the ticket branch; the rerun after the resolution is a new attempt
     flag.prSync = n + 1;
@@ -2284,6 +2324,40 @@ function prPushPhase(c, id, t) {
       { tickets: [id], line: t.line, meta: { of: pid } },
     ),
   );
+}
+
+/**
+ * #199: the patch-id exec of a stacked ticket's own change against its fixed point now (integrate.mjs patch-id),
+ * under `tag`: { pending: its id while it runs, else null; file }, or null for a ticket that is not stacked.
+ */
+function stackPatch(c, id, t, tag) {
+  if (c.profile.integrate !== 'ticket-pr' || (t.stackParent ?? null) === null || !t.branch) return null;
+  const file = c.tick('pr', `${keyOf(id)}-patch-${tag}.json`);
+  const pending = c.emit(
+    exec(`patch:${id}:${tag}`, 'patch-id', ['node', js('integrate.mjs'), 'patch-id', c.path, id, '--from', fixedPointOf(c, t), '--repo', c.cfg.root], {
+      stdout: file,
+      tickets: [id],
+      line: t.line,
+    }),
+  );
+  return { pending, file };
+}
+
+/** #199: the tickets of `id`'s stack, below and above it (by stackParent), `id` left out. */
+function stackOf(c, id) {
+  const out = new Set();
+  for (let p = c.state.tickets[id]?.stackParent ?? null; p !== null && !out.has(p); p = c.state.tickets[p]?.stackParent ?? null) out.add(p);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [k, t] of Object.entries(c.state.tickets)) {
+      if (k === id || out.has(k) || (t.stackParent ?? null) === null) continue;
+      if (t.stackParent === id || out.has(t.stackParent)) {
+        out.add(k);
+        grew = true;
+      }
+    }
+  }
+  return [...out];
 }
 
 /** A ticket awaiting CI on its PR head: one ci.mjs read per wake-up; green goes on to the ready phase. */

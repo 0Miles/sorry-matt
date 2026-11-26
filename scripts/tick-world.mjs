@@ -221,14 +221,21 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     if (args[0] === 'stack') {
       const branch = cwd ? git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD') : null;
       if (args[1] === 'init' || args[1] === 'add') return '';
-      if (args[1] === 'push' || args[1] === 'submit') git(cwd, 'push', '-q', '-u', 'origin', branch);
+      if (args[1] === 'push' || args[1] === 'submit') git(cwd, 'push', '-q', '-f', '-u', 'origin', branch); // gh stack pushes with --force-with-lease
       if (args[1] === 'submit' && !h.prs[branch]) {
         const st = h.state();
         const t = Object.values(st.tickets).find((x) => x.branch === branch);
         const base = t?.stackParent ? st.tickets[t.stackParent].branch : 'main';
         h.prs[branch] = { number: h.prNext++, base, title: null, body: null, draft: true, stacked: true };
       }
-      if (args[1] === 'sync') return h.stackSync ? h.stackSync(cwd, branch) : '';
+      if (args[1] === 'sync') {
+        // #199: the merged layers below are dropped and the branch rebased onto origin's main (h.stackSync to change it)
+        if (h.stackSync) return h.stackSync(cwd, branch);
+        git(cwd, 'fetch', '-q', 'origin');
+        git(cwd, 'rebase', '-q', 'origin/main');
+        h.syncs = (h.syncs ?? 0) + 1;
+        return '';
+      }
       return '';
     }
     if (args[0] === 'pr' && args[1] === 'list') {
