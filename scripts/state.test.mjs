@@ -442,6 +442,137 @@ test('integrate direct, ci skip, simplify false: delivery still needs its merge 
   r.ok('stage', 'delivered', '#1');
 });
 
+// ---- #188: the run's tracker, integrate ticket-pr, a ticket's own PR ---------------------------------------------
+
+/** A fresh run whose init carries `--tracker <tracker>` (none: no flag). */
+function tracked(t, tracker) {
+  const r = run(t, { init: false });
+  r.ok('init', '--run', 'run-1', ...(tracker ? ['--tracker', tracker] : []));
+  return r;
+}
+
+test('#188: init records the tracker; without --tracker, and in an older file without the key, it is unknown', (t) => {
+  assert.equal(tracked(t, 'github').state().tracker, 'github');
+  const local = tracked(t, 'local');
+  assert.equal(local.state().tracker, 'local');
+  assert.equal(local.ok('resume').tracker, 'local');
+  const none = tracked(t);
+  assert.equal(none.state().tracker, null);
+  assert.equal(none.ok('resume').tracker, null);
+  assert.equal(run(t, { init: false }).cmd('init', '--run', 'run-1', '--tracker', 'gitlab').code, 2);
+
+  const old = run(t);
+  const s = old.state();
+  delete s.tracker;
+  writeFileSync(old.path, JSON.stringify(s));
+  assert.equal(old.ok('show').tracker, null);
+  assert.equal(old.ok('resume').tracker, null);
+  old.ok('add', '#1', '--line', LINE);
+  assert.equal('tracker' in old.state(), false, 'a write keeps an older file as it was');
+});
+
+test('#188: integrate ticket-pr is written on a github run only; local and unknown are refused (3) pointing to aggregate-pr', (t) => {
+  const gh = tracked(t, 'github');
+  assert.equal(gh.ok('profile', '--integrate', 'ticket-pr').profile.integrate, 'ticket-pr');
+  assert.equal(gh.ok('resume').profile.integrate, 'ticket-pr');
+
+  tracked(t, 'local').refused(/ticket-pr.*tracker is local.*aggregate-pr/, 'profile', '--integrate', 'ticket-pr');
+  const none = tracked(t);
+  none.refused(/ticket-pr.*tracker is unknown.*aggregate-pr/, 'profile', '--integrate', 'ticket-pr', '--review', 'minimal');
+  assert.equal(none.state().profile, null);
+  const old = run(t);
+  const s = old.state();
+  delete s.tracker;
+  writeFileSync(old.path, JSON.stringify(s));
+  old.refused(/tracker is unknown.*aggregate-pr/, 'profile', '--integrate', 'ticket-pr');
+
+  // the default stays aggregate-pr whichever the tracker
+  for (const tracker of ['github', 'local']) {
+    const r = tracked(t, tracker);
+    assert.equal(r.ok('resume').profile.integrate, 'aggregate-pr');
+    assert.equal(r.ok('profile', '--review', 'minimal').profile.integrate, 'aggregate-pr');
+  }
+  assert.equal(tracked(t, 'local').ok('profile', '--integrate', 'direct').profile.integrate, 'direct');
+});
+
+test('#188: import takes the tracker from the seed and judges a ticket-pr profile by it', (t) => {
+  const seed = (r, body) => r.file('seed.json', { run: 'run-1', ...body });
+  const gh = run(t, { init: false });
+  gh.ok('import', '--from', seed(gh, { tracker: 'github', profile: { integrate: 'ticket-pr' } }));
+  assert.deepEqual([gh.state().tracker, gh.state().profile.integrate], ['github', 'ticket-pr']);
+
+  for (const [body, re] of [
+    [{ tracker: 'local', profile: { integrate: 'ticket-pr' } }, /seed: .*ticket-pr.*tracker is local.*aggregate-pr/],
+    [{ profile: { integrate: 'ticket-pr' } }, /seed: .*ticket-pr.*tracker is unknown.*aggregate-pr/],
+  ]) {
+    const r = run(t, { init: false });
+    const out = r.cmd('import', '--from', seed(r, body));
+    assert.equal(out.code, 3, out.err);
+    assert.match(out.err, re);
+    assert.equal(existsSync(r.path), false);
+  }
+  const bad = run(t, { init: false });
+  assert.equal(bad.cmd('import', '--from', seed(bad, { tracker: 'gitlab' })).code, 2);
+  assert.equal(existsSync(bad.path), false);
+
+  const plain = run(t, { init: false });
+  plain.ok('import', '--from', seed(plain, { tracker: 'local' }));
+  assert.deepEqual([plain.state().tracker, plain.ok('resume').profile.integrate], ['local', 'aggregate-pr']);
+  const none = run(t, { init: false });
+  none.ok('import', '--from', seed(none, {}));
+  assert.equal(none.state().tracker, null);
+});
+
+test('#188: set records a ticket PR, its stack parent and the tickets it waits on; show and resume list them', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '#3', '--line', LINE);
+  assert.deepEqual(['pr', 'stackParent', 'waitingOn'].map((k) => r.state().tickets['#1'][k]), [null, null, []]);
+  r.ok('set', '#2', '--pr', '42', '--stack-parent', '#1', '--waiting-on', '#1,#3');
+  const t2 = r.state().tickets['#2'];
+  assert.deepEqual([t2.pr, t2.stackParent, t2.waitingOn], [42, '#1', ['#1', '#3']]);
+  const open = Object.fromEntries(r.ok('resume').open.map((o) => [o.id, [o.pr, o.stackParent, o.waitingOn]]));
+  assert.deepEqual(open, { '#1': [null, null, []], '#2': [42, '#1', ['#1', '#3']], '#3': [null, null, []] });
+  const shown = r.ok('show').tickets['#2'];
+  assert.deepEqual([shown.pr, shown.stackParent, shown.waitingOn], [42, '#1', ['#1', '#3']]);
+  r.ok('set', '#2', '--stack-parent', 'none', '--waiting-on', 'none');
+  const cleared = r.state().tickets['#2'];
+  assert.deepEqual([cleared.pr, cleared.stackParent, cleared.waitingOn], [42, null, []]);
+
+  // each must be another ticket of this run: refused (3), the file unchanged
+  r.refused(/#2: stackParent names #9, which is not a ticket of this run/, 'set', '#2', '--stack-parent', '#9');
+  r.refused(/#2: stackParent names the ticket itself/, 'set', '#2', '--stack-parent', '#2');
+  r.refused(/#2: waitingOn names the ticket itself/, 'set', '#2', '--waiting-on', '#1,#2');
+  r.refused(/#2: waitingOn names #9, which is not a ticket of this run/, 'set', '#2', '--waiting-on', '#1,#9', '--pr', '7');
+  for (const argv of [['--pr', '0'], ['--pr', 'abc'], ['--pr', '4.5'], ['--waiting-on', '#1,#1'], ['--waiting-on', ','], ['--stack-parent', 'a b']]) {
+    const out = r.cmd('set', '#2', ...argv);
+    assert.equal(out.code, 2, `${argv.join(' ')}: ${out.err}`);
+  }
+  assert.equal(r.state().tickets['#2'].pr, 42);
+});
+
+test('#188: an older file without the PR fields reads them as null, null and []; bad values are not a state file', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '--line', LINE);
+  const s = r.state();
+  for (const k of ['pr', 'stackParent', 'waitingOn']) delete s.tickets['#1'][k];
+  writeFileSync(r.path, JSON.stringify(s));
+  const shown = r.ok('show').tickets['#1'];
+  assert.deepEqual([shown.pr, shown.stackParent, shown.waitingOn], [null, null, []]);
+  const open = r.ok('resume').open.find((o) => o.id === '#1');
+  assert.deepEqual([open.pr, open.stackParent, open.waitingOn], [null, null, []]);
+  r.ok('set', '#1', '--pr', '5');
+  assert.equal(r.state().tickets['#1'].pr, 5);
+
+  for (const [k, v] of [['pr', 'x'], ['pr', 0], ['stackParent', '#9'], ['stackParent', '#1'], ['waitingOn', '#2'], ['waitingOn', ['#2', '#2']], ['waitingOn', ['#7']]]) {
+    const bad = structuredClone(s);
+    bad.tickets['#1'][k] = v;
+    writeFileSync(r.path, JSON.stringify(bad));
+    const out = r.cmd('show');
+    assert.equal(out.code, 1, `${k} ${JSON.stringify(v)}: ${out.err}`);
+    assert.match(out.err, /tickets\.#1/);
+  }
+});
+
 // ---- assignments and resuming ------------------------------------------------------------------------------------
 
 test('#156: review records the finding counts and the tier reasons; without them both are null', (t) => {
