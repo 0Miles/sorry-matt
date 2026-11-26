@@ -14,9 +14,9 @@ const SHA = 'a'.repeat(40);
 // --- verdict ---------------------------------------------------------------------------------------------------
 
 let nextId = 100;
-const ghRun = (status, conclusion, workflow = 'check') => ({ databaseId: (nextId += 1), workflowName: workflow, status, conclusion });
-const done = (conclusion, workflow) => ghRun('completed', conclusion, workflow);
-const inProgress = () => ghRun('in_progress', '');
+const ghRun = (status, conclusion, workflow = 'check', event = 'push') => ({ databaseId: (nextId += 1), workflowName: workflow, event, status, conclusion });
+const done = (conclusion, workflow, event) => ghRun('completed', conclusion, workflow, event);
+const inProgress = (event) => ghRun('in_progress', '', 'check', event);
 
 const ghFailure = (stderr) => () => {
   const e = new Error('Command failed: gh run list');
@@ -49,14 +49,39 @@ test('verdict: the output carries the format, the branch, the SHA and every run'
     reason: null,
     error: null,
     runs: [
-      { id: rows[0].databaseId, workflow: 'check', status: 'completed', conclusion: 'success' },
-      { id: rows[1].databaseId, workflow: 'deploy', status: 'completed', conclusion: 'skipped' },
+      { id: rows[0].databaseId, workflow: 'check', event: 'push', status: 'completed', conclusion: 'success' },
+      { id: rows[1].databaseId, workflow: 'deploy', event: 'push', status: 'completed', conclusion: 'skipped' },
     ],
     rerun: [],
   });
   assert.deepEqual(r.calls, [
-    ['run', 'list', '--branch', 'line', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion'],
   ]);
+});
+
+// A ticket PR's head SHA has a `push` run and a `pull_request` run; `gh run list --branch` lists both (checked
+// live on this repo, see the ticket's status record), so one query reads them and they are judged together.
+test('verdict: push and pull_request runs of a ticket branch SHA are judged together, each run with its event', () => {
+  const pushGreen = done('success', 'check', 'push');
+  const prRed = done('failure', 'check', 'pull_request');
+  const r = verdictOf([prRed, pushGreen], ['ticket/190', SHA]);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.json.branch, 'ticket/190');
+  assert.equal(r.json.verdict, 'red');
+  assert.deepEqual(r.json.runs.map((x) => [x.id, x.event]), [[prRed.databaseId, 'pull_request'], [pushGreen.databaseId, 'push']]);
+  assert.equal(r.calls.length, 1, 'one query reads both events');
+  assert.deepEqual(r.calls[0].slice(0, 4), ['run', 'list', '--branch', 'ticket/190']);
+  assert.ok(!r.calls[0].includes('--event'), 'the query does not filter on the event');
+
+  assert.equal(verdictOf([done('success', 'check', 'push'), inProgress('pull_request')]).json.verdict, 'running');
+  assert.equal(verdictOf([done('cancelled', 'check', 'pull_request'), done('success', 'check', 'push')]).json.verdict, 'cancelled');
+  assert.equal(verdictOf([done('success', 'check', 'pull_request'), done('success', 'check', 'push')]).json.verdict, 'green');
+  assert.equal(verdictOf([done('skipped', 'check', 'push'), done('success', 'check', 'pull_request')]).json.verdict, 'green');
+});
+
+test('verdict: a run gh lists without an event carries event null', () => {
+  const { event: _, ...row } = done('success');
+  assert.equal(verdictOf([row]).json.runs[0].event, null);
 });
 
 test('verdict: --repo is passed on to gh', () => {
@@ -159,7 +184,7 @@ test('base: reads the latest SHA of the base branch, then judges its runs like v
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.calls, [
     ['api', 'repos/acme/app/commits/main', '--jq', '.sha'],
-    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/app'],
+    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion', '--repo', 'acme/app'],
   ]);
   assert.deepEqual([r.json.command, r.json.branch, r.json.sha, r.json.verdict, r.json.failed], ['base', 'main', SHA, 'red', [rows[0].databaseId]]);
 });

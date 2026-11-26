@@ -262,7 +262,7 @@ test('base-ci: a green base latest SHA passes without a warning, read from the f
   assert.equal(r.json.preflight.ok, true);
   assert.deepEqual(calls.find((a) => a[0] === 'api'), ['api', 'repos/acme/widgets/commits/main', '--jq', '.sha']);
   assert.deepEqual(calls.find((a) => a[0] === 'run'), [
-    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/widgets',
+    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion', '--repo', 'acme/widgets',
   ]);
 });
 
