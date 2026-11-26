@@ -973,3 +973,30 @@ test('#199: a rebase that changes the stacked ticket\'s own patch sends it to a 
   const tiers = distinct(h.log).filter((a) => a.step === 'tier' && a.tickets[0] === ID2);
   assert.equal(tiers.length, 1, 'the recheck keeps the tier of the initial review');
 });
+
+// ---- one record call for a batch's results (the host's calls each read its whole context again) ---------------------
+
+test('record takes several results joined by +: a whole run recorded one batch per call ends as the one-by-one run does', (t) => {
+  const one = world(t);
+  one.untilDone();
+  const many = world(t);
+  many.batchRecords = true;
+  many.untilDone();
+  assert.equal(many.wakes.at(-1).at(-1).then, 'done');
+  assert.ok(Math.max(...many.batchedRecords) > 1, 'some batch had several results recorded in one call');
+  const ends = (h) => Object.fromEntries(Object.entries(h.state().tickets).map(([id, x]) => [id, [x.stage, x.merges.length, x.reviews.length]]));
+  assert.deepEqual(ends(many), ends(one));
+  assert.ok(many.batchedRecords.reduce((a, b) => a + b, 0) > many.batchedRecords.length, 'fewer record calls than results');
+});
+
+test('record with several results stops at the first refusal; the ones before it are recorded and failed names it', (t) => {
+  const h = world(t);
+  const out = JSON.parse(h.tick('next', h.path).out);
+  const [first] = out.actions.filter((a) => a.kind === 'exec' && a.batch === 1);
+  assert.ok(first, 'an exec to record');
+  const r = h.tick('record', h.path, first.id, '--exit', '0', '+', 'no-such-action', '--outcome', 'x');
+  assert.notEqual(r.code, 0);
+  const o = JSON.parse(r.out);
+  assert.deepEqual([o.records.length, o.failed], [1, { index: 1, id: 'no-such-action' }]);
+  assert.ok(h.state().tick.done[first.id], 'the first is recorded');
+});

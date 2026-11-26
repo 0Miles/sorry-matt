@@ -12,6 +12,11 @@ branch, the integration branch, the full ticket text, the expansion block, the a
 project command contract and the send-back record, each `none` when there is none. This file holds every other rule you follow, and none of
 them points at a file or section you cannot read.
 
+Once your ticket is done, the host may message you the next ticket — one on the same chain, depending on the ticket you
+just finished — with a new spawn file. That is a new assignment: start again from section 1 with the new spawn file,
+working in its worktree and branch; leave the previous ticket's worktree alone. What you learned of the previous
+ticket's code carries over; its spawn file, acceptance criteria and report no longer apply.
+
 ## 1. Start
 
 1. Read the ticket and state its title first. Use the worktree's absolute path in every command; commit only to

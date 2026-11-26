@@ -8,7 +8,7 @@ import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { main as tick, defaultDeps, bashExecutor, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
-import { LINE, git, write, Crash, BASH, NO_BASH, world, ids, stage, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
+import { LINE, git, write, Crash, BASH, NO_BASH, world, ids, distinct, stage, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
 // ---- #129: tick.mjs run ----------------------------------------------------------------------------------------------
 
 /** One `run` output, which must have exited 0 with nothing on stderr. */
@@ -552,4 +552,38 @@ test("#146: run leaves to the host only the execs tick marks host: a push of a l
   // no exec but a push to a protected branch is marked host: everything else run runs itself
   const marked = h.log.concat(outs.flatMap((o) => o.actions)).filter((a) => a.kind === 'exec' && a.host);
   assert.deepEqual(marked, [], 'nothing marked host on a line that only pushes itself');
+});
+
+// ---- a chain's next ticket goes to the idle agent of its upstream (batch-2 run: implementers were 72% of tokens) ----
+
+test('the next ticket of a chain is sent to the idle implementation agent of its one upstream, with a spawn file of its own', (t) => {
+  const h = world(t);
+  const [ID1, ID2] = h.ids;
+  h.blockers[ID2] = [ID1];
+  h.untilDone();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const once = distinct(h.log);
+  const implementSpawns = once.filter((a) => a.kind === 'spawn' && a.spawn?.description?.startsWith('implement'));
+  assert.deepEqual(implementSpawns.map((a) => a.tickets[0]), [ID1], 'one implementation agent is spawned, for the first ticket');
+  const send = once.find((a) => a.step === 'send' && a.tickets[0] === ID2);
+  assert.ok(send, '#2 goes to the agent by SendMessage');
+  const agent = Object.keys(h.agentOf).find((k) => h.agentOf[k].role === 'implement' && h.agentOf[k].tickets.includes(ID1)); // #1's spawn
+  assert.ok(send.do.startsWith(`SendMessage ${agent} (it implemented ${ID1}, upstream of ${ID2}`), send.do);
+  const brief = /Read (\S+\.md) in full and follow it as a new assignment/.exec(send.do)?.[1];
+  assert.ok(brief && readFileSync(brief, 'utf8').length > 0, 'the message names a spawn file of its own');
+  assert.ok(h.log.findIndex((a) => a.step === 'brief' && a.tickets[0] === ID2) < h.log.findIndex((a) => a.id === send.id), 'the spawn file is written first');
+  assert.deepEqual(h.state().tick.agents[agent].tickets.sort(), [ID1, ID2].sort(), 'the agent now holds both');
+  assert.equal(h.state().tickets[ID2].stage, 'delivered');
+});
+
+test('a chain agent is not reused while its upstream has not passed review (it may still need its agent for a fix round)', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  write(join(h.W, 'freeze.json'), `${JSON.stringify({ preflight: { ok: true, checks: [{ name: 'gh-stack', ok: true, stack: true }] } })}\n`);
+  h.blockers[ID2] = [ID1];
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? 'running' : 'green');
+  h.wake(); // #2 is stacked while #1 is still implementing: #1 may still need its agent, so #2 gets its own
+  const once = distinct(h.log);
+  assert.deepEqual(once.filter((a) => a.kind === 'spawn' && a.spawn?.description?.startsWith('implement')).map((a) => a.tickets[0]).sort(), [ID1, ID2].sort());
+  assert.ok(!once.some((a) => a.step === 'send' && a.tickets[0] === ID2));
 });

@@ -15,6 +15,7 @@
 //                        [--worktrees <dir>] [--spec <identifier or path>]
 //   node tick.mjs next   <state> [--reported <agent id>]... [--now <UTC>]
 //   node tick.mjs run    <state> [--reported <agent id>]... [--now <UTC>]
+//   node tick.mjs record <state> <action id> [flags] + <action id> [flags]…   (several results in one call, in order)
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //                        [--observations <n>] [--pre-existing <n>]
@@ -366,6 +367,7 @@ export const LIMIT_DEFAULTS = Object.freeze({
   'timeout-expand': 15,
   'timeout-merge': 15,
   'timeout-review': 60,
+  'wake-check': 20, // the fallback wake-up's longest wait, minutes
 });
 // The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
 const BUDGET_LINE = /^\s*(?:[-*+]\s+)?(?:`\s*)?budget:\s*(?:`\s*)?([a-z][a-z-]*)\s+(\d+)\s*(?:`\s*)?$/;
@@ -787,10 +789,12 @@ const COLLECT = {
     reference: [doc('SKILL.md', 'section 2, Batched fix')],
   },
   'in-review': {
-    // #143: the review host went to the background; its report comes with its completion notice
-    outcomes: ['pass', 'fix', 'stuck'],
+    // #143: the review host went to the background; its report comes with its completion notice. Its turn can also end
+    // with no report (it was waiting on agents of its own that had reported already): incomplete, and tick sends it a
+    // message at once rather than waiting for the fallback wake-up (the batch-2 run lost 55 minutes so)
+    outcomes: ['pass', 'fix', 'stuck', 'incomplete'],
     what: (ids) =>
-      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck, with the counts of its \`counts:\` line, --observations <n> --pre-existing <n> (both, 0 when there are none) and, when the line has them, --candidates <n> --confirmed <n> --invalid <n> --blocking <n>.`,
+      `Take the review host agent's review report for ${ids.join(', ')} (its at most six lines, not the diff) and record its verdict: pass, fix (with --findings <the finding ids>) or stuck, with the counts of its \`counts:\` line, --observations <n> --pre-existing <n> (both, 0 when there are none) and, when the line has them, --candidates <n> --confirmed <n> --invalid <n> --blocking <n>. When its turn ended with no review report (it says it is waiting on its finders, architect or verifiers, or it stopped midway), record incomplete alone: it stays in flight and tick has you send it a message to go on.`,
     reference: [doc('REVIEWER.md', 'section 2, the review report'), doc('SKILL.md', 'section 2, Close-out checks and review')],
   },
   integrating: {
@@ -829,7 +833,9 @@ function stepReports(c) {
       const spec = COLLECT[t0.stage];
       c.reports.push({ agent, accepted: true, tickets: ids, why: 'current' });
       keep.push(agent);
-      const id = `collect:${agent}@${t0.assignment.assigned}`;
+      // a review host nudged after an incomplete report reports again: a new collect, not the spent one
+      const nudged = c.flag(ids[0]).nudge?.agent === agent ? c.flag(ids[0]).nudge.n : 0;
+      const id = `collect:${agent}@${t0.assignment.assigned}${nudged ? `:n${nudged}` : ''}`;
       if (!spec) {
         c.emit(
           judge(id, 'collect', `Take ${agent}'s report for ${ids.join(', ')} (stage ${t0.stage}) into the status record.`, ['logged'], [doc('SKILL.md', 'section 1 (the loop)')], {
@@ -850,7 +856,7 @@ function stepReports(c) {
           line: t0.line,
           meta: { agent, stage: t0.stage, mode: reviewMode(t0), kind: 'full', ...(tier ? { tier } : {}), ...(tier && tierReasons ? { tierReasons } : {}) },
         });
-        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]`;
+        a.record = `node ${q(SELF)} record ${q(c.path)} ${q(id)} --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] | --outcome incomplete`;
         c.emit(a);
         continue;
       }
@@ -1068,6 +1074,14 @@ function ciFixDispatch(c, line, target, red) {
   });
 }
 
+/** A fallback wake-up no later than `minutes` from now (ScheduleWakeup's 60 s floor kept); null stays null. */
+export function capFallback(fallback, minutes) {
+  if (!fallback || !Number.isInteger(minutes) || minutes <= 0) return fallback;
+  const cap = minutes * 60;
+  if (fallback.seconds <= cap) return fallback;
+  return { ...fallback, seconds: cap, scheduleWakeup: Math.max(60, Math.min(fallback.scheduleWakeup ?? cap, cap)), capped: true };
+}
+
 /** deadline.mjs scan over the named agents in flight; extensions are exec, stops are TIMEOUTS.md judges. */
 function stepTimeouts(c) {
   const { state, book } = c;
@@ -1123,7 +1137,10 @@ function stepTimeouts(c) {
   const r = deadlineMain(['scan', planPath, '--now', c.now], { read: c.deps.read, git: c.deps.git, clock: () => c.nowMs });
   if (r.code !== 0) throw new Error(`deadline.mjs scan failed: ${r.err.trim()}`);
   const scan = JSON.parse(r.out);
-  if (!pending) c.fallback = scan.fallback;
+  // The fallback wake-up waits until the earliest deadline, capped by `budget: wake-check` (minutes): an agent whose
+  // turn ended with no completion notice the host acts on is looked at within that, not at its stage time limit
+  // (timeout-review can be hours).
+  if (!pending) c.fallback = capFallback(scan.fallback, c.limits['wake-check']);
   for (const result of scan.agents) {
     const { x } = plan.find((p) => p.entry.id === result.id);
     if (x.stage === 'ci-fix') {
@@ -1196,7 +1213,30 @@ function implementerOf(c, id) {
   const entries = Object.entries(c.book.agents).filter(([, a]) => a.tickets.includes(id) && (a.role === 'implement' || a.role === 'fix'));
   entries.sort((x, y) => (x[1].at < y[1].at ? -1 : 1));
   const last = entries.at(-1);
-  return last && last.status !== 'stopped' ? last[0] : null;
+  // an agent at work on another ticket now (it took a downstream ticket of a chain) is not this ticket's to message
+  return last && last.status !== 'stopped' && !agentBusy(c, last[0], id) ? last[0] : null;
+}
+
+/** Whether `agent` holds an assignment in flight on a ticket other than `except`, or on a line. */
+const agentBusy = (c, agent, except = null) =>
+  Object.entries(c.state.tickets).some(([k, t]) => k !== except && t.assignment?.agentId === agent && t.assignment.deadline !== null) ||
+  Object.values(c.state.lines).some((L) => L.assignment?.agentId === agent && L.assignment.deadline !== null);
+
+/** The most tickets one implementation agent takes along a chain, its first included: its context grows with each. */
+const CHAIN_CAP = 3;
+
+/**
+ * The idle implementation agent of a ticket's one upstream, to take this ticket next with its context of the same
+ * code: the upstream passed its review (queued or later, so it will not need its agent for a fix round), and the agent
+ * has taken fewer than CHAIN_CAP tickets. null when there is none (a fresh agent is spawned).
+ */
+function chainAgent(c, upstream) {
+  const u = upstream ? c.state.tickets[upstream] : null;
+  if (!u || !['queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'].includes(u.stage)) return null;
+  const agent = implementerOf(c, upstream);
+  const a = agent ? c.book.agents[agent] : null;
+  if (!a || agentBusy(c, agent) || a.tickets.length >= CHAIN_CAP) return null;
+  return agent;
 }
 
 /**
@@ -1350,7 +1390,7 @@ function againstFile(c, id, t, tag) {
  * SendMessage to the agent that has the context, or the merge agent. `create` is set for a fresh dispatch from
  * candidate: the worktree and branch actions it waits for, and the stage move to implementing.
  */
-function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null, mergeOf = null }) {
+function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null, mergeOf = null, upstream = null }) {
   const n = (c.book.dispatches[id] ?? 0) + 1;
   const tag = `${keyOf(id)}-${n}`;
   const rec = c.tick('rec', `${tag}.json`);
@@ -1366,7 +1406,7 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
   );
   let r3 = null;
   if (create) r3 = c.emit(exec(`stage:${id}:implementing:h${hist(t)}`, 'stage', stateArgv(c, 'stage', 'implementing', id), { tickets: [id], line: t.line, after: [r2, ...(create.stageAfter ?? [])] }));
-  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}), ...(mergeOf ? { mergeOf } : {}) };
+  const pending = { mode, role, n, worktree, prevAgent, why, ...(upstream ? { upstream } : {}), branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}), ...(mergeOf ? { mergeOf } : {}) };
   c.flag(id).pending = pending;
   agentTail(c, id, t, pending, [r2, r3, ...before]);
 }
@@ -1375,6 +1415,7 @@ const WHY = {
   red: 'its targeted checks were red: fix them to green (close-out step 1)',
   fix: "the review's findings, verbatim (summary, evidence, fix) from the status record: close them all in this one round (close-out step 3)",
   'send-back': 'the send-back record and the rebuilt worktree: redo the ticket from the latest integration branch (SEND-BACK.md)',
+  chain: 'a new ticket, downstream of the one it implemented: its own spawn file, worktree and branch',
 };
 /** review: minimal leaves its findings in the reviewer's report file (the ticket's flag `report`), not in a review block. */
 const reportAt = (flag) => (flag.report ? `${flag.report} (the reviewer's report)` : null);
@@ -1392,6 +1433,22 @@ const whyText = (flag, why) =>
 /** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
 function agentTail(c, id, t, p, after) {
   const spawnRecord = (n) => `node ${q(SELF)} record ${q(c.path)} ${q(`spawn:${id}:${n}`)} --agent <agent id> [--type general-purpose]`;
+  if (p.mode === 'send' && p.why === 'chain') {
+    // a new ticket for the agent of its upstream: the same spawn file a fresh agent gets, by SendMessage
+    const brief = implementBrief(c, id, t, p, after);
+    if (!brief) return;
+    c.emit(
+      judge(
+        `send:${id}:${p.n}`,
+        'send',
+        `SendMessage ${p.prevAgent} (it implemented ${p.upstream}, upstream of ${id}, and keeps its context of that code): "Your ticket ${p.upstream} is done. A new ticket follows it: ${id}. Read ${resolve(brief.out)} in full and follow it as a new assignment — its own worktree ${p.worktree} and branch ${p.branch}; leave ${p.upstream}'s worktree as it is." sent: it has the work; gone: it no longer exists (a new agent is spawned instead).`,
+        ['sent', 'gone'],
+        [doc('SKILL.md', 'section 1 (the loop)')],
+        { tickets: [id], line: t.line, after: [brief.id, ...after] },
+      ),
+    );
+    return;
+  }
   if (p.mode === 'send') {
     c.emit(
       judge(
@@ -1423,13 +1480,32 @@ function agentTail(c, id, t, p, after) {
     return;
   }
   // spawn: the brief from brief.mjs, then the Agent call
+  const brief = implementBrief(c, id, t, p, after);
+  if (!brief) return;
+  const { id: b, out } = brief;
+  const a = {
+    id: `spawn:${id}:${p.n}`,
+    kind: 'spawn',
+    step: 'spawn',
+    tickets: [id],
+    line: t.line,
+    after: [b, ...after],
+    spawn: { subagent_type: AGENT_TYPES.implement, description: roleDescription(p.role, c.group(id)), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
+    reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
+    record: spawnRecord(p.n),
+  };
+  c.emit(a);
+}
+
+/** The implementation spawn file from brief.mjs: { id: its exec's id (null when done), out }, or null while waiting. */
+function implementBrief(c, id, t, p, after) {
   const body = faceFile(c, id, t, []);
-  if (body.waiting) return; // a bundle's face is written once each of its tickets is fetched (#205)
+  if (body.waiting) return null; // a bundle's face is written once each of its tickets is fetched (#205)
   const values = c.tick('brief', `${keyOf(id)}-${p.n}.values.json`);
   const out = c.tick('brief', `${keyOf(id)}-${p.n}.md`);
   let bodyPath = body.file;
   if (p.note) {
-    if (body.id) return; // the ticket text comes first; the note is added to it next time
+    if (body.id) return null; // the ticket text comes first; the note is added to it next time
     bodyPath = c.tick('body', `${keyOf(id)}-${p.n}.md`);
     c.write(bodyPath, `${c.deps.read(body.file).replace(/\s+$/, '')}\n\n${p.note}\n`);
   }
@@ -1452,18 +1528,7 @@ function agentTail(c, id, t, p, after) {
     )}\n`,
   );
   const b = c.emit(exec(`brief:${id}:${p.n}`, 'brief', ['node', js('brief.mjs'), 'implement', values], { stdout: c.tick('brief', `${keyOf(id)}-${p.n}.json`), tickets: [id], line: t.line, after: [body.id, ...after] }));
-  const a = {
-    id: `spawn:${id}:${p.n}`,
-    kind: 'spawn',
-    step: 'spawn',
-    tickets: [id],
-    line: t.line,
-    after: [b, ...after],
-    spawn: { subagent_type: AGENT_TYPES.implement, description: roleDescription(p.role, c.group(id)), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
-    reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
-    record: spawnRecord(p.n),
-  };
-  c.emit(a);
+  return { id: b, out };
 }
 
 /** The general-purpose spawn for a session without the agent type: brief.mjs's fallback of the spawn file `out`. */
@@ -1550,7 +1615,23 @@ function stepInReview(c, id, t) {
   const retrying = cr?.verdict === 'stuck' && flag.retryReviews === t.reviews.length;
   if (retrying) cr = null;
   // #143: the review host is in flight (it went to the background): its report, or the deadline scan, comes first
-  if (!cr && t.assignment?.deadline && t.assignment.agentId) return;
+  if (!cr && t.assignment?.deadline && t.assignment.agentId) {
+    const nudge = flag.nudge;
+    if (nudge && nudge.agent === t.assignment.agentId && !nudge.sent) {
+      // its turn ended with no report (incomplete): a message now, not the fallback wake-up
+      c.emit(
+        judge(
+          `nudge:${id}:${nudge.n}`,
+          'nudge',
+          `SendMessage ${nudge.agent} (the review host of ${id}, still in flight): "Your turn ended without the review report. Every agent you spawned has either reported or left its notes in your notes directory: read the notes files you are missing, finish the review, and return the review report. Do not end your turn to wait for an agent that has already reported." Record sent; gone when it no longer exists (the deadline scan then hands the review out again).`,
+          ['sent', 'gone'],
+          [doc('REVIEWER.md', 'section 1'), doc('TIMEOUTS.md', 'the review host')],
+          { tickets: [id], line: t.line, meta: { agent: nudge.agent } },
+        ),
+      );
+    }
+    return;
+  }
   if (cr) {
     if (cr.verdict === 'pass') {
       // #199: a stacked ticket's own patch-id at this passed review, against its fixed point now (the upstream
@@ -2868,10 +2949,16 @@ function dispatchSteps(c, d) {
       if (chain.length && (w.overlaps ?? []).every((x) => chain.includes(x.with))) starts.add(w.id);
     }
   }
+  // the ticket's one upstream in this run (its blockers' leads, done or not), whose agent may take it next
+  const upstreamOf = (id) => {
+    const ups = new Set();
+    for (const m of c.group(id)) for (const b of info.get(m)?.blockedBy ?? []) if (b.inSet && c.leadOf(known(b.id)) && c.leadOf(known(b.id)) !== id) ups.add(c.leadOf(known(b.id)));
+    return ups.size === 1 ? [...ups][0] : null;
+  };
   for (const { id, title } of ready.filter((x) => starts.has(x.id))) {
     const t = state.tickets[id];
     if (!t || t.stage !== 'candidate') continue;
-    createDispatch(c, id, t, title);
+    createDispatch(c, id, t, title, upstreamOf(id));
   }
 }
 
@@ -3081,20 +3168,24 @@ function frontier(c, r) {
   return { tickets: [...tickets.values()], frontier: [...new Set(parts.flatMap((p) => p.frontier))] };
 }
 
-function createDispatch(c, id, t, title) {
+function createDispatch(c, id, t, title, upstream = null) {
   const name = c.cfg.tracker === 'github' ? `${numOf(id).padStart(2, '0')}-${slugOf(String(title ?? 'ticket').toLowerCase()).slice(0, 40).replace(/-+$/, '') || 'ticket'}` : slugOf(basename(id).replace(/\.md$/i, ''));
   const branch = t.branch ?? `${c.state.run}/${name}`;
   const present = c.git.wtOf(branch);
   const worktree = present ?? join(c.cfg.worktrees, basename(branch));
   const w = present && t.branch === branch ? null : c.emit(OPERATIONS.createTicketBranch(c, { id, branch, worktree, tag: `h${hist(t)}` }));
   const prev = t.sendBacks ? implementerOf(c, id) : null;
+  // a ticket of a chain goes to the idle agent of its one upstream, which already holds that code in its context: a
+  // fresh agent would read it all again (the batch-2 run's implementers were 72% of its agents' tokens)
+  const chain = prev ? null : chainAgent(c, upstream);
   dispatchAgent(c, id, t, {
     role: 'implement',
     stage: 'implementing',
-    mode: prev ? 'send' : 'spawn',
+    mode: prev || chain ? 'send' : 'spawn',
     worktree,
-    prevAgent: prev,
-    why: 'send-back',
+    prevAgent: prev ?? chain,
+    why: prev ? 'send-back' : chain ? 'chain' : 'send-back',
+    ...(chain ? { upstream } : {}),
     create: { after: [w], stageAfter: [w], branch },
   });
 }
@@ -3766,6 +3857,14 @@ export function record(path, id, flags, now, deps) {
         break;
       }
       if (meta.stage === 'in-review') {
+        if (outcome === 'incomplete') {
+          // its turn ended with no report: it stays in flight; stepInReview has the host send it a message at once
+          reviewCounts(true, false);
+          const prev = flag(tickets[0]).nudge;
+          flag(tickets[0]).nudge = { agent: meta.agent, n: (prev?.agent === meta.agent ? prev.n : 0) + 1, sent: false, at: now };
+          book.inbox = book.inbox.filter((x) => x !== meta.agent);
+          break;
+        }
         // #143: the report of a review host that went to the background, with its counts as for the spawn (#142)
         reviewEnded(tickets[0], meta.agent, meta, outcome, reviewCounts(true, true));
         break;
@@ -3799,6 +3898,12 @@ export function record(path, id, flags, now, deps) {
     case 'ignore':
       book.inbox = book.inbox.filter((x) => `ignore:${x}` !== id);
       break;
+    case 'nudge': {
+      const n = flag(tickets[0]).nudge;
+      if (n) n.sent = true;
+      if (outcome === 'gone') takeAgent(meta.agent, 'stopped');
+      break;
+    }
     case 'spawn':
       if (!flags.agent) throw new UsageError(`${id} is a spawn: record it with --agent <agent id>`);
       spawned(tickets);
@@ -4230,6 +4335,30 @@ export function defaultDeps() {
   };
 }
 
+/** record with several results joined by `+` (see main): each group after the first takes the state file of the first. */
+function recordMany(argv, deps) {
+  const groups = [[]];
+  for (const a of argv.slice(1)) {
+    if (a === '+') groups.push([]);
+    else groups.at(-1).push(a);
+  }
+  const [first, ...more] = groups;
+  const state = first[0];
+  // one `--now` anywhere (a host appends it at the end) is every group's clock
+  const withNow = groups.find((g) => g.includes('--now'));
+  const now = withNow ? withNow[withNow.indexOf('--now') + 1] : null;
+  const records = [];
+  for (const [i, g] of [first, ...more.map((x) => [state, ...x])].entries()) {
+    const r = main(['record', ...g, ...(now && !g.includes('--now') ? ['--now', now] : [])], deps);
+    if (r.code !== 0) {
+      const out = { format: FORMAT, command: 'record', records, failed: { index: i, id: g[1] ?? null } };
+      return { code: r.code, out: `${JSON.stringify(out, null, 2)}\n`, err: r.err };
+    }
+    records.push(JSON.parse(r.out));
+  }
+  return { code: 0, out: `${JSON.stringify({ format: FORMAT, command: 'record', records }, null, 2)}\n`, err: '' };
+}
+
 const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
@@ -4239,6 +4368,10 @@ const SPECS = {
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.
 export function main(argv, deps = defaultDeps()) {
+  // `record <state> <id> [flags] + <id> [flags]…`: several results in one call, in order, each as its own record — the
+  // host records a batch with one command (every host call reads its whole context again). The first that fails stops
+  // the rest; the output lists what was recorded before it.
+  if (argv[0] === 'record' && argv.includes('+')) return recordMany(argv, deps);
   try {
     const command = argv[0];
     if (!(command in SPECS)) throw new UsageError('expected setup, next, run or record');

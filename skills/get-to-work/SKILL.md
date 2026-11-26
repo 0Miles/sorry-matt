@@ -155,7 +155,11 @@ Each wake-up:
      `--type general-purpose` to the record.
    - **judge**: something for you to decide. Read the `reference`, do what `do` says, and record one of `outcomes`.
    - **ask**: something only a human can rule on: section 3.
-3. Once each batch-1 action is recorded, run `run` again, until `then` is `end` or `done` (the run has finished). `end`'s last action closes the wake-up:
+3. Once each batch-1 action is recorded, run `run` again, until `then` is `end` or `done` (the run has finished).
+   Record one batch's results with **one** command: keep `node tick.mjs record <state>` of the first action's `record`
+   field, chain the others after it as ` + <action id> <flags>`, and join the next `run` with `&&` — one Bash call for
+   all of it (each host call reads its whole context again). When one of them is refused, none after it is recorded and
+   the output's `failed` names it; settle the refusal as its message says, then record again from that one. `end`'s last action closes the wake-up:
    the ledger's narrative fields brought up to date and, while agents are in flight, a **fallback wake-up** —
    `ScheduleWakeup`, else a background `sleep` through Bash with its task id in the record, else the same `/loop` in
    interval mode at the shortest stage time limit.

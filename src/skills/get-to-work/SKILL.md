@@ -122,7 +122,10 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
      值），不指定模型，`description` 不變，record 加 `--type general-purpose`。
    - **judge**：要你判斷的事。讀 `reference`，做 `do` 寫的事，以 `outcomes` 之一 record。
    - **ask**：只有人能裁的事，照第 3 節。
-3. batch 1 的動作逐一 record 完，就再跑 `run`，直到 `then` 是 `end` 或 `done`。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，
+3. batch 1 的動作都 record 完，就再跑 `run`，直到 `then` 是 `end` 或 `done`。同一批的結果用**一條**指令記：各動作
+   `record` 欄的指令只留第一個的 `node tick.mjs record <state>`，其餘接在後面以 ` + <動作 id> <旗標>` 串起，再以
+   `&&` 接下一次 `run`，一次 Bash 呼叫做完（主持人的每次呼叫都要把整段 context 再讀一次）。中間有一筆被拒時，它之後的都沒記，
+   輸出的 `failed` 指出是哪一筆；照拒絕的訊息處理後，從那一筆重記。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，
    還有在途 agent 就排 **fallback 喚醒** —— 有 `ScheduleWakeup` 就用它，否則以 Bash 在背景跑 `sleep`，task id
    記進 record；兩者都不能用時，以 interval 模式重新進入同一個 `/loop`，間隔取最短的階段時限。`done` 是 run
    已收官。
