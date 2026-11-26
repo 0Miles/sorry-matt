@@ -618,3 +618,28 @@ test('#196: ticket-pr — awaiting-ci holds its in-flight slot, awaiting-merge d
   if (stage(h, ID2) === 'candidate') h.wake();
   assert.equal(stage(h, ID2), 'implementing');
 });
+
+test('#196 F1: a red PR head goes to a fix round, and the re-queued ticket re-runs the push phase and delivers', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  let red = true;
+  h.ci = () => (red ? 'red' : 'green');
+  h.policy['pr-red'] = () => {
+    red = false; // the fix round turns CI green from here on
+    return 'fix';
+  };
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].fixRounds, 1, 'the red PR head cost one fix round');
+  assert.deepEqual(
+    s.tickets[ID1].history.map((x) => x.to).slice(-8),
+    ['awaiting-ci', 'fixing', 'in-review', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'],
+    'awaiting-ci → fixing → the recheck → queued → the push phase again',
+  );
+  // the re-queued round is a new pr-sync attempt, not the spent exec id (review F1)
+  const syncs = distinct(h.log).filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID1).map((a) => a.id);
+  assert.deepEqual(syncs, [`pr-sync:${ID1}:1`, `pr-sync:${ID1}:2`]);
+  assert.equal(s.tickets[ID1].merges.at(-1).sha, h.prs[s.tickets[ID1].branch].mergeOid, 'the fixed ticket delivered through its PR');
+});

@@ -1984,7 +1984,10 @@ function prIntegrating(c, id, t) {
 /** pr-merge's push phase; exit 0 → awaiting-ci, exit 4 (base-sync conflict, aborted) → a merge agent, then a rerun. */
 function prPushPhase(c, id, t) {
   const flag = c.flag(id);
-  const n = flag.prSync ?? 1;
+  let n = flag.prSync ?? 1;
+  // A ticket back at queued with its attempt already spent (a pr-red fix round re-queued it; the push phase itself
+  // leaves queued at once) starts a new attempt: the spent exec id must not swallow the new round (review F1).
+  if (t.stage === 'queued' && c.book.done[`pr-sync:${id}:${n}`]) flag.prSync = n += 1;
   const pid = `pr-sync:${id}:${n}`;
   const out = c.tick('pr', `${keyOf(id)}-sync-${n}.json`);
   if (c.emit(exec(pid, 'pr-merge', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, okExit: [0, 4, 5], tickets: [id], line: t.line })) !== null) return;
