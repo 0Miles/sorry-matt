@@ -921,9 +921,22 @@ test('--local under a Windows 8.3 short name of the worktree: a file not on disk
 /** A recording `gh` stub: answers by the first two words of the call ("pr list", "stack add", …). */
 function ghStub(answers = {}) {
   const calls = [];
+  // #199 live run: as gh stack does — `view` fails on a branch in no stack, `init` adopts the branches it names, and
+  // `add` creates the new branch on top in the cwd and checks it out
+  const stacked = new Set();
+  const current = (cwd) => execFileSync('git', ['-C', cwd, 'branch', '--show-current'], { encoding: 'utf8' }).trim();
   const fn = (args, cwd, env) => {
     calls.push({ args, cwd, env });
     const a = answers[args.slice(0, 2).join(' ')];
+    if (a === undefined && args[0] === 'stack') {
+      if (args[1] === 'view' && !stacked.has(current(cwd))) throw new Error(`current branch "${current(cwd)}" is not part of a stack`);
+      if (args[1] === 'init') for (const b of args.slice(2)) stacked.add(b);
+      if (args[1] === 'add') {
+        execFileSync('git', ['-C', cwd, 'checkout', '-q', '-b', args[2]], { stdio: 'ignore' });
+        stacked.add(args[2]);
+      }
+      return '';
+    }
     return typeof a === 'function' ? a({ args, cwd, env }) : (a ?? '');
   };
   fn.calls = calls;
@@ -986,16 +999,18 @@ test('ticket-init (ticket-pr) cuts by the #188 fields: origin/<base>, the upstre
   const two = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
   assert.deepEqual([two.from, two.head, two.stack], [upstreamTip, upstreamTip, ['init run-1/01-a', 'add run-1/02-b']]);
   assert.equal(g(wt2, 'symbolic-ref', '--short', 'HEAD'), 'run-1/02-b');
-  assert.deepEqual(gh.calls.map((c) => c.args), [['stack', 'init', 'run-1/01-a'], ['stack', 'add', 'run-1/02-b']]);
+  // #199 live run: view (no stack yet) → init adopts the upstream branch → add cuts the ticket branch on top
+  assert.deepEqual(gh.calls.map((c) => c.args), [['stack', 'view'], ['stack', 'init', 'run-1/01-a'], ['stack', 'add', 'run-1/02-b']]);
+  assert.equal(g(wt1, 'symbolic-ref', '--short', 'HEAD'), 'run-1/01-a', "the upstream's own worktree is left as it was");
   for (const c of gh.calls) {
     assert.deepEqual(c.env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }, 'every gh stack call silences the update notifier');
     samePath(c.cwd, wt2);
   }
   const againTwo = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
   assert.deepEqual([againTwo.created, againTwo.from, againTwo.stack], [{ branch: false, worktree: false }, null, []]);
-  assert.equal(gh.calls.length, 2, 'a rerun reuses the branch and calls gh stack again not at all');
+  assert.equal(gh.calls.length, 3, 'a rerun reuses the branch and calls gh stack again not at all');
 
-  // An upstream that is stacked itself: the stack exists, so only `add` runs.
+  // An upstream that is in a stack already: view says so, and only `add` runs.
   st('set', '#3', '--stack-parent', '#2');
   const three = ok('ticket-init', '#3', '--branch', 'run-1/03-c', '--worktree', join(dir, 'wt-3'));
   assert.deepEqual(three.stack, ['add run-1/03-c']);

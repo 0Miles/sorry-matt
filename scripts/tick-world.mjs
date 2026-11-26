@@ -220,7 +220,21 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     // pushes and opens the stacked draft PR on the parent ticket's branch (idempotent); push pushes; sync is h.stackSync
     if (args[0] === 'stack') {
       const branch = cwd ? git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD') : null;
-      if (args[1] === 'init' || args[1] === 'add') return '';
+      // #199 live run: as gh stack does — view fails off a stack, init adopts, add creates the branch and checks it out
+      h.stacked ??= new Set();
+      if (args[1] === 'view') {
+        if (!h.stacked.has(branch)) throw new Error(`current branch "${branch}" is not part of a stack`);
+        return '';
+      }
+      if (args[1] === 'init') {
+        for (const b of args.slice(2)) h.stacked.add(b);
+        return '';
+      }
+      if (args[1] === 'add') {
+        git(cwd, 'checkout', '-q', '-b', args[2]);
+        h.stacked.add(args[2]);
+        return '';
+      }
       if (args[1] === 'push' || args[1] === 'submit') git(cwd, 'push', '-q', '-f', '-u', 'origin', branch); // gh stack pushes with --force-with-lease
       if (args[1] === 'submit' && !h.prs[branch]) {
         const st = h.state();

@@ -61,11 +61,13 @@
 //                - `stackParent` null: cut from `origin/<--base>` (`--base` is the base branch, required here;
 //                  refused when `origin/<--base>` is not a commit);
 //                - `stackParent` set: cut from the upstream ticket's recorded branch (refused when it has none, or
-//                  the branch is gone), then joined to the upstream's stack with non-interactive `gh stack`
-//                  calls carrying explicit branch names, run in the new worktree: `gh stack init <upstream branch>`
-//                  first when the upstream is not stacked itself (its own `stackParent` is null), then
-//                  `gh stack add <ticket branch>`. Run only when this call created the branch: a rerun reuses the
-//                  branch and calls gh not at all. The output's "stack" lists the gh stack subcommands run
+//                  the branch is gone) by `gh stack` itself, non-interactively with explicit branch names (#199
+//                  live run: `gh stack add` runs only on a branch of the stack and creates the new branch): the new
+//                  worktree is added detached and checks out the upstream branch (`--ignore-other-worktrees`,
+//                  beside the upstream's own worktree; nothing is committed there); `gh stack init <upstream
+//                  branch>` (which adopts the existing branch) when `gh stack view` there says it is in no stack
+//                  yet, then `gh stack add <ticket branch>` cuts the ticket branch on top and checks it out. Run
+//                  only when the branch does not exist yet: a rerun reuses the branch and calls gh not at all. The output's "stack" lists the gh stack subcommands run
 //                  (e.g. ["init <upstream>", "add <branch>"]; [] on a rerun or an unstacked ticket).
 //              `--base` outside ticket-pr is refused (2).
 //              Ticket branch rule (ticket-init and merge, checked before anything is touched): the branch is
@@ -552,16 +554,33 @@ function ticketInitPr(ctx, id, s, t, flags) {
       parent !== null ? `${id} is stacked on ${parent}, whose branch ${from} does not exist` : `${from} is not a commit; fetch the base branch first`,
     );
   }
-  const made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), from);
   const stack = [];
-  if (made.branch && parent !== null) {
-    if ((s.tickets[parent].stackParent ?? null) === null) {
-      ghStack(ctx, made.path, 'init', from);
+  let made;
+  if (parent !== null && branchTip(repo, flags.branch) === null) {
+    // #199 live run: `gh stack add` only runs on a branch of the stack, and creates the new branch itself. So the
+    // worktree starts detached, checks out the upstream branch beside the upstream's own worktree
+    // (--ignore-other-worktrees: nothing is committed there), joins it to a stack when it is in none yet (`init`
+    // adopts an existing branch), and `add` cuts the ticket branch on top and checks it out.
+    const wt = ctx.path(flags.worktree);
+    const occupant = worktrees(repo).find((w) => samePath(w.path, wt));
+    if (occupant) throw new Refusal(`${wt} is already the worktree of ${occupant.branch ?? 'a detached HEAD'}`);
+    git(repo, 'worktree', 'add', '-q', '--detach', wt, from);
+    git(wt, 'checkout', '-q', '--ignore-other-worktrees', from);
+    let inStack = true;
+    try {
+      ghStack(ctx, wt, 'view');
+    } catch {
+      inStack = false;
+    }
+    if (!inStack) {
+      ghStack(ctx, wt, 'init', from);
       stack.push(`init ${from}`);
     }
-    ghStack(ctx, made.path, 'add', flags.branch);
+    ghStack(ctx, wt, 'add', flags.branch);
     stack.push(`add ${flags.branch}`);
-  }
+    if (branchTip(repo, flags.branch) === null) throw new Error(`gh stack add did not create ${flags.branch}`);
+    made = { branch: true, worktree: true, path: wt };
+  } else made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), from);
   if (t.branch !== flags.branch) state(ctx, 'set', id, '--branch', flags.branch);
   return {
     out: {

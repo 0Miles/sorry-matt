@@ -19,3 +19,19 @@ gh-stack 0.3.0，全程非互動，`GH_STACK_NO_UPDATE_NOTIFIER=1`。
 - **`Closes #N`**：base 指向非預設分支的 PR 連 `closingIssuesReferences` 都不建；stack 內的 PR 等 retarget 到 `main`
   並合併後才關票。所以關票不能只靠 `Closes`：合併後查 issue 實際狀態，沒關就補關（#196）。
 - **`gh stack submit --auto` 冪等**：第二次執行回報 `up to date`，exit 0，不開重複的 PR；PR body 自動帶入 commit body。
+
+### 線上腳本端到端（#199，2026-11-26，同一個 sandbox）
+
+用線上分支的 `integrate.mjs` 對 A（issue #8）與疊在 A 上的 B（issue #9）跑完一輪：
+
+- **`gh stack add` 只在 stack 的分支上跑，而且自己建新分支**：在下游自己的 worktree（已在下游分支上）跑
+  `gh stack init <上游>` 後 `gh stack add <下游>` 會失敗（`current branch ... is not part of a stack`）。可行的順序：
+  下游 worktree 以 detached 建出，`git checkout --ignore-other-worktrees <上游分支>`，`gh stack view` 失敗才
+  `gh stack init <上游分支>`（`init` 會採用已存在的分支），再 `gh stack add <下游分支>`。`ticket-init` 照此實作。
+- `.git/gh-stack` 是 repo 層級的 JSON（所有 worktree 共用）；`gh stack merge <數字>` 先當 stack 編號、再當 PR 編號，
+  stack 與 PR 共用編號序列，所以不會撞。
+- A：`pr-merge --ready` 給 `gh stack merge 10 --yes --squash`（B 疊在它上面），squash 合併成功，`Closes #8` 生效。
+- B：GitHub 自動把 PR 的 base 改成 `main`；`pr-merge` 的 push phase 跑 `gh stack sync`，B 被 rebase 到新 `main`
+  （SHA 換了），`patch-id` 前後相同 → 審查沿用；`gh stack merge 11 --yes --squash` 成功。
+- **B 的 `Closes #9` 沒有生效**：PR 建立與寫 body 時 base 是 A 的分支，retarget 到 `main` 後 GitHub 也沒補建關聯。
+  #196 的合併後關票檢查（`gh issue close` 附 PR 留言）是必要的，不是保險。
