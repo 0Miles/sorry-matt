@@ -23,8 +23,8 @@
 //   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //                           [--pr <number>] [--stack-parent <ticket>|none] [--waiting-on <ticket>,<ticket>|none]
-//                           [--left-for-human <text>|none]
-//   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
+//                           [--left-for-human <text>|none] [--pr-base <base branch>]
+//   node state.mjs stage   <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full [--tier-reason <reason>]...]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
@@ -100,6 +100,9 @@
 //                                                          // ready and the merge is left for a person (no merge
 //                                                          // authorization); missing in an older file: null
 //         "pr": <the ticket's own pull request number> | null,           // its ticket-level PR (#188)
+//         "prBase": "<base branch>" | null,                // #219: the base branch its PR merges toward (a
+//                                                          // stacked one's: the stack's), written by integrate.mjs
+//                                                          // from the first --base; missing in an older file: null
 //         "stackParent": "<ticket>" | null,                // the ticket its PR is stacked on
 //         "waitingOn": ["<ticket>"],                       // the upstream tickets it waits to see merged
 //                                                          // stackParent and each waitingOn: another ticket of this
@@ -226,6 +229,8 @@
 //             tickets it waits on (`none` clears either). Each ticket named must be another ticket of this state,
 //             else refused (3); a ticket named twice in `--waiting-on` is bad input (2). `--left-for-human <text>`
 //             (#196) records that the ticket's ready PR is left for a person to merge (`none` clears it).
+//             `--pr-base <base branch>` (#219) records the base branch the ticket's PR merges toward; integrate.mjs
+//             writes it from the first `--base` and refuses a later `--base` that differs.
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
 //             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
@@ -438,6 +443,7 @@ const newTicket = (line) => ({
   unfixedIssue: null,
   leftForHuman: null,
   pr: null,
+  prBase: null,
   stackParent: null,
   waitingOn: [],
   merges: [],
@@ -571,6 +577,8 @@ function check(state, bad) {
     need(t.leftForHuman === undefined || optText(t.leftForHuman), `${w}.leftForHuman`, 'is not text or null');
     // #188: a state written before has none of the three: read as null, null, []
     need(t.pr == null || (Number.isInteger(t.pr) && t.pr > 0), `${w}.pr`, 'is not a pull request number or null');
+    // #219: a state written before has no key: read as null
+    need(t.prBase == null || isId(t.prBase), `${w}.prBase`, 'is not a branch name or null');
     need(t.waitingOn === undefined || Array.isArray(t.waitingOn), `${w}.waitingOn`, 'is not a list of tickets');
     const stacked = stackProblem(state, id, t.stackParent ?? null, t.waitingOn ?? []);
     need(stacked === null, w, stacked);
@@ -1007,7 +1015,7 @@ const prFields = (t) => ({ pr: t.pr ?? null, stackParent: t.stackParent ?? null,
 const show = (state) => ({
   ...state,
   tracker: state.tracker ?? null,
-  tickets: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, { ...t, ...prFields(t) }])),
+  tickets: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, { ...t, ...prFields(t), prBase: t.prBase ?? null }])),
 });
 
 const localLine = (branch, r) => `local: ${branch} ${r.sha} ${r.result} ${r.reason}`;
@@ -1119,11 +1127,13 @@ function set(path, rest, flags, ctx) {
     pr: 'pr',
     'stack-parent': 'stackParent',
     'waiting-on': 'waitingOn',
+    'pr-base': 'prBase',
   };
   const given = Object.keys(fields).filter((k) => flags[k] !== undefined);
   if (!given.length) throw new UsageError(`set needs at least one of ${Object.keys(fields).map((k) => `--${k}`).join(', ')}`);
   if (flags.snapshot !== undefined && !/^[0-9a-f]{64}$/.test(flags.snapshot)) throw new UsageError('--snapshot: expected the 64-digit sha256 of the acceptance snapshot');
   if (flags['unfixed-issue'] !== undefined && !isId(flags['unfixed-issue'])) throw new UsageError('--unfixed-issue: expected an issue id');
+  if (flags['pr-base'] !== undefined && !isId(flags['pr-base'])) throw new UsageError('--pr-base: expected a branch name');
   const values = { ...flags };
   if (flags['left-for-human'] === 'none') values['left-for-human'] = null;
   if (flags.pr !== undefined) {
@@ -1493,7 +1503,7 @@ const COMMANDS = {
   bundle: [bundle, NOW],
   line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
-  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', 'left-for-human': 'one', pr: 'one', 'stack-parent': 'one', 'waiting-on': 'one', ...NOW }],
+  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', 'left-for-human': 'one', pr: 'one', 'stack-parent': 'one', 'waiting-on': 'one', 'pr-base': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
   review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', covered: 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
