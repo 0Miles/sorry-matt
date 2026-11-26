@@ -3,6 +3,23 @@
 本檔是流水線停止之後的收官：tick 的 `judge` 指到這裡時全文讀取。線級三道關的順序、併入基底與完整驗證的指令都
 由 tick 發下；這裡只寫要你判斷或撰寫的部分。
 
+## `integrate: ticket-pr`
+
+`ticket-pr` 下（#200）每張票各自是一個交付單位：沒有整合分支，也沒有總 PR。下面線級的三道關（精簡、併入基底、
+完整驗證）、`review-guide.mjs` 與總 PR 都不做 —— 併入基底在每支 PR 合併前做（`pr-merge` 的 push phase），跨票的
+重複留給之後的 run；完整驗證就是每支 PR 合併前、PR head 上的 CI。tick 的 finish gate 照 #196 的 `delivered` 定義
+檢查：有合併 SHA，或有留給人合併的紀錄，而且每張 delivered 的票都記了 PR。
+
+- **對帳表**：`wrap-up` 的 `meta.tickets` 每張票一列（合票的成員票各佔一列，`lead` 指向主票，同列主票那一支 PR）：
+  PR 連結、所屬 stack（由下往上）、合併狀態（`merged` 已合併、`in-queue` 在 queue、`left-for-human` 留給人合併、
+  `waiting-upstream` 等上游、`not-merged` 未併入）、merge SHA 與 PR head 的 CI 結果。照它寫進最終輸出的對帳表。
+- **留給人合併的 PR**：`meta.humanWork` 逐條寫進人工作業清單，附 `merge-gate.mjs` 的 decision 與 reason；同一個
+  stack 的照合併順序排（最底下的先），指令是 `gh stack merge <PR> --yes --squash`。
+- **潤稿**：只有留給人合併的 PR 會收到 tick 發的 `pr-polish` judge：依 `ASKING.md` 第 6 節呼叫 Skill tool 帶入
+  `no-bullshit` 潤 PR body（保留 `Closes` 行），以 `gh pr edit <PR> --body-file <檔>` 寫回。本 run 自己合併的 PR
+  不潤。
+- 收官時不會有還在 `awaiting-merge` 的票：tick 以 fallback 喚醒等 merge queue 合完才收官。
+
 每條線先過**線級的三道關**，順序固定：
 
 1. **精簡**：對整條線累積的改動做一次品質收斂 —— 復用、簡化、效率、抽象層級。跨票的重複只有整併之後才看得見，
@@ -74,8 +91,7 @@
 
 **最終輸出**：每條線的總 PR 或整合分支、併入的基底 SHA（未併入時標明）、完整驗證的 SHA 與來源、涵蓋全部初始
 票的**對帳表**（`state.mjs show`，含每張票的退回次數，每列指向接續紀錄；合票的成員票各佔一列，終局、merge SHA
-與接續紀錄同主票，並寫明屬於哪個合票；`ticket-pr` 下合票的每張成員票同列它那一支 PR 的連結與合併狀態
-<!-- pending #200 -->）、**本 run 的計量與預算**（state 的
+與接續紀錄同主票，並寫明屬於哪個合票）、**本 run 的計量與預算**（state 的
 `usage`，停下時含 `stop`）與**分段計量**、需授權動作的結果（ledger 第 5 欄）、**跳過精簡的線**（`wrap-up` 的
 `meta.simplifySkipped`，每條附理由；沒有就不列），以及期間新開的 raw tickets 清單並請使用者執行 `/triage`。
 分段計量是 `scripts/spawns.mjs <ledger 所在目錄>/<run>.counters.json` 輸出的 `byType` 與 `byTicket` 原樣附上；沒有 counters 檔或腳本以非 0 結束時，寫明本 run 沒有分段計量與原因，不自己估。

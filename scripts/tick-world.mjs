@@ -399,6 +399,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       return 'sent';
     },
     'gh-stack-missing': () => 'listed', // #198
+    'pr-polish': () => 'polished', // #200
     'wrap-up': () => 'done',
     'wakeup-end': () => 'done',
   };

@@ -76,6 +76,11 @@
 //     tip-recorded       (as in merged, for every line with a delivered ticket)
 //     pushed             (as in integrated, for every line with a delivered ticket)
 //     cleaned            (as in integrated, for every ticket with a recorded branch)
+//     pr-recorded        (integrate: ticket-pr, #200) every delivered ticket has its pull request recorded. Under
+//                        ticket-pr the lines have no branch: base-sync, full-verification, tip-recorded and pushed
+//                        are not asserted — each PR synced the base before its merge, and its head's CI stood in for
+//                        the full verification. cleaned is asserted for the merged tickets only (a PR left for a
+//                        person still has its branch).
 //   ledger     --ledger <path> [--ended]   The run ledger has its shape (ASKING.md section 7).
 //     marker             the first line (a BOM aside) is `<!-- sorry-matt:run active -->`, or with --ended
 //                        `<!-- sorry-matt:run ended -->`, with nothing before it.
@@ -452,6 +457,13 @@ const gates = {
       if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && (t.leftForHuman ?? null) !== null)) {
         failMerge(id, `is delivered with no merge SHA${ticketPr ? ' and no left-for-human record' : ''}`);
       }
+    }
+    if (ticketPr) {
+      const failPr = r.check('pr-recorded');
+      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && (t.pr ?? null) === null) failPr(id, 'is delivered with no pull request recorded');
+      // only a merged ticket's branch is spent: a PR left for a person, or one stopped short, still has its branch
+      cleaned(r, g, state, Object.keys(state.tickets).filter((id) => state.tickets[id].merges.length));
+      return;
     }
     const lines = deliveredLines(state);
     const failBase = r.check('base-sync');

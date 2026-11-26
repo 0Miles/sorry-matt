@@ -94,7 +94,10 @@
 //                    --yes --squash`. Review freshness: the stacked ticket's own patch-id (integrate.mjs patch-id) is
 //                    taken when its review passes and again after the sync; the same id keeps the review, any other
 //                    is a recheck (integrating → in-review, the initial review's tier) — as is a base sync whose
-//                    conflict a merge agent resolved
+//                    conflict a merge agent resolved.
+//                    The finish (#200): the finish gate (no line checks), one `pr-polish` judge per PR left for a
+//                    person, and the wrap-up with `meta.tickets` (the reconciliation rows: PR link, stack, merge
+//                    state, PR head CI) and `meta.humanWork` (the merges left for a person, a stack's bottom first)
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -2373,6 +2376,7 @@ function prAwaitCi(c, id, t) {
   if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
   const v = readJsonFile(c.deps, out);
   const verdict = v?.verdict ?? null;
+  if (verdict) flag.prCi = { sha: head, verdict }; // #200: the PR head's last CI result, for the reconciliation table
   if (verdict !== 'no-run' && flag.prNoRun) {
     delete flag.prNoRun;
     delete flag.prNoRunAt;
@@ -3184,11 +3188,30 @@ function stepFinish(c) {
     for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
     if (!all) return;
   }
-  // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs and a CI read.
+  // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs (or ticket-level
+  // PRs, #200: delivered by its own definition, no line checks) and a CI read.
   const gates = [];
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
-  if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
+  if (['aggregate-pr', 'ticket-pr'].includes(profile.integrate) && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
   if (gates.some(Boolean)) return;
+  // #200: the PRs left for a person get their body polished (ASKING section 6); the ones merged here are not
+  const rows = profile.integrate === 'ticket-pr' ? prRows(c) : null;
+  const polish = [];
+  for (const row of rows ?? []) {
+    if (row.lead !== null || row.merge !== 'left-for-human' || row.pr === null) continue;
+    polish.push(
+      c.emit(
+        judge(
+          `pr-polish:${row.ticket}`,
+          'pr-polish',
+          `Pull request ${row.pr} (${row.ticket}) is left for a person to merge. Polish its body as ASKING section 6 says — call the Skill tool with \`no-bullshit\` on it — keeping its \`Closes\` lines, and write it back with \`gh pr edit ${row.pr} --body-file <file>\`. Record polished.`,
+          ['polished'],
+          [doc('ASKING.md', 'section 6'), doc('FINISH.md', 'integrate: ticket-pr')],
+          { tickets: [row.ticket], meta: { pr: row.pr } },
+        ),
+      ),
+    );
+  }
   // #205: each line's observation ticket, checked once against the line's final tip
   for (const l of Object.keys(state.lines)) {
     const issue = book.flags[`line:${l}`]?.observationsIssue;
@@ -3206,6 +3229,25 @@ function stepFinish(c) {
     );
   }
   const skipped = simplifySkipped(c);
+  const after = [...c.actions.filter((a) => a.step === 'observations' || a.step === 'observations-final').map((a) => a.id), ...polish]; // #142: the raw tickets are filed first
+  if (rows) {
+    // #200: integrate: ticket-pr — every ticket was its own delivery; no simplify pass, base sync, full verification,
+    // review-guide.mjs or aggregate PR
+    const human = humanMerges(c, rows);
+    c.emit(
+      judge(
+        'wrap-up',
+        'wrap-up',
+        `Every ticket is at an end state; under integrate: ticket-pr each one was its own delivery (FINISH.md, integrate: ticket-pr): no simplify pass, no base sync, no full verification, no review-guide.mjs, no aggregate PR. Do what is left: the cleanup (clean-it-up), the final output with the reconciliation table — one row per ticket (a bundle's members each), with the PR link, its stack, the merge state and the PR head's CI result, as meta.tickets has them — run metrics and spawn breakdown, and the ledger's ended marker when standalone.${
+          human.length ? ` Put each PR left for a person on the human-work list with merge-gate.mjs's reason, a stack's in its merge order (the bottom first): ${human.map((x) => x.text).join('; ')}.` : ''
+        } Record done.`,
+        ['done'],
+        [doc('FINISH.md', 'integrate: ticket-pr')],
+        { after, meta: { tickets: rows, humanWork: human } },
+      ),
+    );
+    return;
+  }
   c.emit(
     judge(
       'wrap-up',
@@ -3216,11 +3258,75 @@ function stepFinish(c) {
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
       {
-        after: c.actions.filter((a) => a.step === 'observations' || a.step === 'observations-final').map((a) => a.id), // #142: the raw tickets are filed first
+        after,
         ...(skipped.length ? { meta: { simplifySkipped: skipped } } : {}),
       },
     ),
   );
+}
+
+/**
+ * #200: the reconciliation rows under integrate: ticket-pr, one per ticket — a bundle's members each, with the lead's
+ * PR (`lead` names it; null on the lead's own row): the PR number and link, the stack it is in (its tickets bottom
+ * first, null outside a stack), the merge state (merged, in-queue, left-for-human, waiting-upstream, not-merged), the
+ * merge SHA, the PR head's last CI result, and for a PR left for a person merge-gate.mjs's decision and reason.
+ */
+function prRows(c) {
+  const rows = [];
+  const depth = (k) => {
+    let n = 0;
+    for (let p = c.state.tickets[k]?.stackParent ?? null; p !== null && n < 100; p = c.state.tickets[p]?.stackParent ?? null) n += 1;
+    return n;
+  };
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    const others = stackOf(c, id);
+    const stack = others.length ? [...others, id].sort((a, b) => depth(a) - depth(b)) : null;
+    const merge =
+      t.stage === 'delivered'
+        ? t.merges.length
+          ? 'merged'
+          : 'left-for-human'
+        : t.stage === 'awaiting-merge'
+          ? 'in-queue'
+          : t.stage === 'waiting-upstream' || /^waits on /.test(String(t.reason ?? ''))
+            ? 'waiting-upstream'
+            : 'not-merged';
+    const pr = t.pr ?? null;
+    const ci = c.book.flags[id]?.prCi ?? null;
+    const ready = c.book.flags[id]?.prReady ? readJsonFile(c.deps, c.book.flags[id].prReady) : null;
+    const gate = merge === 'left-for-human' && ready?.gate ? { decision: ready.gate.decision, reason: ready.gate.reason } : null;
+    for (const m of c.group(id)) {
+      rows.push({
+        ticket: m,
+        lead: m === id ? null : id,
+        stage: t.stage,
+        pr,
+        url: pr !== null && c.cfg.repo ? `https://github.com/${c.cfg.repo}/pull/${pr}` : null,
+        stack,
+        merge,
+        mergeSha: t.merges.at(-1)?.sha ?? null,
+        ci: ci ? { verdict: ci.verdict, sha: ci.sha } : null,
+        gate,
+        reason: t.reason ?? t.leftForHuman ?? null,
+      });
+    }
+  }
+  return rows;
+}
+
+/** #200: the human-work list's merges — the PRs left for a person, a stack's bottom first, with merge-gate's reason. */
+function humanMerges(c, rows) {
+  const left = rows.filter((r) => r.lead === null && r.merge === 'left-for-human' && r.pr !== null);
+  const pos = (r) => (r.stack ? r.stack.indexOf(r.ticket) : 0);
+  left.sort((a, b) => String(a.stack?.[0] ?? a.ticket).localeCompare(String(b.stack?.[0] ?? b.ticket)) || pos(a) - pos(b));
+  return left.map((r) => ({
+    ticket: r.ticket,
+    pr: r.pr,
+    url: r.url,
+    stack: r.stack,
+    gate: r.gate,
+    text: `merge PR ${r.pr}${r.url ? ` (${r.url})` : ''} for ${r.ticket}${r.gate ? ` — merge-gate.mjs: ${r.gate.decision}, ${r.gate.reason}` : ''}${r.stack ? ` — stack ${r.stack.join(' ← ')}, merge position ${r.stack.indexOf(r.ticket) + 1} of ${r.stack.length}, with \`gh stack merge ${r.pr} --yes --squash\`` : ''}`,
+  }));
 }
 
 /** One line's simplify pass, base sync, full verification and delivery; true once all are done. */
