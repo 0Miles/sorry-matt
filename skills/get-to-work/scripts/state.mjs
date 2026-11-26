@@ -103,8 +103,12 @@
 //         "stackParent": "<ticket>" | null,                // the ticket its PR is stacked on
 //         "waitingOn": ["<ticket>"],                       // the upstream tickets it waits to see merged
 //                                                          // stackParent and each waitingOn: another ticket of this
-//                                                          // state, none twice; all three missing in an older file:
-//                                                          // read as null, null, []
+//                                                          // state; waitingOn names none twice (the stackParent
+//                                                          // may be in it too); all three missing in an older
+//                                                          // file: read as null, null, []
+//         (load() fills in what an older file lacks — tracker, and a ticket's leftForHuman, pr, stackParent and
+//         waitingOn — with what it reads as, so no reader needs a fallback; a write leaves out again each one it
+//         filled in that still holds that value, so it keeps an older file as it was; #218)
 //         "merges": [{ "sha", "at" }],                     // every merge of the ticket, `-ci` merges included
 //         "reason": "<why stuck or awaiting ruling>" | null,
 //         "history": [{ "from", "to", "at", "reason" }],
@@ -170,7 +174,8 @@
 //              aggregate-pr (the default for a local or unknown tracker: a state from before #188 keeps it) | direct
 //              (merge straight into the base branch). ticket-pr is written only when the state's tracker is github
 //              (init --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing
-//              to aggregate-pr), by `profile` and by `import` alike;
+//              to aggregate-pr), by `profile` and by `import` alike, and a state file that holds it anyway is not
+//              a state file (1; #218);
 //   ci         read (default) | skip;
 //   simplify   true (default) | false.
 //              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
@@ -193,8 +198,9 @@
 //             Profile); refused when the file exists.
 //   profile   Writes the profile once (see Profile). Refused when one is already written, or once any ticket has
 //             left candidate or has a review, or with integrate ticket-pr on a run whose tracker is not github.
-//   show      Prints the state; the fields an older file lacks are printed as they read (`tracker` null; a ticket's
-//             `pr`, `stackParent`, `waitingOn` null, null, []), and the file is not changed.
+//   show      Prints the state as load() reads it: the fields an older file lacks are printed as they read
+//             (`tracker` null; a ticket's `leftForHuman`, `pr`, `stackParent`, `waitingOn` null, null, null, []),
+//             and the file is not changed.
 //   resume    What a resumed host needs, from the state alone:
 //             { "format", "command": "resume", "run", "tracker", "revision", "profile": <effective>, "profileWritten",
 //               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline", "members"?,
@@ -347,14 +353,14 @@ const PROFILE_VALUES = {
   ci: ['read', 'skip'],
   simplify: [true, false],
 };
-/** The trackers a run can record (#188), as acceptance.mjs names them; null in the state: unknown. */
+/** The trackers a run can record (#188); null in the state: unknown. The one list: acceptance.mjs reads tickets of these (#218). */
 export const TRACKERS = ['github', 'local'];
 /**
  * #201: the integrate default by the run's tracker — ticket-pr on GitHub; Local Markdown, and an unknown tracker (a
  * state from before #188), keep aggregate-pr. PROFILE_DEFAULTS holds the tracker-less one.
  */
 export const integrateDefault = (tracker) => (tracker === 'github' ? 'ticket-pr' : PROFILE_DEFAULTS.integrate);
-export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...(state.profile ?? {}) });
+export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker), ...(state.profile ?? {}) });
 const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];
@@ -479,8 +485,14 @@ function countsProblem({ candidates, confirmed, invalid, blocking }) {
 }
 
 /**
+ * Whether a waitingOn list names a ticket twice (#188) — the one rule behind both `set --waiting-on` (bad input, 2)
+ * and stackProblem (refused, 3; a file holding it: 1). The stack parent may be in the list too.
+ */
+const namesTwice = (waitingOn) => new Set(waitingOn).size !== waitingOn.length;
+
+/**
  * What is wrong with a ticket's stack parent and the tickets it waits on, or null (#188): each must be another
- * ticket of this state, and none is named twice.
+ * ticket of this state, and waitingOn names none twice (the stack parent may be in it too).
  */
 function stackProblem(state, id, stackParent, waitingOn) {
   const named = [...(stackParent === null ? [] : [['stackParent', stackParent]]), ...waitingOn.map((x) => ['waitingOn', x])];
@@ -489,7 +501,7 @@ function stackProblem(state, id, stackParent, waitingOn) {
     if (other === id) return `${what} names the ticket itself; it must be another ticket of this run`;
     if (!(other in state.tickets)) return `${what} names ${other}, which is not a ticket of this run`;
   }
-  if (new Set(waitingOn).size !== waitingOn.length) return 'waitingOn names a ticket twice';
+  if (namesTwice(waitingOn)) return 'waitingOn names a ticket twice';
   return null;
 }
 
@@ -504,8 +516,8 @@ function check(state, bad) {
   need(isTime(state.created) && isTime(state.updated), 'created/updated', 'are not UTC times');
   need(isCount(state.revision), 'revision', 'is not a count');
   need(state.imported === null || isTime(state.imported), 'imported', 'is not a UTC time or null');
-  // a state written before #188 has no key: read as null (unknown)
-  need(state.tracker == null || TRACKERS.includes(state.tracker), 'tracker', `is not one of ${TRACKERS.join(', ')} or null`);
+  // a state written before #188 has no key: load() reads it as null (unknown)
+  need(state.tracker === null || TRACKERS.includes(state.tracker), 'tracker', `is not one of ${TRACKERS.join(', ')} or null`);
   const why = profileProblem(state.profile ?? null);
   need(why === null, 'profile', why);
   need(isObject(state.lines) && isObject(state.tickets) && isObject(state.usage), 'lines/tickets/usage', 'are not objects');
@@ -567,12 +579,11 @@ function check(state, bad) {
       'is not a list of { fixed, unfixed, after }',
     );
     need(t.unfixedIssue === null || isId(t.unfixedIssue), `${w}.unfixedIssue`, 'is not an issue id or null');
-    // #196: a state written before has no key: read as null
-    need(t.leftForHuman === undefined || optText(t.leftForHuman), `${w}.leftForHuman`, 'is not text or null');
-    // #188: a state written before has none of the three: read as null, null, []
-    need(t.pr == null || (Number.isInteger(t.pr) && t.pr > 0), `${w}.pr`, 'is not a pull request number or null');
-    need(t.waitingOn === undefined || Array.isArray(t.waitingOn), `${w}.waitingOn`, 'is not a list of tickets');
-    const stacked = stackProblem(state, id, t.stackParent ?? null, t.waitingOn ?? []);
+    // #196 and #188: a state written before has none of these; load() reads them as null, null, null, []
+    need(optText(t.leftForHuman), `${w}.leftForHuman`, 'is not text or null');
+    need(t.pr === null || (Number.isInteger(t.pr) && t.pr > 0), `${w}.pr`, 'is not a pull request number or null');
+    need(Array.isArray(t.waitingOn), `${w}.waitingOn`, 'is not a list of tickets');
+    const stacked = stackProblem(state, id, t.stackParent, t.waitingOn);
     need(stacked === null, w, stacked);
     need(Array.isArray(t.merges) && t.merges.every((m) => isObject(m) && SHA.test(m.sha)), `${w}.merges`, 'is not a list of { sha }');
     need(Array.isArray(t.history) && t.history.every((h) => isObject(h) && STAGES.includes(h.to)), `${w}.history`, 'is not a list of transitions');
@@ -589,6 +600,10 @@ function check(state, bad) {
   need(u.sleepTask === null || isText(u.sleepTask), 'usage.sleepTask', 'is not a task id or null');
   need(u.snapshot === null || (isObject(u.snapshot) && isObject(u.snapshot.tips) && Array.isArray(u.snapshot.terminal)), 'usage.snapshot', 'is not { tips, terminal } or null');
   need(state.stop === null || (isObject(state.stop) && Array.isArray(state.stop.stoppedBy)), 'stop', 'is not { stoppedBy, … } or null');
+  // #218: ticket-pr is for a GitHub run. Last, so a malformed state is reported as such first; `profile` and
+  // `import` refuse it (3) themselves (import by this `where`), so only a file written by hand gets here.
+  const integrate = integrateProblem(state.profile ?? null, state.tracker);
+  need(integrate === null, INTEGRATE_WHERE, integrate);
 }
 
 // ---- the stage rules -----------------------------------------------------------------------------------------------
@@ -603,6 +618,9 @@ function profileProblem(p) {
   }
   return null;
 }
+
+/** The `where` check() reports integrateProblem under (#218), so import can tell it from a malformed seed. */
+const INTEGRATE_WHERE = 'profile.integrate';
 
 /** Why this run's tracker does not allow the profile's integrate value, or null (#188): ticket-pr is for GitHub. */
 function integrateProblem(profile, tracker) {
@@ -663,8 +681,8 @@ function stageGuard(id, t, to, from, profile) {
     return `${id}: ${to} is the ticket-pr merge path; this run's profile integrate is ${profile.integrate}`;
   }
   // #198: a ticket waits on named upstreams; it leaves the wait only once none is left
-  if (to === 'waiting-upstream' && !(t.waitingOn ?? []).length) return `${id}: waiting-upstream needs the upstreams it waits on recorded (set --waiting-on)`;
-  if (from === 'waiting-upstream' && to === 'candidate' && (t.waitingOn ?? []).length) {
+  if (to === 'waiting-upstream' && !t.waitingOn.length) return `${id}: waiting-upstream needs the upstreams it waits on recorded (set --waiting-on)`;
+  if (from === 'waiting-upstream' && to === 'candidate' && t.waitingOn.length) {
     return `${id}: candidate: it still waits on ${t.waitingOn.join(', ')} (set --waiting-on none once they are merged)`;
   }
   if (to === 'fixing') {
@@ -684,7 +702,7 @@ function stageGuard(id, t, to, from, profile) {
   }
   if (to === 'delivered' && !t.merges.length) {
     // #196, integrate: ticket-pr: a ready PR left for a person to merge is delivered too
-    if (profile.integrate === 'ticket-pr' && (t.leftForHuman ?? null) !== null) return null;
+    if (profile.integrate === 'ticket-pr' && t.leftForHuman !== null) return null;
     return `${id}: delivered needs a merge SHA; none is recorded (record it with merge${profile.integrate === 'ticket-pr' ? ', or record the ready PR as left for a person with set --left-for-human' : ''})`;
   }
   return null;
@@ -802,13 +820,44 @@ export function load(path) {
   } catch (error) {
     throw new StateError(`${path} is not JSON (${error.message})`);
   }
+  fillIn(state);
   check(state, (where, what) => {
     throw new StateError(`${path} is not a sorry-matt state file: ${where} ${what}`);
   });
   return state;
 }
 
-const save = (path, state) => writeAtomic(path, `${JSON.stringify(state, null, 2)}\n`);
+/** The fields a state from before them lacks, with what they read as (#188, #196; #218). */
+const OLDER_FILE_DEFAULTS = { state: { tracker: null }, ticket: { leftForHuman: null, pr: null, stackParent: null, waitingOn: [] } };
+/** Each object load() filled a field into → { field: the default's JSON }; save leaves those still at it out. */
+const filled = new WeakMap();
+
+/** Fills in what an older file lacks, so no reader needs a fallback; a value of the wrong shape is left to check. */
+function fillIn(state) {
+  const fill = (object, defaults) => {
+    if (!isObject(object)) return;
+    const missing = Object.entries(defaults).filter(([k]) => !(k in object));
+    if (!missing.length) return;
+    for (const [k, v] of missing) object[k] = structuredClone(v);
+    filled.set(object, new Map(missing.map(([k, v]) => [k, JSON.stringify(v)])));
+  };
+  fill(state, OLDER_FILE_DEFAULTS.state);
+  if (isObject(state) && isObject(state.tickets)) for (const t of Object.values(state.tickets)) fill(t, OLDER_FILE_DEFAULTS.ticket);
+}
+
+const save = (path, state) =>
+  writeAtomic(
+    path,
+    `${JSON.stringify(
+      state,
+      function keepOlder(key, value) {
+        // a field load() filled in and still at its default stays out: a write keeps an older file as it was
+        const at = filled.get(this)?.get(key);
+        return at !== undefined && at === JSON.stringify(value) ? undefined : value;
+      },
+      2,
+    )}\n`,
+  );
 
 /**
  * Apply `change(state)` under the lock and save, bumping the revision. `change` returns the command's output fields;
@@ -965,7 +1014,7 @@ function importLedger(path, rest, flags, ctx) {
     state.usage.startedNote = `imported ${ctx.now}: the time before the import is not counted`;
   }
   if (seed.stop !== undefined) state.stop = seed.stop;
-  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...seed.profile };
+  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker), ...seed.profile };
   let records = 0;
   if (flags.ledger !== undefined) {
     let text;
@@ -986,10 +1035,10 @@ function importLedger(path, rest, flags, ctx) {
   const spawns = hookSpawns(path, ctx.read);
   if (spawns !== null) Object.assign(state.usage, { spawns, spawnsSource: 'counters' });
   check(state, (where, what) => {
+    // a well-formed seed whose ticket-pr profile its tracker does not allow is refused (3), not bad input
+    if (where === INTEGRATE_WHERE) throw new Refusal(`seed: ${what}`);
     throw new UsageError(`seed ${flags.from}: ${where} ${what}`);
   });
-  const integrate = integrateProblem(state.profile, state.tracker);
-  if (integrate) throw new Refusal(`seed: ${integrate}`);
   const profile = profileOf(state);
   for (const [id, t] of Object.entries(state.tickets)) {
     if (!['queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'].includes(t.stage)) continue;
@@ -999,16 +1048,6 @@ function importLedger(path, rest, flags, ctx) {
   create(path, state);
   return { revision: state.revision, run: state.run, tickets: Object.keys(state.tickets).length, lines: Object.keys(state.lines).length, localRecords: records };
 }
-
-/** A ticket's own PR fields (#188, #196), as an older file without them reads. */
-const prFields = (t) => ({ pr: t.pr ?? null, stackParent: t.stackParent ?? null, waitingOn: t.waitingOn ?? [], leftForHuman: t.leftForHuman ?? null });
-
-/** The state as `show` prints it: the file, with the fields an older file lacks read as their defaults (#188). */
-const show = (state) => ({
-  ...state,
-  tracker: state.tracker ?? null,
-  tickets: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, { ...t, ...prFields(t) }])),
-});
 
 const localLine = (branch, r) => `local: ${branch} ${r.sha} ${r.result} ${r.reason}`;
 
@@ -1020,7 +1059,7 @@ function resume(state) {
   for (const [id, t] of Object.entries(state.tickets)) {
     const a = t.assignment;
     if (TERMINAL.includes(t.stage)) terminal[t.stage].push(id);
-    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null, ...(t.members ? { members: t.members } : {}), ...prFields(t) });
+    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null, ...(t.members ? { members: t.members } : {}), pr: t.pr, stackParent: t.stackParent, waitingOn: t.waitingOn, leftForHuman: t.leftForHuman });
     if (!a || a.deadline === null) continue;
     if (a.agentId === null) {
       unnamed.push(id);
@@ -1049,7 +1088,7 @@ function resume(state) {
     ]),
   );
   const bundles = Object.fromEntries(Object.entries(state.tickets).filter(([, t]) => t.members).map(([id, t]) => [id, t.members]));
-  return { run: state.run, tracker: state.tracker ?? null, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, bundles, lines, usage: state.usage, stop: state.stop };
+  return { run: state.run, tracker: state.tracker, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, bundles, lines, usage: state.usage, stop: state.stop };
 }
 
 function add(path, rest, flags, ctx) {
@@ -1134,13 +1173,13 @@ function set(path, rest, flags, ctx) {
   if (flags['stack-parent'] === 'none') values['stack-parent'] = null;
   if (flags['waiting-on'] !== undefined) {
     values['waiting-on'] = flags['waiting-on'] === 'none' ? [] : ids(flags['waiting-on'], '--waiting-on');
-    if (new Set(values['waiting-on']).size !== values['waiting-on'].length) throw new UsageError('--waiting-on: a ticket is named twice');
+    if (namesTwice(values['waiting-on'])) throw new UsageError('--waiting-on: a ticket is named twice');
   }
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
     for (const k of given) t[fields[k]] = values[k];
-    const stacked = stackProblem(state, id, t.stackParent ?? null, t.waitingOn ?? []);
+    const stacked = stackProblem(state, id, t.stackParent, t.waitingOn);
     if (stacked) throw new Refusal(`${id}: ${stacked}`);
     return { tickets: view(state, [id]) };
   });
@@ -1199,8 +1238,8 @@ function profile(path, rest, flags, ctx) {
     if (moved) {
       throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
     }
-    const profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...given };
-    const integrate = integrateProblem(profile, state.tracker ?? null);
+    const profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker), ...given };
+    const integrate = integrateProblem(profile, state.tracker);
     if (integrate) throw new Refusal(integrate);
     state.profile = profile;
     return { profile: state.profile };
@@ -1487,7 +1526,7 @@ const NOW = { now: 'one' };
 const COMMANDS = {
   init: [init, { run: 'one', tracker: 'one', ...NOW }],
   import: [importLedger, { from: 'one', ledger: 'one', ...NOW }],
-  show: [(path) => show(load(path)), {}],
+  show: [(path) => load(path), {}],
   resume: [(path) => resume(load(path)), {}],
   add: [add, { line: 'one', ...NOW }],
   bundle: [bundle, NOW],

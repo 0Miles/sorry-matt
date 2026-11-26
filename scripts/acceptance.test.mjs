@@ -182,6 +182,10 @@ test('cli: bad arguments and a snapshot of another ticket exit 2; an unreadable 
   const { gh } = fakeGh({ 7: { title: 'Export', body: BODY, comments: [] } });
   const deps = { gh, readFile: () => JSON.stringify({ format: 'sorry-matt/acceptance@1', tracker: 'github', id: '#8', items: [] }) };
   assert.equal(main(['github', '7'], deps).code, 2);
+  // #218: a tracker outside state.mjs's TRACKERS is bad input, not read as a local ticket
+  const unknown = main(['gitlab', 't.md'], deps);
+  assert.equal(unknown.code, 2);
+  assert.match(unknown.err, /first argument must be github or local/);
   assert.equal(main(['github', '--repo', REPO, '7', '8'], deps).code, 2);
   assert.equal(main(['local', '--repo', REPO, 't.md'], deps).code, 2);
   assert.equal(main(['github', '--repo', REPO, '--ref', 'main', '7'], deps).code, 2);

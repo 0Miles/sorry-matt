@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { main } from '../src/skills/get-to-work/scripts/state.mjs';
+import { main, load } from '../src/skills/get-to-work/scripts/state.mjs';
 import { main as deadline } from '../src/skills/get-to-work/scripts/deadline.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../src/skills/get-to-work/scripts/state.mjs', import.meta.url));
@@ -568,6 +568,8 @@ test('#188: an older file without the PR fields reads them as null, null and [];
   assert.deepEqual([open.pr, open.stackParent, open.waitingOn], [null, null, []]);
   r.ok('set', '#1', '--pr', '5');
   assert.equal(r.state().tickets['#1'].pr, 5);
+  // #218: the write keeps the fields it did not set as the older file had them: absent
+  assert.deepEqual(['stackParent', 'waitingOn'].filter((k) => k in r.state().tickets['#1']), []);
 
   for (const [k, v] of [['pr', 'x'], ['pr', 0], ['stackParent', '#9'], ['stackParent', '#1'], ['waitingOn', '#2'], ['waitingOn', ['#2', '#2']], ['waitingOn', ['#7']]]) {
     const bad = structuredClone(s);
@@ -577,6 +579,59 @@ test('#188: an older file without the PR fields reads them as null, null and [];
     assert.equal(out.code, 1, `${k} ${JSON.stringify(v)}: ${out.err}`);
     assert.match(out.err, /tickets\.#1/);
   }
+});
+
+test('#218: load() reads the fields an older file lacks as their defaults; a write leaves them out again', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '--line', LINE);
+  const s = r.state();
+  delete s.tracker;
+  for (const k of ['pr', 'stackParent', 'waitingOn', 'leftForHuman']) delete s.tickets['#1'][k];
+  writeFileSync(r.path, JSON.stringify(s));
+  const loaded = load(r.path);
+  assert.equal(loaded.tracker, null);
+  const t1 = loaded.tickets['#1'];
+  assert.deepEqual([t1.pr, t1.stackParent, t1.waitingOn, t1.leftForHuman], [null, null, [], null]);
+
+  // a field the write sets to something else is written; one set back to its default stays absent
+  r.ok('set', '#1', '--waiting-on', '#2', '--stack-parent', 'none');
+  const written = r.state();
+  assert.equal('tracker' in written, false);
+  assert.deepEqual(written.tickets['#1'].waitingOn, ['#2']);
+  assert.deepEqual(['pr', 'stackParent', 'leftForHuman'].filter((k) => k in written.tickets['#1']), []);
+  r.ok('set', '#1', '--waiting-on', 'none');
+  assert.equal('waitingOn' in r.state().tickets['#1'], true, 'a field once written stays written');
+  // a ticket of the same file written whole keeps every field
+  assert.deepEqual([r.state().tickets['#2'].pr, r.state().tickets['#2'].waitingOn], [null, []]);
+});
+
+test('#218: a state file whose profile has integrate ticket-pr on a tracker other than github is not a state file (1)', (t) => {
+  for (const tracker of ['local', null, undefined]) {
+    const r = run(t);
+    const s = r.state();
+    s.profile = { ...s.profile, integrate: 'ticket-pr' };
+    if (tracker === undefined) delete s.tracker;
+    else s.tracker = tracker;
+    writeFileSync(r.path, JSON.stringify(s));
+    const out = r.cmd('show');
+    assert.equal(out.code, 1, `${tracker}: ${out.err}`);
+    assert.match(out.err, /profile\.integrate .*ticket-pr.*aggregate-pr/);
+  }
+  const gh = run(t, { init: false });
+  gh.ok('init', '--run', 'run-1', '--tracker', 'github');
+  const s = gh.state();
+  s.profile = { integrate: 'ticket-pr' };
+  writeFileSync(gh.path, JSON.stringify(s));
+  assert.equal(gh.ok('show').profile.integrate, 'ticket-pr');
+});
+
+test('#218: import still refuses ticket-pr off GitHub (3) only once the seed is otherwise well-formed; a malformed seed is bad input (2)', (t) => {
+  const r = run(t, { init: false });
+  const seed = r.file('seed.json', { run: 'run-1', tracker: 'local', profile: { integrate: 'ticket-pr' }, tickets: { '#1': { line: LINE, stage: 'nowhere' } } });
+  const out = r.cmd('import', '--from', seed);
+  assert.equal(out.code, 2, out.err);
+  assert.match(out.err, /tickets\.#1\.stage/);
+  assert.equal(existsSync(r.path), false);
 });
 
 // ---- assignments and resuming ------------------------------------------------------------------------------------

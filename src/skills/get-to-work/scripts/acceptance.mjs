@@ -66,6 +66,7 @@ import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
 import { UsageError, parseJson, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { scan, section, ownRows, lines, startsHeading, listItem } from './ticket.mjs';
+import { TRACKERS } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
 export const MARKER = '<!-- sorry-matt:expansion -->';
@@ -216,7 +217,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--')) throw new UsageError(`unknown option ${a}`);
     else opts.positional.push(a);
   }
-  if (tracker !== 'github' && tracker !== 'local') throw new UsageError('first argument must be github or local');
+  if (!TRACKERS.includes(tracker)) throw new UsageError(`first argument must be ${TRACKERS.join(' or ')}`);
   if (opts.positional.length !== 1) throw new UsageError('give exactly one ticket');
   if (tracker === 'local' && opts.repo) throw new UsageError('--repo is github only');
   if (tracker === 'github' && opts.ref) throw new UsageError('--ref is local only');

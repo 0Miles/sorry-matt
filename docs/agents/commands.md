@@ -50,7 +50,7 @@ claude plugin validate .
   | `hooks/` | `scripts/guard.test.mjs`、`scripts/budget.test.mjs`、`scripts/end-run.test.mjs`、`scripts/reread.test.mjs` |
   | `src/skills/prove-it/scripts/tier.mjs` | `scripts/tier.test.mjs`、`scripts/scope.test.mjs`（`scope.mjs` import 它）、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`（它的重播實跑 `tick.mjs` 發下的判級指令） |
   | `src/skills/get-to-work/scripts/deadline.mjs` | `scripts/deadline.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`、`scripts/integrate.test.mjs`（`tick.mjs` import 它） |
-  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`、`scripts/retro.test.mjs`（`verify.mjs`、`tick.mjs` 與 `retro.mjs` import 它） |
+  | `src/skills/get-to-work/scripts/state.mjs` | `scripts/state.test.mjs`、`scripts/acceptance.test.mjs`、`scripts/verify.test.mjs`、`scripts/integrate.test.mjs`、`scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`、`scripts/retro.test.mjs`（`verify.mjs`、`tick.mjs`、`retro.mjs` 與 `acceptance.mjs` import 它） |
   | `src/skills/get-to-work/scripts/verify.mjs` | `scripts/verify.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`（它的重播實跑 `tick.mjs` 發下的指令） |
   | `src/skills/prove-it/scripts/scope.mjs` | `scripts/scope.test.mjs` |
   | `src/skills/prove-it/scripts/worktree.mjs` | `scripts/worktree.test.mjs` |
@@ -138,9 +138,11 @@ src/skills/get-to-work/scripts/state.mjs#newTicket
 src/skills/get-to-work/scripts/state.mjs#newState
 src/skills/get-to-work/scripts/state.mjs#checkAssignment
 src/skills/get-to-work/scripts/state.mjs#countsProblem
+src/skills/get-to-work/scripts/state.mjs#namesTwice
 src/skills/get-to-work/scripts/state.mjs#stackProblem
 src/skills/get-to-work/scripts/state.mjs#check
 src/skills/get-to-work/scripts/state.mjs#profileProblem
+src/skills/get-to-work/scripts/state.mjs#INTEGRATE_WHERE
 src/skills/get-to-work/scripts/state.mjs#integrateProblem
 src/skills/get-to-work/scripts/state.mjs#lastEntry
 src/skills/get-to-work/scripts/state.mjs#currentReview
@@ -171,9 +173,11 @@ skills/get-to-work/scripts/state.mjs#newTicket
 skills/get-to-work/scripts/state.mjs#newState
 skills/get-to-work/scripts/state.mjs#checkAssignment
 skills/get-to-work/scripts/state.mjs#countsProblem
+skills/get-to-work/scripts/state.mjs#namesTwice
 skills/get-to-work/scripts/state.mjs#stackProblem
 skills/get-to-work/scripts/state.mjs#check
 skills/get-to-work/scripts/state.mjs#profileProblem
+skills/get-to-work/scripts/state.mjs#INTEGRATE_WHERE
 skills/get-to-work/scripts/state.mjs#integrateProblem
 skills/get-to-work/scripts/state.mjs#lastEntry
 skills/get-to-work/scripts/state.mjs#currentReview
