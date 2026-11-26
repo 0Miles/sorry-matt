@@ -71,6 +71,9 @@
 //                    or skipped, with a one-line reason; the wrap-up lists the skipped lines and their reasons
 //                    (`meta.simplifySkipped`) for the closing summary and the self-answer log
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
+//   integrate: ticket-pr  every ticket is its own pull request (#193, #195) and walks its own merge through the
+//                    waiting stages awaiting-ci and awaiting-merge (#196, stepPrMerge); the finish has no line
+//                    delivery (no simplify pass, base sync or full verification: the PR head's CI stood in)
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -320,8 +323,11 @@ const doc = (file, part) => ({
 // host's own Bash tool (#129, #146), as integrate.mjs leaves its push of one (isProtected there).
 const isProtected = (c, branch) => branch === 'main' || branch === 'master' || branch === c.cfg.base;
 
-const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
-const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
+const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci'];
+const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci'];
+// #196: a ticket at awaiting-merge holds no in-flight slot (it blocks no dispatch point), but its planned files
+// stay occupied in dispatch file-overlap until the merge lands.
+const OCCUPIES = [...IN_FLIGHT, 'awaiting-merge'];
 export const LIMIT_DEFAULTS = Object.freeze({
   spawns: 200,
   rounds: 40,
@@ -1316,7 +1322,7 @@ function againstFile(c, id, t, tag) {
  * SendMessage to the agent that has the context, or the merge agent. `create` is set for a fresh dispatch from
  * candidate: the worktree and branch actions it waits for, and the stage move to implementing.
  */
-function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null }) {
+function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null, mergeOf = null }) {
   const n = (c.book.dispatches[id] ?? 0) + 1;
   const tag = `${keyOf(id)}-${n}`;
   const rec = c.tick('rec', `${tag}.json`);
@@ -1332,7 +1338,7 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
   );
   let r3 = null;
   if (create) r3 = c.emit(exec(`stage:${id}:implementing:h${hist(t)}`, 'stage', stateArgv(c, 'stage', 'implementing', id), { tickets: [id], line: t.line, after: [r2, ...(create.stageAfter ?? [])] }));
-  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}) };
+  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}), ...(mergeOf ? { mergeOf } : {}) };
   c.flag(id).pending = pending;
   agentTail(c, id, t, pending, [r2, r3, ...before]);
 }
@@ -1368,11 +1374,14 @@ function agentTail(c, id, t, p, after) {
   }
   if (p.mode === 'merge') {
     const files = p.files?.length ? ` (${p.files.join(', ')})` : '';
+    // #196, integrate: ticket-pr: the conflict is the base sync, origin/<base> merged into the ticket branch
+    const sides = p.mergeOf ? `Merging ${p.mergeOf} into ${t.branch}` : `Merging ${t.branch} into ${c.target(t.line)}`;
+    const command = p.mergeOf ? `git merge --no-edit ${p.mergeOf}` : `git merge --no-ff --no-edit ${t.branch}`;
     c.emit(
       judge(
         `merge-agent:${id}:${p.n}`,
         'merge-agent',
-        `Merging ${t.branch} into ${c.target(t.line)} conflicts${files}; integrate.mjs aborted the merge, so ${p.worktree} is clean. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the merge-conflict brief (both sides' ticket text and commit messages, the intent rule): in ${p.worktree} it runs \`git merge --no-ff --no-edit ${t.branch}\` again, resolves each conflict, and ends with \`git commit --no-edit\`; when it cannot resolve them safely it runs \`git merge --abort\` and reports unresolved. Record spawned with --agent.`,
+        `${sides} conflicts${files}; integrate.mjs aborted the merge, so ${p.worktree} is clean. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the merge-conflict brief (both sides' ticket text and commit messages, the intent rule): in ${p.worktree} it runs \`${command}\` again, resolves each conflict, and ends with \`git commit --no-edit\`; when it cannot resolve them safely it runs \`git merge --abort\` and reports unresolved. Record spawned with --agent.`,
         ['spawned'],
         [doc('SKILL.md', 'section 2, Merge conflicts')],
         { tickets: [id], line: t.line, after, needs: { agent: 'the merge agent id' } },
@@ -1887,12 +1896,246 @@ function stepTicketPr(c) {
   }
 }
 
+// ---- the ticket-pr merge path (#196) --------------------------------------------------------------------------------
+
+/**
+ * #196: under integrate: ticket-pr a reviewed ticket that is not stacked walks its own merge, one ticket at a time
+ * per line: pr-merge's push phase (sync the base into the ticket branch, push; queued → integrating) → awaiting-ci
+ * (ci.mjs verdict on the PR head, read once per wake-up; the wait is the existing fallback wake-up, no polling loop)
+ * → green: pr-merge --ready (`gh pr ready` + merge-gate.mjs) → awaiting-merge, the merge command handed to the host
+ * as a prompting call (send status `host`) → the host reports the merge sent, and pr-merge --merged (checked once
+ * per wake-up) records the merge SHA and delivers. Without merge authorization the host records left-for-human: the
+ * PR stays ready for a person, and the ticket is delivered with a left-for-human record (state.mjs set
+ * --left-for-human). A red PR head goes to a fix round (the fix commit is pushed back to the same PR by
+ * stepTicketPr); cancelled is rerun once and no-run counted per ticket, as the line-level CI rules have it. A
+ * stacked ticket parks at queued: its stack's merge order is not driven here.
+ */
+function stepPrMerge(c) {
+  prCloseIssues(c);
+  const byLine = new Map();
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (!byLine.has(t.line)) byLine.set(t.line, []);
+    byLine.get(t.line).push([id, t]);
+  }
+  for (const tickets of byLine.values()) {
+    let busy = false;
+    for (const [id, t] of tickets) {
+      if (t.stage === 'integrating') prIntegrating(c, id, t);
+      else if (t.stage === 'awaiting-ci') prAwaitCi(c, id, t);
+      else if (t.stage === 'awaiting-merge') prAwaitMerge(c, id, t);
+      else continue;
+      busy = true;
+    }
+    if (busy) continue;
+    const queued = tickets
+      .filter(([, t]) => t.stage === 'queued' && (t.stackParent ?? null) === null && (t.pr ?? null) !== null && t.branch)
+      .sort((x, y) => ((x[1].history[lastEntry(x[1], 'queued')]?.at ?? '') < (y[1].history[lastEntry(y[1], 'queued')]?.at ?? '') ? -1 : 1));
+    if (queued.length) prPushPhase(c, queued[0][0], queued[0][1]); // the push phase moves queued → integrating itself
+  }
+}
+
+/**
+ * #196: after a ticket's merge the issue may still be open (`Closes` did not fire, or was edited away): its state is
+ * read once, and an open one is closed with a comment pointing at the PR — idempotent, never relying on `Closes`.
+ * A bundle closes every member's issue; a left-for-human ticket has no merge yet, so the person closing is theirs.
+ */
+function prCloseIssues(c) {
+  if (c.cfg.tracker !== 'github') return;
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (t.stage !== 'delivered' || !t.merges.length) continue;
+    for (const m of c.group(id)) {
+      const out = c.tick('pr', `issue-${keyOf(m)}.json`);
+      if (c.emit(exec(`issue-state:${m}`, 'issue-state', ['gh', 'issue', 'view', numOf(m), '--json', 'state', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: out, tickets: [id], line: t.line })) !== null) continue;
+      if (readJsonFile(c.deps, out)?.state !== 'OPEN') continue; // closed already (Closes fired): nothing to do
+      c.emit(
+        exec(`issue-close:${m}`, 'issue-close', ['gh', 'issue', 'close', numOf(m), '--comment', `Delivered by pull request #${t.pr} (merge ${t.merges.at(-1).sha}).`, ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], {
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    }
+  }
+}
+
+/** A ticket integrating under ticket-pr: its base sync's conflict goes to a merge agent, else the push phase runs. */
+function prIntegrating(c, id, t) {
+  const flag = c.flag(id);
+  if (flag.sendBack) {
+    c.emit(
+      judge(
+        `send-back:${id}:h${hist(t)}`,
+        'send-back',
+        `Send ${id} back for a redo as SEND-BACK.md says (integrate.mjs send-back, then the send-back record, also written to ${c.sendBack(id)}, and the widened prediction). Record sent-back; when it was sent back once already, mark it stuck instead (SEND-BACK.md) and record stuck with --value <reason>.`,
+        ['sent-back', 'stuck'],
+        [doc('SEND-BACK.md', 'Send back for a redo')],
+        { tickets: [id], line: t.line },
+      ),
+    );
+    return;
+  }
+  const a = t.assignment;
+  if (a && a.deadline !== null) {
+    if (!a.agentId) pendingAgent(c, id, t);
+    return; // the merge agent resolves the base sync's conflict in the ticket worktree
+  }
+  prPushPhase(c, id, t);
+}
+
+/** pr-merge's push phase; exit 0 → awaiting-ci, exit 4 (base-sync conflict, aborted) → a merge agent, then a rerun. */
+function prPushPhase(c, id, t) {
+  const flag = c.flag(id);
+  const n = flag.prSync ?? 1;
+  const pid = `pr-sync:${id}:${n}`;
+  const out = c.tick('pr', `${keyOf(id)}-sync-${n}.json`);
+  if (c.emit(exec(pid, 'pr-merge', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, okExit: [0, 4, 5], tickets: [id], line: t.line })) !== null) return;
+  const done = c.book.done[pid];
+  if (done.exit === 0) return void stageTo(c, id, t, 'awaiting-ci');
+  if (done.exit === 4) {
+    // the conflict of merging origin/<base> into the ticket branch; the rerun after the resolution is a new attempt
+    flag.prSync = n + 1;
+    const handed = Object.values(c.book.agents).some((x) => x.role === 'merge' && x.tickets.includes(id) && x.at >= done.at);
+    if (!handed) {
+      const o = readJsonFile(c.deps, out);
+      dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: c.git.wtOf(t.branch) ?? c.cfg.root, files: Array.isArray(o?.files) ? o.files : null, mergeOf: `origin/${c.cfg.base}` });
+    }
+    return;
+  }
+  // exit 5: gh stack sync aborted on stack divergence — a ruling, not a retry
+  c.emit(
+    judge(
+      `pr-diverged:${id}:${n}`,
+      'pr-diverged',
+      `${id}'s stack diverged while pr-merge synced it (${out} holds the lines). Rule on the divergence (whose branch moved, what the stack should look like), put it right, and record retry; or record stuck / awaiting-ruling with --value <reason>.`,
+      ['retry', 'stuck', 'awaiting-ruling'],
+      [{ path: js('integrate.mjs'), part: 'header, pr-merge (diverged)' }],
+      { tickets: [id], line: t.line, meta: { of: pid } },
+    ),
+  );
+}
+
+/** A ticket awaiting CI on its PR head: one ci.mjs read per wake-up; green goes on to the ready phase. */
+function prAwaitCi(c, id, t) {
+  const flag = c.flag(id);
+  const tip = c.git.ref(t.branch);
+  const head = c.git.remote(t.branch);
+  if (!tip || !head || head !== tip) return; // stepTicketPr pushes the tip first; CI is read at the pushed head
+  const head12 = head.slice(0, 12);
+  if (flag.prCiWaived === head) return void prReadyPhase(c, id, t, head12);
+  const out = c.tick('ci', `pr-${keyOf(id)}-w${c.book.wakeup}.json`);
+  const readId = `pr-ci:${id}@${head12}:w${c.book.wakeup}`;
+  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+  const v = readJsonFile(c.deps, out);
+  const verdict = v?.verdict ?? null;
+  if (verdict !== 'no-run' && flag.prNoRun) {
+    delete flag.prNoRun;
+    delete flag.prNoRunAt;
+  }
+  if (verdict === 'green') return void prReadyPhase(c, id, t, head12);
+  if (verdict === 'red') {
+    const fixable = t.fixRounds < c.profile.fixRounds;
+    c.emit(
+      judge(
+        `pr-red:${id}@${head12}`,
+        'pr-red',
+        `${id}'s pull request head ${head} (${t.branch}) is red on CI. Read the failing run.${fixable ? ' Record fix: the ticket goes to a fix round (point the fix agent at the failing run, not at review findings) and the fix commit is pushed back to the same PR.' : ` The ${c.profile.fixRounds} fix rounds are used.`} Or record stuck / awaiting-ruling with --value <reason>.`,
+        [...(fixable ? ['fix'] : []), 'stuck', 'awaiting-ruling'],
+        [doc('RED-LIGHT.md', 'the red-light handling, applied to the PR head')],
+        { tickets: [id], line: t.line, meta: { sha: head } },
+      ),
+    );
+    return;
+  }
+  if (verdict === 'cancelled') {
+    // the line-level rule, applied to the PR head run: rerun each cancelled run once, read again next wake-up
+    for (const run of v?.rerun ?? []) c.emit(exec(`pr-rerun:${id}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { tickets: [id], line: t.line }));
+    return;
+  }
+  if (verdict === 'no-run' && v?.reason === 'empty') {
+    // the line-level no-run counting, per ticket: at two empty reads the branch's run list settles it
+    if (flag.prNoRunAt !== readId) {
+      flag.prNoRun = (flag.prNoRun ?? 0) + 1;
+      flag.prNoRunAt = readId;
+    }
+    if ((flag.prNoRun ?? 0) < 2) return;
+    const runsOut = c.tick('ci', `pr-${keyOf(id)}-branch-w${c.book.wakeup}.json`);
+    if (c.emit(exec(`pr-ci-branch:${id}:w${c.book.wakeup}`, 'ci-branch', ['gh', 'run', 'list', '--branch', t.branch, '--limit', '1', '--json', 'databaseId', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: runsOut, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+    const listed = readJsonFile(c.deps, runsOut);
+    if (Array.isArray(listed) && listed.length === 0) {
+      c.emit(
+        judge(
+          `pr-no-ci:${id}@${head12}`,
+          'pr-no-ci',
+          `No CI run covers ${id}'s pull request head ${head} after two reads, and ${t.branch} has no runs at all. Record ready to go on to the ready phase (merge-gate.mjs still guards the merge); or record stuck / awaiting-ruling with --value <reason>.`,
+          ['ready', 'stuck', 'awaiting-ruling'],
+          [{ path: js('ci.mjs'), part: 'header (no-run)' }],
+          { tickets: [id], line: t.line, meta: { sha: head } },
+        ),
+      );
+    }
+    return;
+  }
+  // running or query-failed: read again next wake-up; the wait is the fallback wake-up
+}
+
+/** pr-merge --ready (`gh pr ready` + merge-gate.mjs), then awaiting-merge and the merge handed to the host. */
+function prReadyPhase(c, id, t, head12) {
+  const out = c.tick('pr', `${keyOf(id)}-ready-${head12}.json`);
+  if (c.emit(exec(`pr-ready:${id}@${head12}`, 'pr-ready', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--ready', '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, tickets: [id], line: t.line })) !== null) return;
+  c.flag(id).prReady = out;
+  const s = stageTo(c, id, t, 'awaiting-merge');
+  prSendJudge(c, id, t, readJsonFile(c.deps, out), s ? [s] : []);
+}
+
+/**
+ * The prompting call of the merge (#196): the command goes to the host, which sends it only under merge
+ * authorization (a standing grant in the ledger's authorization field, or the user's instruction this run) with its
+ * own tool, under the user's permission settings; without authorization the ticket is recorded left-for-human.
+ * True while the judge is still open.
+ */
+function prSendJudge(c, id, t, ready, after) {
+  const sid = `pr-send:${id}:${t.pr}`;
+  if (c.done(sid)) return false;
+  const gate = ready?.gate ?? null;
+  const send = ready?.send ?? null;
+  const human = send?.status !== 'host';
+  const command = send?.command ?? `gh pr merge ${t.pr}`;
+  const what = human
+    ? `${id}'s pull request ${t.pr} is ready, and merge-gate.mjs says a person merges it (${gate ? `${gate.decision}: ${gate.reason}` : 'its output could not be read'}). Put the merge on the human-work list and record left-for-human: the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`
+    : `${id}'s pull request ${t.pr} is ready (merge-gate.mjs: ${gate.decision}, ${gate.reason}). With merge authorization — a standing grant in the ledger's authorization field, or the user's instruction this run — run \`${command}\` with your own tool under the user's permission settings (never --admin, never auto-merge) and record sent: tick then watches for the merge, GitHub's merge queue included. Without authorization record left-for-human: the PR stays ready for a person to merge and the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`;
+  c.emit(
+    judge(sid, 'pr-send', what, [...(human ? [] : ['sent']), 'left-for-human', 'stuck', 'awaiting-ruling'], [doc('FINISH.md', 'the merge where authority allows'), { path: js('merge-gate.mjs'), part: 'header (decisions)' }], {
+      tickets: [id],
+      line: t.line,
+      after,
+      meta: { pr: t.pr, command },
+    }),
+  );
+  return true;
+}
+
+/** A ticket awaiting its merge: once the command was sent, pr-merge --merged is checked once per wake-up. */
+function prAwaitMerge(c, id, t) {
+  const flag = c.flag(id);
+  const ready = flag.prReady ? readJsonFile(c.deps, flag.prReady) : null;
+  if (prSendJudge(c, id, t, ready, [])) return;
+  if (c.book.done[`pr-send:${id}:${t.pr}`]?.outcome !== 'sent') return; // left-for-human and the rulings moved it in record
+  // exit 3: the PR is not merged yet (the queue is running); checked again next wake-up — the fallback wake-up waits
+  c.emit(
+    exec(`pr-merged:${id}:w${c.book.wakeup}`, 'pr-merged', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--merged', '--repo', c.cfg.root], {
+      stdout: c.tick('pr', `${keyOf(id)}-merged-w${c.book.wakeup}.json`),
+      okExit: [0, 3],
+      tickets: [id],
+      line: t.line,
+    }),
+  );
+}
+
 // ---- integration ----------------------------------------------------------------------------------------------------
 
 function stepIntegration(c) {
-  // #195: under integrate: ticket-pr nothing merges into an integration branch — the line has none (#193). A ticket
-  // whose review passed parks at queued; the merge path is its pull request's (integrate.mjs pr-merge, a later step).
-  if (c.profile.integrate === 'ticket-pr') return;
+  // #195: under integrate: ticket-pr nothing merges into an integration branch — the line has none (#193). The
+  // merge path is the ticket's own pull request's: integrate.mjs pr-merge, driven by stepPrMerge (#196).
+  if (c.profile.integrate === 'ticket-pr') return stepPrMerge(c);
   const { state, book } = c;
   const byTarget = new Map();
   for (const [id, t] of Object.entries(state.tickets)) {
@@ -2231,7 +2474,7 @@ function dispatchSteps(c, d) {
   const ov = c.done(`overlap:r${r}`) ? readJsonFile(c.deps, outPath) : null;
   if (!ov) {
     const running = Object.entries(state.tickets)
-      .filter(([, t]) => IN_FLIGHT.includes(t.stage))
+      .filter(([, t]) => OCCUPIES.includes(t.stage))
       .map(([id, t]) => {
         let files = predictedOf(c, id);
         if (!c.deps.exists(files)) {
@@ -2239,7 +2482,8 @@ function dispatchSteps(c, d) {
           c.write(files, '/\n'); // no prediction on record: it holds the whole repository
         }
         const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
-        return { id, files, ...(wt ? { worktree: wt, base: c.target(t.line) } : {}) };
+        // #196: under ticket-pr the base a running worktree is diffed against is the ticket's own fixed point
+        return { id, files, ...(wt ? { worktree: wt, base: fixedPointOf(c, t) } : {}) };
       });
     c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
     c.emit(exec(`overlap:r${r}`, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
@@ -2406,16 +2650,20 @@ function stepFinish(c) {
   const { state, book, profile } = c;
   const tickets = Object.values(state.tickets);
   if (!tickets.every((t) => TERMINAL.includes(t.stage)) || book.dispatch || book.finished) return;
-  // One finish per target: under direct every line's target is the base, finished once (on its own line when the
-  // state has one, which is where its CI is recorded).
-  const byTarget = new Map();
-  for (const line of Object.keys(state.lines)) {
-    const target = c.target(line);
-    if (!byTarget.has(target) || line === target) byTarget.set(target, line);
+  // #196: under integrate: ticket-pr there is no line delivery — every delivered ticket merged its own PR with CI
+  // green on the PR head, or is recorded left-for-human; the lines have no branch, base sync or full verification.
+  if (profile.integrate !== 'ticket-pr') {
+    // One finish per target: under direct every line's target is the base, finished once (on its own line when the
+    // state has one, which is where its CI is recorded).
+    const byTarget = new Map();
+    for (const line of Object.keys(state.lines)) {
+      const target = c.target(line);
+      if (!byTarget.has(target) || line === target) byTarget.set(target, line);
+    }
+    let all = true;
+    for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
+    if (!all) return;
   }
-  let all = true;
-  for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
-  if (!all) return;
   // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs and a CI read.
   const gates = [];
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
@@ -3041,6 +3289,26 @@ export function record(path, id, flags, now, deps) {
     case 'send-back':
       delete flag(tickets[0]).sendBack;
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
+      break;
+    // #196: the ticket-pr merge path's judges
+    case 'pr-red':
+      stageIf(tickets[0], outcome === 'fix' ? 'fixing' : outcome, flags.value ?? `the PR head's CI is red at ${meta.sha}`);
+      break;
+    case 'pr-no-ci':
+      if (outcome === 'ready') flag(tickets[0]).prCiWaived = meta.sha;
+      else stageIf(tickets[0], outcome, flags.value ?? 'no CI run covers the PR head');
+      break;
+    case 'pr-send': {
+      const [tid] = tickets;
+      if (outcome === 'left-for-human') {
+        if ((ticket(tid)?.leftForHuman ?? null) === null) S('set', tid, '--left-for-human', flags.value ?? `pull request ${meta.pr} is ready; the merge is left for a person`);
+        stageIf(tid, 'delivered');
+      } else if (outcome !== 'sent') stageIf(tid, outcome, flags.value ?? 'the merge could not be sent');
+      break;
+    }
+    case 'pr-diverged':
+      if (outcome === 'retry') reissue(meta.of);
+      else stageIf(tickets[0], outcome, flags.value ?? 'the stack diverged while pr-merge synced it');
       break;
     case 'timeout': {
       if (meta.stage === 'ci-fix') {
