@@ -447,3 +447,78 @@ test('#128 D2: a background spawn listed at batch 2 or later and not recorded co
   assert.ok(!r.actions.some((a) => a.step === 'spawn-check'), 'not a check: it was never handed out');
   assert.equal(r.actions.find((a) => a.id === late.id)?.kind, 'spawn', `${late.id} is issued again as a spawn`);
 });
+
+// ---- integrate: ticket-pr (#195) -----------------------------------------------------------------------------------
+
+test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR at the first reported commit, pushes each fix to the same PR, and nothing merges into an integration branch', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  // #2's initial review says fix; its fix round commits again and the recheck passes
+  h.policy.review = (a) => (a.tickets[0] === ID2 && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'f1' } : 'pass');
+  for (let i = 0; i < 6 && !(stage(h, ID1) === 'queued' && stage(h, ID2) === 'queued'); i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'queued');
+  assert.equal(stage(h, ID2), 'queued');
+  const log = distinct(h.log);
+
+  // dispatch: ticket-init with --base; the branch is cut from origin/main, and nothing merges into an integration branch
+  const init = log.find((a) => a.step === 'ticket-branch' && a.tickets[0] === ID1);
+  assert.equal(init.argv[init.argv.indexOf('--base') + 1], 'main');
+  const branch = h.state().tickets[ID1].branch;
+  assert.equal(git(h.repo, 'merge-base', 'origin/main', branch), git(h.repo, 'rev-parse', 'origin/main'), 'cut from origin/main');
+  assert.ok(log.every((a) => a.step !== 'merge' && !(a.argv ?? []).includes('merge')), 'no action merges a ticket into an integration branch');
+
+  // pr-open at the first reported commit: once per ticket, not marked host, a draft, the number in the state
+  const opens = log.filter((a) => a.step === 'pr-open');
+  assert.deepEqual(opens.map((a) => a.tickets[0]).sort(), [ID1, ID2].sort(), 'one pr-open per ticket');
+  assert.ok(opens.every((a) => !a.host), 'pr-open is not marked host');
+  const pr1 = h.state().tickets[ID1].pr;
+  const pr2 = h.state().tickets[ID2].pr;
+  assert.ok(Number.isInteger(pr1) && Number.isInteger(pr2) && pr1 !== pr2, 'each ticket has its own PR number in the state');
+  assert.ok(h.ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create' && args.includes('--draft')), 'the PR opens as a draft');
+
+  // the review runs beside the PR's CI: the review spawn does not wait for pr-open
+  const review1 = log.find((a) => a.step === 'review' && a.tickets[0] === ID1);
+  assert.ok(!review1.after.includes(`pr-open:${ID1}`), 'the review does not wait for the PR');
+
+  // the fixed point is origin/<base>, decided per ticket: the tier judge and the review dispatch file both carry it
+  const tier1 = log.find((a) => a.step === 'tier' && a.tickets[0] === ID1);
+  assert.equal(tier1.argv[tier1.argv.indexOf('--base') + 1], 'origin/main');
+  const values = JSON.parse(readFileSync(join(h.W, 'tick', 'review', '1-1.values.json'), 'utf8'));
+  assert.equal(values.fixedPoint, 'origin/main');
+
+  // the fix commit goes back to the same PR: pr-push on the same branch, no second pr-open, the same number throughout
+  const pushes = log.filter((a) => a.step === 'pr-push');
+  assert.ok(pushes.length >= 1 && pushes.every((a) => a.tickets[0] === ID2), "the fix round's commit is pushed back for #2");
+  assert.equal(log.filter((a) => a.step === 'pr-open' && a.tickets[0] === ID2).length, 1, 'no second pr-open');
+  assert.equal(h.state().tickets[ID2].pr, pr2, 'the same PR number throughout');
+  const b2 = h.state().tickets[ID2].branch;
+  assert.equal(git(h.repo, 'rev-parse', b2), git(h.repo, 'rev-parse', `origin/${b2}`), 'the fix commit is on the remote ticket branch');
+
+  // F1: the ticket-pr guard of stepIntegration is pinned — even with a ref by the line's name present, the queued
+  // tickets stay parked: the next list carries no merge, no stage-to-integrating and no no-worktree action
+  git(h.repo, 'branch', LINE, 'main');
+  const parked = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(
+    parked.actions.every((a) => !['merge', 'no-worktree'].includes(a.step) && !(a.argv ?? []).includes('integrating')),
+    `nothing merges a queued ticket under ticket-pr: ${parked.actions.map((a) => a.id).join(', ')}`,
+  );
+});
+
+test('#195: ticket-pr — a report carrying no commit opens no PR; the report goes on through the existing rules', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  // the agents commit nothing, and their reports say so
+  h.work = (agent) => h.reportsNext.push(agent);
+  const report = h.agentReport;
+  h.agentReport = (a) => report(a).replace(/^commit: .*$/m, 'commit: none');
+  for (let i = 0; i < 5 && !(stage(h, ID1) === 'queued' && stage(h, ID2) === 'queued'); i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'queued', 'green with no commit still goes to review and on to queued');
+  const log = distinct(h.log);
+  assert.ok(log.every((a) => a.step !== 'pr-open' && a.step !== 'pr-push'), 'no PR action was issued');
+  assert.equal(h.state().tickets[ID1].pr, null);
+  assert.equal(h.ghCalls.length, 0, 'gh was never called');
+  // an empty diff is tier light: the minimal review's brief compares with the per-ticket fixed point
+  const rev = log.find((a) => a.step === 'review' && a.tickets[0] === ID1);
+  assert.equal(rev.meta.kind, 'minimal');
+  assert.match(readFileSync(briefOf(rev), 'utf8'), /git diff origin\/main\.\.\./);
+});

@@ -484,9 +484,17 @@ function checksText(t) {
 
 /** One builder per operation the host is handed: an exec of the script that owns it. */
 export const OPERATIONS = {
-  // integrate.mjs ticket-init: the ticket branch from the line's tip, its worktree, the branch recorded
+  // integrate.mjs ticket-init: the ticket branch from the line's tip, its worktree, the branch recorded.
+  // Under integrate: ticket-pr (#193, #195) the cut point is the ticket's own: origin/<base> for a ticket that is not
+  // stacked, the upstream ticket branch for a stacked one — integrate.mjs decides by the ticket's #188 fields; --base
+  // names the base branch it needs for the first case. Nothing merges the ticket into an integration branch.
   createTicketBranch: (c, { id, branch, worktree, tag }) =>
-    exec(`branch:${id}:${basename(worktree)}:${tag}`, 'ticket-branch', ['node', js('integrate.mjs'), 'ticket-init', c.path, id, '--branch', branch, '--worktree', worktree, '--repo', c.cfg.root], { tickets: [id] }),
+    exec(
+      `branch:${id}:${basename(worktree)}:${tag}`,
+      'ticket-branch',
+      ['node', js('integrate.mjs'), 'ticket-init', c.path, id, '--branch', branch, '--worktree', worktree, ...(c.profile.integrate === 'ticket-pr' ? ['--base', c.cfg.base] : []), '--repo', c.cfg.root],
+      { tickets: [id] },
+    ),
   // integrate.mjs merge: merge, record, deliver, delivered, push, clean; a conflict is aborted and exits 4
   merge: (c, { id, t, wt, tag }) =>
     exec(
@@ -1474,6 +1482,15 @@ function unfixed(c, id, t, what) {
 /** The review a ticket in in-review is due: a recheck when it came back from a fix round, else the initial one. */
 const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial');
 
+/**
+ * The fixed point of a ticket's review (#191, #195): the line's integration branch (the base branch under
+ * integrate: direct). Under integrate: ticket-pr it is decided per ticket, not per line: `origin/<base>` for a ticket
+ * that is not stacked, the upstream ticket's recorded branch for a stacked one (origin/<base> when none is recorded
+ * yet — ticket-init refuses that order, so it does not come up in a run tick drove).
+ */
+const fixedPointOf = (c, t) =>
+  c.profile.integrate === 'ticket-pr' ? ((t.stackParent ?? null) !== null && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}` : c.target(t.line);
+
 function stepInReview(c, id, t) {
   const k = t.history.filter((h) => h.to === 'in-review').length;
   const mode = reviewMode(t);
@@ -1527,7 +1544,7 @@ function stepInReview(c, id, t) {
         '',
         `- Ticket text: ${resolve(body.file)} (${c.cfg.tracker === 'local' ? 'the ticket file' : 'the full ticket text'}).`,
         acceptance,
-        `- Ticket branch: ${t.branch}; compare it with ${c.target(t.line)} (\`git diff ${c.target(t.line)}...${t.branch}\`).`,
+        `- Ticket branch: ${t.branch}; compare it with ${fixedPointOf(c, t)} (\`git diff ${fixedPointOf(c, t)}...${t.branch}\`).`,
         `- Acceptance snapshot: ${c.acceptanceFile(id)}; the comparison with the ticket now: ${against}.`,
         ...(c.members(id).length ? [`- This is a bundle of ${c.group(id).join(', ')} (#205): review the whole diff once against every ticket's criteria; each criterion names its ticket.`] : []),
         `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
@@ -1565,7 +1582,7 @@ function reviewTier(c, id, t) {
   const entries = t.history.filter((h) => h.to === 'in-review');
   const k = entries.findLastIndex((h) => h.from !== 'fixing') + 1 || entries.length;
   const file = c.tick('tier', `${keyOf(id)}-${k}.json`);
-  const argv = ['node', TIER_SCRIPT, 'judge', '--base', c.target(t.line), '--head', t.branch];
+  const argv = ['node', TIER_SCRIPT, 'judge', '--base', fixedPointOf(c, t), '--head', t.branch];
   if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
   const out = readJsonFile(c.deps, file);
   // #156: the judge's reasons go on the review's record with its tier
@@ -1629,7 +1646,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
         statusRecord: statusRecordOf(c, id, t),
         snapshot: c.acceptanceFile(id),
         against,
-        fixedPoint: c.target(t.line),
+        fixedPoint: fixedPointOf(c, t),
         branch: t.branch,
         checksReport: flag.agentReport,
         ci: ciCoverage(c, t),
@@ -1818,9 +1835,64 @@ function stepExpandReassign(c) {
   expandDispatch(c, `${Math.max(1, c.state.usage.rounds)}x${n}`, group, { reassign: true });
 }
 
+// ---- ticket-level pull requests (#195) ------------------------------------------------------------------------------
+
+/** The commit the latest implementation or fix report carries (its `commit:` line; agents/implementer.md section 5), or null: no report kept, or it says none. */
+function reportedCommit(c, id) {
+  const file = c.flag(id).agentReport;
+  if (!file) return null;
+  try {
+    const v = reportField(c.deps.read(file), 'commit');
+    return v && !/^none\b/i.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #195: under integrate: ticket-pr every ticket is its own pull request from its first reported commit on. A ticket
+ * whose latest agent report carries a commit and has no PR recorded gets one `pr-open` exec (integrate.mjs pushes the
+ * ticket branch and opens the draft PR; the number goes into the state); a report carrying no commit opens nothing
+ * and the report's own rules go on as ever. Once the PR is recorded, a branch tip the remote does not have yet — a
+ * batched fix's commit, a redo after a send-back — gets a `pr-push` exec to the same pull request; the number never
+ * changes and no second PR is opened. Neither exec is marked `host` (a ticket branch is never a protected branch),
+ * and the review's actions do not wait for them: the review and the PR's CI run in parallel. While an agent holds the
+ * ticket (an implementation or fix round, a review host in flight) nothing is pushed: its report comes first.
+ */
+function stepTicketPr(c) {
+  if (c.profile.integrate !== 'ticket-pr') return;
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (TERMINAL.includes(t.stage) || !t.branch) continue;
+    if (t.assignment?.deadline && t.assignment.agentId) continue; // an agent is at work: its report comes first
+    const tip = c.git.ref(t.branch);
+    if (!tip || !reportedCommit(c, id)) continue;
+    if ((t.pr ?? null) === null) {
+      const title = c.book.titles?.[id] ?? String(id);
+      c.emit(
+        exec(`pr-open:${id}`, 'pr-open', ['node', js('integrate.mjs'), 'pr-open', c.path, id, '--title', title, '--base', c.cfg.base, '--repo', c.cfg.root], {
+          stdout: c.tick('pr', `${keyOf(id)}-open.json`),
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    } else if (c.git.remote(t.branch) !== tip) {
+      c.emit(
+        exec(`pr-push:${id}@${tip.slice(0, 12)}`, 'pr-push', ['node', js('integrate.mjs'), 'pr-push', c.path, id, '--repo', c.cfg.root], {
+          stdout: c.tick('pr', `${keyOf(id)}-push-${tip.slice(0, 12)}.json`),
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    }
+  }
+}
+
 // ---- integration ----------------------------------------------------------------------------------------------------
 
 function stepIntegration(c) {
+  // #195: under integrate: ticket-pr nothing merges into an integration branch — the line has none (#193). A ticket
+  // whose review passed parks at queued; the merge path is its pull request's (integrate.mjs pr-merge, a later step).
+  if (c.profile.integrate === 'ticket-pr') return;
   const { state, book } = c;
   const byTarget = new Map();
   for (const [id, t] of Object.entries(state.tickets)) {
@@ -2584,6 +2656,7 @@ export function next(path, reported, now, deps, { hold = false } = {}) {
   }
   stepObservations(c);
   stepExpandReassign(c);
+  stepTicketPr(c);
   stepIntegration(c);
   stepDispatch(c);
   stepFinish(c);
