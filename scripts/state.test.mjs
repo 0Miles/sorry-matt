@@ -1041,3 +1041,119 @@ test('a state whose members are also tickets, or in two bundles, is not a state 
   writeFileSync(r.path, JSON.stringify(s));
   assert.equal(r.cmd('show').code, 1);
 });
+
+// ---- #196: the ticket-pr merge path's stages awaiting-ci and awaiting-merge ----------------------------------------
+
+/** A GitHub run under integrate: ticket-pr (plus any other profile fields). */
+function ticketPrRun(t, profileArgs = []) {
+  const r = run(t, { init: false });
+  r.ok('init', '--run', 'run-1', '--tracker', 'github');
+  r.ok('profile', '--integrate', 'ticket-pr', ...profileArgs);
+  return r;
+}
+
+test('#196: integrating → awaiting-ci → awaiting-merge → delivered, the merge SHA recorded in awaiting-merge', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'integrating');
+  r.ok('stage', 'awaiting-ci', '#1');
+  r.ok('stage', 'awaiting-merge', '#1');
+  r.refused(/delivered needs a merge SHA.*left-for-human/s, 'stage', 'delivered', '#1');
+  r.ok('merge', '#1', SHA1);
+  const out = r.ok('stage', 'delivered', '#1');
+  assert.equal(out.tickets['#1'].stage, 'delivered');
+  assert.deepEqual(
+    out.tickets['#1'].history.map((h) => h.to),
+    ['implementing', 'in-review', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'],
+  );
+});
+
+test('#196: a left-for-human record stands in for the merge SHA under ticket-pr, and `none` clears it', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'integrating');
+  r.ok('stage', 'awaiting-ci', '#1');
+  r.ok('stage', 'awaiting-merge', '#1');
+  r.ok('set', '#1', '--left-for-human', 'PR 11 is ready; a person merges it');
+  assert.equal(r.state().tickets['#1'].leftForHuman, 'PR 11 is ready; a person merges it');
+  r.ok('set', '#1', '--left-for-human', 'none');
+  assert.equal(r.state().tickets['#1'].leftForHuman, null);
+  r.refused(/delivered needs a merge SHA/, 'stage', 'delivered', '#1');
+  r.ok('set', '#1', '--left-for-human', 'left for a person');
+  const out = r.ok('stage', 'delivered', '#1');
+  assert.equal(out.tickets['#1'].stage, 'delivered');
+  assert.deepEqual(out.tickets['#1'].merges, []);
+});
+
+test('#196: awaiting-ci → fixing needs no review verdict (the red PR head is the reason) but still counts the round', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'integrating');
+  r.ok('stage', 'awaiting-ci', '#1');
+  const out = r.ok('stage', 'fixing', '#1', '--reason', 'the PR head is red');
+  assert.equal(out.tickets['#1'].fixRounds, 1);
+  // the round goes back through in-review as ever
+  r.ok('stage', 'in-review', '#1');
+  r.ok('review', '#1', '--mode', 'recheck', '--verdict', 'pass');
+  r.ok('stage', 'queued', '#1');
+});
+
+test('#196: awaiting-ci → fixing stays under the fix-round cap', (t) => {
+  const r = ticketPrRun(t, ['--fixRounds', '0']);
+  at(r, '#1', 'integrating');
+  r.ok('stage', 'awaiting-ci', '#1');
+  r.refused(/0 of 0 fix rounds used/, 'stage', 'fixing', '#1');
+});
+
+test('#196: the two waiting stages take awaiting-ruling and stuck, and refuse every non-edge', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'integrating');
+  r.ok('stage', 'awaiting-ci', '#1');
+  r.refused(/no edge awaiting-ci → delivered/, 'stage', 'delivered', '#1');
+  r.refused(/no edge awaiting-ci → queued/, 'stage', 'queued', '#1');
+  r.refused(/no edge awaiting-ci → integrating/, 'stage', 'integrating', '#1');
+  r.ok('stage', 'awaiting-merge', '#1');
+  r.refused(/no edge awaiting-merge → fixing/, 'stage', 'fixing', '#1');
+  r.refused(/no edge awaiting-merge → awaiting-ci/, 'stage', 'awaiting-ci', '#1');
+  r.ok('stage', 'stuck', '#1', '--reason', 'parked');
+
+  at(r, '#2', 'queued');
+  r.refused(/no edge queued → awaiting-ci/, 'stage', 'awaiting-ci', '#2');
+  r.refused(/no edge queued → awaiting-merge/, 'stage', 'awaiting-merge', '#2');
+  r.ok('stage', 'integrating', '#2');
+  r.ok('stage', 'awaiting-ci', '#2');
+  const out = r.ok('stage', 'awaiting-ruling', '#2', '--reason', 'ruling');
+  assert.equal(out.tickets['#2'].stage, 'awaiting-ruling');
+});
+
+test('#196: awaiting-ci and awaiting-merge are refused outside integrate: ticket-pr', (t) => {
+  const r = run(t);
+  at(r, '#1', 'integrating');
+  r.refused(/awaiting-ci is the ticket-pr merge path.*aggregate-pr/, 'stage', 'awaiting-ci', '#1');
+});
+
+test('#196: merge is still refused before integrating, and import takes the waiting stages under their guards', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'queued');
+  r.refused(/recorded in integrating or awaiting-merge/, 'merge', '#1', SHA1);
+
+  // an imported awaiting-merge ticket passes the queued guard (a passing review) like queued and integrating do
+  const gh = run(t, { init: false });
+  const seed = gh.file('seed.json', {
+    run: 'run-1',
+    tracker: 'github',
+    profile: { integrate: 'ticket-pr' },
+    tickets: {
+      '#1': { line: LINE, stage: 'awaiting-merge', snapshotSha256: SNAP, reviews: [{ mode: 'initial', verdict: 'pass' }] },
+    },
+  });
+  gh.ok('import', '--from', seed);
+  assert.equal(gh.state().tickets['#1'].stage, 'awaiting-merge');
+  const bad = run(t, { init: false });
+  const badSeed = bad.file('bad.json', {
+    run: 'run-1',
+    tracker: 'github',
+    profile: { integrate: 'ticket-pr' },
+    tickets: { '#1': { line: LINE, stage: 'awaiting-ci', snapshotSha256: SNAP } },
+  });
+  const res = bad.cmd('import', '--from', badSeed);
+  assert.equal(res.code, 3, res.err);
+  assert.match(res.err, /queued needs a review/);
+});
