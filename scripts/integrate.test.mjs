@@ -1327,3 +1327,111 @@ test('pr-merge refuses a ticket that is not queued or integrating, or has no bra
   env.queue('#2');
   refused(/#2 has no pull request recorded \(pr-open first\)/, 'pr-merge', '#2', '--base', 'main');
 });
+
+// ---- revert under integrate: ticket-pr (#197) ----------------------------------------------------------------------
+
+/** withQueuedPr, then the PR merged on the base: the branch lands on origin's main and the merge SHA is recorded. */
+function mergedPr(t, env, id, branch, pr) {
+  const q = withQueuedPr(t, env, id, branch, pr);
+  env.g(env.repo, 'push', '-q', 'origin', `refs/heads/${branch}:refs/heads/main`);
+  env.git('fetch', '-q', 'origin');
+  const msha = env.git('rev-parse', 'origin/main');
+  env.st('stage', 'integrating', id);
+  env.st('merge', id, msha);
+  env.st('stage', 'delivered', id);
+  return { ...q, msha };
+}
+
+test('revert (ticket-pr): reverts the merge on a revert branch, opens the revert PR against the base, never pushes the base, and is idempotent', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":31}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/31\n',
+  });
+  const env = withPrLine(t, ['#1'], gh);
+  const { dir, bare, state, ok, integrate } = env;
+  const { msha } = mergedPr(t, env, '#1', 'run-1/01-a', 12);
+  const inBare = (...args) => execFileSync('git', ['-C', bare, ...args], { encoding: 'utf8' }).trim();
+  const baseBefore = inBare('rev-parse', 'refs/heads/main');
+  assert.equal(baseBefore, msha);
+
+  const wt = join(dir, 'wt-revert');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red').code, 2, '--base is required under ticket-pr');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red', '--base', 'main', '--local', 'x.md').code, 2, '--local is refused');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red', '--base', 'main', '--push').code, 2, '--push is refused');
+
+  const out = ok('revert', '#1', '--worktree', wt, '--reason', `base CI red at ${msha}`, '--base', 'main');
+  assert.deepEqual(
+    [out.result, out.revertBranch, out.pr, out.prCreated, out.record, out.completion, out.stage],
+    ['reverted', 'run-1/01-a-revert', 31, true, 'host', 'none', 'stuck'],
+  );
+  assert.equal(out.reverts.length, 1);
+  assert.deepEqual([out.reverts[0].merge, out.reverts[0].found], [msha, 'reverted']);
+  assert.equal(out.reverts[0].revert, out.head);
+  assert.deepEqual(out.push, { status: 'revert-pr', branch: 'run-1/01-a-revert' });
+  // the revert branch is on origin at the revert commit; the base branch itself was never pushed
+  assert.equal(inBare('rev-parse', 'refs/heads/run-1/01-a-revert'), out.head);
+  assert.equal(inBare('rev-parse', 'refs/heads/main'), baseBefore, 'the base branch is untouched');
+  // the revert PR targets the base from the revert branch, and is not a draft (ruling 2: a mechanical revert, no review)
+  const create = gh.of('pr', 'create');
+  assert.equal(create.length, 1);
+  const args = create[0].args;
+  assert.equal(args[args.indexOf('--base') + 1], 'main');
+  assert.equal(args[args.indexOf('--head') + 1], 'run-1/01-a-revert');
+  assert.ok(!args.includes('--draft'), 'a mechanical revert is not reviewed: the PR opens ready');
+  assert.equal(args[args.indexOf('--title') + 1], 'Revert #1');
+  const s = state();
+  assert.equal(s.tickets['#1'].stage, 'stuck');
+  assert.match(s.tickets['#1'].reason, new RegExp(`^base CI red at ${msha}; reverted ${msha} by `));
+  assert.equal(existsSync(join(wt, '01-a.md')), false, "the ticket's change is reverted at the revert head");
+
+  // a rerun finds the revert, reuses the open PR and opens nothing new
+  const again = ok('revert', '#1', '--worktree', wt, '--reason', `base CI red at ${msha}`, '--base', 'main');
+  assert.deepEqual([again.prCreated, again.pr, again.reverts[0].found], [false, 31, 'git']);
+  assert.equal(gh.of('pr', 'create').length, 1, 'no second PR is created');
+});
+
+test('revert (ticket-pr): an integrated dependent becomes stuck; in-flight and candidate ones await a ruling, the branch tip kept', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":41}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/41\n',
+  });
+  const env = withPrLine(t, ['#1', '#2', '#3', '#4'], gh);
+  const { dir, git, ok, st, state, integrate, work } = env;
+  const { msha } = mergedPr(t, env, '#1', 'run-1/01-a', 12);
+  mergedPr(t, env, '#2', 'run-1/02-b', 13); // integrated dependent: its merge stays, the ticket goes stuck
+  const wt3 = join(dir, 'wt-3');
+  ok('ticket-init', '#3', '--branch', 'run-1/03-c', '--worktree', wt3, '--base', 'main');
+  const tip3 = work(wt3, { 'three.md': 'three\n' }, '#3: in flight');
+  st('set', '#3', '--snapshot', 'a'.repeat(64));
+  st('stage', 'implementing', '#3');
+
+  assert.equal(integrate('revert', '#1', '--worktree', join(dir, 'wt-revert'), '--reason', 'base red', '--base', 'main', '--dependent', '#2=x.md').code, 2, 'a dependent ticket file goes with --local');
+
+  const out = ok('revert', '#1', '--worktree', join(dir, 'wt-revert'), '--reason', 'base red', '--base', 'main', '--dependent', '#2', '--dependent', '#3', '--dependent', '#4');
+  const rows = Object.fromEntries(out.dependents.map((r) => [r.ticket, r]));
+  assert.deepEqual([rows['#2'].treatment, rows['#2'].stage], ['integrated', 'stuck']);
+  assert.deepEqual([rows['#3'].treatment, rows['#3'].stage], ['in-flight', 'awaiting-ruling']);
+  assert.deepEqual(rows['#3'].kept, { ref: 'refs/sorry-matt/run-1/03-c/upstream-reverted', sha: tip3 });
+  assert.deepEqual(rows['#3'].cleanup, { worktree: 'removed', branch: 'deleted' });
+  assert.equal(existsSync(wt3), false);
+  assert.throws(() => git('rev-parse', '--verify', '-q', 'refs/heads/run-1/03-c'), 'the branch is deleted; the ref keeps its tip');
+  assert.equal(git('rev-parse', 'refs/sorry-matt/run-1/03-c/upstream-reverted'), tip3);
+  assert.deepEqual([rows['#4'].treatment, rows['#4'].stage, rows['#4'].kept], ['in-flight', 'awaiting-ruling', null]);
+  const s = state();
+  const upstream = new RegExp(`^upstream reverted: #1 \\(${out.reverts[0].revert}\\)$`);
+  assert.match(s.tickets['#2'].reason, upstream);
+  assert.match(s.tickets['#3'].reason, upstream);
+  assert.match(s.tickets['#4'].reason, upstream);
+  assert.deepEqual(s.tickets['#2'].merges.length, 1, "the integrated dependent's merge stays");
+});
+
+test('revert: --base outside integrate: ticket-pr is a usage error; under it a ticket with no merge is refused', (t) => {
+  const aggregate = withLine(t, ['#1']);
+  assert.equal(aggregate.integrate('revert', '#1', '--worktree', aggregate.lineWt, '--reason', 'x', '--base', 'main').code, 2);
+
+  const env = withPrLine(t, ['#1'], ghStub());
+  withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  env.refused(/#1 is queued; revert takes a delivered ticket/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
+  env.st('stage', 'integrating', '#1');
+  env.refused(/#1 has no merge recorded; there is nothing to revert/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
+});

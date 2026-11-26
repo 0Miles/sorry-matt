@@ -22,6 +22,7 @@ import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
+import { main as ciMain } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
 
@@ -162,7 +163,29 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         : verdict === 'no-run'
           ? []
           : [{ id: 7, workflow: 'check', status: 'completed', conclusion: verdict === 'red' ? 'failure' : 'success' }];
-    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [] };
+    // #197: `failed` holds the red runs' ids, as ci.mjs verdict reports them for `gh run view <id> --log-failed`
+    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [], failed: verdict === 'red' ? [7] : [] };
+  };
+  /** #197: `ci.mjs base <branch>` — origin's tip of the base branch, judged by h.ci as a verdict is. */
+  h.base = (args) => {
+    const branch = args.filter((x, k, all) => x !== 'base' && x !== '--repo' && all[k - 1] !== '--repo').at(-1);
+    const sha = git(h.repo, 'rev-parse', `origin/${branch}`);
+    const v = h.verdict(['verdict', branch, sha]);
+    return { ...v, command: 'base' };
+  };
+  /** #197: the run list the real `ci.mjs earliest-red` reads — one row per first-parent SHA of the branch, from h.ci. */
+  h.ghRuns = (args) => {
+    if (args[0] !== 'run' || args[1] !== 'list') throw new Error(`no gh stub for earliest-red: gh ${args.join(' ')}`);
+    const branch = args[args.indexOf('--branch') + 1];
+    const commit = args.includes('--commit') ? args[args.indexOf('--commit') + 1] : null;
+    const shas = commit ? [commit] : git(h.repo, 'log', '--first-parent', '--format=%H', `origin/${branch}`).split('\n').filter(Boolean);
+    const rows = [];
+    for (const sha of shas) {
+      const v = h.ci(branch, sha);
+      if (v === 'no-run') continue;
+      rows.push({ headSha: sha, databaseId: 7, workflowName: 'check', event: 'push', status: v === 'running' ? 'in_progress' : 'completed', conclusion: v === 'red' ? 'failure' : v === 'green' ? 'success' : v === 'running' ? null : v });
+    }
+    return JSON.stringify(rows);
   };
   h.frontier = (args) => {
     const flag = (name) => (args.includes(name) ? new Set(args[args.indexOf(name) + 1].split(',')) : new Set());
@@ -218,11 +241,23 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     if (args[0] === 'api' && args[1] === 'graphql') return JSON.stringify(h.mergeQueue ?? { data: { repository: { mergeQueue: null } } });
     throw new Error(`no gh stub for: gh ${args.join(' ')}`);
   };
-  /** #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. */
+  /**
+   * #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. #197: as
+   * GitHub's "Create a merge commit" does, always a merge commit whose first parent is main, never a fast-forward:
+   * the base's first-parent history is then the merges, which the base-red attribution walks.
+   */
+  h.mergeBranch = (branch) => {
+    const wt = join(h.dir, `merge-${(h.mergeN = (h.mergeN ?? 0) + 1)}`);
+    git(h.repo, 'fetch', '-q', 'origin');
+    git(h.repo, 'worktree', 'add', '-q', '--detach', wt, 'origin/main');
+    git(wt, 'merge', '-q', '--no-ff', '-m', `Merge pull request #${h.prs[branch]?.number ?? 0} from ${branch}`, branch);
+    git(wt, 'push', '-q', 'origin', 'HEAD:main');
+    git(h.repo, 'worktree', 'remove', '--force', wt);
+    git(h.repo, 'fetch', '-q', 'origin');
+  };
   h.mergePr = (tid) => {
     const branch = h.state().tickets[tid].branch;
-    git(h.repo, 'push', '-q', 'origin', `${branch}:main`);
-    git(h.repo, 'fetch', '-q', 'origin');
+    h.mergeBranch(branch);
     const pr = h.prs[branch];
     pr.merged = true;
     pr.mergeOid = git(h.repo, 'rev-parse', 'origin/main');
@@ -244,7 +279,16 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       else if (script === 'brief.mjs') r = briefMain(rest);
       else if (script === 'overlap.mjs') r = overlapMain(rest);
       else if (script === 'tier.mjs') r = tierMain(rest, tierDeps(a.cwd ?? process.cwd())); // #139: run for real, on the repo
-      else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
+      else if (script === 'ci.mjs' && rest[0] === 'base') r = { code: 0, out: JSON.stringify(h.base(rest)) };
+      else if (script === 'ci.mjs' && rest[0] === 'earliest-red') {
+        // #197: run for real on the repo, the network canned (gh run list rows built from h.ci per SHA)
+        r = ciMain(rest, {
+          read: (p) => readFileSync(p, 'utf8'),
+          git: (cwd, args2) => execFileSync('git', ['-C', cwd, ...args2], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: ENV }),
+          gh: h.ghRuns,
+          cwd: process.cwd(),
+        });
+      } else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
       else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
       else if (script === 'acceptance.mjs') r = { code: 0, out: JSON.stringify(h.accept(rest)) };
       else throw new Error(`no stand-in for ${script}`);
@@ -270,6 +314,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         else out = `title:\t${h.titles[id]}\n--\nThe ticket text of ${id}.\n`;
       }
       else if (args[0] === 'run' && args[1] === 'list') out = '[]';
+      else if (args[0] === 'run' && args[1] === 'view') out = `log of run ${args[2]}\n`; // #197: gh run view <id> --log-failed
     } else throw new Error(`unknown command ${cmd}`);
     if (a.stdout) write(a.stdout, out);
     return code;

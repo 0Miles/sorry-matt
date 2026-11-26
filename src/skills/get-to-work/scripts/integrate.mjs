@@ -16,6 +16,7 @@
 //   node integrate.mjs ci-init     <state> <ticket> --worktree <path> [--repo <dir>]
 //   node integrate.mjs revert      <state> <ticket> --worktree <integration worktree> --reason <text>
 //                                  [--local <ticket file>] [--dependent <ticket>[=<ticket file>]]... [--push]
+//                                  [--base <base branch>] [--repo <dir>]     (the last two: integrate: ticket-pr)
 //   node integrate.mjs send-back   <state> <ticket> [--conflicts <file>,<file>] [--predicted <file>,<file>]
 //                                  [--repo <dir>]
 //   node integrate.mjs stuck       <state> <ticket> --reason <text> [--worktree <integration worktree>
@@ -257,6 +258,20 @@
 //                        "tip", "push" }
 //              `completion` "not-found": the file at HEAD is delivered but no completion commit was found; the
 //              blocker after it still makes frontier.mjs read the ticket as stuck.
+//              Under integrate: ticket-pr (#197) the ticket's merges are on the base branch, so the revert goes out
+//              as a pull request and the base branch itself is never pushed. `--base` is required (`--local` and
+//              `--push` are refused: the record is the host's raw issue, and the revert branch is always pushed):
+//              each merge is reverted, newest first, on the revert branch `<ticket branch>-revert`, cut from
+//              `origin/<--base>` with a worktree at `--worktree` (an existing one is reused; a merge is already
+//              reverted when a commit on the revert branch says `This reverts commit <merge>`). The ticket and each
+//              `--dependent` are recorded exactly as above (the ticket stuck, an integrated dependent stuck, an
+//              in-flight one awaiting a ruling with its branch tip kept), the cleanup running in `--repo`'s
+//              repository. Then the revert branch is pushed and a revert pull request opened against `--base`
+//              (`gh pr create`, not a draft; an open PR with that head is reused). Whether and when the revert PR is
+//              merged is not this command's call: tick waits for the revert PR's own CI and hands the merge to the
+//              host as a prompting call (RED-LIGHT.md, the ticket-pr handling). Output as above plus
+//              "revertBranch", "head" (its tip), "pr", "prCreated", with "completion" "none", "record" "host" and
+//              "push" { "status": "revert-pr", "branch" }.
 // send-back    The git part of a send back for a redo (SEND-BACK.md steps 1 and 3), for a ticket queued or
 //              integrating that has no merge recorded (a candidate already sent back, for a rerun). Refused when the
 //              ticket was sent back once already (mark it stuck). The steps:
@@ -1162,6 +1177,9 @@ function revert(ctx, rest, flags) {
   if (rest.length !== 1) throw new UsageError('revert takes exactly one ticket');
   if (!flags.worktree) throw new UsageError('revert needs --worktree (the integration worktree)');
   if (!flags.reason) throw new UsageError('revert needs --reason');
+  const s0 = load(ctx.state);
+  if (profileOf(s0).integrate === 'ticket-pr') return revertPr(ctx, rest, flags, s0);
+  if (flags.base !== undefined) throw new UsageError('--base is for integrate: ticket-pr');
   const local = flags.local !== undefined;
   const deps = (flags.dependent ?? []).map((d) => {
     const at = d.indexOf('=');
@@ -1171,7 +1189,7 @@ function revert(ctx, rest, flags) {
   });
   const [id] = rest;
   const wt = ctx.path(flags.worktree);
-  let s = load(ctx.state);
+  let s = s0;
   const t = ticketOf(s, id);
   if (!['delivered', 'integrating', 'stuck'].includes(t.stage)) {
     throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket, or an integrating one with its merge recorded`);
@@ -1297,6 +1315,142 @@ function revert(ctx, rest, flags) {
       dependents,
       tip,
       push,
+    },
+  };
+}
+
+// ---- revert under integrate: ticket-pr (#197) ----------------------------------------------------------------------
+
+/** The revert branch rule: never a line, a protected branch, or another ticket's ticket or revert branch. */
+function checkRevertBranch(s, id, branch, repo) {
+  if (branch in s.lines) throw new Refusal(`${branch} is an integration branch of this run, not a revert branch`);
+  if (isProtected(repo, branch)) throw new Refusal(`${branch} is a protected branch, not a revert branch`);
+  const other = Object.entries(s.tickets).find(([k, o]) => o.branch && (o.branch === branch || (k !== id && `${o.branch}-revert` === branch)));
+  if (other) throw new Refusal(`${branch} is ${other[0]}'s branch`);
+}
+
+/**
+ * revert under integrate: ticket-pr (#197, see the header): the merges are on the base branch, so the revert goes
+ * out as a pull request on the revert branch `<ticket branch>-revert`, and the base branch is never pushed.
+ */
+function revertPr(ctx, rest, flags, s) {
+  if (!flags.base) throw new UsageError('revert under integrate: ticket-pr needs --base (the base branch the revert PR targets)');
+  if (flags.local !== undefined) throw new UsageError('--local is the Local Markdown record; integrate: ticket-pr runs on GitHub');
+  if (flags.push) throw new UsageError('--push: under integrate: ticket-pr the revert branch is always pushed and the base branch never is');
+  const deps = (flags.dependent ?? []).map((d) => {
+    if (d.includes('=')) throw new UsageError(`--dependent ${d}: a ticket file goes with --local, which integrate: ticket-pr does not take`);
+    return d;
+  });
+  const [id] = rest;
+  const repo = ctx.repo;
+  const t = ticketOf(s, id);
+  if (!['delivered', 'integrating', 'stuck'].includes(t.stage)) {
+    throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket, or an integrating one with its merge recorded`);
+  }
+  if (!t.merges.length) throw new Refusal(`${id} has no merge recorded; there is nothing to revert`);
+  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded; the revert branch is <ticket branch>-revert`);
+  const branch = `${t.branch}-revert`;
+  checkRevertBranch(s, id, branch, repo);
+  const base = `origin/${flags.base}`;
+  if (commitOf(repo, base) === null) throw new Refusal(`${base} is not a commit; fetch the base branch first`);
+  const seen = new Set([id]);
+  for (const dep of deps) {
+    const d = ticketOf(s, dep);
+    if (seen.has(dep)) throw new UsageError(`--dependent ${dep} is given twice, or is the reverted ticket`);
+    seen.add(dep);
+    if (d.branch && !INTEGRATED(d)) checkTicketBranch(s, dep, d, d.branch, repo);
+  }
+  const merges = [...new Set(t.merges.map((m) => {
+    const sha = commitOf(repo, m.sha);
+    if (sha === null) throw new Refusal(`${id}: the recorded merge ${m.sha} is not a commit in this repository`);
+    if (!isAncestor(repo, sha, base)) throw new Refusal(`${id}: the recorded merge ${sha} is not on ${base}; the state and git disagree`);
+    return sha;
+  }))];
+  const made = ensureWorktree(repo, branch, ctx.path(flags.worktree), base);
+  const wt = made.path;
+  const already = new Map(merges.map((m) => [m, revertOf(wt, m, branch)]));
+  if (t.stage === 'stuck' && merges.every((m) => already.get(m) === null)) {
+    throw new Refusal(`${id} is stuck, but none of its merges is reverted on ${branch}: it was marked stuck another way`);
+  }
+
+  // 1. revert, newest first, on the revert branch
+  const reverts = [];
+  for (const m of [...merges].reverse()) {
+    if (already.get(m)) {
+      reverts.push({ merge: m, revert: already.get(m), found: 'git' });
+      continue;
+    }
+    if (dirty(wt)) throw new Refusal(`${wt} has uncommitted changes; the revert needs a clean worktree`);
+    const r = revertCommit(wt, m);
+    if (r.files) return { code: CONFLICT, out: { command: 'revert', ticket: id, line: t.line, result: 'conflict', merge: m, files: r.files } };
+    reverts.push({ merge: m, revert: r.sha, found: 'reverted' });
+  }
+  reverts.reverse();
+  const pairs = reverts.map((r) => `${r.merge} by ${r.revert}`).join(', ');
+  const revertShas = reverts.map((r) => r.revert).join(', ');
+
+  // 2. state (GitHub: the host files the raw issue, as the line revert has it: "record" is "host")
+  if (t.stage !== 'stuck') state(ctx, 'stage', 'stuck', id, '--reason', `${flags.reason}; reverted ${pairs}`);
+
+  // 3. dependents, treated as the line revert treats them; the cleanup runs in the repository, there is no line worktree
+  const upstream = `upstream reverted: ${id} (${revertShas})`;
+  const dependents = [];
+  for (const dep of deps) {
+    const live = load(ctx.state);
+    const d = live.tickets[dep];
+    const row = { ticket: dep, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
+    if (INTEGRATED(d)) {
+      row.treatment = 'integrated';
+      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep, '--reason', upstream);
+    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
+      row.treatment = 'in-flight';
+      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep, '--reason', upstream);
+      if (d.assignment?.deadline) {
+        row.agent = d.assignment.agentId ?? null;
+        row.cleanup = 'agent-in-flight';
+      } else if (d.branch) {
+        row.kept = keepTip(repo, d.branch, keptRef(live.run, d.branch, 'upstream-reverted'));
+        row.cleanup = cleanBranch(repo, d.branch, `${dep} is awaiting a ruling`, true);
+      }
+    }
+    row.stage = load(ctx.state).tickets[dep].stage;
+    dependents.push(row);
+  }
+
+  // 4. push the revert branch (never the base) and open the revert PR; an open one with that head is reused
+  pushable(repo, id, branch, 'the revert PR needs the revert branch on origin');
+  git(repo, 'push', '-q', '-u', 'origin', branch);
+  let pr = openPrNumber(ctx, repo, branch);
+  const created = pr === null;
+  if (created) {
+    const body = [
+      `Reverts the merge${merges.length > 1 ? 's' : ''} of ${id}: the base branch turned red.`,
+      '',
+      `Reason: ${flags.reason}`,
+      '',
+      ...reverts.map((r) => `- Reverted: ${r.merge} by ${r.revert}`),
+    ].join('\n');
+    const out = String(ctx.gh(['pr', 'create', '--base', flags.base, '--head', branch, '--title', `Revert ${id}`, '--body', body], repo));
+    const m = /\/pull\/(\d+)/.exec(out);
+    if (!m) throw new Error(`gh pr create printed no pull request URL: ${out.trim()}`);
+    pr = Number(m[1]);
+  }
+  return {
+    out: {
+      command: 'revert',
+      ticket: id,
+      line: t.line,
+      result: 'reverted',
+      reverts,
+      completion: 'none',
+      record: 'host',
+      stage: load(ctx.state).tickets[id].stage,
+      dependents,
+      revertBranch: branch,
+      head: branchTip(repo, branch),
+      pr,
+      prCreated: created,
+      push: { status: 'revert-pr', branch },
     },
   };
 }
@@ -1440,7 +1594,7 @@ const COMMANDS = {
   'pr-merge': [prMerge, { base: 'one', ready: 'bool', merged: 'bool', repo: 'one', now: 'one' }],
   merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
   'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
-  revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', now: 'one' }],
+  revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', base: 'one', repo: 'one', now: 'one' }],
   'send-back': [sendBack, { conflicts: 'one', predicted: 'one', repo: 'one', now: 'one' }],
   stuck: [stuck, { reason: 'one', worktree: 'one', local: 'one', attempts: 'one', 'review-worktree': 'one', push: 'bool', repo: 'one', now: 'one' }],
 };
