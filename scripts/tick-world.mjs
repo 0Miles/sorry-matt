@@ -57,6 +57,10 @@ export const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id
  */
 export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"' } = {}) {
   const local = tracker === 'local';
+  // #195: under integrate: ticket-pr the line has no integration branch and no worktree (#193): every ticket is its
+  // own pull request, cut from origin/<base>. The world then makes neither, records the line with no tip, and seeds
+  // the state's tracker (state.mjs refuses the profile without a GitHub run).
+  const ticketPr = profile?.integrate === 'ticket-pr';
   const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
   // the long form: on a Windows runner tmpdir() is an 8.3 short path (RUNNER~1), git prints the long one
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-tick-')));
@@ -80,8 +84,10 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'remote', 'add', 'origin', origin);
   git(repo, 'push', '-q', '-u', 'origin', 'main');
-  git(repo, 'worktree', 'add', '-q', '-b', LINE, intWt, 'main');
-  git(intWt, 'push', '-q', '-u', 'origin', LINE);
+  if (!ticketPr) {
+    git(repo, 'worktree', 'add', '-q', '-b', LINE, intWt, 'main');
+    git(intWt, 'push', '-q', '-u', 'origin', LINE);
+  }
   const runs = join(dir, 'runs');
   mkdirSync(runs, { recursive: true });
   const path = join(runs, 'r1.state.json');
@@ -128,9 +134,9 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   h.state = () => JSON.parse(readFileSync(path, 'utf8'));
   h.tick = (...args) => tick([...args, '--now', h.iso()]);
 
-  h.S('init', '--run', 'r1');
+  h.S('init', '--run', 'r1', ...(ticketPr ? ['--tracker', 'github'] : []));
   h.S('add', ID1, ID2, '--line', h.line);
-  h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
+  if (!ticketPr) h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
   if (profile) h.S('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
   write(join(W, 'files', `${numOf(ID1)}.txt`), 'a.txt\n');
   write(join(W, 'files', `${numOf(ID2)}.txt`), 'b.txt\n');
@@ -179,6 +185,27 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     return out;
   };
 
+  // #195: the `gh` seam of integrate.mjs (pr-open, pr-push, gh stack): the canned pull requests, head branch → PR.
+  // Every call is logged in h.ghCalls, so a replay can assert what was sent (`gh pr create --draft …`).
+  h.prs = {};
+  h.prNext = 11;
+  h.ghCalls = [];
+  h.gh = (args) => {
+    h.ghCalls.push(args);
+    if (args[0] === 'pr' && args[1] === 'list') {
+      const pr = h.prs[args[args.indexOf('--head') + 1]];
+      return JSON.stringify(pr ? [{ number: pr.number }] : []);
+    }
+    if (args[0] === 'pr' && args[1] === 'create') {
+      const head = args[args.indexOf('--head') + 1];
+      const number = h.prNext++;
+      h.prs[head] = { number, base: args[args.indexOf('--base') + 1], title: args[args.indexOf('--title') + 1], body: args[args.indexOf('--body') + 1], draft: args.includes('--draft') };
+      return `https://github.com/${REPO}/pull/${number}\n`;
+    }
+    if (args[0] === 'pr' && args[1] === 'edit') return '';
+    throw new Error(`no gh stub for: gh ${args.join(' ')}`);
+  };
+
   // ---- the host ----
   h.exec = (a) => {
     const [cmd, ...args] = a.argv;
@@ -189,7 +216,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       const rest = args.slice(1);
       let r;
       if (script === 'state.mjs') r = stateMain(rest[0] === 'check' ? rest : [...rest, '--now', h.iso()]);
-      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()]);
+      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()], { gh: h.gh });
       else if (script === 'verify.mjs') r = verifyMain([...rest, '--now', h.iso()]);
       else if (script === 'deadline.mjs') r = deadlineMain(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
       else if (script === 'brief.mjs') r = briefMain(rest);
