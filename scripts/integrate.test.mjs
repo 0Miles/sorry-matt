@@ -1127,4 +1127,203 @@ test('pr-open and pr-push are refused outside integrate: ticket-pr', (t) => {
   const { refused } = withLine(t, ['#1']);
   refused(/pr-open is for integrate: ticket-pr; this run's integrate is aggregate-pr/, 'pr-open', '#1', '--title', 'x', '--base', 'main');
   refused(/pr-push is for integrate: ticket-pr/, 'pr-push', '#1');
+  refused(/pr-merge is for integrate: ticket-pr/, 'pr-merge', '#1', '--base', 'main');
+});
+
+// ---- pr-merge (#194) -----------------------------------------------------------------------------------------------
+
+/** withPrLine() plus one queued unstacked ticket `id` with a branch, one commit and its PR number recorded. */
+function withQueuedPr(t, env, id, branch, pr) {
+  const wt = join(env.dir, `wt-${branch.split('/').pop()}`);
+  env.ok('ticket-init', id, '--branch', branch, '--worktree', wt, '--base', 'main');
+  const tip = env.work(wt, { [`${branch.split('/').pop()}.md`]: 'work\n' }, `${id}: work`);
+  env.st('set', id, '--pr', String(pr));
+  env.queue(id);
+  return { wt, tip };
+}
+
+test('pr-merge (ticket-pr) phase push: merges origin/<base>, pushes the branch, reports the head, and is idempotent', (t) => {
+  const gh = ghStub();
+  const env = withPrLine(t, ['#1'], gh);
+  const { dir, repo, bare, git, g, ok, state, refused, integrate, work } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  // The base moves on after the cut: the ticket branch must take it before CI.
+  work(repo, { 'base2.md': 'the base moves on\n' }, 'base: second commit');
+  git('push', '-q', 'origin', 'main');
+  const baseSha = git('rev-parse', 'origin/main');
+
+  assert.equal(integrate('pr-merge', '#1').code, 2, '--base is required for an unstacked ticket');
+  const out = ok('pr-merge', '#1', '--base', 'main');
+  const head = git('rev-parse', 'refs/heads/run-1/01-a');
+  assert.deepEqual(out, {
+    format: 'sorry-matt/integrate@1', command: 'pr-merge', phase: 'push', ticket: '#1', line: LINE,
+    pr: 12, branch: 'run-1/01-a', stacked: false, result: 'pushed', synced: 'merged origin/main', head,
+  });
+  // git: one merge commit on the ticket branch, its parents the old tip and origin/main, pushed to origin.
+  assert.equal(g(one.wt, 'rev-parse', 'HEAD^1'), one.tip);
+  assert.equal(g(one.wt, 'rev-parse', 'HEAD^2'), baseSha);
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), head);
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+  assert.equal(gh.calls.length, 0, 'an unstacked push phase calls gh not at all');
+
+  const revision = state().revision;
+  const again = ok('pr-merge', '#1', '--base', 'main');
+  assert.deepEqual([again.synced, again.head], ['already', head]);
+  assert.equal(git('rev-parse', 'refs/heads/run-1/01-a'), head, 'no second merge');
+  assert.equal(state().revision, revision, 'nothing left to record on a rerun');
+  refused(/#9 is not a ticket of this run/, 'pr-merge', '#9', '--base', 'main');
+});
+
+test('pr-merge (ticket-pr) phase push: a conflict with the base aborts, exits 4 and leaves state, HEAD and the worktree as before', (t) => {
+  const env = withPrLine(t, ['#1'], ghStub());
+  const { repo, bare, git, g, ok, state, statePath, integrate, work } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  work(one.wt, { 'a.md': 'one\nTWO\n' }, '#1: edit a');
+  const tip = g(one.wt, 'rev-parse', 'HEAD');
+  work(repo, { 'a.md': 'one\nTHREE\n' }, 'base: conflicting edit');
+  git('push', '-q', 'origin', 'main');
+  const before = readFileSync(statePath, 'utf8');
+
+  const r = integrate('pr-merge', '#1', '--base', 'main');
+  assert.equal(r.code, 4, r.err);
+  assert.equal(r.json.result, 'conflict');
+  assert.deepEqual(r.json.files, ['a.md']);
+  assert.equal(readFileSync(statePath, 'utf8'), before, 'state unchanged');
+  assert.equal(state().tickets['#1'].stage, 'queued');
+  assert.equal(g(one.wt, 'rev-parse', 'HEAD'), tip);
+  assert.equal(g(one.wt, 'status', '--porcelain'), '');
+  assert.throws(() => g(one.wt, 'rev-parse', '--verify', '-q', 'MERGE_HEAD'));
+  assert.throws(() => remoteTip(bare, 'refs/heads/run-1/01-a'), 'nothing was pushed');
+
+  // The merge agent resolves it in the ticket worktree; the rerun finds the base taken and pushes.
+  try {
+    g(one.wt, 'merge', '--no-edit', 'origin/main');
+  } catch {
+    // the conflict, as expected
+  }
+  writeFileSync(join(one.wt, 'a.md'), 'one\nTWO\nTHREE\n');
+  g(one.wt, 'add', 'a.md');
+  g(one.wt, 'commit', '-q', '--no-edit');
+  const resolved = g(one.wt, 'rev-parse', 'HEAD');
+  const out = ok('pr-merge', '#1', '--base', 'main');
+  assert.deepEqual([out.synced, out.head], ['already', resolved]);
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), resolved);
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+});
+
+test('pr-merge (ticket-pr) phase push for a stacked ticket: gh stack sync then push; a divergence exits 5 and pushes nothing', (t) => {
+  let diverged = true;
+  const gh = ghStub({
+    'stack sync': () => (diverged ? 'warning: run-1/02-b has diverged from origin/run-1/02-b\nsync aborted\n' : 'synced\n'),
+  });
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, g, ok, st, state, statePath, integrate } = env;
+  withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  const tip2 = env.work(wt2, { 'two.md': 'two\n' }, '#2: stacked work');
+  st('set', '#2', '--pr', '13');
+  env.queue('#2');
+
+  // The sync aborted on a divergence while exiting 0: read from its output, exit 5, not reported as success.
+  const before = readFileSync(statePath, 'utf8');
+  const r = integrate('pr-merge', '#2');
+  assert.equal(r.code, 5, r.err);
+  assert.equal(r.json.result, 'diverged');
+  assert.deepEqual(r.json.divergence, ['warning: run-1/02-b has diverged from origin/run-1/02-b']);
+  assert.equal(readFileSync(statePath, 'utf8'), before, 'state unchanged');
+  assert.equal(state().tickets['#2'].stage, 'queued');
+  assert.equal(gh.of('stack', 'push').length, 0, 'nothing is pushed on a divergence');
+
+  diverged = false;
+  const out = ok('pr-merge', '#2');
+  assert.deepEqual([out.stacked, out.result, out.synced, out.head], [true, 'pushed', 'gh stack sync', tip2]);
+  const sync = gh.of('stack', 'sync');
+  const push = gh.of('stack', 'push');
+  assert.deepEqual([sync.length, push.length], [2, 1]);
+  for (const c of [...sync, ...push]) {
+    assert.deepEqual(c.env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+    samePath(c.cwd, wt2);
+  }
+  assert.equal(state().tickets['#2'].stage, 'integrating');
+});
+
+test('pr-merge --ready: gh pr ready, then merge-gate decides; merge or queue hands the command to the host, human sends nothing', (t) => {
+  let graphql = '{"data":{"repository":{"mergeQueue":null}}}';
+  const gh = ghStub({
+    'repo view': '{"nameWithOwner":"o/r"}',
+    'api graphql': () => graphql,
+  });
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, ok, st, state, integrate } = env;
+  withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  st('set', '#2', '--stack-parent', '#1');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', join(dir, 'wt-2'));
+  st('set', '#2', '--pr', '13');
+  env.queue('#2');
+
+  assert.equal(integrate('pr-merge', '#1', '--ready').code, 2, '--ready needs --base for merge-gate');
+  assert.equal(integrate('pr-merge', '#1', '--ready', '--merged').code, 2);
+  const out = ok('pr-merge', '#1', '--ready', '--base', 'main');
+  assert.equal(out.phase, 'ready');
+  assert.equal(out.base, 'main');
+  assert.deepEqual(out.gate, { decision: 'merge', reason: 'no-queue' });
+  assert.deepEqual(out.send, { status: 'host', command: 'gh pr merge 12' }, 'the host sends the merge, never the script');
+  assert.deepEqual(gh.of('pr', 'ready')[0].args, ['pr', 'ready', '12']);
+  assert.equal(gh.of('api', 'graphql').length, 1, "merge-gate's merge-queue query went through the same gh seam");
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+
+  const stacked = ok('pr-merge', '#2', '--ready', '--base', 'main');
+  assert.deepEqual(stacked.send, { status: 'host', command: 'gh stack merge 13' });
+  assert.deepEqual(gh.of('pr', 'ready')[1].args, ['pr', 'ready', '13']);
+
+  // A failed gate query decides human: nothing is sent, and the gate's reason is carried.
+  graphql = 'not json at all';
+  const human = ok('pr-merge', '#1', '--ready', '--base', 'main');
+  assert.deepEqual(human.gate, { decision: 'human', reason: 'query-failed' });
+  assert.deepEqual(human.send, { status: 'human' });
+});
+
+test('pr-merge --merged: refused until the PR is MERGED, then records the merge SHA, delivers and cleans up locally', (t) => {
+  const msha = 'b'.repeat(40);
+  let prState = 'OPEN';
+  const gh = ghStub({
+    'pr view': () => JSON.stringify({ mergeCommit: { oid: msha }, state: prState }),
+  });
+  const env = withPrLine(t, ['#1'], gh);
+  const { git, ok, state, refused } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+
+  refused(/#1's pull request 12 is OPEN, not MERGED; the host sends the merge first/, 'pr-merge', '#1', '--merged');
+  assert.equal(state().tickets['#1'].stage, 'queued');
+  assert.equal(existsSync(one.wt), true, 'nothing is cleaned before the merge is confirmed');
+
+  prState = 'MERGED';
+  const out = ok('pr-merge', '#1', '--merged');
+  assert.deepEqual([out.phase, out.merge, out.stage], ['merged', msha, 'delivered']);
+  assert.deepEqual(out.cleanup, { worktree: 'removed', branch: 'deleted' });
+  assert.deepEqual(gh.of('pr', 'view')[0].args, ['pr', 'view', '12', '--json', 'mergeCommit,state']);
+  assert.equal(existsSync(one.wt), false);
+  assert.throws(() => git('rev-parse', '--verify', '-q', 'refs/heads/run-1/01-a'));
+  const s = state();
+  assert.equal(s.tickets['#1'].stage, 'delivered');
+  assert.deepEqual(s.tickets['#1'].merges.map((m) => m.sha), [msha]);
+
+  const revision = state().revision;
+  const again = ok('pr-merge', '#1', '--merged');
+  assert.deepEqual(again.cleanup, { worktree: 'absent', branch: 'absent' });
+  assert.equal(again.merge, msha);
+  assert.equal(state().revision, revision, 'nothing left to record on a rerun');
+});
+
+test('pr-merge refuses a ticket that is not queued or integrating, or has no branch or PR recorded', (t) => {
+  const env = withPrLine(t, ['#1', '#2'], ghStub());
+  const { dir, ok, refused } = env;
+  refused(/#1 is candidate; pr-merge takes a ticket that is queued or integrating/, 'pr-merge', '#1', '--base', 'main');
+  env.queue('#1');
+  refused(/#1 has no ticket branch recorded/, 'pr-merge', '#1', '--base', 'main');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', join(dir, 'wt-2'), '--base', 'main');
+  env.queue('#2');
+  refused(/#2 has no pull request recorded \(pr-open first\)/, 'pr-merge', '#2', '--base', 'main');
 });
