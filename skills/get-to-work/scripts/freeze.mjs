@@ -46,7 +46,8 @@
 //              - tracker "github": `default-branch`: `gh repo view <source> --json defaultBranchRef` reads the default
 //                branch; it fails when the plan's `base` (without a leading `origin/`, `refs/remotes/origin/` or
 //                `refs/heads/`) is not it, since a PR's `Closes #N` only closes its issue on the default branch, and
-//                when the query fails (the detail carries gh's message). Its detail names `aggregate-pr`.
+//                when the query fails. A mismatch's detail names `aggregate-pr` (or the default branch as `base`);
+//                a failed query's detail is `could not be read: <gh's message>` and names no setting.
 //              - tracker "local": `tracker` fails: Local Markdown has no PR to open; its detail names `aggregate-pr`.
 //              - either tracker: `gh-stack`: `gh stack --version` with `GH_STACK_NO_UPDATE_NOTIFIER=1` in the
 //                environment, with `stack` (true when it exited 0 and printed a version on stdout: without the
