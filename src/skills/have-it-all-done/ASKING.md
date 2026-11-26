@@ -224,6 +224,8 @@ hook 沒擋下的同類操作也一樣不做。subagent 把它寫進回報交給
      `budget: no-progress 3`。`spawns` 與 `rounds` 在票數確定時照第 4 節改寫。
    - **階段時限**：同樣格式，單位分鐘：`budget: timeout-implement 30`、`budget: timeout-fix 20`（含紅燈修正）、
      `budget: timeout-expand 15`、`budget: timeout-merge 15`、`budget: timeout-review 60`（審查主持 agent）。
+     另有一行可省略的 `budget: wake-check 20`：fallback 喚醒最多等幾分鐘（沒寫就是 20），讓回合結束卻沒交回報的
+     agent 不必等到它的階段時限才被看到。
    - **用量與停止原因**在 state 的 `usage` 與 `stop`。spawn 數取自 hook 寫的 `<run>.counters.json`，只讀不寫。
      向使用者提問時，從送出到收到回答的秒數以 `state.mjs usage --wait` 加進等人時間。token 數除非執行環境自己
      提供，一律標為未知，不以耗時或 agent 數量推算。

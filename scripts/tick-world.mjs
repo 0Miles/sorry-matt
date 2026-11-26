@@ -428,7 +428,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     const flags = ['--outcome', r.outcome];
     for (const k of ['value', 'findings', 'fixed', 'unfixed', 'agent']) if (r[k] !== undefined) flags.push(`--${k}`, r[k]);
     // #142 × #143: the report of a review host that went to the background carries its `counts:` line, as at the spawn
-    if (a.step === 'collect' && a.meta.stage === 'in-review') flags.push('--observations', String(r.observations ?? 0), '--pre-existing', String(r.preExisting ?? 0), ...findingCountFlags(r));
+    if (a.step === 'collect' && a.meta.stage === 'in-review' && r.outcome !== 'incomplete') flags.push('--observations', String(r.observations ?? 0), '--pre-existing', String(r.preExisting ?? 0), ...findingCountFlags(r));
     return flags;
   };
   /** The implementation (or fix) agent's report as agents/implementer.md section 5 has it. */
@@ -466,18 +466,29 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
 
   /** The host's turn as SKILL.md has it: batch 1 of the list, each recorded; the later batches come in later lists. */
   h.run = (actions) => {
+    // h.batchRecords: the batch's results recorded with one `record … + …` call at the end, as SKILL.md step 3 has it
+    const held = [];
+    const record = h.batchRecords ? (...args) => held.push(args) : h.record;
+    h.runBatch(actions, record);
+    if (held.length) {
+      const r = h.tick('record', path, ...held.flatMap((g, i) => (i ? ['+', ...g] : g)));
+      assert.equal(r.code, 0, r.err);
+      (h.batchedRecords ??= []).push(held.length);
+    }
+  };
+  h.runBatch = (actions, record) => {
     for (const a of actions.filter((x) => x.batch === 1)) {
       h.log.push({ ...a, wakeup: h.wakes.length });
       if (a.kind === 'exec') {
         const code = h.exec(a);
         if (h.crashAfter?.(a)) throw new Crash(a.id);
-        h.record(a.id, '--exit', String(code));
+        record(a.id, '--exit', String(code));
       } else if (a.kind === 'spawn') {
         const r = h.spawn(a);
         if (h.crashAfter?.(a)) throw new Crash(a.id);
-        if (Array.isArray(r)) h.record(a.id, ...r);
+        if (Array.isArray(r)) record(a.id, ...r);
         else {
-          h.record(a.id, ...r.flags);
+          record(a.id, ...r.flags);
           if (r.agent && h.agentOf[r.agent].role === 'expand') {
             for (const tid of a.tickets) {
               // the expansion agent's block: on GitHub an issue comment, which acceptance.mjs reads back
@@ -496,7 +507,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
           else if (r.agent) h.work(r.agent, a.tickets[0]);
         }
       } else {
-        h.record(a.id, ...h.judge(a));
+        record(a.id, ...h.judge(a));
       }
     }
   };

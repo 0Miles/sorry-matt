@@ -229,7 +229,7 @@ test('#143: the review spawn comes with an assignment record; a review host in t
   const w3 = h.wake();
   const collect = h.actions(w3).find((x) => x.step === 'collect' && x.meta?.agent === agent);
   assert.ok(collect, 'the review host report is collected');
-  assert.deepEqual([collect.meta.stage, collect.outcomes], ['in-review', ['pass', 'fix', 'stuck']]);
+  assert.deepEqual([collect.meta.stage, collect.outcomes], ['in-review', ['pass', 'fix', 'stuck', 'incomplete']]);
   assert.match(collect.record, /--outcome pass\|fix\|stuck/);
   const after = h.state();
   assert.equal(after.tick.agents[agent].status, 'collected');
@@ -272,7 +272,7 @@ test('#142 × #143: a review host in the background brings its counts with the c
     if (a.tickets[0] !== '#1') return 'pass';
     assert.equal(a.step, 'collect', 'in the background the verdict comes by the collect');
     if (!checked++) {
-      assert.match(a.record, /--outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\]$/);
+      assert.match(a.record, /--outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\] \| --outcome incomplete$/);
       assert.match(a.do, /--observations <n> --pre-existing <n>/);
       for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
         const r = h.tick('record', h.path, a.id, '--outcome', 'pass', ...missing);
@@ -387,4 +387,47 @@ test('#128 D4: under review: minimal a fix agent reassigned after a timeout is p
   assert.ok(brief.includes(`The findings of this fix round are in ${join(h.W, 'tick', 'review', '1-1.report.md')}`), 'the findings are in the reviewer report');
   assert.doesNotMatch(brief, /this ticket's existing record/);
   assert.doesNotMatch(brief, /review block/);
+});
+
+// ---- a review host whose turn ends with no report is sent a message at once (batch-2 run: a 55-minute stall) -------
+
+test('a review host in the background whose turn ends with no report is recorded incomplete, nudged by SendMessage at once, and its next report is collected', (t) => {
+  const h = world(t);
+  h.reviewBackground = true;
+  let first = true;
+  h.policy.collect = (a) => {
+    if (a.meta.stage !== 'in-review') return { implementing: 'green', expanding: 'reported', fixing: 'fixed' }[a.meta.stage] ?? 'logged';
+    if (a.tickets[0] === '#1' && first) {
+      first = false;
+      assert.ok(a.outcomes.includes('incomplete'));
+      return 'incomplete';
+    }
+    return 'pass';
+  };
+  h.nudges = [];
+  h.policy.nudge = (a) => {
+    h.nudges.push({ a, wakeup: h.wakes.length });
+    h.reportsNext.push(a.meta.agent); // the review host goes on and reports again
+    return 'sent';
+  };
+  for (let i = 0; i < 8 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const collects = distinct(h.log).filter((a) => a.step === 'collect' && a.meta?.stage === 'in-review' && a.tickets[0] === '#1');
+  assert.equal(collects.length, 2, 'the incomplete report, then the report after the nudge');
+  assert.match(collects[1].id, /:n1$/, 'the second report is a new collect');
+  assert.equal(h.nudges.length, 1);
+  const incompleteAt = h.log.find((a) => a.id === collects[0].id).wakeup;
+  assert.equal(h.nudges[0].wakeup, incompleteAt, 'the message goes out in the same wake-up, not at the fallback');
+  assert.match(h.nudges[0].a.do, /^SendMessage /);
+  assert.ok(!h.log.some((a) => a.step === 'timeout'), 'no timeout, no reassignment');
+  assert.deepEqual(h.state().tickets['#1'].reviews.map((r) => r.verdict), ['pass'], 'one review recorded');
+});
+
+test('the fallback wake-up is capped by budget: wake-check (20 minutes by default)', async () => {
+  const { capFallback } = await import('../src/skills/get-to-work/scripts/tick.mjs');
+  const long = { deadline: '2026-05-01T12:30:00Z', seconds: 9000, scheduleWakeup: 3600 };
+  assert.deepEqual(capFallback(long, 20), { ...long, seconds: 1200, scheduleWakeup: 1200, capped: true });
+  assert.equal(capFallback({ ...long, seconds: 600, scheduleWakeup: 600 }, 20).seconds, 600, 'a nearer deadline stands');
+  assert.equal(capFallback(null, 20), null);
+  assert.equal(capFallback(long, 0), long, 'no cap without a positive limit');
 });

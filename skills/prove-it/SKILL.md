@@ -142,7 +142,11 @@ means no deleted-behaviour lens, no rule file covering the changed files means n
 signature changed the cross-file lens is folded into line by line.
 
 This skill's finders, the architect (below), verifiers (section 4) and Fix Verifiers (section 7) are always dispatched by you in the
-foreground: you wait within your own turn until every one of them is back. The caller spawns you in the foreground,
+foreground: you wait within your own turn until every one of them is back. The Agent tool may still put them in the
+background; each one that comes back then brings a completion notice. Before you end your turn to wait, name each agent
+not back yet — by the completion notices you got and the files they wrote to your notes directory — and when none is
+missing go on as usual: never wait for a notice that has already come; end your turn to wait only for one truly not
+back. End your turn without the review report and the host sends you a message to go on. The caller spawns you in the foreground,
 but the Agent tool may put you in the background: the caller then takes your report when your completion notice
 arrives, and what you do does not change. `get-to-work` gives the review host agent a time limit (`timeout-review`):
 when you are put in the background it scans that deadline all the same, and once you are overdue it stops you and hands the
