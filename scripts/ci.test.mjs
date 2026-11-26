@@ -53,10 +53,23 @@ test('verdict: the output carries the format, the branch, the SHA and every run'
       { id: rows[1].databaseId, workflow: 'deploy', event: 'push', status: 'completed', conclusion: 'skipped' },
     ],
     rerun: [],
+    failed: [],
   });
   assert.deepEqual(r.calls, [
     ['run', 'list', '--branch', 'line', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion'],
   ]);
+});
+
+// #197: a red PR head's failing output is saved with `gh run view <id> --log-failed`; the ids come from `failed`.
+test('verdict: failed lists the red runs\' ids, and only those', () => {
+  const ok = done('success', 'check', 'push');
+  const bad = done('failure', 'check', 'pull_request');
+  const worse = done('timed_out', 'deploy', 'push');
+  const r = verdictOf([ok, bad, worse], ['ticket/197', SHA]);
+  assert.equal(r.json.verdict, 'red');
+  assert.deepEqual(r.json.failed, [bad.databaseId, worse.databaseId]);
+  assert.deepEqual(verdictOf([ok]).json.failed, [], 'green: no failed ids');
+  assert.deepEqual(verdictOf(ghFailure('boom\n')).json.failed, [], 'query-failed: no failed ids');
 });
 
 // A ticket PR's head SHA has a `push` run and a `pull_request` run; `gh run list --branch` lists both (checked
