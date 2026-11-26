@@ -18,7 +18,7 @@
 //   node tick.mjs record <state> <action id> [--exit <code>] [--outcome <word>] [--agent <id>] [--type <agent type>]
 //                        [--value <text>] [--findings <id>,<id>] [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //                        [--observations <n>] [--pre-existing <n>]
-//                        [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] [--now <UTC>]
+//                        [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] [--covered <n>] [--now <UTC>]
 //
 // setup writes the run's configuration into the state file once at the freeze (again to change it; the bookkeeping
 // below is kept). `--repo` is required with github, `--tickets-dir` (where the ticket files are, e.g.
@@ -294,6 +294,7 @@ import { constants as osConstants } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
@@ -598,6 +599,13 @@ function context(path, state, now, deps) {
   c.tick = (...p) => join(W, 'tick', ...p);
   c.snapshot = (id) => join(W, 'acceptance', `${keyOf(id)}.json`);
   c.predicted = (id) => join(W, 'files', `${keyOf(id)}.txt`);
+  // #205: a bundle's lead stands for it in the state; its members are kept on the lead
+  c.members = (id) => state.tickets[id]?.members ?? [];
+  c.group = (id) => [id, ...c.members(id)];
+  c.leadOf = (id) => (id in state.tickets ? id : (Object.entries(state.tickets).find(([, t]) => (t.members ?? []).includes(id))?.[0] ?? null));
+  c.ticketOf = (id) => state.tickets[c.leadOf(id)];
+  /** The acceptance the agents read: the ticket's snapshot, or a bundle's snapshot of all its tickets. */
+  c.acceptanceFile = (id) => (c.members(id).length ? join(W, 'acceptance', `${keyOf(id)}.bundle.json`) : c.snapshot(id));
   c.sendBack = (id) => join(W, 'sendback', `${keyOf(id)}.md`);
   c.target = (line) => (profile.integrate === 'direct' ? cfg.base : line);
   c.ticketPath = (id) => `${cfg.ticketsDir.replace(/\\/g, '/').replace(/\/+$/, '')}/${id}`;
@@ -1054,7 +1062,7 @@ function stepTimeouts(c) {
           if (read && Array.isArray(read.expansions)) entry.expansions[id] = read.expansions.length;
           else {
             complete = false;
-            c.emit(exec(`expansions:${x.id}:${a.deadline}:${id}`, 'expansions', acceptanceArgv(c, id, state.tickets[id]), { stdout: out, cwd: acceptanceCwd(c), tickets: [id] }));
+            c.emit(exec(`expansions:${x.id}:${a.deadline}:${id}`, 'expansions', acceptanceArgv(c, id, c.ticketOf(id)), { stdout: out, cwd: acceptanceCwd(c), tickets: [c.leadOf(id) ?? id] }));
           }
         }
         if (!complete) {
@@ -1203,8 +1211,96 @@ function ticketFace(text) {
  */
 function acceptanceSource(c, id) {
   if (c.profile.expand !== 'skip') return 'criteria';
-  const snap = readJsonFile(c.deps, c.snapshot(id)); // null when missing or unreadable
-  return Array.isArray(snap?.items) && snap.items.length ? 'criteria' : 'ticket-text';
+  // null when missing or unreadable; a bundle has criteria only when each of its tickets has some (#205)
+  const has = (m) => {
+    const snap = readJsonFile(c.deps, c.snapshot(m));
+    return Array.isArray(snap?.items) && snap.items.length > 0;
+  };
+  return c.group(id).every(has) ? 'criteria' : 'ticket-text';
+}
+
+/**
+ * #205: the ticket face the agents read. A ticket's own (bodyFile), or for a bundle one file with the face of each
+ * of its tickets, written once each of them is fetched; `waiting` while one is still being fetched (nothing that reads
+ * the face is handed out then).
+ */
+function faceFile(c, id, t, after, again = null) {
+  if (!c.members(id).length) return bodyFile(c, id, t, after, again);
+  const parts = c.group(id).map((m) => ({ m, ...bodyFile(c, m, t, after, again) }));
+  const pending = parts.find((x) => x.id)?.id ?? null;
+  const file = c.tick('body', `${keyOf(id)}.bundle${again ? `-${slugOf(again)}` : ''}.md`);
+  if (pending) return { file, id: pending, waiting: true };
+  const ids = c.group(id);
+  const head = [
+    `# Bundle ${ids.join(', ')}`,
+    '',
+    `These ${ids.length} tickets are one bundle (#205): one implementation on one ticket branch, one review of the whole diff, one merge. Each keeps its identity: its text is below under its own heading, each acceptance criterion names its ticket, and delivering the bundle delivers every one of them. ${id}, the lead, carries the status record; each other ticket's status record points to it.`,
+  ];
+  const body = parts.map((x) => `---\n\n## Bundle ticket ${x.m}\n\n${c.deps.exists(x.file) ? c.deps.read(x.file).replace(/\s+$/, '') : '(its text could not be read)'}`);
+  c.write(file, `${[...head, '', ...body].join('\n')}\n`);
+  return { file, id: null };
+}
+
+/** #205: a bundle's snapshot: the items of each ticket's own snapshot, in bundle order, each naming its ticket. */
+function bundleSnapshot(c, id) {
+  const snaps = c.group(id).map((m) => ({ m, snap: readJsonFile(c.deps, c.snapshot(m)) }));
+  if (snaps.some((x) => !x.snap)) return null;
+  const items = snaps.flatMap(({ m, snap }) => (snap.items ?? []).map((it) => ({ ticket: m, ...it })));
+  const out = {
+    format: 'sorry-matt/acceptance@1',
+    tracker: snaps[0].snap.tracker,
+    source: snaps[0].snap.source,
+    id,
+    bundle: c.group(id),
+    title: snaps.map(({ m, snap }) => `${m} ${snap.title ?? ''}`.trim()).join(' / '),
+    items,
+    expansions: snaps.flatMap(({ m, snap }) => (snap.expansions ?? []).map((e) => ({ ticket: m, ...e }))),
+    needsExpansion: snaps.some(({ snap }) => snap.needsExpansion),
+    sha256: createHash('sha256').update(JSON.stringify(items)).digest('hex'),
+  };
+  c.write(c.acceptanceFile(id), `${JSON.stringify(out, null, 2)}\n`);
+  return out;
+}
+
+/**
+ * The comparison of the acceptance with the snapshot for a review (acceptance.mjs --against): one exec per ticket;
+ * for a bundle (#205) the one file the agents read is written once each ticket's is done, its `check` the union of
+ * theirs (each item naming its ticket) and `tickets` each one's own output. `waiting` while one is still running.
+ */
+function againstFile(c, id, t, tag) {
+  const one = (m) => {
+    const file = c.tick('against', `${keyOf(m)}-${tag}.json`);
+    const sha = m === id ? (t.snapshotSha256 ?? '<sha256>') : (readJsonFile(c.deps, c.snapshot(m))?.sha256 ?? '<sha256>');
+    const eid = c.emit(
+      exec(`against:${m}:${tag}`, 'acceptance-check', acceptanceArgv(c, m, t, ['--against', c.snapshot(m), '--sha', sha]), {
+        stdout: file,
+        cwd: acceptanceCwd(c),
+        okExit: [0, 3],
+        tickets: [id],
+        line: t.line,
+      }),
+    );
+    return { m, file, id: eid };
+  };
+  if (!c.members(id).length) {
+    const x = one(id);
+    return { file: x.file, id: x.id };
+  }
+  const parts = c.group(id).map(one);
+  const file = c.tick('against', `${keyOf(id)}-${tag}.bundle.json`);
+  const pending = parts.find((x) => x.id)?.id ?? null;
+  if (pending) return { file, id: pending, waiting: true };
+  const outs = parts.map((x) => ({ m: x.m, out: readJsonFile(c.deps, x.file) }));
+  const named = (m, xs) => (xs ?? []).map((it) => ({ ticket: m, ...it }));
+  const check = {
+    against: c.acceptanceFile(id),
+    snapshotIntact: outs.every((x) => x.out?.check?.snapshotIntact !== false),
+    changed: outs.some((x) => !x.out || x.out.check?.changed !== false),
+    removed: outs.flatMap((x) => named(x.m, x.out?.check?.removed)),
+    added: outs.flatMap((x) => named(x.m, x.out?.check?.added)),
+  };
+  c.write(file, `${JSON.stringify({ format: 'sorry-matt/acceptance@1', id, bundle: c.group(id), check, tickets: Object.fromEntries(outs.map((x) => [x.m, x.out])) }, null, 2)}\n`);
+  return { file, id: null };
 }
 
 /**
@@ -1277,7 +1373,8 @@ function agentTail(c, id, t, p, after) {
     return;
   }
   // spawn: the brief from brief.mjs, then the Agent call
-  const body = bodyFile(c, id, t, []);
+  const body = faceFile(c, id, t, []);
+  if (body.waiting) return; // a bundle's face is written once each of its tickets is fetched (#205)
   const values = c.tick('brief', `${keyOf(id)}-${p.n}.values.json`);
   const out = c.tick('brief', `${keyOf(id)}-${p.n}.md`);
   let bodyPath = body.file;
@@ -1292,7 +1389,7 @@ function agentTail(c, id, t, p, after) {
       {
         out,
         role: p.role,
-        snapshot: c.snapshot(id),
+        snapshot: c.acceptanceFile(id),
         worktree: p.worktree,
         branch: p.branch,
         integration: c.target(t.line),
@@ -1312,7 +1409,7 @@ function agentTail(c, id, t, p, after) {
     tickets: [id],
     line: t.line,
     after: [b, ...after],
-    spawn: { subagent_type: AGENT_TYPES.implement, description: roleDescription(p.role, [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
+    spawn: { subagent_type: AGENT_TYPES.implement, description: roleDescription(p.role, c.group(id)), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
     reference: [doc('SKILL.md', 'section 1 (the loop: spawn; general-purpose when the type is not available)')],
     record: spawnRecord(p.n),
   };
@@ -1405,27 +1502,22 @@ function stepInReview(c, id, t) {
   }
   // a review handed out again after its host timed out (#143) is a new review: its own ids and spawn file
   const tag = `${k}${retrying ? `.${t.reviews.length}` : ''}${flag.redispatch?.reassign ? '-t' : ''}`;
-  const against = c.tick('against', `${keyOf(id)}-${tag}.json`);
-  const ag = c.emit(
-    exec(`against:${id}:${tag}`, 'acceptance-check', acceptanceArgv(c, id, t, ['--against', c.snapshot(id), '--sha', t.snapshotSha256 ?? '<sha256>']), {
-      stdout: against,
-      cwd: acceptanceCwd(c),
-      okExit: [0, 3],
-      tickets: [id],
-      line: t.line,
-    }),
-  );
+  const cmp = againstFile(c, id, t, tag);
+  const against = cmp.file;
+  const ag = cmp.id;
+  if (cmp.waiting) return; // a bundle's comparison is written once each of its tickets' is done (#205)
   // #139: under review: full the review tier picks the review; it is judged first, once per initial review
   const tier = c.profile.review === 'full' ? reviewTier(c, id, t) : null;
-  if (tier === undefined) return void bodyFile(c, id, t, [], `review:${tag}`); // the ticket face is fetched meanwhile
+  if (tier === undefined) return void faceFile(c, id, t, [], `review:${tag}`); // the ticket face is fetched meanwhile
   if (c.profile.review === 'minimal' || tier.tier === 'light') {
     const brief = c.tick('review', `${keyOf(id)}-${tag}.md`);
     const report = c.tick('review', `${keyOf(id)}-${tag}.report.md`); // the fix round's findings come from here
-    const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+    const body = faceFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+    if (body.waiting) return;
     const acceptance =
       acceptanceSource(c, id) === 'ticket-text'
         ? '- Acceptance: the ticket text is the acceptance (expand: skip, and the snapshot has no criteria).'
-        : `- Acceptance: the \`items\` of the acceptance snapshot ${resolve(c.snapshot(id))}.`;
+        : `- Acceptance: the \`items\` of the acceptance snapshot ${resolve(c.acceptanceFile(id))}.`;
     c.write(
       brief,
       [
@@ -1436,7 +1528,8 @@ function stepInReview(c, id, t) {
         `- Ticket text: ${resolve(body.file)} (${c.cfg.tracker === 'local' ? 'the ticket file' : 'the full ticket text'}).`,
         acceptance,
         `- Ticket branch: ${t.branch}; compare it with ${c.target(t.line)} (\`git diff ${c.target(t.line)}...${t.branch}\`).`,
-        `- Acceptance snapshot: ${c.snapshot(id)}; the comparison with the ticket now: ${against}.`,
+        `- Acceptance snapshot: ${c.acceptanceFile(id)}; the comparison with the ticket now: ${against}.`,
+        ...(c.members(id).length ? [`- This is a bundle of ${c.group(id).join(', ')} (#205): review the whole diff once against every ticket's criteria; each criterion names its ticket.`] : []),
         `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
         '',
         'Report in at most 15 lines: `verdict: pass | fix`, then one line per finding: `<id>: <file:line> <what is wrong> <evidence>`.',
@@ -1451,7 +1544,7 @@ function stepInReview(c, id, t) {
       tickets: [id],
       line: t.line,
       after: [ag, body.id],
-      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
+      spawn: { subagent_type: 'general-purpose', description: roleDescription('review', c.group(id)), prompt: `Read ${resolve(brief)} in full and follow it.`, background: false },
       reference: [doc('SKILL.md', 'section 2, Close-out checks and review')],
       outcomes: ['pass', 'fix'],
       meta: { mode, kind: 'minimal', report, ...(tier ? { tier: tier.tier } : {}), ...(tier?.reasons ? { tierReasons: tier.reasons } : {}) },
@@ -1518,7 +1611,8 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
       ),
     );
   }
-  const body = bodyFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+  const body = faceFile(c, id, t, [], `review:${tag}`); // the ticket as it is at this review
+  if (body.waiting) return;
   const values = c.tick('review', `${keyOf(id)}-${tag}.values.json`);
   const out = c.tick('review', `${keyOf(id)}-${tag}.md`);
   c.write(
@@ -1533,7 +1627,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
         ticket: id,
         bodyFile: body.file,
         statusRecord: statusRecordOf(c, id, t),
-        snapshot: c.snapshot(id),
+        snapshot: c.acceptanceFile(id),
         against,
         fixedPoint: c.target(t.line),
         branch: t.branch,
@@ -1543,6 +1637,8 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
         reviewer: 'primary',
         scratchpad: join(c.cfg.worktrees, 'review', keyOf(id)),
         tier: tier?.file ?? null,
+        bundle: c.members(id).length ? c.group(id) : null,
+        siblings: siblingScope(c, id, tag),
       },
       null,
       2,
@@ -1568,37 +1664,73 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
     tickets: [id],
     line: t.line,
     after: [b, ag, body.id, r2],
-    spawn: { subagent_type: 'general-purpose', description: roleDescription('review', [id]), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
+    spawn: { subagent_type: 'general-purpose', description: roleDescription('review', c.group(id)), prompt: `Read ${resolve(out)} in full and follow it.`, background: false },
     reference: [doc('REVIEWER.md', 'all of it (the spawn file is its rules and the values)'), doc('SKILL.md', 'section 2, Close-out checks and review')],
     outcomes: ['pass', 'fix', 'stuck'],
     meta: { mode, kind: 'full', ...(tier?.file ? { tier: tier.tier } : {}), ...(tier?.reasons ? { tierReasons: tier.reasons } : {}) },
     // #143: with its report when it returned it; --agent alone when the Agent tool put it in the background
-    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]   (in the background: --agent <agent id> alone)`,
+    record: `node ${q(SELF)} record ${q(c.path)} ${q(`review:${id}:${tag}`)} --agent <agent id> --outcome pass|fix|stuck [--findings <id>,<id>] --observations <n> --pre-existing <n> [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] [--covered <n>]   (in the background: --agent <agent id> alone)`,
   });
 }
 
 /**
- * #142: a review whose report counts observations or pre-existing gets a judge to file them as one raw ticket per
- * ticket (SKILL.md, Filing along the way). It does not hold the ticket up: the review's conclusion goes on beside it.
- * One judge per such review, in review order: a later one is handed out once the earlier is recorded, and names
- * the raw ticket that one filed, which its new items join.
+ * #205: the sibling scope of a review: the run's other open tickets (not at an end state, not this bundle), each with
+ * its stage, title, predicted files and where its full text is, so a candidate one of them covers is not reported as
+ * this ticket's. null when there is none.
+ */
+function siblingScope(c, id, tag) {
+  const own = new Set(c.group(id));
+  const rows = [];
+  for (const [lead, t] of Object.entries(c.state.tickets)) {
+    if (TERMINAL.includes(t.stage)) continue;
+    for (const m of c.group(lead)) {
+      if (own.has(m)) continue;
+      const files = c.deps.exists(c.predicted(m)) ? c.deps.read(c.predicted(m)).split(/\r?\n/).map((x) => x.trim()).filter((x) => x && !x.startsWith('#')) : [];
+      const text = c.cfg.tracker === 'github' ? `\`gh issue view ${numOf(m)} --repo ${c.cfg.repo}\`` : `${c.ticketPath(m)} on ${c.target(t.line)}`;
+      const title = c.book.titles?.[m];
+      rows.push(`- ${m}${title ? ` — ${title}` : ''} (${t.stage}${m !== lead ? `, in bundle ${lead}` : ''}); predicted files: ${files.join(', ') || 'none written'}; full text: ${text}`);
+    }
+  }
+  if (!rows.length) return null;
+  const file = c.tick('review', `${keyOf(id)}-${tag}.siblings.md`);
+  c.write(
+    file,
+    [
+      `# Sibling scope of ${[...own].join(', ')}`,
+      '',
+      'The other open tickets of this run. A candidate that one of them is to do (its text says so) is `covered` by it, not a finding or an observation of this review — unless it is a blocking one (acceptance, regression, red, safety): this ticket lands on its own.',
+      '',
+      ...rows,
+    ].join('\n') + '\n',
+  );
+  return file;
+}
+
+/**
+ * #142, #205: a review whose report counts observations or pre-existing gets a judge to file them in one raw ticket
+ * per line (SKILL.md, Filing along the way). It does not hold the ticket up: the review's conclusion goes on beside
+ * it. One judge at a time per line, in review order: a later one is handed out once the earlier is recorded, and
+ * names the raw ticket on file for the line, which its new items join, an item already there merged, not repeated.
  */
 function stepObservations(c) {
+  const busy = new Set(); // lines with a judge in this list
   for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (busy.has(t.line)) continue;
     const at = t.reviews.findIndex((r, i) => (r.observations ?? 0) + (r.preExisting ?? 0) > 0 && !c.done(`observations:${id}:${i + 1}`));
     if (at < 0) continue;
+    busy.add(t.line);
     const r = t.reviews[at];
     const o = r.observations ?? 0;
     const counts = `${o} observation${o === 1 ? '' : 's'} and ${r.preExisting ?? 0} pre-existing`;
     const where = `the \`observations\` and \`pre-existing\` sections of its ${r.mode} review block (review ${at + 1}) in ${statusRecordOf(c, id, t)}`;
-    const issue = c.flag(id).observationsIssue;
+    const issue = c.flag(`line:${t.line}`).observationsIssue ?? c.flag(id).observationsIssue;
     const how =
       c.cfg.tracker === 'github'
         ? '`gh issue create` without `ready-for-agent`, the body polished by ASKING section 6'
         : `the next unused ticket file in ${c.cfg.ticketsDir} with Status needs-triage, committed to ${t.line} (pushed before this wake-up ends when there is an origin)`;
     const what = issue
-      ? `${id}'s ${r.mode} review reports ${counts}. Read only ${where}; add the items not already in ${issue} to it (location, one sentence, evidence path each) — the same raw ticket, not another. Record filed with --value ${issue}.`
-      : `${id}'s ${r.mode} review reports ${counts}. Read only ${where}, and file one raw ticket listing each item (location, one sentence, evidence path), linked to the status record: ${how}. It stays outside the frozen ticket set. Record filed with --value <issue id>.`;
+      ? `${id}'s ${r.mode} review reports ${counts}. Read only ${where}; add its items to ${issue}, the raw ticket of line ${t.line} (location, one sentence, evidence path each, and the ticket it came from). An item at the same location as one already there, or about the same problem, is not added again: name ${id} among that item's sources. The same raw ticket, not another. Record filed with --value ${issue}.`
+      : `${id}'s ${r.mode} review reports ${counts}. Read only ${where}, and file one raw ticket for line ${t.line} listing each item (location, one sentence, evidence path, the ticket it came from), linked to the status record: ${how}. Later reviews of the line's tickets add theirs to it. It stays outside the frozen ticket set. Record filed with --value <issue id>.`;
     c.emit(
       judge(`observations:${id}:${at + 1}`, 'observations', what, ['filed'], [doc('SKILL.md', 'section 2, Filing along the way'), doc('ASKING.md', 'section 6')], {
         tickets: [id],
@@ -1676,9 +1808,13 @@ function stepExpanding(c, id, t) {
 function stepExpandReassign(c) {
   const group = Object.entries(c.state.tickets)
     .filter(([id, t]) => t.stage === 'expanding' && t.assignment?.deadline === null && c.book.flags[id]?.redispatch?.reassign)
-    .map(([id, t]) => ({ id, count: t.assignment.fingerprint?.expansions?.[id] ?? 0 }));
+    // #205: a lead's fingerprint holds its members' counts too; each is expanded again
+    .flatMap(([id, t]) => {
+      const counts = t.assignment.fingerprint?.expansions ?? {};
+      return c.group(id).filter((m) => m === id || m in counts).map((m) => ({ id: m, count: counts[m] ?? 0 }));
+    });
   if (!group.length) return;
-  const n = Math.max(...group.map((x) => c.book.dispatches[x.id] ?? 0)) + 1;
+  const n = Math.max(...group.map((x) => c.book.dispatches[c.leadOf(x.id)] ?? 0)) + 1;
   expandDispatch(c, `${Math.max(1, c.state.usage.rounds)}x${n}`, group, { reassign: true });
 }
 
@@ -1929,14 +2065,18 @@ function dispatchSteps(c, d) {
   // 3. frontier
   const fr = frontier(c, r);
   if (!fr) return;
-  const known = (fid) => (fid in state.tickets ? fid : basename(String(fid)) in state.tickets ? basename(String(fid)) : null);
+  // a frontier id as the run names it: a ticket, or a member of a bundle (#205)
+  const known = (fid) => [fid, basename(String(fid))].find((x) => c.leadOf(x) !== null) ?? null;
   const info = new Map(fr.tickets.map((x) => [known(x.id), x]).filter(([k]) => k));
+  book.titles = { ...(book.titles ?? {}), ...Object.fromEntries([...info].filter(([, x]) => x.title).map(([k, x]) => [k, x.title])) };
   // 4. stalled tickets and the lines that failed verification leave the pipeline
   for (const [id, t] of Object.entries(state.tickets)) {
     if (t.stage !== 'candidate') continue;
-    const f = info.get(id);
+    // a bundle stalls when any of its tickets does (#205)
+    const sid = c.group(id).find((m) => info.get(m)?.stalled) ?? id;
+    const f = info.get(sid);
     let reason = null;
-    if (f?.stalled) reason = `stalled (${f.stalled}): ${f.blockedBy.filter((b) => b.state !== 'done').map((b) => `${b.id} ${b.state}`).join(', ') || 'see frontier'}`;
+    if (f?.stalled) reason = `stalled (${f.stalled})${sid !== id ? ` at ${sid}, of this bundle` : ''}: ${f.blockedBy.filter((b) => b.state !== 'done').map((b) => `${b.id} ${b.state}`).join(', ') || 'see frontier'}`;
     else if (book.failed[t.line]) reason = `line failed verification (${t.line})`;
     if (reason) {
       d.touched.push(id);
@@ -1944,8 +2084,23 @@ function dispatchSteps(c, d) {
     }
   }
   // 5. candidates, the most unblocking first
-  const dependents = (id) => fr.tickets.filter((x) => (x.blockedBy ?? []).some((b) => b.inSet && known(b.id) === id)).length;
-  const order = fr.frontier.map(known).filter(Boolean);
+  const dependents = (id) => {
+    const g = c.group(id);
+    return fr.tickets.filter((x) => !g.includes(known(x.id)) && (x.blockedBy ?? []).some((b) => b.inSet && g.includes(known(b.id)))).length;
+  };
+  // #205: a bundle is ready when every blocker of each of its tickets is done or in the bundle; its place is its
+  // first ready ticket's in the frontier's order
+  const groupReady = (id) =>
+    c.group(id).every((m) => {
+      const f = info.get(m);
+      return f && f.state === 'open' && (f.blockedBy ?? []).every((b) => b.state === 'done' || c.group(id).includes(known(b.id)));
+    });
+  const order = [
+    ...new Set([
+      ...fr.frontier.map(known).filter(Boolean).map((x) => c.leadOf(x)),
+      ...Object.keys(state.tickets).filter((id) => c.members(id).length && groupReady(id)),
+    ]),
+  ].filter((id) => !c.members(id).length || groupReady(id));
   const candidates = order
     .filter((id) => state.tickets[id].stage === 'candidate' && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
     .map((id, i) => ({ id, i, n: dependents(id) }))
@@ -1956,33 +2111,42 @@ function dispatchSteps(c, d) {
   let pending = false;
   for (const id of candidates) {
     const t = state.tickets[id];
-    const snap = c.snapshot(id);
-    let acc = c.deps.exists(snap) ? readJsonFile(c.deps, snap) : null;
-    if (!acc) {
-      const out = c.tick('acceptance', `r${r}-${keyOf(id)}.json`);
-      acc = c.done(`acceptance:${id}:r${r}`) ? readJsonFile(c.deps, out) : null;
+    // #205: each ticket of a bundle has its own snapshot, expansion and predicted files; the lead waits for them all
+    let held = false;
+    let lead = null;
+    for (const m of c.group(id)) {
+      const snap = c.snapshot(m);
+      let acc = c.deps.exists(snap) ? readJsonFile(c.deps, snap) : null;
       if (!acc) {
-        c.emit(exec(`acceptance:${id}:r${r}`, 'acceptance', acceptanceArgv(c, id, t), { stdout: out, cwd: acceptanceCwd(c), tickets: [id], line: t.line }));
-        pending = true;
-        continue;
+        const out = c.tick('acceptance', `r${r}-${keyOf(m)}.json`);
+        acc = c.done(`acceptance:${m}:r${r}`) ? readJsonFile(c.deps, out) : null;
+        if (!acc) {
+          c.emit(exec(`acceptance:${m}:r${r}`, 'acceptance', acceptanceArgv(c, m, t), { stdout: out, cwd: acceptanceCwd(c), tickets: [id], line: t.line }));
+          pending = held = true;
+          continue;
+        }
+        if (acc.needsExpansion && profile.expand === 'agent') {
+          expand.push({ id: m, count: Array.isArray(acc.expansions) ? acc.expansions.length : 0 });
+          held = true;
+          continue;
+        }
+        c.write(snap, `${JSON.stringify(acc, null, 2)}\n`); // the snapshot, saved once
       }
-      if (acc.needsExpansion && profile.expand === 'agent') {
-        expand.push({ id, count: Array.isArray(acc.expansions) ? acc.expansions.length : 0 });
-        continue;
+      if (m === id) lead = acc;
+      if (!c.deps.exists(c.predicted(m))) {
+        c.emit(
+          judge(`predict:${m}`, 'predict', `Write ${m}'s predicted files to ${c.predicted(m)}: one repo-relative path per line, \`/\` only when nothing narrower can be inferred, index files left out. Record written.`, ['written'], [doc('SKILL.md', 'section 2, Predicted files')], {
+            tickets: [id],
+            line: t.line,
+          }),
+        );
+        pending = held = true;
       }
-      c.write(snap, `${JSON.stringify(acc, null, 2)}\n`); // the snapshot, saved once
     }
+    if (held) continue;
+    if (c.members(id).length && !c.deps.exists(c.acceptanceFile(id))) bundleSnapshot(c, id);
     if (t.snapshotSha256 === null) {
-      c.emit(exec(`snapshot:${id}`, 'snapshot', stateArgv(c, 'set', id, '--snapshot', acc.sha256), { tickets: [id], line: t.line }));
-      pending = true;
-    }
-    if (!c.deps.exists(c.predicted(id))) {
-      c.emit(
-        judge(`predict:${id}`, 'predict', `Write ${id}'s predicted files to ${c.predicted(id)}: one repo-relative path per line, \`/\` only when nothing narrower can be inferred, index files left out. Record written.`, ['written'], [doc('SKILL.md', 'section 2, Predicted files')], {
-          tickets: [id],
-          line: t.line,
-        }),
-      );
+      c.emit(exec(`snapshot:${id}`, 'snapshot', stateArgv(c, 'set', id, '--snapshot', lead.sha256), { tickets: [id], line: t.line }));
       pending = true;
     }
     ready.push({ id, title: info.get(id)?.title ?? null });
@@ -1997,7 +2161,7 @@ function dispatchSteps(c, d) {
     const running = Object.entries(state.tickets)
       .filter(([, t]) => IN_FLIGHT.includes(t.stage))
       .map(([id, t]) => {
-        let files = c.predicted(id);
+        let files = predictedOf(c, id);
         if (!c.deps.exists(files)) {
           files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
           c.write(files, '/\n'); // no prediction on record: it holds the whole repository
@@ -2005,7 +2169,7 @@ function dispatchSteps(c, d) {
         const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
         return { id, files, ...(wt ? { worktree: wt, base: c.target(t.line) } : {}) };
       });
-    c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: c.predicted(id) })) }, null, 2)}\n`);
+    c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
     c.emit(exec(`overlap:r${r}`, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
     return;
   }
@@ -2014,6 +2178,16 @@ function dispatchSteps(c, d) {
     if (!t || t.stage !== 'candidate') continue;
     createDispatch(c, id, t, ready.find((x) => x.id === id)?.title);
   }
+}
+
+/** #205: a ticket's predicted files, or for a bundle one list of all its tickets' (written once each has one). */
+function predictedOf(c, id) {
+  if (!c.members(id).length) return c.predicted(id);
+  const files = c.group(id).map((m) => c.predicted(m));
+  if (!files.every((f) => c.deps.exists(f))) return c.predicted(id); // a missing one: the caller's fallback holds
+  const out = c.tick('overlap', `${keyOf(id)}.bundle.txt`);
+  c.write(out, `${files.map((f) => c.deps.read(f).replace(/\s+$/, '')).join('\n')}\n`);
+  return out;
 }
 
 function progressPlan(c) {
@@ -2039,13 +2213,14 @@ function progressPlan(c) {
 /** frontier.mjs for the whole set (GitHub), or per line with --ref (Local Markdown); null while it is being read. */
 function frontier(c, r) {
   const { state } = c;
-  const ids = Object.keys(state.tickets);
+  // #205: a bundle's members are tickets of the set too, and share their lead's end state
+  const ids = Object.keys(state.tickets).flatMap((id) => c.group(id));
   if (c.cfg.tracker === 'github') {
     const out = c.tick('frontier', `r${r}.json`);
     const read = c.done(`frontier:r${r}`) ? readJsonFile(c.deps, out) : null;
     if (read) return read;
-    const done = ids.filter((id) => state.tickets[id].stage === 'delivered').map(numOf);
-    const stuck = ids.filter((id) => state.tickets[id].stage === 'stuck').map(numOf);
+    const done = ids.filter((id) => c.ticketOf(id).stage === 'delivered').map(numOf);
+    const stuck = ids.filter((id) => c.ticketOf(id).stage === 'stuck').map(numOf);
     const argv = ['node', js('frontier.mjs'), 'github', '--repo', c.cfg.repo, ...(done.length ? ['--done', done.join(',')] : []), ...(stuck.length ? ['--stuck', stuck.join(',')] : []), ...ids];
     c.emit(exec(`frontier:r${r}`, 'frontier', argv, { stdout: out }));
     return null;
@@ -2093,8 +2268,10 @@ function createDispatch(c, id, t, title) {
 function expandDispatch(c, r, group, { reassign = false } = {}) {
   const { state } = c;
   const ids = group.map((x) => x.id);
-  const bodies = ids.map((id) => bodyFile(c, id, state.tickets[id], [], `expand:r${r}`));
-  const lines = [...new Set(ids.map((id) => c.target(state.tickets[id].line)))];
+  // #205: a bundle's member is expanded with the others but recorded on its lead
+  const leads = [...new Set(ids.map((id) => c.leadOf(id)))];
+  const bodies = ids.map((id) => bodyFile(c, id, c.ticketOf(id), [], `expand:r${r}`));
+  const lines = [...new Set(ids.map((id) => c.target(c.ticketOf(id).line)))];
   const values = c.tick('brief', `expand-r${r}.values.json`);
   const out = c.tick('brief', `expand-r${r}.md`);
   c.write(
@@ -2108,31 +2285,32 @@ function expandDispatch(c, r, group, { reassign = false } = {}) {
         ...(c.cfg.tracker === 'github' ? { repo: c.cfg.repo } : {}),
         lines: lines.map((branch) => ({ branch, worktree: resolve(c.git.wtOf(branch) ?? c.cfg.root) })),
         spec: c.cfg.spec ?? null,
-        tickets: ids.map((id, i) => ({ id, line: c.target(state.tickets[id].line), bodyFile: bodies[i].file })),
+        tickets: ids.map((id, i) => ({ id, line: c.target(c.ticketOf(id).line), bodyFile: bodies[i].file })),
       },
       null,
       2,
     )}\n`,
   );
   const rec = c.tick('rec', `expand-r${r}.json`);
-  const r1 = c.emit(exec(`rec:expand:r${r}`, 'assignment', ['node', js('deadline.mjs'), 'record', ...group.flatMap((x) => ['--expansions', `${x.id}=${x.count}`]), '--limit', String(c.limits['timeout-expand'])], { stdout: rec, tickets: ids }));
-  const r2 = c.emit(exec(`assign:expand:r${r}`, 'assignment', stateArgv(c, 'assign', ...ids, '--record', rec, '--type', AGENT_TYPES.expand, ...(reassign ? ['--reassign'] : [])), { tickets: ids, after: [r1] }));
-  const r3 = reassign ? null : c.emit(exec(`stage:expanding:r${r}`, 'stage', stateArgv(c, 'stage', 'expanding', ...ids), { tickets: ids, after: [r2] }));
+  const r1 = c.emit(exec(`rec:expand:r${r}`, 'assignment', ['node', js('deadline.mjs'), 'record', ...group.flatMap((x) => ['--expansions', `${x.id}=${x.count}`]), '--limit', String(c.limits['timeout-expand'])], { stdout: rec, tickets: leads }));
+  const r2 = c.emit(exec(`assign:expand:r${r}`, 'assignment', stateArgv(c, 'assign', ...leads, '--record', rec, '--type', AGENT_TYPES.expand, ...(reassign ? ['--reassign'] : [])), { tickets: leads, after: [r1] }));
+  const r3 = reassign ? null : c.emit(exec(`stage:expanding:r${r}`, 'stage', stateArgv(c, 'stage', 'expanding', ...leads), { tickets: leads, after: [r2] }));
   c.book.expansions[r] = ids;
-  for (const id of ids) c.flag(id).pending = { mode: 'expand', round: r };
+  for (const id of leads) c.flag(id).pending = { mode: 'expand', round: r };
   expandTail(c, r, [r2, r3, ...bodies.map((b) => b.id)]);
 }
 
 function expandTail(c, r, after = []) {
   const ids = c.book.expansions[r];
+  const leads = [...new Set(ids.map((id) => c.leadOf(id) ?? id))];
   const values = c.tick('brief', `expand-r${r}.values.json`);
   const out = c.tick('brief', `expand-r${r}.md`);
-  const b = c.emit(exec(`brief:expand:r${r}`, 'brief', ['node', js('brief.mjs'), 'expand', values], { stdout: c.tick('brief', `expand-r${r}.json`), tickets: ids, after }));
+  const b = c.emit(exec(`brief:expand:r${r}`, 'brief', ['node', js('brief.mjs'), 'expand', values], { stdout: c.tick('brief', `expand-r${r}.json`), tickets: leads, after }));
   c.emit({
     id: `spawn:expand:r${r}`,
     kind: 'spawn',
     step: 'spawn',
-    tickets: ids,
+    tickets: leads,
     line: null,
     after: [b, ...after],
     spawn: { subagent_type: AGENT_TYPES.expand, description: roleDescription('expand', ids), prompt: `Read ${resolve(out)} in full and follow it.`, background: true, fallback: fallbackSpawn(out) },
@@ -2171,6 +2349,22 @@ function stepFinish(c) {
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
   if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
   if (gates.some(Boolean)) return;
+  // #205: each line's observation ticket, checked once against the line's final tip
+  for (const l of Object.keys(state.lines)) {
+    const issue = book.flags[`line:${l}`]?.observationsIssue;
+    if (!issue) continue;
+    const sha = c.git.ref(c.target(l)) ?? state.lines[l].tip;
+    c.emit(
+      judge(
+        `observations-final:${l}`,
+        'observations-final',
+        `${issue} holds the observations and pre-existing of line ${l}. Check each of its items against ${c.target(l)} at ${sha ?? 'its tip'}, and mark it in ${issue}: still present, or resolved by <ticket> (<sha>) when a later ticket of the line already changed it. Read the code at each item's location; add nothing new. Record checked.`,
+        ['checked'],
+        [doc('FINISH.md', 'the observation ticket of a line'), doc('SKILL.md', 'section 2, Filing along the way')],
+        { line: l, after: c.actions.filter((a) => a.step === 'observations').map((a) => a.id) },
+      ),
+    );
+  }
   const skipped = simplifySkipped(c);
   c.emit(
     judge(
@@ -2182,7 +2376,7 @@ function stepFinish(c) {
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
       {
-        after: c.actions.filter((a) => a.step === 'observations').map((a) => a.id), // #142: the raw tickets are filed first
+        after: c.actions.filter((a) => a.step === 'observations' || a.step === 'observations-final').map((a) => a.id), // #142: the raw tickets are filed first
         ...(skipped.length ? { meta: { simplifySkipped: skipped } } : {}),
       },
     ),
@@ -2594,11 +2788,14 @@ export function record(path, id, flags, now, deps) {
     if (more.length && !withVerdict)
       throw new UsageError(`${id}: a review host in the background has no report yet: record --agent alone; its collect takes the counts`);
     if (more.length && more.length < FINDING_COUNTS.length) throw new UsageError(`${id}: --candidates, --confirmed, --invalid and --blocking go together`);
-    for (const k of ['observations', 'pre-existing', ...FINDING_COUNTS])
+    // #205: the count of candidates another open ticket covers, under the same rules
+    if (flags.covered !== undefined && (!full || !withVerdict)) throw new UsageError(`${id}: --covered goes with a prove-it review's report`);
+    for (const k of ['observations', 'pre-existing', ...FINDING_COUNTS, 'covered'])
       if (flags[k] !== undefined && !/^\d+$/.test(flags[k])) throw new UsageError(`--${k}: expected a whole number, 0 or more, got ${JSON.stringify(flags[k])}`);
     return [
       ...(given ? ['--observations', flags.observations, '--pre-existing', flags['pre-existing']] : []),
       ...more.flatMap((k) => [`--${k}`, flags[k]]),
+      ...(flags.covered !== undefined ? ['--covered', flags.covered] : []),
     ];
   };
   // A review recorded once on ticket `t`, with its report's counts (#142) and the review tier it was chosen by and that
@@ -2752,14 +2949,18 @@ export function record(path, id, flags, now, deps) {
       stageIf(tickets[0], 'stuck', flags.value ?? 'findings still open after the fix rounds');
       break;
     case 'observations': {
-      // #142: one raw ticket per ticket; a later review's items go into it
+      // #142, #205: one raw ticket per line; a later review's items go into it
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
-      const f = flag(tickets[0]);
-      if (f.observationsIssue && f.observationsIssue !== flags.value)
-        throw new Refused(`${id}: ${tickets[0]}'s observations and pre-existing go to ${f.observationsIssue}, the raw ticket filed for its earlier review; add the new items there and record filed with --value ${f.observationsIssue}`);
+      const ln = issued.line ?? ticket(tickets[0])?.line;
+      const f = flag(`line:${ln}`);
+      const onFile = f.observationsIssue ?? flag(tickets[0]).observationsIssue;
+      if (onFile && onFile !== flags.value)
+        throw new Refused(`${id}: the observations and pre-existing of line ${ln} go to ${onFile}, the raw ticket filed for it; add the new items there and record filed with --value ${onFile}`);
       f.observationsIssue = flags.value;
       break;
     }
+    case 'observations-final':
+      break;
     case 'file-issue':
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
       if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
@@ -3052,7 +3253,7 @@ const SPECS = {
   setup: { tracker: 'one', root: 'one', base: 'one', repo: 'one', ledger: 'one', 'tickets-dir': 'one', worktrees: 'one', spec: 'one', now: 'one' },
   next: { reported: 'many', now: 'one' },
   run: { reported: 'many', now: 'one' },
-  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', candidates: 'one', confirmed: 'one', invalid: 'one', blocking: 'one', now: 'one' },
+  record: { exit: 'one', outcome: 'one', agent: 'one', type: 'one', value: 'one', findings: 'one', fixed: 'one', unfixed: 'one', observations: 'one', 'pre-existing': 'one', candidates: 'one', confirmed: 'one', invalid: 'one', blocking: 'one', covered: 'one', now: 'one' },
 };
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.

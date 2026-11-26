@@ -171,6 +171,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 整併佇列 | integration queue |
 | 預計檔案 | predicted files |
 | 檔案重疊 | file overlap |
+| 票級 PR | ticket-level PR |
+| 疊/不疊(票級 PR 疊在上游 ticket 分支上) | stacked / not stacked |
 | 退回重做 | send back for a redo |
 | 退回紀錄 | send-back record |
 | 退回次數 | send-back count |
@@ -196,6 +198,9 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 審查門檻 | review threshold |
 | 還在跑 | still running |
 | 沒有 run | no run |
+| 全域樣式 | global styles |
+| 全域樣式越界 | global style overreach |
+| 查重 | duplicate check |
 | 查詢失敗 | query failed |
 | 被取消 | cancelled |
 | CI 不涵蓋整合分支 | CI does not cover the integration branch |
@@ -431,6 +436,13 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | agent 回報(實作或修正 agent 交回的) | agent report |
 | 針對性檢查結果 | targeted-check results |
 | 回顧紀錄（`retro.mjs` 的跨 run 總表） | retro record |
+| 合票 | bundle |
+| 合票候選 | bundle candidate |
+| 主票 | lead ticket |
+| 成員票 | member |
+| 兄弟票範圍 | sibling scope |
+| 由他票涵蓋 | covered by another ticket |
+| 線的觀察票 | a line's observation ticket |
 
 ## 外部語義來源
 

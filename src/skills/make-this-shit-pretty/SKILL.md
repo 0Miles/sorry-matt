@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 開工先以本 skill 載入時標示的 base directory 為起點，全文讀取同層的
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md)。它是**前端契約**；
-下面粗體的**元件複用**、**寫死的值**、**狀態矩陣**、**無障礙底線**、**證據等級**與**給人看的清單**
+下面粗體的**元件複用**、**寫死的值**、**全域樣式**、**狀態矩陣**、**無障礙底線**、**證據等級**與**給人看的清單**
 由它定義。
 
 接著照**元件複用**的前置處理 `docs/agents/ui.md`，讀不讀由前置決定；它不存在時在第 1 步之前停下：不開分支、
@@ -53,7 +53,7 @@ disable-model-invocation: true
 可用 skill 清單裡有 `modern-web-guidance` 時，另外呼叫 Skill tool 帶入 `modern-web-guidance`
 找出範圍內過時的平台寫法。
 
-「繞過元件庫」對照 `ui.md` 的「元件庫」「共用元件」「Tokens」三段，抓三類：
+「繞過元件庫」對照 `ui.md` 的「元件庫」「共用元件」「Tokens」三段與「慣例」段的「全域樣式」行，抓四類：
 
 - **手刻近似元件**：模仿元件庫元件或共用元件的自製元素。finding 寫出它模仿的元件名稱，以及
   該元件在 `ui.md` 裡的位置或套件。
@@ -61,9 +61,13 @@ disable-model-invocation: true
   specificity 或 `!important`、私有 class 或私有 CSS 變數。
 - **寫死的值**：照**元件複用**的**寫死的值**定義判定，不另訂判準；finding 寫出它對應的 token。
   不符合定義的字面值不記 finding。
+- **全域樣式越界**：照**元件複用**的**全域樣式**判定 —— 不屬可收三類的全域規則（例如讓兩個以上頁面套用
+  的版面或狀態 class，該做成共用元件），或與另一條全域規則、共用元件、token 重複的全域規則。finding 寫出
+  它該改成的共用元件或重複的那一條的 `file:line`。
 
 這一類 finding 的**證據等級**：手刻近似元件與外部覆寫為實測（瀏覽器裡讀到的 DOM 與 computed
-style），沒有瀏覽器時為未驗證，並附原始碼 `file:line`；寫死的值的證據等級與證據照**寫死的值**的定義。
+style），沒有瀏覽器時為未驗證，並附原始碼 `file:line`；寫死的值與全域樣式越界的證據等級與證據照
+**寫死的值**與**全域樣式**的定義。
 
 完成判準：旅程的每一步與中斷情境都走過；每個 lens 都有 findings 或明記「沒有發現」；
 每則 finding 五欄俱全。

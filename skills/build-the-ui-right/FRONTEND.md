@@ -68,8 +68,8 @@ When the entry chosen for a file is "None" (a file inside no `Scope`, handled as
 skips every library step: call no bundled skill, count no component library components among the candidates,
 and there is no `Loading` line to read or change; follow the rest.
 
-The same per-file rule applies to the `Tokens` section and to the `New shared components` line of the
-`Conventions` section: when they have several entries, each with a `Scope` line, take the entry whose `Scope`
+The same per-file rule applies to the `Tokens` section and to the `New shared components` and `Global styles`
+lines of the `Conventions` section: when they have several entries, each with a `Scope` line, take the entry whose `Scope`
 covers the file's path, and the one with the longest path when several cover it; a file inside no `Scope` is
 handled as "None" and goes into the report's **`ui.md` mismatches**. While a new component has no path yet, the
 `New shared components` line is chosen by the files that will use it (its **using files**). When the using files
@@ -89,8 +89,8 @@ home fold into this one entry; do not write a second one. In this case `ui.md` i
 `Shared components` table, fill in no location for `New shared components`, and add no `Scope` column. When the
 `Shared components` table has a
 `Scope` column, only the rows whose `Scope` covers the file's path are candidates for that file. In the steps
-below and in `actually-look-at-the-ui`, the `Tokens` section, its `Location` line, and the `New shared
-components` line all mean the entry chosen for that file.
+below and in `actually-look-at-the-ui`, the `Tokens` section, its `Location` line, the `New shared
+components` line, and the `Global styles` line all mean the entry chosen for that file.
 
 ### 2. The bundled skill first
 
@@ -113,6 +113,9 @@ and when the job does not fit, look at `Instead`. Candidates come from four sour
 components` table, component library components, native HTML elements, and **page-local components** (existing
 components inside the page that only that page uses, and so are not in `ui.md`). When more than one candidate
 fits, write why the other was not chosen.
+
+A class defined in global styles is not a fifth kind of candidate: styling that two or more pages or features
+are to share becomes a shared component; see **global styles**.
 
 `Existing, not for new use` counts only as marked under the entry chosen for that file: a package marked under
 that entry, and a duplicate the `Conventions` section marks as not for new use, stay out of new code. A package
@@ -202,7 +205,47 @@ browser is needed. There is one fix only: switch to that matching token — when
 token with the same value; when it matched by "the same purpose" with a different value, the token that states
 that role. Add no new token, and do not switch to an outside override or any other prohibition.
 
-### 7. New-component bar
+### 7. Global styles
+
+**Global styles** are style rules no component scope contains: the rules in the project's global stylesheets
+(the stylesheets the entry point loads, whose location the `Global styles` line of the `Conventions` section of
+`ui.md` records), and selectors without a scope in component source (an unscoped `<style>`, `:global(...)`,
+global injection from CSS-in-JS). A component's own scoped styles and utilities at a call site are not global
+styles.
+
+**Shared components first.** Layout, block, or state styling that two or more pages or features are to share
+(a page shell, a page head, a list frame, an empty state, a loading state, and the like) becomes a shared
+component: it goes through the **new-component bar** and, per **maintain `ui.md`**, lands in the same commit
+as the pages that use it. It is not written as a global class each page applies. Styling only one page uses
+stays inside that page's scope. Global styles hold only the three kinds a shared component cannot give:
+
+- Token definitions and theme overrides.
+- Base styles for native elements (`body`, native form controls, and the like), whose selectors pick only
+  native elements or the project's own classes and never the inner nodes a library component renders — that
+  is the prohibition on overriding a component's internal styles from an outside selector.
+- Rules that must apply across components and cannot live inside one, such as a site-wide `:focus-visible`
+  outline or `prefers-reduced-motion`.
+
+**Check for duplicates before writing.** Before adding or changing any global style rule, confirm in order that
+nothing duplicates it, and write in the report what was checked:
+
+1. The `Shared components` table and the component library: a component that does the same job exists → use
+   it, and write no global style.
+2. Tokens: the value or the purpose already has a token → use the token (judged as under **hard-coded value**).
+3. Existing global styles: search every file the `Global styles` line records, plus the project's `:global(`
+   and unscoped `<style>`; the same selector, or the same set of declarations already applied to the same kind
+   of element → reuse or extend that rule instead of writing another.
+
+The evidence of the duplicate check is the search commands and their results, or `file:line`; its evidence
+grade is measured, and no browser is needed.
+
+A global style still needed after the check is written only into a file the `Global styles` line records.
+When the `Global styles` line chosen for that file reads "None", or `ui.md` has no such line, create no global
+stylesheet and write the styling inside a scope instead; when it must apply across components and cannot,
+write it into the report's **`ui.md` mismatches**: which line, the rule needed, and the paths of the files that
+use it.
+
+### 8. New-component bar
 
 Before building a new component, always meet the first two:
 
@@ -224,7 +267,7 @@ file handles it as a new component used on a single page, per the prerequisite.
 A new component used on a single page sits beside that page, stays out of `ui.md`, and is not bound by the last
 two.
 
-### 8. Maintain `ui.md`
+### 9. Maintain `ui.md`
 
 When `ui.md` and the source conflict, the source wins. A skill that changes code handles it in two layers:
 
@@ -240,6 +283,9 @@ When `ui.md` and the source conflict, the source wins. A skill that changes code
      covers every using file, is not an added shared component and does not belong here: `ui.md` is not changed,
      and its mismatch goes into the report per the prerequisite.
    - Introducing, upgrading, or removing a component library, or changing how it is loaded.
+   - Adding, moving, or removing a global stylesheet: the same commit updates the `Global styles` line of the
+     `Conventions` section. Adding or changing rules inside an existing file does not change `ui.md`: `ui.md`
+     records locations, not class names.
    - Reusing an existing component that so far only another page used: in the component choice table it is
      "reused", with its file path as the location; when this change makes two or more pages or features use it,
      the same commit adds a row for it to the `Shared components` table, with its actual path in `Location`;
@@ -255,8 +301,10 @@ Done when: every UI element falls into exactly one of three categories — "reus
 rung N" with its rationale, or "new" with the knowledge it brings and why existing components fall short; a native
 HTML element is "reused", with the location written "native `<tag>`" (for example "native `<p>`"), and does not go
 through the **new-component bar**; a **page-local component** is "reused", with its file path as the location;
-`ui.md` matches this change, or is explicitly recorded as needing no update; and every mismatch found along the
-way, and every mismatch the prerequisite requires, is written into the report one by one, or "none" is stated.
+`ui.md` matches this change, or is explicitly recorded as needing no update; every global style rule this change
+adds or changes is one of the three kinds **global styles** allows, with its duplicate-check evidence; and every
+mismatch found along the way, and every mismatch the prerequisite requires, is written into the report one by
+one, or "none" is stated.
 
 ## State matrix
 

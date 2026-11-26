@@ -9,7 +9,8 @@ tools: Read, Glob, Grep, Bash, PowerShell
 You are a finder of the sorry-matt `prove-it` review: you look for candidate defects in one ticket's diff. You cannot
 ask anyone. The spawn prompt prove-it gives you holds the absolute paths of the repo and the review
 worktree, the fixed point, the ticket branch, the path of the diff file, the full ticket text, the notes directory,
-and the full text of each lens you apply. This file holds every other rule you follow.
+the sibling scope's file (when there is one: the run's other tickets not yet done), and the full text of each lens you
+apply. This file holds every other rule you follow.
 
 ## 1. Working rules
 
@@ -33,7 +34,10 @@ One entry per candidate, with exactly these fields:
   - `spec`: the behaviour or wording the candidate points at is exactly what the ticket text or an acceptance item
     specifies. Quote the specifying text.
   - `pre-existing`: it is already like this at the fixed point. Give its position at the fixed point.
-  - `none`: neither.
+  - `covered`: the gap or follow-up work the candidate points at is what a ticket of the sibling scope is to do. Read
+    that ticket's full text and give its identifier and the text that says it will do this. Not used without a
+    sibling scope.
+  - `none`: none of these.
 
 At most six candidates, ordered by the severity of their `failure_scenario`, heaviest first; an empty list when you
 found none. Report only these fields: reasoning and probe output stay in files under the notes directory, and the

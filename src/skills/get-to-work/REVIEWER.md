@@ -18,14 +18,18 @@
 - `ticket`：票的識別碼，與存放票面全文與展開區塊的檔案
 - `status record`：接續紀錄的位置
 - `acceptance snapshot`、`comparison`：驗收快照與這次比對輸出的絕對路徑
-- `fixed point`：線整合分支；`ticket branch`：ticket 分支
+- `fixed point`：`aggregate-pr` 與 `direct` 下是線整合分支；`ticket-pr`（票級 PR，沒有整合分支）下，不疊的票是
+  `origin/<基底分支>`，疊的票是上游的 ticket 分支 —— 審查範圍是 `<fixed point>...<ticket 分支>`，只看這張票自己那一層；
+  `ticket branch`：ticket 分支
 - `targeted checks`：實作 agent 回報的針對性檢查指令與結果、它跑的 commit，以及它回報全文的檔案
 - `targeted checks ran at`：那些針對性檢查跑的 SHA，回報沒寫時是 `not reported`；`prove-it` 第 3 節依它決定沿用或重跑
-- `CI coverage`：`covered`、`uncovered` 或 `no-origin`
+- `CI coverage`：`covered`、`uncovered` 或 `no-origin`；`ticket-pr` 下是這張票的票級 PR 的 CI
 - `previous review block`：`in the status record` 時上一次的審查區塊在接續紀錄裡，`none` 時沒有
 - `reviewer`：這次的 reviewer
 - `scratchpad`：絕對路徑
 - `review tier`：tick 審查前判好的審查分級與它的判級輸出檔，`prove-it` 照它不再自己判；`none given` 時由 `prove-it` 判
+- `bundle`：`none`，或合票（#205）的每張票，主票在前：一次審查涵蓋整組的 diff 與每張票的驗收項
+- `sibling scope`：`none`，或同 run 其他還沒到終局的票的清單檔，`prove-it` 用它判 `covered`
 
 ## 1. 主持審查
 
@@ -48,7 +52,7 @@ architect（`full` 級才有）、verifier 與 Fix Verifier 由你以前景 spaw
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```

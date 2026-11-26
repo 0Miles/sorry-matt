@@ -101,6 +101,38 @@ test('changed lines count additions plus deletions: 400 is standard, 401 is full
   assert.equal(at401.fixVerifiers, 'per-file');
 });
 
+test('test files do not count toward the line thresholds: 300 code + 600 test lines is standard', (t) => {
+  const out = judge(repo(t, {}, {
+    'src/Query/a.cs': lines(300),
+    'tests/Query.Tests/ATests.cs': lines(200),
+    'src/web/a.test.js': lines(100),
+    'Proj.Tests/Fixtures/f.cs': lines(100),
+    'pkg/a_test.go': lines(100),
+    'spec/b.rb': lines(100),
+  }));
+  assert.equal(out.signals.changedLines, 900);
+  assert.equal(out.signals.testLines, 600);
+  assert.equal(out.signals.codeLines, 300);
+  assert.equal(out.tier, 'standard');
+  assert.deepEqual(out.reasons, ['default']);
+
+  const code = judge(repo(t, {}, { 'src/a.js': lines(401), 'tests/a.test.js': lines(10) }));
+  assert.equal(code.signals.codeLines, 401);
+  assert.equal(code.tier, 'full');
+  assert.deepEqual(code.reasons, ['over-lines']);
+
+  const fewCode = judge(repo(t, {}, { 'src/a.js': lines(20), 'tests/a.test.js': lines(300) }));
+  assert.equal(fewCode.tier, 'light');
+  assert.deepEqual(fewCode.reasons, ['few-lines']);
+});
+
+test('a test file renamed into place counts by its new path', (t) => {
+  const base = { 'src/helper.js': lines(300) };
+  const out = judge(repo(t, base, { 'src/helper.js': null, 'tests/helper.test.js': `${lines(300)}${lines(80, 'more')}` }));
+  assert.equal(out.signals.testLines, out.signals.changedLines);
+  assert.equal(out.signals.codeLines, 0);
+});
+
 test('a renamed file counts only the lines it changed, as plain git diff --numstat reports them', (t) => {
   const base = { 'src/a.js': lines(300) };
   const pure = judge(repo(t, base, { 'src/a.js': null, 'lib/a.js': lines(300) }));
@@ -451,6 +483,14 @@ test('batch verify: light is one verifier; suspected candidates form their own s
     { files: ['c.js'], short: [], normal: ['C3'] },
   ]);
   assert.deepEqual(batchItems({ tier: 'standard', items: [] }), []);
+});
+
+test('batch verify: a candidate another open ticket covers (#205) goes on the short path', () => {
+  const items = [C('C1', 'a.js', 'covered'), C('C2', 'b.js')];
+  assert.deepEqual(batchItems({ tier: 'full', items }), [
+    { files: ['a.js'], short: ['C1'], normal: [] },
+    { files: ['b.js'], short: [], normal: ['C2'] },
+  ]);
 });
 
 test('batch verify: standard folds the file groups with the fewest candidates so the total stays at the max', () => {

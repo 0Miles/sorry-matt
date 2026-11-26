@@ -59,6 +59,8 @@ Then deliver each line by mode:
      searching commits for the ticket number (another ticket's commit body mentioning it would be swept in); the
      status-record link; for a `resolved` merge, its `remergeDiff` command and a note that it can only be seen locally
      (git 2.36 or later); the send-back count; and `Closes #N` at the end.
+     A bundle (#205, the state's `members`) is one section: its title lists every ticket of it, the lead first, then
+     each ticket's title and its criteria, and the section ends with one `Closes #N` line per ticket.
   3. **Line-level commits**: each of `lineCommits` with its link and purpose, a conflict resolution with its
      `remergeDiff` command.
   4. **Gaps**: stuck and awaiting-ruling tickets, without `Closes`; one with a merge on the line gets its commit range.
@@ -85,15 +87,22 @@ aggregate PR still in the queue is handled as "left for a human to merge" for cl
 **Closing tickets** comes after `gh pr merge` is sent. GitHub resolves `Closes` only for a PR into the repo's default
 branch, found with `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`:
 
-- The aggregate PR merged: confirm every delivered ticket is closed. When the base is not the default branch, or a
+- The aggregate PR merged: confirm every delivered ticket is closed, every member of a bundle included. When the base is not the default branch, or a
   ticket is still open after the merge, the host closes each by the tracker contract's Close, with a comment pointing
   to the aggregate PR.
 - The aggregate PR left for a human, and the base is not the default branch: the human-work list gives the commands to
   close the tickets after the merge.
 
+**A line's observation ticket** (#205): a line's review observations and pre-existing items all live in one raw
+ticket. At the finish tick hands out an `observations-final` judge: read the code at each item's location on the line's
+final tip, mark the item in that ticket "still present" or "resolved by <ticket> (<SHA>)", add no new item, and record
+`checked`. The wrap-up judge waits for it.
+
 **Final output**: each line's aggregate PR or integration branch, the synced base SHA (or that it is unsynced), the full
 verification's SHA and source, the **reconciliation table** covering every initial ticket (`state.mjs show`, with each
-ticket's send-back count, each row pointing to its status record), **this run's metrics and budget** (the state's
+ticket's send-back count, each row pointing to its status record; each member of a bundle has its own row, with the
+lead's end state, merge SHA and status record, and says which bundle it is in; under `ticket-pr` each member of a
+bundle shows that bundle's one PR link and merge state <!-- pending #200 -->), **this run's metrics and budget** (the state's
 `usage`, with `stop` after a stop) with the **spawn breakdown**, the authorization outcomes (ledger field 5), the
 **lines that skipped the simplify pass** (the `wrap-up`'s `meta.simplifySkipped`, each with its reason; left out when
 there are none), and the list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and

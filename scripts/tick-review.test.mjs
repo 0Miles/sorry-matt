@@ -111,7 +111,7 @@ test('#142: a prove-it review is recorded with both counts; a minimal review tak
   h.policy.review = (a) => {
     if (!checked++) {
       // #143: the template also says how a review host the Agent tool put in the background is recorded
-      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\] {3}\(in the background: --agent <agent id> alone\)$/);
+      assert.match(a.record, /--agent <agent id> --outcome pass\|fix\|stuck \[--findings <id>,<id>\] --observations <n> --pre-existing <n> \[--candidates <n> --confirmed <n> --invalid <n> --blocking <n>\] \[--covered <n>\] {3}\(in the background: --agent <agent id> alone\)$/);
       for (const missing of [[], ['--observations', '1'], ['--pre-existing', '0']]) {
         const r = h.tick('record', h.path, a.id, '--agent', 'x', '--outcome', 'pass', ...missing);
         assert.equal(r.code, 2, `without ${missing.length ? 'one' : 'both'}`);

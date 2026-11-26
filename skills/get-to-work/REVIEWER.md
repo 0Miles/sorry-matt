@@ -22,18 +22,25 @@ This review's values are below the last rule of this file (the labels `brief.mjs
 - `ticket`: the ticket's identifier, and the file holding the ticket text and its expansion blocks
 - `status record`: where the status record is
 - `acceptance snapshot`, `comparison`: absolute paths of the acceptance snapshot and of this acceptance diff output
-- `fixed point`: the line integration branch; `ticket branch`: the ticket branch
+- `fixed point`: the line integration branch under `aggregate-pr` and `direct`; under `ticket-pr` (ticket-level PRs,
+  no integration branch), `origin/<base branch>` for a ticket that is not stacked and the upstream ticket branch for
+  a stacked one — the review range is `<fixed point>...<ticket branch>`, this ticket's own layer only;
+  `ticket branch`: the ticket branch
 - `targeted checks`: the targeted-check commands and results the implementation agent reported, the commit it ran
   them on, and the file holding its full report
 - `targeted checks ran at`: the SHA those targeted checks ran at, or `not reported` when the report gives none;
   `prove-it` section 3 decides from it whether to reuse them or rerun them
-- `CI coverage`: `covered`, `uncovered` or `no-origin`
+- `CI coverage`: `covered`, `uncovered` or `no-origin`; under `ticket-pr`, the CI of this ticket's ticket-level PR
 - `previous review block`: `in the status record` when the previous review block is in the status record, `none` when
   there is none
 - `reviewer`: this review's reviewer
 - `scratchpad`: an absolute path
 - `review tier`: the review tier tick judged before the review and its tier command output, which `prove-it` goes by
   instead of judging again; with `none given`, `prove-it` judges it
+- `bundle`: `none`, or every ticket of a bundle (#205), the lead first: one review covers the whole bundle's diff and
+  every ticket's criteria
+- `sibling scope`: `none`, or the file listing the run's other tickets not at an end state, which `prove-it` judges
+  `covered` by
 
 ## 1. Host the review
 
@@ -59,7 +66,7 @@ restating of findings, observations or reasoning:
 <!-- sorry-matt:review-report -->
 ticket: <id>  review: <round>  mode: initial | recheck  tier: light | standard | full
 verdict: pass | fix | stuck
-counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n>
+counts: findings=<n> observations=<n> pre-existing=<n> candidates=<n> confirmed=<n> invalid=<n> blocking=<n> covered=<n>
 block: <where the review block is: the status comment's URL, or the ticket file's path; none when no block was written>
 stuck: <reason (clear: <how to clear it>; completed: <last section done, or none>), or none>
 ```

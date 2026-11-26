@@ -10,7 +10,7 @@ Arguments name the page, component, route, or flow to rework. With no argument, 
 
 Before starting, take the base directory shown when this skill loaded and read the sibling
 [`../build-the-ui-right/FRONTEND.md`](../build-the-ui-right/FRONTEND.md) in full. It is the **frontend
-contract**; it defines the bold **component reuse**, **hard-coded value**, **state matrix**, **accessibility
+contract**; it defines the bold **component reuse**, **hard-coded value**, **global styles**, **state matrix**, **accessibility
 floor**, **evidence grade**, and **eyes-on list** below.
 
 Then handle `docs/agents/ui.md` per the prerequisite of **component reuse**, which decides whether to read it;
@@ -65,7 +65,7 @@ Sweep once with each of five lenses: purpose and hierarchy, blank cells in the *
 `modern-web-guidance` to find outdated platform patterns in scope.
 
 "Bypassing the component library" checks against the `Component library`, `Shared components`, and `Tokens`
-sections of `ui.md`, and catches three kinds:
+sections of `ui.md` and the `Global styles` line of its `Conventions` section, and catches four kinds:
 
 - **Hand-rolled lookalike**: a home-made element imitating a library component or a shared component. The
   finding names the component it imitates, and that component's location or package in `ui.md`.
@@ -74,10 +74,15 @@ sections of `ui.md`, and catches three kinds:
   `!important`, a private class or private CSS variable.
 - **Hard-coded value**: judged by the **hard-coded value** definition in **component reuse**, with no criterion
   of its own; the finding names the token that matches it. A literal outside the definition gets no finding.
+- **Global style overreach**: judged by **global styles** in **component reuse** — a global rule outside the three
+  kinds it allows (a layout or state class two or more pages apply, for example, which should be a shared
+  component), or a global rule that duplicates another global rule, a shared component, or a token. The finding
+  names the shared component it should become, or the `file:line` of the rule it duplicates.
 
 The **evidence grade** of these findings: hand-rolled lookalikes and outside overrides are measured (the DOM and
 computed style read in the browser), and with no browser they are unverified, with the source `file:line`
-attached; the evidence grade and evidence for hard-coded values follow the **hard-coded value** definition.
+attached; the evidence grade and evidence for hard-coded values and global style overreach follow the
+**hard-coded value** and **global styles** definitions.
 
 Done when: every step of the journey and the interruption were walked; every lens has findings or an explicit
 "nothing found"; every finding has all five fields.

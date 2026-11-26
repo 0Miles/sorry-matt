@@ -17,6 +17,7 @@
 //   node state.mjs show     <state>
 //   node state.mjs resume   <state>
 //   node state.mjs add      <state> <ticket>... --line <integration branch>
+//   node state.mjs bundle   <state> <lead> <member>...
 //   node state.mjs line     <state> <integration branch> [--lines <line>,<line>] [--tip <sha>]
 //                           [--base <sha> --synced yes|no]
 //   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
@@ -25,7 +26,7 @@
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full [--tier-reason <reason>]...]
 //                           [--findings <id>,<id>] [--observations <n>] [--pre-existing <n>]
-//                           [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>]
+//                           [--candidates <n> --confirmed <n> --invalid <n> --blocking <n>] [--covered <n>]
 //   node state.mjs report   <state> <ticket> [--fixed <id>,<id>] [--unfixed <id>,<id>]
 //   node state.mjs merge    <state> <ticket> <merge sha>
 //   node state.mjs assign   <state> <ticket>... --record <record.json> --type <agent type> [--worktree <path>] [--reassign]
@@ -84,6 +85,8 @@
 //                       "findings": ["<finding id>"] | null, "observations": <n>, "preExisting": <n>, "at",
 //                       "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // (#156);
 //                                                          // confirmed + invalid <= candidates, blocking <= confirmed
+//                       "covered": <n>,                    // #205: candidates another open ticket of the run
+//                                                          // covers; missing when the report gave none
 //                       "after": <history length when recorded> }],   // the counts of the review report (#142)
 //                                                          // tierReasons and findingCounts missing: an older file
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
@@ -91,7 +94,9 @@
 //         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
 //         "merges": [{ "sha", "at" }],                     // every merge of the ticket, `-ci` merges included
 //         "reason": "<why stuck or awaiting ruling>" | null,
-//         "history": [{ "from", "to", "at", "reason" }] } },
+//         "history": [{ "from", "to", "at", "reason" }],
+//         "members": ["<ticket>"] } },                     // #205: a bundle's other tickets, this one its lead;
+//                                                          // missing on a ticket that leads no bundle
 //     "usage": { "started": "<UTC>" | null, "startedNote": <text> | null, "waitingSeconds": <n>,
 //                "spawns": <n>, "spawnsSource": "counters" | "host", "rounds": <dispatch points>,
 //                "noProgress": <n>, "snapshot": { "tips", "terminal" } | null,
@@ -165,7 +170,7 @@
 //   show      Prints the state.
 //   resume    What a resumed host needs, from the state alone:
 //             { "format", "command": "resume", "run", "revision", "profile": <effective>, "profileWritten",
-//               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline" }],  // not at an end
+//               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline", "members"? }],  // not at an end
 //               "inFlight": [{ "id": "<agent id>", "type", "tickets": [<ticket>], "assigned", "limit", "deadline",
 //                              "extended", "fingerprint", "worktree"?, "line"? }],   // one per agent with a
 //                                                         // deadline (`line` and no tickets: a line's agent);
@@ -175,10 +180,18 @@
 //                                                         // or `agent` did not
 //               "unnamedLines": [<integration branch>],   // the same for a line's assignment
 //               "terminal": { "delivered": [], "stuck": [], "awaiting-ruling": [] },
+//               "bundles": { "<lead>": ["<member>"] },    // #205: a member shares its lead's stage and end state
 //               "lines": { "<branch>": { "tip", "ci", "ciNotCovering",
 //                                        "local": ["local: <branch> <sha> <result> <reason>"] } },  // for ci.mjs
 //               "usage", "stop" }
-//   add       Adds tickets at candidate on an integration branch (created when new). Refused for a known ticket.
+//   add       Adds tickets at candidate on an integration branch (created when new). Refused for a known ticket,
+//             and for a member of a bundle.
+//   bundle    (#205) Folds the members into a bundle led by <lead>: they leave `tickets` and are kept, in the order
+//             given, as the lead's `members`. From then on the lead stands for the whole bundle — one dispatch, one
+//             agent, one review, one merge — and every end state, merge SHA and review is the lead's for all of
+//             them. A command naming a member is refused with the lead's name. Refused unless every ticket named is
+//             at candidate with no history, review, assignment or merge, on the lead's line, and none leads a
+//             bundle already. Which tickets to bundle is the host's ruling at the freeze (freeze.mjs `bundles`).
 //   line      Creates or updates an integration branch: the joined frontier lines, the tip, the base sync.
 //   set       Fills a ticket's free-text, snapshot and unfixed-issue fields.
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
@@ -188,7 +201,8 @@
 //             `--observations` and `--pre-existing` are the report's counts of those two sections (default 0; a
 //             review recorded before #142 has neither). `--tier-reason` (with `--tier`, once per reason, in order;
 //             #173: any non-empty text, commas and spaces included) are the reasons of the tier.mjs judge output it
-//             was chosen by; `--candidates`, `--confirmed`, `--invalid` and `--blocking` (all four or none) are the
+//             was chosen by; `--covered` (#205) is the report's count of candidates another open ticket of the run
+//             covers (missing without it); `--candidates`, `--confirmed`, `--invalid` and `--blocking` (all four or none) are the
 //             report's counts of the candidates, the verifier's confirmed and invalid rulings and the blocking findings
 //             (#156). A ruling is of a candidate and a blocking finding is a confirmed one, so confirmed + invalid
 //             above candidates, or blocking above confirmed, is refused (2; #173), and a state file holding such
@@ -466,7 +480,8 @@ function check(state, bad) {
           isCount(r.after) && (r.findings === null || (Array.isArray(r.findings) && r.findings.every(isId))) &&
           [r.observations, r.preExisting].every((n) => n === undefined || isCount(n)) &&
           (r.tierReasons == null || (Array.isArray(r.tierReasons) && r.tierReasons.every(isText))) &&
-          (r.findingCounts == null || (isObject(r.findingCounts) && FINDING_COUNTS.every((k) => isCount(r.findingCounts[k])))),
+          (r.findingCounts == null || (isObject(r.findingCounts) && FINDING_COUNTS.every((k) => isCount(r.findingCounts[k])))) &&
+          (r.covered === undefined || isCount(r.covered)),
         `${w}.reviews[${i}]`,
         'is not { mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, after }',
       ),
@@ -485,7 +500,11 @@ function check(state, bad) {
     need(t.unfixedIssue === null || isId(t.unfixedIssue), `${w}.unfixedIssue`, 'is not an issue id or null');
     need(Array.isArray(t.merges) && t.merges.every((m) => isObject(m) && SHA.test(m.sha)), `${w}.merges`, 'is not a list of { sha }');
     need(Array.isArray(t.history) && t.history.every((h) => isObject(h) && STAGES.includes(h.to)), `${w}.history`, 'is not a list of transitions');
+    // #205: a bundle's other tickets; missing in an older file and on a ticket that leads no bundle
+    need(t.members === undefined || (Array.isArray(t.members) && t.members.length > 0 && t.members.every((m) => isId(m) && m !== id && !(m in state.tickets))), `${w}.members`, 'is not a list of ticket ids outside the tickets');
   }
+  const memberIds = Object.values(state.tickets).flatMap((t) => t.members ?? []);
+  need(new Set(memberIds).size === memberIds.length, 'tickets.*.members', 'name a ticket in two bundles');
   const u = state.usage;
   need(u.started === null || isTime(u.started), 'usage.started', 'is not a UTC time or null');
   need(typeof u.waitingSeconds === 'number' && u.waitingSeconds >= 0, 'usage.waitingSeconds', 'is not seconds');
@@ -768,9 +787,15 @@ const ids = (text, where) => {
 const ticketsOf = (state, ids) => {
   if (!ids.length) throw new UsageError('name at least one ticket');
   if (new Set(ids).size !== ids.length) throw new UsageError('a ticket is named twice');
-  for (const id of ids) if (!(id in state.tickets)) throw new Refusal(`${id} is not a ticket of this run (add it first)`);
+  for (const id of ids) {
+    if (id in state.tickets) continue;
+    const lead = leadOf(state, id);
+    throw new Refusal(lead ? `${id} is a member of bundle ${lead}: name its lead, ${lead}` : `${id} is not a ticket of this run (add it first)`);
+  }
   return ids;
 };
+/** #205: the lead whose bundle a ticket id is a member of, or null. */
+export const leadOf = (state, id) => Object.entries(state.tickets).find(([, t]) => (t.members ?? []).includes(id))?.[0] ?? null;
 const lineOf = (state, branch) => {
   if (!(branch in state.lines)) throw new Refusal(`${branch} is not an integration branch of this run (create it with line or add)`);
   return state.lines[branch];
@@ -884,7 +909,7 @@ function resume(state) {
   for (const [id, t] of Object.entries(state.tickets)) {
     const a = t.assignment;
     if (TERMINAL.includes(t.stage)) terminal[t.stage].push(id);
-    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null });
+    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null, ...(t.members ? { members: t.members } : {}) });
     if (!a || a.deadline === null) continue;
     if (a.agentId === null) {
       unnamed.push(id);
@@ -912,7 +937,8 @@ function resume(state) {
       { tip: l.tip, ci: l.ci, ciNotCovering: l.ciNotCovering !== null, local: l.local.map((r) => localLine(branch, r)) },
     ]),
   );
-  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, lines, usage: state.usage, stop: state.stop };
+  const bundles = Object.fromEntries(Object.entries(state.tickets).filter(([, t]) => t.members).map(([id, t]) => [id, t.members]));
+  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, bundles, lines, usage: state.usage, stop: state.stop };
 }
 
 function add(path, rest, flags, ctx) {
@@ -922,9 +948,31 @@ function add(path, rest, flags, ctx) {
   if (new Set(rest).size !== rest.length) throw new UsageError('a ticket is named twice');
   return update(path, ctx.now, (state) => {
     for (const id of rest) if (id in state.tickets) throw new Refusal(`${id} is already a ticket of this run (on ${state.tickets[id].line})`);
+    for (const id of rest) if (leadOf(state, id)) throw new Refusal(`${id} is already a member of bundle ${leadOf(state, id)}`);
     state.lines[flags.line] ??= newLine();
     for (const id of rest) state.tickets[id] = newTicket(flags.line);
     return { tickets: view(state, rest) };
+  });
+}
+
+/** #205: folds tickets into a bundle led by the first: they leave `tickets` and become the lead's `members`. */
+function bundle(path, rest, flags, ctx) {
+  if (rest.length < 2) throw new UsageError('bundle takes the lead and at least one member');
+  if (new Set(rest).size !== rest.length) throw new UsageError('a ticket is named twice');
+  const [lead, ...members] = rest;
+  return update(path, ctx.now, (state) => {
+    ticketsOf(state, rest);
+    const fresh = (id) => {
+      const t = state.tickets[id];
+      if (t.stage !== 'candidate' || t.history.length || t.reviews.length || t.assignment !== null || t.merges.length) throw new Refusal(`${id}: only a ticket that never left candidate can be bundled; it is ${t.stage}`);
+      if (t.members) throw new Refusal(`${id} already leads bundle ${[id, ...t.members].join(', ')}`);
+    };
+    for (const id of rest) fresh(id);
+    const line = state.tickets[lead].line;
+    for (const id of members) if (state.tickets[id].line !== line) throw new Refusal(`${id} is on ${state.tickets[id].line}, the lead on ${line}: a bundle stays on one line`);
+    for (const id of members) delete state.tickets[id];
+    state.tickets[lead].members = members;
+    return { tickets: view(state, [lead]) };
   });
 }
 
@@ -995,11 +1043,12 @@ function review(path, rest, flags, ctx) {
   const findingCounts = given.length ? Object.fromEntries(FINDING_COUNTS.map((k) => [k, count(flags[k], `--${k}`)])) : null;
   const why = findingCounts && countsProblem(findingCounts);
   if (why) throw new UsageError(`the finding counts do not add up: ${why}`);
+  const covered = flags.covered === undefined ? undefined : count(flags.covered, '--covered');
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
     if (t.stage !== 'in-review') throw new Refusal(`${id}: a review is recorded only in in-review; it is ${t.stage}`);
-    t.reviews.push({ mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, at: ctx.now, after: t.history.length });
+    t.reviews.push({ mode, verdict, kind, tier, tierReasons, findings, observations, preExisting, findingCounts, ...(covered === undefined ? {} : { covered }), at: ctx.now, after: t.history.length });
     state.usage.reviewRounds += 1;
     return { tickets: view(state, [id]) };
   });
@@ -1308,11 +1357,12 @@ const COMMANDS = {
   show: [(path) => load(path), {}],
   resume: [(path) => resume(load(path)), {}],
   add: [add, { line: 'one', ...NOW }],
+  bundle: [bundle, NOW],
   line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
   set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
-  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
+  review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', covered: 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],
   merge: [merge, NOW],
   assign: [assign, { record: 'one', type: 'one', worktree: 'one', reassign: 'bool', line: 'one', ...NOW }],

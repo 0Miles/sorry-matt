@@ -61,9 +61,10 @@
 //             "tier": "light" | "standard" | "full" | null,   // of the last initial review
 //             "tierReasons": [<tier.mjs reason>] | null, "verdict": "pass" | "fix" | "stuck" | null,   // last review
 //             "reviews": [{ "mode", "kind", "verdict", "tier", "tierReasons", "findingCounts", "findings": <n> | null,
-//                           "observations", "preExisting", "at" }],
+//                           "observations", "preExisting", "covered", "at" }],   // covered: #205, null before
 //             "findingCounts": { "candidates", "confirmed", "invalid", "blocking" } | null,   // summed over the
 //                                                          // reviews that recorded them; null: none did
+//             "members": ["<ticket>"],                      // #205: a bundle's other tickets, [] for none
 //             "sendBacks", "fixRounds", "timeoutExtensions": <n> | null,   // null: an older state that counted
 //                                                          // extensions for the run only, and had some
 //             "timeoutReassignments": <n>, "stageSeconds": { "<stage>": <seconds> },   // from the stage history;
@@ -299,6 +300,7 @@ function reviewRow(r) {
     findings: Array.isArray(r.findings) ? r.findings.length : null,
     observations: r.observations ?? null,
     preExisting: r.preExisting ?? null,
+    covered: r.covered ?? null, // #205: null when the review recorded none
     at: r.at ?? null,
   };
 }
@@ -367,6 +369,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
       verdict: reviews.at(-1)?.verdict ?? null,
       reviews,
       findingCounts,
+      members: t.members ?? [], // #205: the bundle's other tickets; this row stands for them all
       sendBacks: t.sendBacks ?? 0,
       fixRounds: t.fixRounds ?? 0,
       timeoutExtensions: t.timeoutExtensions ?? (state.usage?.timeoutExtensions ? null : 0),
