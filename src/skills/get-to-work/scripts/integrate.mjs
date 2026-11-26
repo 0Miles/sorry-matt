@@ -5,7 +5,10 @@
 //
 // Usage (every command takes the state file first; `--now <UTC>` is passed on to state.mjs's writes)
 //   node integrate.mjs line-init   <state> --branch <branch> [--worktree <path>] [--from <ref>] [--repo <dir>]
-//   node integrate.mjs ticket-init <state> <ticket> --branch <ticket branch> --worktree <path> [--repo <dir>]
+//   node integrate.mjs ticket-init <state> <ticket> --branch <ticket branch> --worktree <path>
+//                                  [--base <base branch>] [--repo <dir>]
+//   node integrate.mjs pr-open     <state> <ticket> --title <text> [--base <base branch>] [--repo <dir>]
+//   node integrate.mjs pr-push     <state> <ticket> [--repo <dir>]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> [--branch <ticket branch>]
 //                                  [--local <ticket file> [--checks <text>]] [--push]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> --ci [--push]
@@ -37,20 +40,68 @@
 //                              created from a ref (`--from` is refused). The branch must exist. The worktree that
 //                              already has it checked out is the line's worktree (a different `--worktree` is
 //                              refused); when none has, one is added at `--worktree`.
+//                ticket-pr     The line has no integration branch and no worktree (#193): every ticket is its own
+//                              pull request. `--branch` is only the line's name in the state; nothing is created,
+//                              and `--from` and `--worktree` are refused. The line is recorded in the state with
+//                              no tip (`state.mjs line <branch>`) when it is not there yet; a rerun writes nothing.
 //              Records the line in the state with its tip (`state.mjs line <branch> --tip <sha>`) when the state
 //              does not already have that tip.
 //              Output: { "format", "command": "line-init", "integrate", "branch", "worktree", "tip",
 //                        "created": { "branch": true | false, "worktree": true | false } }
+//              (ticket-pr: "worktree" and "tip" are null.)
 // ticket-init  Creates the ticket branch from the current tip of its line's integration branch (the ticket's
 //              `line` in the state), with a worktree at `--worktree`, and records the branch on the ticket
 //              (`state.mjs set --branch`). An existing branch is reused as it is; a worktree already holding it must
 //              be the one at `--worktree`. Refused for a ticket at an end state.
+//              Under integrate: ticket-pr (#193) the cut point comes from the ticket's #188 fields instead:
+//                - `waitingOn` not empty: refused (exit 3), no branch is cut until those upstreams are merged;
+//                - `stackParent` null: cut from `origin/<--base>` (`--base` is the base branch, required here;
+//                  refused when `origin/<--base>` is not a commit);
+//                - `stackParent` set: cut from the upstream ticket's recorded branch (refused when it has none, or
+//                  the branch is gone), then joined to the upstream's stack with non-interactive `gh stack`
+//                  calls carrying explicit branch names, run in the new worktree: `gh stack init <upstream branch>`
+//                  first when the upstream is not stacked itself (its own `stackParent` is null), then
+//                  `gh stack add <ticket branch>`. Run only when this call created the branch: a rerun reuses the
+//                  branch and calls gh not at all. The output's "stack" lists the gh stack subcommands run
+//                  (e.g. ["init <upstream>", "add <branch>"]; [] on a rerun or an unstacked ticket).
+//              `--base` outside ticket-pr is refused (2).
 //              Ticket branch rule (ticket-init and merge, checked before anything is touched): the branch is
 //              refused when it is an integration branch of the run (the ticket's line or another), a protected
 //              branch (see push), or another ticket's recorded branch; once the ticket has a recorded branch, a
 //              different `--branch` is refused too.
 //              Output: { "format", "command": "ticket-init", "ticket", "line", "branch", "worktree", "head",
 //                        "from": "<line tip it was cut from>" | null, "created": { "branch", "worktree" } }
+//              (ticket-pr: "from" is the SHA it was cut from — origin/<base> or the upstream branch tip — and the
+//              output adds "stack" as above.)
+// pr-open      integrate: ticket-pr only (#193; any other integrate is refused). Pushes the ticket branch
+//              (`git push -u origin <branch>`; an origin remote is required) and opens the ticket's draft pull
+//              request. Idempotent: a branch that already has an open PR (`gh pr list --head <branch> --state open`)
+//              reuses it, opens nothing new, and only records its number. Otherwise:
+//                - `stackParent` null: `gh pr create --draft --base <--base> --head <branch>` (`--base` is the base
+//                  branch, required here) with `--title <--title>` and the body below; the number is read from the
+//                  pull request URL it prints.
+//                - `stackParent` set: `gh stack submit --auto` (the PRs it creates are drafts), run in the worktree
+//                  holding the branch; this layer's number is then read with `gh pr list --head <branch>` (not from
+//                  submit's output), and the body below is written onto it with `gh pr edit <number> --body`.
+//              Body: the ticket title (`--title`), then this ticket's commit subjects (oldest first, from
+//              `<cut point>..<branch>`), then one final `Closes <ticket>` line — for a bundle (state.mjs `members`)
+//              one `Closes` line per member, the lead first, and the one PR is the lead's branch with the number
+//              recorded on the lead. Commit messages themselves carry no closing keyword. The number is recorded
+//              with `state.mjs set <ticket> --pr <number>` (skipped when already recorded). Refused for a ticket at
+//              an end state or with no recorded branch.
+//              Output: { "format", "command": "pr-open", "ticket", "line", "branch", "stacked": true | false,
+//                        "pr": <number>, "created": true | false }
+// pr-push      integrate: ticket-pr only (#193). Pushes a fix commit to the same pull request: the ticket branch is
+//              pushed again — `gh stack push` (in the worktree holding the branch) for a stacked ticket,
+//              `git push -u origin <branch>` otherwise. A ticket branch is never a protected branch (the ticket
+//              branch rule holds), so the push always runs here and the output carries no `host` marker.
+//              Output: { "format", "command": "pr-push", "ticket", "branch", "stacked", "pushed": "git push" |
+//                        "gh stack push", "head": "<sha pushed>" }
+//              Every `gh stack` call these commands make is non-interactive (explicit branch names or flags, no
+//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Two gh-stack behaviours are
+//              stubbed here per its docs and are #187 live-run items: whether `gh stack submit --auto` is idempotent
+//              over PRs already open lower in the stack, and this layer's number being read back with `gh pr list`
+//              rather than parsed from submit's output.
 // merge        Integrates one ticket (stage queued, integrating, or delivered for a rerun) in the integration
 //              worktree, which must have the ticket's line checked out. The steps, in order; each one checks
 //              whether it is already done and only does what is missing, so a rerun after an interruption at any
@@ -204,6 +255,7 @@
 // is missing; steps finished before it stay finished); 4 merge or revert conflict (JSON on stdout; the step that
 // conflicted changed nothing). On 1, 2 and 3 nothing is written to stdout.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { main as stateMain, load, PROFILE_DEFAULTS, TERMINAL } from './state.mjs';
@@ -318,6 +370,14 @@ function lineInit(ctx, rest, flags) {
   const s = load(ctx.state);
   const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
   const branch = flags.branch;
+  if (mode === 'ticket-pr') {
+    if (flags.from !== undefined) throw new UsageError('--from: under integrate: ticket-pr the line has no integration branch; nothing is created');
+    if (flags.worktree !== undefined) throw new UsageError('--worktree: under integrate: ticket-pr the line has no worktree');
+    if (!(branch in s.lines)) state(ctx, 'line', branch);
+    return {
+      out: { command: 'line-init', integrate: mode, branch, worktree: null, tip: null, created: { branch: false, worktree: false } },
+    };
+  }
   let made;
   if (mode === 'direct') {
     if (flags.from !== undefined) throw new UsageError('--from: under integrate: direct the line is the base branch itself; nothing is created from a ref');
@@ -355,8 +415,11 @@ function ticketInit(ctx, rest, flags) {
   const [id] = rest;
   const repo = ctx.repo;
   const s = load(ctx.state);
+  const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
+  if (flags.base !== undefined && mode !== 'ticket-pr') throw new UsageError('--base is for integrate: ticket-pr');
   const t = ticketOf(s, id);
   if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
+  if (mode === 'ticket-pr') return ticketInitPr(ctx, id, s, t, flags);
   const lineTip = branchTip(repo, t.line);
   if (lineTip === null) throw new Refusal(`${id}'s integration branch ${t.line} does not exist (line-init first)`);
   checkTicketBranch(s, id, t, flags.branch, repo);
@@ -373,6 +436,150 @@ function ticketInit(ctx, rest, flags) {
       from: made.branch ? lineTip : null,
       created: { branch: made.branch, worktree: made.worktree },
     },
+  };
+}
+
+// ---- ticket-pr (#193) ----------------------------------------------------------------------------------------------
+
+/** A non-interactive `gh stack` call, with the update notifier silenced. */
+const ghStack = (ctx, cwd, ...args) => ctx.gh(['stack', ...args], cwd, { GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+
+/** The run's effective integrate mode; a command that is ticket-pr only refuses any other. */
+function ticketPrOnly(s, command) {
+  const mode = { ...PROFILE_DEFAULTS, ...(s.profile ?? {}) }.integrate;
+  if (mode !== 'ticket-pr') throw new Refusal(`${command} is for integrate: ticket-pr; this run's integrate is ${mode}`);
+}
+
+/** The worktree holding `branch`, where `gh stack` acts on it. */
+function stackCwd(repo, branch) {
+  const holder = worktrees(repo).find((w) => w.branch === branch);
+  if (!holder) throw new Refusal(`gh stack needs ${branch} checked out in a worktree, and none has it`);
+  return holder.path;
+}
+
+/** ticket-init under integrate: ticket-pr — cut by the ticket's #188 fields (see the header). */
+function ticketInitPr(ctx, id, s, t, flags) {
+  const repo = ctx.repo;
+  const waiting = t.waitingOn ?? [];
+  if (waiting.length) throw new Refusal(`${id} is waiting on ${waiting.join(', ')} to merge; no branch is cut until they are`);
+  checkTicketBranch(s, id, t, flags.branch, repo);
+  const parent = t.stackParent ?? null;
+  let from;
+  if (parent !== null) {
+    const up = s.tickets[parent];
+    if (!up) throw new Refusal(`${id}'s stackParent ${parent} is not a ticket of this run`);
+    if (!up.branch) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded (ticket-init it first)`);
+    if (branchTip(repo, up.branch) === null) throw new Refusal(`${id} is stacked on ${parent}, whose branch ${up.branch} does not exist`);
+    from = up.branch;
+  } else {
+    if (!flags.base) throw new UsageError('ticket-init under integrate: ticket-pr needs --base (the base branch) for a ticket that is not stacked');
+    from = `origin/${flags.base}`;
+    if (commitOf(repo, from) === null) throw new Refusal(`${from} is not a commit; fetch the base branch first`);
+  }
+  const fromSha = commitOf(repo, from);
+  const made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), from);
+  const stack = [];
+  if (made.branch && parent !== null) {
+    if ((s.tickets[parent].stackParent ?? null) === null) {
+      ghStack(ctx, made.path, 'init', from);
+      stack.push(`init ${from}`);
+    }
+    ghStack(ctx, made.path, 'add', flags.branch);
+    stack.push(`add ${flags.branch}`);
+  }
+  if (t.branch !== flags.branch) state(ctx, 'set', id, '--branch', flags.branch);
+  return {
+    out: {
+      command: 'ticket-init',
+      ticket: id,
+      line: t.line,
+      branch: flags.branch,
+      worktree: made.path,
+      head: branchTip(repo, flags.branch),
+      from: made.branch ? fromSha : null,
+      created: { branch: made.branch, worktree: made.worktree },
+      stack,
+    },
+  };
+}
+
+/** The ticket's PR and cut point: { t, branch, parent, fromRef }, shared by pr-open and pr-push. */
+function prTicket(ctx, s, id, base) {
+  const repo = ctx.repo;
+  const t = ticketOf(s, id);
+  if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
+  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded (ticket-init first)`);
+  checkTicketBranch(s, id, t, t.branch, repo);
+  if (branchTip(repo, t.branch) === null) throw new Refusal(`${id}'s ticket branch ${t.branch} does not exist`);
+  if (tryGit(repo, 'remote', 'get-url', 'origin') === null) throw new Refusal('the repository has no origin remote; ticket-pr pushes every ticket branch there');
+  const parent = t.stackParent ?? null;
+  let fromRef = null;
+  if (parent === null) {
+    if (base !== undefined) fromRef = `origin/${base}`;
+  } else {
+    fromRef = s.tickets[parent]?.branch ?? null;
+    if (fromRef === null) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
+  }
+  if (fromRef !== null && commitOf(ctx.repo, fromRef) === null) throw new Refusal(`${fromRef} is not a commit`);
+  return { t, branch: t.branch, parent, fromRef };
+}
+
+/** The PR body: the ticket title, this ticket's commit subjects, one final `Closes` line per bundled ticket. */
+function prBody(repo, id, t, title, fromRef, branch) {
+  const subjects = git(repo, 'log', '--reverse', '--format=%s', `${fromRef}..refs/heads/${branch}`).split(/\r?\n/).filter(Boolean);
+  const closes = [id, ...(t.members ?? [])].map((m) => `Closes ${m}`);
+  return [title, '', ...subjects.map((x) => `- ${x}`), '', ...closes].join('\n');
+}
+
+function prOpen(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('pr-open takes exactly one ticket');
+  if (!flags.title) throw new UsageError('pr-open needs --title (the ticket title for the PR body)');
+  const [id] = rest;
+  const repo = ctx.repo;
+  const s = load(ctx.state);
+  ticketPrOnly(s, 'pr-open');
+  const { t, branch, parent, fromRef } = prTicket(ctx, s, id, flags.base);
+  if (fromRef === null) throw new UsageError('pr-open needs --base (the base branch) for a ticket that is not stacked');
+
+  // 1. push
+  git(repo, 'push', '-q', '-u', 'origin', branch);
+
+  // 2. reuse an open PR, else 3. create the draft
+  const open = JSON.parse(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo));
+  let pr = open.length ? open[0].number : null;
+  const created = pr === null;
+  if (created) {
+    const body = prBody(repo, id, t, flags.title, fromRef, branch);
+    if (parent === null) {
+      const out = String(ctx.gh(['pr', 'create', '--draft', '--base', flags.base, '--head', branch, '--title', flags.title, '--body', body], repo));
+      const m = /\/pull\/(\d+)/.exec(out);
+      if (!m) throw new Error(`gh pr create printed no pull request URL: ${out.trim()}`);
+      pr = Number(m[1]);
+    } else {
+      ghStack(ctx, stackCwd(repo, branch), 'submit', '--auto');
+      const after = JSON.parse(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo));
+      if (!after.length) throw new Refusal(`gh stack submit --auto opened no pull request for ${branch}`);
+      pr = after[0].number;
+      ctx.gh(['pr', 'edit', String(pr), '--body', body], repo);
+    }
+  }
+
+  // 4. record
+  if ((t.pr ?? null) !== pr) state(ctx, 'set', id, '--pr', String(pr));
+  return { out: { command: 'pr-open', ticket: id, line: t.line, branch, stacked: parent !== null, pr, created } };
+}
+
+function prPush(ctx, rest, _flags) {
+  if (rest.length !== 1) throw new UsageError('pr-push takes exactly one ticket');
+  const [id] = rest;
+  const repo = ctx.repo;
+  const s = load(ctx.state);
+  ticketPrOnly(s, 'pr-push');
+  const { branch, parent } = prTicket(ctx, s, id, undefined);
+  if (parent !== null) ghStack(ctx, stackCwd(repo, branch), 'push');
+  else git(repo, 'push', '-q', '-u', 'origin', branch);
+  return {
+    out: { command: 'pr-push', ticket: id, branch, stacked: parent !== null, pushed: parent !== null ? 'gh stack push' : 'git push', head: branchTip(repo, branch) },
   };
 }
 
@@ -1072,7 +1279,9 @@ function stuck(ctx, rest, flags) {
 
 const COMMANDS = {
   'line-init': [lineInit, { branch: 'one', worktree: 'one', from: 'one', repo: 'one', now: 'one' }],
-  'ticket-init': [ticketInit, { branch: 'one', worktree: 'one', repo: 'one', now: 'one' }],
+  'ticket-init': [ticketInit, { branch: 'one', worktree: 'one', base: 'one', repo: 'one', now: 'one' }],
+  'pr-open': [prOpen, { title: 'one', base: 'one', repo: 'one', now: 'one' }],
+  'pr-push': [prPush, { repo: 'one', now: 'one' }],
   merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
   'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
   revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', now: 'one' }],
@@ -1105,19 +1314,25 @@ function parseArgs(argv, spec) {
 }
 
 export function defaultDeps() {
-  return { cwd: process.cwd() };
+  return {
+    cwd: process.cwd(),
+    // The `gh` seam (as in freeze.mjs): env, when given, is added to the environment of that one call.
+    gh: (args, cwd, env) =>
+      execFileSync('gh', args, { cwd, env: env && { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] }),
+  };
 }
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.
-export function main(argv, deps = defaultDeps()) {
+export function main(argv, deps = {}) {
+  const d = { ...defaultDeps(), ...deps };
   try {
     const entry = COMMANDS[argv[0]];
     if (!entry) throw new UsageError(`expected one of ${Object.keys(COMMANDS).join(', ')}`);
     const [cmd, spec] = entry;
     const { flags, rest } = parseArgs(argv.slice(1), spec);
     if (!rest.length) throw new UsageError(`${argv[0]} needs the state file first`);
-    const path = (p) => resolve(deps.cwd, p);
-    const ctx = { state: path(rest[0]), now: flags.now, repo: path(flags.repo ?? '.'), path };
+    const path = (p) => resolve(d.cwd, p);
+    const ctx = { state: path(rest[0]), now: flags.now, repo: path(flags.repo ?? '.'), path, gh: d.gh };
     const { code = 0, out } = cmd(ctx, rest.slice(1), flags);
     return { code, out: `${JSON.stringify({ format: FORMAT, ...out }, null, 2)}\n`, err: '' };
   } catch (e) {

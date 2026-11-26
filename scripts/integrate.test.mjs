@@ -25,7 +25,7 @@ function scratch(t) {
 }
 
 /** A repo on main with one commit, optionally pushed to a bare origin, and an initialized state. */
-function setup(t, { origin = true, profile } = {}) {
+function setup(t, { origin = true, profile, tracker, gh } = {}) {
   const dir = scratch(t);
   const repo = join(dir, 'repo');
   const statePath = join(dir, 'run-1.state.json');
@@ -50,11 +50,11 @@ function setup(t, { origin = true, profile } = {}) {
     assert.equal(r.code, 0, r.err);
     return JSON.parse(r.out);
   };
-  st('init', '--run', 'run-1');
+  st('init', '--run', 'run-1', ...(tracker ? ['--tracker', tracker] : []));
   if (profile) st('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
   const state = () => JSON.parse(readFileSync(statePath, 'utf8'));
   const integrate = (...argv) => {
-    const r = main([argv[0], statePath, ...argv.slice(1), '--now', NOW], { cwd: repo });
+    const r = main([argv[0], statePath, ...argv.slice(1), '--now', NOW], { cwd: repo, ...(gh ? { gh } : {}) });
     return { ...r, json: r.out ? JSON.parse(r.out) : null };
   };
   const ok = (...argv) => {
@@ -914,4 +914,217 @@ test('--local under a Windows 8.3 short name of the worktree: a file not on disk
   queue('#1');
   refused(/--local issues\/none\.md is not committed on run-1\/line-a/, 'merge', '#1', '--worktree', short, '--local', 'issues/none.md', '--checks', 'x');
   assert.equal(state().tickets['#1'].stage, 'integrating');
+});
+
+// ---- integrate: ticket-pr (#193) -----------------------------------------------------------------------------------
+
+/** A recording `gh` stub: answers by the first two words of the call ("pr list", "stack add", …). */
+function ghStub(answers = {}) {
+  const calls = [];
+  const fn = (args, cwd, env) => {
+    calls.push({ args, cwd, env });
+    const a = answers[args.slice(0, 2).join(' ')];
+    return typeof a === 'function' ? a({ args, cwd, env }) : (a ?? '');
+  };
+  fn.calls = calls;
+  fn.of = (first, second) => calls.filter((c) => c.args[0] === first && (second === undefined || c.args[1] === second));
+  return fn;
+}
+
+/** setup() with tracker github, integrate: ticket-pr, the line recorded and `ids` added on it. */
+function withPrLine(t, ids, gh = ghStub()) {
+  const env = setup(t, { tracker: 'github', profile: { integrate: 'ticket-pr' }, gh });
+  env.ok('line-init', '--branch', LINE);
+  env.st('add', ...ids, '--line', LINE);
+  return { ...env, gh };
+}
+
+const samePath = (a, b) => assert.equal(realpathSync.native(a), realpathSync.native(b));
+
+test('line-init (ticket-pr) records the line, creates no branch and no worktree, and is idempotent', (t) => {
+  const { dir, git, ok, state, integrate } = setup(t, { tracker: 'github', profile: { integrate: 'ticket-pr' } });
+  const worktreeCount = () => git('worktree', 'list', '--porcelain').split('\n\n').filter(Boolean).length;
+  const before = worktreeCount();
+  const out = ok('line-init', '--branch', LINE);
+  assert.equal(out.integrate, 'ticket-pr');
+  assert.deepEqual(out.created, { branch: false, worktree: false });
+  assert.equal(out.tip, null);
+  assert.equal(out.worktree, null);
+  assert.throws(() => git('rev-parse', '--verify', `refs/heads/${LINE}`), 'no integration branch is created');
+  assert.equal(worktreeCount(), before, 'no line worktree is created');
+  assert.equal(state().lines[LINE].tip, null);
+
+  const file = readFileSync(join(dir, 'run-1.state.json'), 'utf8');
+  const again = ok('line-init', '--branch', LINE);
+  assert.deepEqual(again, out, 'a rerun gives the same output');
+  assert.equal(readFileSync(join(dir, 'run-1.state.json'), 'utf8'), file, 'nothing to record on a rerun');
+  assert.equal(worktreeCount(), before);
+
+  assert.equal(integrate('line-init', '--branch', LINE, '--from', 'HEAD').code, 2);
+  assert.equal(integrate('line-init', '--branch', LINE, '--worktree', join(dir, 'wt-line')).code, 2);
+});
+
+test('ticket-init (ticket-pr) cuts by the #188 fields: origin/<base>, the upstream branch, or a waiting refusal', (t) => {
+  const gh = ghStub();
+  const { dir, git, g, ok, st, state, refused, integrate, work } = withPrLine(t, ['#1', '#2', '#3', '#4'], gh);
+  const base = git('rev-parse', 'origin/main');
+  work(join(dir, 'repo'), { 'later.md': 'after the push\n' }, 'local main moved past origin/main');
+
+  // stackParent null, waitingOn empty: cut from origin/<base>, not from the local base branch.
+  const wt1 = join(dir, 'wt-1');
+  assert.equal(integrate('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt1).code, 2, '--base is required');
+  const one = ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt1, '--base', 'main');
+  assert.deepEqual([one.from, one.head, one.created, one.stack], [base, base, { branch: true, worktree: true }, []]);
+  assert.equal(git('rev-parse', 'refs/heads/run-1/01-a'), base);
+  assert.equal(state().tickets['#1'].branch, 'run-1/01-a');
+  assert.equal(gh.calls.length, 0, 'an unstacked ticket calls gh not at all');
+
+  // stackParent set: cut from the upstream ticket branch; init + add join the upstream's stack, non-interactively.
+  const upstreamTip = work(wt1, { 'one.md': 'one\n' }, '#1: first commit');
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  const two = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  assert.deepEqual([two.from, two.head, two.stack], [upstreamTip, upstreamTip, ['init run-1/01-a', 'add run-1/02-b']]);
+  assert.equal(g(wt2, 'symbolic-ref', '--short', 'HEAD'), 'run-1/02-b');
+  assert.deepEqual(gh.calls.map((c) => c.args), [['stack', 'init', 'run-1/01-a'], ['stack', 'add', 'run-1/02-b']]);
+  for (const c of gh.calls) {
+    assert.deepEqual(c.env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }, 'every gh stack call silences the update notifier');
+    samePath(c.cwd, wt2);
+  }
+  const againTwo = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  assert.deepEqual([againTwo.created, againTwo.from, againTwo.stack], [{ branch: false, worktree: false }, null, []]);
+  assert.equal(gh.calls.length, 2, 'a rerun reuses the branch and calls gh stack again not at all');
+
+  // An upstream that is stacked itself: the stack exists, so only `add` runs.
+  st('set', '#3', '--stack-parent', '#2');
+  const three = ok('ticket-init', '#3', '--branch', 'run-1/03-c', '--worktree', join(dir, 'wt-3'));
+  assert.deepEqual(three.stack, ['add run-1/03-c']);
+  assert.deepEqual(gh.calls.at(-1).args, ['stack', 'add', 'run-1/03-c']);
+
+  // waitingOn not empty: refused with 3, and no branch is cut.
+  st('set', '#4', '--waiting-on', '#1');
+  refused(/#4 is waiting on #1 to merge/, 'ticket-init', '#4', '--branch', 'run-1/04-d', '--worktree', join(dir, 'wt-4'), '--base', 'main');
+  assert.throws(() => git('rev-parse', '--verify', 'refs/heads/run-1/04-d'), 'no branch for a waiting ticket');
+  assert.equal(state().tickets['#4'].branch, null);
+});
+
+test('pr-open (ticket-pr) pushes the branch, opens the draft PR with the body and Closes line, and records the number', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":12}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/12\n',
+  });
+  const { dir, bare, git, ok, state, refused, work } = withPrLine(t, ['#1'], gh);
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
+  refused(/#9 is not a ticket of this run/, 'pr-open', '#9', '--title', 'x', '--base', 'main');
+  work(wt, { 'one.md': 'one\n' }, '#1: add the thing');
+  work(wt, { 'two.md': 'two\n' }, '#1: refine the thing');
+  const head = git('rev-parse', 'refs/heads/run-1/01-a');
+
+  const out = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.deepEqual(out, { format: 'sorry-matt/integrate@1', command: 'pr-open', ticket: '#1', line: LINE, branch: 'run-1/01-a', stacked: false, pr: 12, created: true });
+  assert.equal(execFileSync('git', ['-C', bare, 'rev-parse', 'refs/heads/run-1/01-a'], { encoding: 'utf8' }).trim(), head, 'the ticket branch is pushed');
+  assert.equal(state().tickets['#1'].pr, 12);
+  const create = gh.of('pr', 'create');
+  assert.equal(create.length, 1);
+  const args = create[0].args;
+  for (const flag of ['--draft']) assert.ok(args.includes(flag), `gh pr create carries ${flag}`);
+  assert.equal(args[args.indexOf('--base') + 1], 'main');
+  assert.equal(args[args.indexOf('--head') + 1], 'run-1/01-a');
+  const body = args[args.indexOf('--body') + 1].split('\n');
+  assert.equal(body[0], 'Add the thing', 'the body starts with the ticket title');
+  assert.deepEqual(body.filter((l) => l.startsWith('- ')), ['- #1: add the thing', '- #1: refine the thing'], 'the commit subjects, oldest first');
+  assert.equal(body.at(-1), 'Closes #1', 'the final line closes the ticket');
+  assert.equal(body.filter((l) => l.startsWith('Closes ')).length, 1, 'one Closes line only');
+
+  // Idempotent: the open PR is reused, nothing new is opened, and the state is already recorded.
+  const file = readFileSync(join(dir, 'run-1.state.json'), 'utf8');
+  const again = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.deepEqual([again.pr, again.created], [12, false]);
+  assert.equal(gh.of('pr', 'create').length, 1, 'no second PR is created');
+  assert.equal(readFileSync(join(dir, 'run-1.state.json'), 'utf8'), file, 'the recorded number is left as it is');
+});
+
+test('pr-open (ticket-pr) for a stacked ticket submits the stack, reads the number back, and writes the body', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('stack', 'submit').length ? '[{"number":13}]' : '[]'),
+  });
+  const { dir, ok, st, state, work } = withPrLine(t, ['#1', '#2'], gh);
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', join(dir, 'wt-1'), '--base', 'main');
+  work(join(dir, 'wt-1'), { 'one.md': 'one\n' }, '#1: upstream work');
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  work(wt2, { 'two.md': 'two\n' }, '#2: stacked work');
+
+  const out = ok('pr-open', '#2', '--title', 'Stacked thing');
+  assert.deepEqual([out.stacked, out.pr, out.created], [true, 13, true]);
+  assert.equal(state().tickets['#2'].pr, 13);
+  const submit = gh.of('stack', 'submit');
+  assert.equal(submit.length, 1);
+  assert.deepEqual(submit[0].args, ['stack', 'submit', '--auto']);
+  assert.deepEqual(submit[0].env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+  samePath(submit[0].cwd, wt2);
+  const edit = gh.of('pr', 'edit');
+  assert.equal(edit.length, 1);
+  assert.equal(edit[0].args[2], '13');
+  const body = edit[0].args[edit[0].args.indexOf('--body') + 1].split('\n');
+  assert.equal(body[0], 'Stacked thing');
+  assert.deepEqual(body.filter((l) => l.startsWith('- ')), ['- #2: stacked work'], 'only this layer\'s commits');
+  assert.equal(body.at(-1), 'Closes #2');
+});
+
+test('pr-open (ticket-pr) for a bundle opens one PR on the lead with one Closes line per member, the lead first', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":21}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/21\n',
+  });
+  const { dir, ok, st, state, refused, work } = withPrLine(t, ['#5', '#6'], gh);
+  st('bundle', '#5', '#6');
+  const wt = join(dir, 'wt-5');
+  ok('ticket-init', '#5', '--branch', 'run-1/05-e', '--worktree', wt, '--base', 'main');
+  work(wt, { 'five.md': 'five\n' }, '#5 #6: bundled work');
+
+  const out = ok('pr-open', '#5', '--title', 'Bundle of five and six', '--base', 'main');
+  assert.deepEqual([out.pr, out.created, out.branch], [21, true, 'run-1/05-e'], 'one PR, on the lead\'s branch');
+  assert.equal(state().tickets['#5'].pr, 21, 'the number is recorded on the lead');
+  const args = gh.of('pr', 'create')[0].args;
+  const body = args[args.indexOf('--body') + 1].split('\n');
+  assert.deepEqual(body.filter((l) => l.startsWith('Closes ')), ['Closes #5', 'Closes #6'], 'every member, the lead first');
+  refused(/#6 .*lead|#6 is not a ticket/, 'pr-open', '#6', '--title', 'member', '--base', 'main');
+});
+
+test('pr-push (ticket-pr) pushes the same branch, gh stack push for a stacked ticket, and marks nothing host', (t) => {
+  const gh = ghStub({
+    'pr list': () => '[{"number":12}]',
+  });
+  const { dir, bare, git, ok, st, refused, work } = withPrLine(t, ['#1', '#2'], gh);
+  const wt1 = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt1, '--base', 'main');
+  work(wt1, { 'one.md': 'one\n' }, '#1: first commit');
+  ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  const fix = work(wt1, { 'one.md': 'one fixed\n' }, '#1: fix after review');
+
+  const out = ok('pr-push', '#1');
+  assert.deepEqual(out, { format: 'sorry-matt/integrate@1', command: 'pr-push', ticket: '#1', branch: 'run-1/01-a', stacked: false, pushed: 'git push', head: fix });
+  assert.ok(!JSON.stringify(out).includes('host'), 'a ticket branch is not protected; no host marker');
+  assert.equal(execFileSync('git', ['-C', bare, 'rev-parse', 'refs/heads/run-1/01-a'], { encoding: 'utf8' }).trim(), fix, 'the fix commit reaches the same branch');
+
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  work(wt2, { 'two.md': 'two\n' }, '#2: stacked work');
+  const stacked = ok('pr-push', '#2');
+  assert.deepEqual([stacked.stacked, stacked.pushed], [true, 'gh stack push']);
+  const push = gh.of('stack', 'push');
+  assert.equal(push.length, 1);
+  assert.deepEqual(push[0].env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+  samePath(push[0].cwd, wt2);
+  refused(/#9 is not a ticket of this run/, 'pr-push', '#9');
+});
+
+test('pr-open and pr-push are refused outside integrate: ticket-pr', (t) => {
+  const { refused } = withLine(t, ['#1']);
+  refused(/pr-open is for integrate: ticket-pr; this run's integrate is aggregate-pr/, 'pr-open', '#1', '--title', 'x', '--base', 'main');
+  refused(/pr-push is for integrate: ticket-pr/, 'pr-push', '#1');
 });

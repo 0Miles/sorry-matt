@@ -165,8 +165,7 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 合票只是本 run 的排程：tracker 上的票不合併、不關、不改寫。主票的接續紀錄帶整組的審查區塊；實作 agent 在其他
 成員票的接續紀錄留一行指到主票。交付時每張成員票都要關（總 PR 與 FINISH.md 的對帳表逐張列出）。
 
-`integrate: ticket-pr` 下合票是一支票級 PR：body 的摘要逐張列出成員票，每張各一行 `Closes #N`，合併後一次關掉
-整組。<!-- pending #193 --> 疊進 `gh stack` 時整組是一層：下游依賴任一張成員票，等的都是這一層的 PR，`stackParent`
+疊進 `gh stack` 時整組是一層：下游依賴任一張成員票，等的都是這一層的 PR，`stackParent`
 與 `waitingOn` 記主票；判「恰有一張未合併上游」時，同一個合票的幾張上游算一張。<!-- pending #198 -->
 
 ### 收票的檢查與審查
