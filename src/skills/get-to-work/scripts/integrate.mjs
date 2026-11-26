@@ -99,7 +99,9 @@
 //              Output: { "format", "command": "pr-push", "ticket", "branch", "stacked", "pushed": "git push" |
 //                        "gh stack push", "head": "<sha pushed>" }
 // pr-merge     integrate: ticket-pr only (#194). Brings a reviewed ticket-level PR (recorded with pr-open) to
-//              mergeable: the ticket is queued or integrating (a first call moves it queued → integrating), and the
+//              mergeable: the ticket is queued or integrating (a first call moves it queued → integrating; #196:
+//              --ready also takes awaiting-ci and --merged also takes awaiting-merge, the waiting stages tick
+//              parks the ticket in between the phases), and the
 //              script itself never polls and never sends the merge. Three calls, each one phase:
 //                (default)  Phase "push": syncs the base, then pushes the ticket branch.
 //                             - not stacked: `git merge` of `origin/<--base>` (`--base` is the base branch, required
@@ -132,7 +134,7 @@
 //                                     "send": { "status": "host", "command" } | { "status": "human" } }
 //                --merged   Phase "merged", after the host reports the merge done: the merge SHA and confirmation
 //                           are read with `gh pr view <PR> --json mergeCommit,state` (refused unless "MERGED"), the
-//                           SHA is recorded (`state.mjs merge`), the ticket becomes delivered, and the cleanup
+//                           SHA is recorded (`state.mjs merge`, in integrating or awaiting-merge), the ticket becomes delivered, and the cleanup
 //                           removes the ticket's worktree and local branch (`git branch -D`: the merge lives on the
 //                           remote). The remote branch is never deleted here: it is deleted with the merge itself
 //                           only when the authorization scope allows the host that.
@@ -639,12 +641,11 @@ function prPush(ctx, rest, _flags) {
 // ---- pr-merge (#194) -----------------------------------------------------------------------------------------------
 
 /**
- * The ticket pr-merge acts on: { t, branch, pr, parent }. The ticket is queued or integrating (delivered too when
- * `delivered`: the --merged phase reruns), with its branch and PR recorded.
+ * The ticket pr-merge acts on: { t, branch, pr, parent }, with its branch and PR recorded. `stages` is the phase's
+ * allowed stages (#196: --ready also takes awaiting-ci, --merged also takes awaiting-merge and delivered reruns).
  */
-function prMergeTicket(ctx, s, id, delivered) {
+function prMergeTicket(ctx, s, id, stages) {
   const t = ticketOf(s, id);
-  const stages = ['queued', 'integrating', ...(delivered ? ['delivered'] : [])];
   if (!stages.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; pr-merge takes a ticket that is ${stages.join(' or ')}`);
   const branch = recordedBranch(s, id, t, ctx.repo);
   if ((t.pr ?? null) === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
@@ -658,7 +659,7 @@ const prMergeOut = (phase, id, t, rest) => ({
 /** Phase "push": sync the base into the ticket branch, push it, and report the head for tick's CI wake-up. */
 function prMergePush(ctx, id, s, flags) {
   const repo = ctx.repo;
-  const { t, branch, parent } = prMergeTicket(ctx, s, id, false);
+  const { t, branch, parent } = prMergeTicket(ctx, s, id, ['queued', 'integrating']);
   pushable(repo, id, branch, 'pr-merge pushes the ticket branch there');
   const wt = stackCwd(repo, branch);
   let synced;
@@ -689,7 +690,7 @@ function prMergePush(ctx, id, s, flags) {
 /** Phase "ready" (after the host confirms CI green): `gh pr ready`, then merge-gate.mjs decides what may be sent. */
 function prMergeReady(ctx, id, s, flags) {
   const repo = ctx.repo;
-  const { t, pr, parent } = prMergeTicket(ctx, s, id, false);
+  const { t, pr, parent } = prMergeTicket(ctx, s, id, ['queued', 'integrating', 'awaiting-ci']);
   if (!flags.base) throw new UsageError('pr-merge --ready needs --base (the base branch) for merge-gate.mjs');
   ctx.gh(['pr', 'ready', String(pr)], repo);
   const slug = parseJson(ctx.gh(['repo', 'view', '--json', 'nameWithOwner'], repo))?.nameWithOwner;
@@ -713,7 +714,7 @@ function prMergeReady(ctx, id, s, flags) {
 /** Phase "merged" (after the host reports the merge done): record the merge SHA, deliver, and clean up locally. */
 function prMergeMerged(ctx, id, s) {
   const repo = ctx.repo;
-  const { t, branch, pr } = prMergeTicket(ctx, s, id, true);
+  const { t, branch, pr } = prMergeTicket(ctx, s, id, ['queued', 'integrating', 'awaiting-merge', 'delivered']);
   const view = parseJson(ctx.gh(['pr', 'view', String(pr), '--json', 'mergeCommit,state'], repo));
   if (view?.state !== 'MERGED') throw new Refusal(`${id}'s pull request ${pr} is ${view?.state ?? 'in an unknown state'}, not MERGED; the host sends the merge first`);
   const sha = view?.mergeCommit?.oid;

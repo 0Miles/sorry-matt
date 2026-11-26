@@ -108,6 +108,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     ids: [ID1, ID2],
     titles: { [ID1]: 'First thing', [ID2]: 'Second thing' },
     comments: {}, // GitHub: ticket id → the issue's comments, as `gh issue view --json comments` gives them
+    issueState: {}, // #196: ticket id → the issue's state for `gh issue view --json state` (default CLOSED: `Closes` fired)
     blockers: {},
     acceptance: {},
     ci: () => 'green',
@@ -203,7 +204,28 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       return `https://github.com/${REPO}/pull/${number}\n`;
     }
     if (args[0] === 'pr' && args[1] === 'edit') return '';
+    // #196: the pr-merge seam — ready, the merge-gate queries, and the merged PR's view
+    if (args[0] === 'pr' && args[1] === 'ready') {
+      const pr = Object.values(h.prs).find((x) => x.number === Number(args[2]));
+      if (pr) pr.draft = false;
+      return '';
+    }
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const pr = Object.values(h.prs).find((x) => x.number === Number(args[2]));
+      return JSON.stringify({ mergeCommit: pr?.merged ? { oid: pr.mergeOid } : null, state: pr?.merged ? 'MERGED' : 'OPEN' });
+    }
+    if (args[0] === 'repo' && args[1] === 'view') return JSON.stringify({ nameWithOwner: REPO });
+    if (args[0] === 'api' && args[1] === 'graphql') return JSON.stringify(h.mergeQueue ?? { data: { repository: { mergeQueue: null } } });
     throw new Error(`no gh stub for: gh ${args.join(' ')}`);
+  };
+  /** #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. */
+  h.mergePr = (tid) => {
+    const branch = h.state().tickets[tid].branch;
+    git(h.repo, 'push', '-q', 'origin', `${branch}:main`);
+    git(h.repo, 'fetch', '-q', 'origin');
+    const pr = h.prs[branch];
+    pr.merged = true;
+    pr.mergeOid = git(h.repo, 'rev-parse', 'origin/main');
   };
 
   // ---- the host ----
@@ -239,9 +261,10 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         // gh issue view off a TTY: --json gives the fields asked for; --comments prints the comments only, not the body
         const id = `#${args[2]}`;
         const comments = h.comments[id] ?? [];
+        if (args[1] === 'close') h.issueState[id] = 'CLOSED'; // #196: the idempotent close after the merge
         if (args.includes('--json')) {
           const fields = args[args.indexOf('--json') + 1].split(',');
-          const all = { title: h.titles[id], body: `The ticket text of ${id}.`, comments };
+          const all = { title: h.titles[id], body: `The ticket text of ${id}.`, comments, state: h.issueState[id] ?? 'CLOSED' };
           out = `${JSON.stringify(Object.fromEntries(fields.map((f) => [f, all[f]])))}\n`;
         } else if (args.includes('--comments')) out = comments.map((x) => `author:\t${x.author.login}\n--\n${x.body}\n--\n`).join('');
         else out = `title:\t${h.titles[id]}\n--\nThe ticket text of ${id}.\n`;
@@ -303,6 +326,11 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     'deliver-ticket': () => 'done',
     'deliver-line': () => 'done',
     simplify: () => ({ outcome: 'none', value: 'looked at the line: nothing to reuse or remove' }),
+    // #196: the host holds merge authorization by default: it sends the merge and GitHub merges at once
+    'pr-send': (a) => {
+      h.mergePr(a.tickets[0]);
+      return 'sent';
+    },
     'wrap-up': () => 'done',
     'wakeup-end': () => 'done',
   };

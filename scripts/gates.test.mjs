@@ -896,3 +896,42 @@ test('ledger: an unreadable ledger fails the marker assertion', (t) => {
   const { w } = ledgerWorld(t);
   failsOnly(w.check('ledger', '--ledger', join(w.dir, 'nope.md')), 'marker', /could not read the ledger/);
 });
+
+// ---- #196: delivered-merge under integrate: ticket-pr --------------------------------------------------------------
+
+test('#196: finish delivered-merge under ticket-pr passes on a merge SHA or a left-for-human record, and fails with neither', (t) => {
+  const w = world(t);
+  w.edit((s) => {
+    s.tracker = 'github';
+  });
+  w.ok('profile', '--integrate', 'ticket-pr');
+  w.ok('add', '#1', '--line', LINE);
+  w.ok('set', '#1', '--snapshot', SNAP, '--branch', branchOf('#1'));
+  for (const next of ['implementing', 'in-review', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge']) {
+    if (next === 'queued') w.ok('review', '#1', '--mode', 'initial', '--verdict', 'pass');
+    w.ok('stage', next, '#1');
+  }
+  w.ok('set', '#1', '--left-for-human', 'PR 11 is ready; a person merges it');
+  w.ok('stage', 'delivered', '#1');
+
+  const record = w.check('finish');
+  assert.ok(record.json.checked.includes('delivered-merge'), 'delivered-merge was applied');
+  assert.ok(!record.json.failures.some((f) => f.assertion === 'delivered-merge'), `a left-for-human record passes: ${JSON.stringify(record.json.failures)}`);
+
+  // a merge SHA passes too (the record cleared away)
+  w.edit((s) => {
+    s.tickets['#1'].leftForHuman = null;
+    s.tickets['#1'].merges = [{ sha: '3'.repeat(40), at: NOW }];
+  });
+  const sha = w.check('finish');
+  assert.ok(!sha.json.failures.some((f) => f.assertion === 'delivered-merge'), 'a merge SHA passes');
+
+  // neither: the assertion fails and names both
+  w.edit((s) => {
+    s.tickets['#1'].merges = [];
+  });
+  const neither = w.check('finish');
+  const fails = neither.json.failures.filter((f) => f.assertion === 'delivered-merge');
+  assert.equal(fails.length, 1);
+  assert.match(fails[0].message, /no merge SHA and no left-for-human record/);
+});

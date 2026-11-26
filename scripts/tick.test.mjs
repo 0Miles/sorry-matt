@@ -453,18 +453,24 @@ test('#128 D2: a background spawn listed at batch 2 or later and not recorded co
 test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR at the first reported commit, pushes each fix to the same PR, and nothing merges into an integration branch', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
   const [ID1, ID2] = h.ids;
+  // F1 pin: a ref by the line's name is present from the start; stepIntegration must never merge into it
+  git(h.repo, 'branch', LINE, 'main');
+  const lineSha = git(h.repo, 'rev-parse', LINE);
   // #2's initial review says fix; its fix round commits again and the recheck passes
   h.policy.review = (a) => (a.tickets[0] === ID2 && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'f1' } : 'pass');
-  for (let i = 0; i < 6 && !(stage(h, ID1) === 'queued' && stage(h, ID2) === 'queued'); i += 1) h.wake();
-  assert.equal(stage(h, ID1), 'queued');
-  assert.equal(stage(h, ID2), 'queued');
-  const log = distinct(h.log);
-
-  // dispatch: ticket-init with --base; the branch is cut from origin/main, and nothing merges into an integration branch
-  const init = log.find((a) => a.step === 'ticket-branch' && a.tickets[0] === ID1);
-  assert.equal(init.argv[init.argv.indexOf('--base') + 1], 'main');
+  // the first wake-up dispatches: the branch is cut from origin/main (checked before the delivery removes it)
+  h.wake();
   const branch = h.state().tickets[ID1].branch;
   assert.equal(git(h.repo, 'merge-base', 'origin/main', branch), git(h.repo, 'rev-parse', 'origin/main'), 'cut from origin/main');
+  // #196: the queued tickets walk their own PR merges to delivered
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+  const log = distinct(h.log);
+
+  // dispatch: ticket-init with --base, and nothing merges into an integration branch
+  const init = log.find((a) => a.step === 'ticket-branch' && a.tickets[0] === ID1);
+  assert.equal(init.argv[init.argv.indexOf('--base') + 1], 'main');
   assert.ok(log.every((a) => a.step !== 'merge' && !(a.argv ?? []).includes('merge')), 'no action merges a ticket into an integration branch');
 
   // pr-open at the first reported commit: once per ticket, not marked host, a draft, the number in the state
@@ -492,16 +498,12 @@ test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR
   assert.equal(log.filter((a) => a.step === 'pr-open' && a.tickets[0] === ID2).length, 1, 'no second pr-open');
   assert.equal(h.state().tickets[ID2].pr, pr2, 'the same PR number throughout');
   const b2 = h.state().tickets[ID2].branch;
-  assert.equal(git(h.repo, 'rev-parse', b2), git(h.repo, 'rev-parse', `origin/${b2}`), 'the fix commit is on the remote ticket branch');
+  assert.ok(git(h.repo, 'rev-parse', `origin/${b2}`), 'the remote ticket branch holds the pushed commits (the local one is cleaned at delivery)');
 
-  // F1: the ticket-pr guard of stepIntegration is pinned — even with a ref by the line's name present, the queued
-  // tickets stay parked: the next list carries no merge, no stage-to-integrating and no no-worktree action
-  git(h.repo, 'branch', LINE, 'main');
-  const parked = JSON.parse(h.tick('next', h.path).out);
-  assert.ok(
-    parked.actions.every((a) => !['merge', 'no-worktree'].includes(a.step) && !(a.argv ?? []).includes('integrating')),
-    `nothing merges a queued ticket under ticket-pr: ${parked.actions.map((a) => a.id).join(', ')}`,
-  );
+  // F1: the ticket-pr guard of stepIntegration is pinned — the line ref present throughout never saw a merge
+  // or a no-worktree judge: the delivery went through the tickets' own pull requests (#196)
+  assert.ok(log.every((a) => a.step !== 'no-worktree'), 'no no-worktree judge under ticket-pr');
+  assert.equal(git(h.repo, 'rev-parse', LINE), lineSha, 'the ref by the line name is untouched');
 });
 
 test('#195: ticket-pr — a report carrying no commit opens no PR; the report goes on through the existing rules', (t) => {
@@ -521,4 +523,123 @@ test('#195: ticket-pr — a report carrying no commit opens no PR; the report go
   const rev = log.find((a) => a.step === 'review' && a.tickets[0] === ID1);
   assert.equal(rev.meta.kind, 'minimal');
   assert.match(readFileSync(briefOf(rev), 'utf8'), /git diff origin\/main\.\.\./);
+});
+
+// ---- integrate: ticket-pr — the merge path (#196) ------------------------------------------------------------------
+
+test('#196: ticket-pr — pr-merge, awaiting-ci on the PR head, ready + merge-gate, the host merge, delivered, and the open issue closed once', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.issueState[ID1] = 'OPEN'; // `Closes` did not fire for #1; #2's issue closed itself
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+  const s = h.state();
+  assert.deepEqual(
+    s.tickets[ID1].history.map((x) => x.to).slice(-4),
+    ['integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'],
+    'queued → integrating (pr-merge push) → awaiting-ci → awaiting-merge → delivered',
+  );
+  const branch1 = s.tickets[ID1].branch;
+  assert.equal(s.tickets[ID1].merges.at(-1).sha, h.prs[branch1].mergeOid, "the recorded merge SHA is GitHub's merge commit");
+  const log = distinct(h.log);
+  // awaiting-ci reads ci.mjs verdict on the PR head: the ticket branch at its pushed SHA
+  const read1 = log.find((a) => a.step === 'ci-read' && a.id.startsWith(`pr-ci:${ID1}@`));
+  assert.ok(read1, 'CI is read on the PR head');
+  assert.ok(read1.argv.includes(branch1), 'the verdict is read for the ticket branch');
+  assert.match(read1.argv.at(-1), /^[0-9a-f]{40}$/, 'at the PR head SHA');
+  // the ready phase: gh pr ready + merge-gate.mjs, then the merge command with send status host
+  assert.ok(h.ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready' && Number(a[2]) === s.tickets[ID1].pr), 'gh pr ready ran');
+  assert.ok(h.ghCalls.some((a) => a[0] === 'api' && a[1] === 'graphql'), 'merge-gate.mjs queried the merge queue');
+  const ready1 = JSON.parse(readFileSync(log.find((a) => a.step === 'pr-ready' && a.tickets[0] === ID1).stdout, 'utf8'));
+  assert.deepEqual(ready1.send, { status: 'host', command: `gh pr merge ${s.tickets[ID1].pr}` });
+  const send1 = log.find((a) => a.step === 'pr-send' && a.tickets[0] === ID1);
+  assert.ok(send1.outcomes.includes('sent') && send1.outcomes.includes('left-for-human'), 'the prompting call offers sent and left-for-human');
+  assert.match(send1.do, /never --admin, never auto-merge/);
+  // the still-open issue gets one idempotent close pointing at the PR; the closed one sees no action
+  const closes = log.filter((a) => a.step === 'issue-close');
+  assert.deepEqual(closes.map((a) => a.tickets[0]), [ID1], 'only the open issue is closed');
+  assert.ok(closes[0].argv.join(' ').includes(`pull request #${s.tickets[ID1].pr}`), 'the comment points at the PR');
+  const extra = h.wake();
+  assert.ok(h.actions(extra).every((a) => a.step !== 'issue-close' && a.step !== 'issue-state'), 'the close is not issued again');
+});
+
+test('#196: ticket-pr — without merge authorization the PR still goes ready; the ticket is recorded left-for-human and delivered', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.policy['pr-send'] = () => ({ outcome: 'left-for-human', value: 'no merge authorization this run: left for a person' });
+  h.untilDone();
+  const s = h.state();
+  for (const id of [ID1, ID2]) {
+    assert.equal(s.tickets[id].stage, 'delivered');
+    assert.deepEqual(s.tickets[id].merges, [], `${id}: no merge SHA — nothing was merged`);
+    assert.equal(s.tickets[id].leftForHuman, 'no merge authorization this run: left for a person');
+    assert.equal(h.prs[s.tickets[id].branch].draft, false, `${id}: the PR was taken to ready`);
+    assert.ok(!h.prs[s.tickets[id].branch].merged, `${id}: GitHub saw no merge`);
+  }
+  const log = distinct(h.log);
+  assert.ok(log.every((a) => a.step !== 'pr-merged'), 'tick never checks for a merge that was not sent');
+  assert.ok(log.every((a) => a.step !== 'issue-close'), "closing the issues goes with the person's merge");
+});
+
+test('#196: ticket-pr — awaiting-ci holds its in-flight slot, awaiting-merge does not but its planned files stay occupied; both wait on the fallback wake-up', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  write(join(h.W, 'files', '2.txt'), 'a.txt\n'); // #2 plans #1's file: dispatch file-overlap holds it back
+  let ci1 = 'running';
+  h.ci = () => ci1;
+  h.policy['pr-send'] = () => 'sent'; // sent, but GitHub's merge queue has not merged yet
+  for (let i = 0; i < 4 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  // one CI read per wake-up, then the wake ends — no polling loop in the action list, the fallback wake-up waits
+  const w = h.wake();
+  assert.equal(distinct(h.actions(w)).filter((a) => a.step === 'ci-read').length, 1, 'one read per wake-up');
+  assert.equal(w.at(-1).then, 'end');
+  assert.ok(w.every((o) => o.dispatch === null), 'awaiting-ci holds its in-flight slot: no dispatch point runs');
+  assert.equal(stage(h, ID2), 'candidate');
+  // green: ready, the merge sent, and the ticket parks at awaiting-merge
+  ci1 = 'green';
+  h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-merge');
+  // awaiting-merge holds no slot: the dispatch point runs — but #1's planned files still hold #2 back
+  const w2 = h.wake();
+  const dispatch = w2.map((o) => o.dispatch).find(Boolean);
+  assert.ok(dispatch?.reasons.includes('nothing in flight while candidates remain'), `the dispatch point ran: ${JSON.stringify(w2.map((o) => o.dispatch))}`);
+  assert.equal(distinct(h.actions(w2)).filter((a) => a.step === 'pr-merged').length, 1, 'the merge is checked once per wake-up');
+  assert.equal(stage(h, ID2), 'candidate', 'the overlap holds #2 back');
+  const plan = JSON.parse(readFileSync(join(h.W, 'overlap', `${dispatch.round}.plan.json`), 'utf8'));
+  assert.deepEqual(plan.running.map((x) => x.id), [ID1], "the awaiting-merge ticket's planned files stay occupied");
+  const out = JSON.parse(readFileSync(join(h.W, 'overlap', `${dispatch.round}.json`), 'utf8'));
+  assert.deepEqual(out.wait.map((x) => x.id), [ID2]);
+  // the merge lands: #1 is delivered and the file is free — #2 starts
+  h.mergePr(ID1);
+  h.wake();
+  assert.equal(stage(h, ID1), 'delivered');
+  if (stage(h, ID2) === 'candidate') h.wake();
+  assert.equal(stage(h, ID2), 'implementing');
+});
+
+test('#196 F1: a red PR head goes to a fix round, and the re-queued ticket re-runs the push phase and delivers', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  let red = true;
+  h.ci = () => (red ? 'red' : 'green');
+  h.policy['pr-red'] = () => {
+    red = false; // the fix round turns CI green from here on
+    return 'fix';
+  };
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].fixRounds, 1, 'the red PR head cost one fix round');
+  assert.deepEqual(
+    s.tickets[ID1].history.map((x) => x.to).slice(-8),
+    ['awaiting-ci', 'fixing', 'in-review', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'],
+    'awaiting-ci → fixing → the recheck → queued → the push phase again',
+  );
+  // the re-queued round is a new pr-sync attempt, not the spent exec id (review F1)
+  const syncs = distinct(h.log).filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID1).map((a) => a.id);
+  assert.deepEqual(syncs, [`pr-sync:${ID1}:1`, `pr-sync:${ID1}:2`]);
+  assert.equal(s.tickets[ID1].merges.at(-1).sha, h.prs[s.tickets[ID1].branch].mergeOid, 'the fixed ticket delivered through its PR');
 });
