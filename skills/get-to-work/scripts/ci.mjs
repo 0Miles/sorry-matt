@@ -1,19 +1,28 @@
 #!/usr/bin/env node
-// ci: what GitHub Actions says about an integration branch. `verdict` turns the runs of one SHA into one result;
+// ci: what GitHub Actions says about an integration branch or a ticket branch. `verdict` turns the runs of one SHA
+// into one result;
 // `base` does the same for the latest SHA of the base branch; `earliest-red` finds where a red line turned red
 // and which tickets were merged in that stretch.
 // Read-only: it queries `gh` and `git` and never reruns, pushes or writes anything.
 // No dependencies: runs on a bare Node 20+ with git and the `gh` CLI.
 //
 // Usage
-//   node ci.mjs verdict [--repo <owner>/<repo>] <integration branch> <sha>
+//   node ci.mjs verdict [--repo <owner>/<repo>] <branch> <sha>
 //   node ci.mjs base [--repo <owner>/<repo>] <base branch>
 //   node ci.mjs earliest-red <plan.json>
 //
 // verdict
-//   Input: the integration branch and the SHA to read. `gh` runs in the current directory; pass --repo when that
-//   is not inside the repository. The query is
-//     gh run list --branch <branch> --commit <sha> --limit 100 --json databaseId,workflowName,status,conclusion
+//   Input: a branch and the SHA to read: an integration branch and its tip, or a ticket branch and the head SHA of
+//   its ticket PR. `gh` runs in the current directory; pass --repo when that is not inside the repository. The
+//   query is
+//     gh run list --branch <branch> --commit <sha> --limit 100 --json databaseId,workflowName,event,status,conclusion
+//   It lists the runs of every event on that SHA: a ticket PR's head SHA has a `push` run and a `pull_request` run,
+//   and `--branch` matches both (the head branch is the branch of a `pull_request` run; checked live on this repo
+//   with `gh run list --branch <PR head branch> --json event,headSha`), so no `--event` query is added. Each run
+//   carries its `event`, and the runs of all events are judged together by the rules below: a green `push` run
+//   beside a red `pull_request` run is red. Stacked ticket PRs need no workflow trigger of their own: per the
+//   gh-stack FAQ ("How do GitHub Actions work with Stacked PRs?"), every PR in a stack triggers `pull_request`
+//   workflows, branch protection and required checks as if it targeted the stack's base (main).
 //   All runs of the SHA together give one verdict, by the first rule that matches:
 //     1. query-failed  `gh` exited non-zero, could not be started, or printed something that is not a run list.
 //     2. no-run        the list is empty (`reason` "empty").
@@ -29,12 +38,13 @@
 //   {
 //     "format":  "sorry-matt/ci@1",
 //     "command": "verdict",
-//     "branch":  "<integration branch>",
+//     "branch":  "<branch>",
 //     "sha":     "<sha>",
 //     "verdict": "query-failed" | "no-run" | "red" | "running" | "cancelled" | "green",
 //     "reason":  "empty" | "no-success" | null,   // set only for no-run
 //     "error":   "<gh's error message>" | null,   // set only for query-failed
-//     "runs":    [{ "id": 123, "workflow": "check", "status": "completed", "conclusion": "success" }],
+//     "runs":    [{ "id": 123, "workflow": "check", "event": "push" | "pull_request" | ... | null,
+//                   "status": "completed", "conclusion": "success" }],
 //     "rerun":   [123]                             // for cancelled: the ids of the cancelled runs, for
 //                                                  // `gh run rerun <id>`, which the caller runs; else []
 //   }
@@ -71,7 +81,7 @@
 //   The walk is `git log --first-parent <merge-base>..<tip>`, newest first, where <tip> is `origin/<line>` when
 //   `ci` is true and the local `<line>` otherwise, and <merge-base> is `git merge-base <tip> <base>`.
 //   Each SHA's verdict: with `ci` true, the runs of
-//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowName,status,conclusion
+//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowName,event,status,conclusion
 //   grouped by `headSha` and judged by the rules of `verdict`; only red and green are conclusions (running,
 //   cancelled and no-run, all-skipped SHAs included, are not). A SHA with no CI conclusion takes its local
 //   verification record, when it has one. When `gh` fails, only the local records are used and `ci` in the
@@ -89,7 +99,7 @@
 //   `lowerBound`: that green SHA (`kind` "green"), or the merge base when there is no earlier green conclusion
 //   (`kind` "merge-base"), on lines with CI as well.
 //   `baseCi`: with `ci` true, a red and no green on the line, the base's runs of the merge base, from
-//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,status,conclusion
+//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,event,status,conclusion
 //   where <base branch> is `base` without a leading `origin/`, `refs/remotes/origin/` or `refs/heads/`, judged by
 //   the rules of `verdict`. When that verdict is red, the base was already red where the line left it: the red
 //   came in with the base, `tickets` is empty and `unmatched` true. Any other verdict (green, running, cancelled,
@@ -123,7 +133,8 @@
 //     "merges":      [{ "sha": "<merge>", "subject": "...", "tickets": ["#12"],
 //                       "matchedBy": "sha" | "branch" | "id" | null }],   // the stretch's merges, oldest first
 //     "verdicts":    [{ "sha": "<sha>", "verdict": "red", "source": "ci" | "local", "partial": false,
-//                       "runs": [{ "id": 123, "workflow": "check", "status": "completed", "conclusion": "failure" }],
+//                       "runs": [{ "id": 123, "workflow": "check", "event": "push", "status": "completed",
+//                                  "conclusion": "failure" }],
 //                       "failed": [123] }]
 //                                                              // newest first: walked SHAs with CI runs or a
 //                                                              // local record; verdict as in `verdict`, from the
@@ -143,13 +154,14 @@ import { ticketOwners } from './merges.mjs';
 export const FORMAT = 'sorry-matt/ci@1';
 
 const RED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required', 'stale']);
-const RUN_FIELDS = 'databaseId,workflowName,status,conclusion';
+// Each run's event too: a ticket PR's head SHA has push and pull_request runs.
+const RUN_FIELDS = 'databaseId,workflowName,event,status,conclusion';
 // earliest-red reads at most this many runs of the line; a list this long may have been cut.
 export const RUN_LIMIT = 200;
 
-const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, status: r.status ?? null, conclusion: r.conclusion || null });
+const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, event: r.event || null, status: r.status ?? null, conclusion: r.conclusion || null });
 
-/** One verdict for the runs of one SHA (`{ id, workflow, status, conclusion }` each): rules 2 to 6 of the header. */
+/** One verdict for the runs of one SHA (`{ id, workflow, event, status, conclusion }` each): rules 2 to 6 of the header. */
 export function classify(runs) {
   const result = (verdict, extra = {}) => ({ verdict, reason: null, rerun: [], ...extra });
   if (!runs.length) return result('no-run', { reason: 'empty' });
@@ -405,7 +417,7 @@ export function main(argv, deps = defaultDeps()) {
     const [command, ...rest] = argv;
     let result;
     if (command === 'verdict') {
-      const { rest: [branch, sha], repo } = repoArgs(rest, 2, 'verdict takes <integration branch> <sha>');
+      const { rest: [branch, sha], repo } = repoArgs(rest, 2, 'verdict takes <branch> <sha>');
       result = verdict({ branch, sha, repo, cwd: deps.cwd }, deps.gh);
     } else if (command === 'base') {
       const { rest: [base], repo } = repoArgs(rest, 1, 'base takes <base branch>');

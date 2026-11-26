@@ -76,6 +76,9 @@ function run(dir, { repo, frontier, files = {}, extra = {}, gh = ghOk(), git: gi
   return { ...r, json: r.code === 0 ? JSON.parse(r.out) : null };
 }
 
+// One preflight check of a run's output, by name.
+const checkOf = (r, name) => r.json.preflight.checks.find((c) => c.name === name);
+
 // ---------- joining lines ----------
 
 test('chained overlap (A-B, B-C) joins three lines into one even though A and C do not overlap', (t) => {
@@ -257,12 +260,12 @@ test('base-ci: a green base latest SHA passes without a warning, read from the f
   const calls = [];
   const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh: ghOk([], { calls }) });
   assert.equal(r.code, 0, r.err);
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.sha, base.ci.verdict], [true, false, 'main', BASE_SHA, 'green']);
   assert.equal(r.json.preflight.ok, true);
   assert.deepEqual(calls.find((a) => a[0] === 'api'), ['api', 'repos/acme/widgets/commits/main', '--jq', '.sha']);
   assert.deepEqual(calls.find((a) => a[0] === 'run'), [
-    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,status,conclusion', '--repo', 'acme/widgets',
+    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion', '--repo', 'acme/widgets',
   ]);
 });
 
@@ -272,7 +275,7 @@ test('base-ci: a red base is a warning that does not block the freeze', (t) => {
   const gh = ghOk([], { baseRuns: [ghRun(7, 'failure'), ghRun(8, 'success')] });
   const r = run(dir, { repo, frontier: frontierOf([['#1'], ['#2']]), files: { '#1': 'a\n', '#2': 'b\n' }, extra: { base: 'origin/main' }, gh });
   assert.equal(r.code, 0, r.err);
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.verdict, base.ci.failed], [true, true, 'main', 'red', [7]]);
   assert.match(base.detail, /main .*red/);
   assert.equal(r.json.preflight.ok, true);
@@ -294,7 +297,7 @@ test('base-ci: a failed query is a warning that does not block the freeze, with 
   };
   const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh });
   assert.equal(r.code, 0, r.err);
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci.sha, base.ci.verdict], [true, true, null, 'query-failed']);
   assert.match(base.detail, /HTTP 502/);
   assert.equal(r.json.preflight.ok, true);
@@ -307,7 +310,7 @@ test('base-ci: a base still running or with no run is neither blocking nor a war
   for (const [baseRuns, verdict] of [[[ghRun(3, '', 'in_progress')], 'running'], [[], 'no-run']]) {
     const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh: ghOk([], { baseRuns }) });
     assert.equal(r.code, 0, r.err);
-    const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+    const base = checkOf(r, 'base-ci');
     assert.deepEqual([base.ok, base.warning, base.ci.verdict], [true, false, verdict]);
   }
 });
@@ -337,7 +340,7 @@ test('base-ci: a local tracker in a repository with an origin reads the base CI 
   const r = run(dir, { repo, frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }), files: { '#1': 'a\n' }, gh });
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean', 'base-ci']);
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci.branch, base.ci.sha, base.ci.verdict, base.ci.failed], [true, true, 'main', BASE_SHA, 'red', [7]]);
   assert.equal(r.json.preflight.ok, true);
   // only the base's CI: no gh auth check and no pull requests for a local tracker
@@ -357,7 +360,7 @@ test('base-ci: a local tracker whose origin gh cannot read is a warning (query-f
   };
   const r = run(dir, { repo, frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }), files: { '#1': 'a\n' }, gh });
   assert.equal(r.code, 0, r.err);
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci.sha, base.ci.verdict], [true, true, null, 'query-failed']);
   assert.match(base.detail, /known GitHub host/);
   assert.equal(r.json.preflight.ok, true);
@@ -412,7 +415,7 @@ test('preflight fails when gh is not logged in or not installed', (t) => {
   };
   const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, gh: loggedOut });
   assert.equal(r.code, 0, r.err);
-  const auth = r.json.preflight.checks.find((c) => c.name === 'gh-auth');
+  const auth = checkOf(r, 'gh-auth');
   assert.equal(auth.ok, false);
   assert.match(auth.detail, /not logged into/);
   assert.equal(r.json.held, null);
@@ -425,7 +428,7 @@ test('preflight fails when no remote points at the frontier source (another repo
   const repo = repoIn(dir, { remote: 'https://github.com/acme/gadgets.git' });
   const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' } });
   assert.equal(r.code, 0, r.err);
-  const match = r.json.preflight.checks.find((c) => c.name === 'repo-match');
+  const match = checkOf(r, 'repo-match');
   assert.equal(match.ok, false);
   assert.match(match.detail, /acme\/widgets.*acme\/gadgets/);
   const none = repoIn(join(dir, 'x'), { remote: null });
@@ -446,10 +449,175 @@ test('local tracker: no gh check, no remote needed, no pull requests read', (t) 
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean', 'base-ci']);
   // no origin: no CI to read (its lines go on local verification, as tick has it), and no warning
-  const base = r.json.preflight.checks.find((c) => c.name === 'base-ci');
+  const base = checkOf(r, 'base-ci');
   assert.deepEqual([base.ok, base.warning, base.ci], [true, false, null]);
   assert.match(base.detail, /no origin/);
   assert.deepEqual(r.json.candidates, [{ id: '.scratch/f/issues/01-a.md', line: '.scratch/f/issues/01-a.md', unlocks: 0 }]);
+});
+
+// ---------- integrate ----------
+
+const ISSUE_PR = ['git-repo', 'clean', 'gh-auth', 'repo-match', 'base-ci'];
+const STACK_VERSION = 'gh stack version 0.3.0';
+
+// gh for an `integrate: ticket-pr` run: the repository's default branch is `defaultBranch` (a function of the
+// arguments that throws stands for a failed query), and `gh stack --version` prints `stack` (null: not installed).
+// `envs` collects the environment gh stack ran with.
+const ghTicketPr = ({ defaultBranch = 'main', stack = STACK_VERSION, calls = [], envs = [] } = {}) => {
+  const ok = ghOk([], { calls });
+  return (args, cwd, env) => {
+    if (args[0] === 'repo') {
+      calls.push(args);
+      return `${typeof defaultBranch === 'function' ? defaultBranch(args) : defaultBranch}\n`;
+    }
+    if (args[0] === 'stack') {
+      calls.push(args);
+      envs.push(env);
+      if (stack === null) {
+        const e = new Error('Command failed: gh stack --version');
+        e.stderr = 'unknown command "stack" for "gh"';
+        throw e;
+      }
+      return `${stack}\n`;
+    }
+    return ok(args, cwd);
+  };
+};
+
+// A one-ticket `integrate: ticket-pr` run with `gh`.
+const ticketPr = (dir, repo, gh, extra = {}) =>
+  run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { integrate: 'ticket-pr', ...extra }, gh });
+
+test('integrate: omitted, aggregate-pr and direct run the same checks and never ask for the default branch or gh stack', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const integrate of [undefined, 'aggregate-pr', 'direct']) {
+    const calls = [];
+    const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { integrate }, gh: ghTicketPr({ calls }) });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json.preflight.checks.map((c) => c.name), ISSUE_PR, String(integrate));
+    assert.equal(r.json.preflight.ok, true);
+    assert.deepEqual(calls.filter((a) => a[0] === 'repo' || a[0] === 'stack'), [], String(integrate));
+  }
+  const local = run(dir, {
+    repo,
+    frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }),
+    files: { '#1': 'a\n' },
+    gh: ghTicketPr(),
+  });
+  assert.deepEqual(local.json.preflight.checks.map((c) => c.name), ['git-repo', 'clean', 'base-ci']);
+});
+
+test('integrate: any other value exits 2', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const integrate of ['ticket', 'Ticket-PR', '', 3, null]) {
+    const r = run(dir, { repo, frontier: frontierOf([['#1']]), files: { '#1': 'a\n' }, extra: { integrate }, gh: () => assert.fail('gh is not called') });
+    assert.equal(r.code, 2, `${JSON.stringify(integrate)}: ${r.err}`);
+    assert.match(r.err, /integrate/);
+  }
+});
+
+test('ticket-pr: the base is the repository default branch, read from the frontier source', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const base of ['main', 'origin/main']) {
+    const calls = [];
+    const r = ticketPr(dir, repo, ghTicketPr({ calls }), { base });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(r.json.preflight.checks.map((c) => [c.name, c.ok]), [...ISSUE_PR.map((n) => [n, true]), ['default-branch', true], ['gh-stack', true]]);
+    assert.equal(r.json.preflight.ok, true);
+    assert.deepEqual(calls.find((a) => a[0] === 'repo'), ['repo', 'view', 'acme/widgets', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']);
+  }
+});
+
+test('ticket-pr: a base that is not the default branch fails the preflight and points at aggregate-pr', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const r = ticketPr(dir, repo, ghTicketPr({ defaultBranch: 'trunk' }));
+  assert.equal(r.code, 0, r.err);
+  const check = checkOf(r, 'default-branch');
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /\bmain\b/);
+  assert.match(check.detail, /\btrunk\b/);
+  assert.match(check.detail, /aggregate-pr/);
+  assert.equal(r.json.preflight.ok, false);
+  assert.equal(r.json.lines, null);
+});
+
+test('ticket-pr: a failed default-branch query fails the preflight with gh\'s message', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const defaultBranch = () => {
+    const e = new Error('Command failed: gh repo view');
+    e.stderr = 'HTTP 404: Not Found';
+    throw e;
+  };
+  const r = ticketPr(dir, repo, ghTicketPr({ defaultBranch }));
+  assert.equal(r.code, 0, r.err);
+  const check = checkOf(r, 'default-branch');
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /HTTP 404: Not Found/);
+  assert.equal(r.json.preflight.ok, false);
+});
+
+test('ticket-pr: a Local Markdown tracker fails the preflight and points at aggregate-pr', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir, { remote: null });
+  const r = run(dir, {
+    repo,
+    frontier: frontierOf([['#1']], { tracker: 'local', source: 'worktree' }),
+    files: { '#1': 'a\n' },
+    extra: { integrate: 'ticket-pr' },
+    gh: ghTicketPr(),
+  });
+  assert.equal(r.code, 0, r.err);
+  const check = checkOf(r, 'tracker');
+  assert.equal(check.ok, false);
+  assert.match(check.detail, /local/i);
+  assert.match(check.detail, /aggregate-pr/);
+  assert.equal(r.json.preflight.ok, false);
+  assert.equal(r.json.candidates, null);
+});
+
+test('ticket-pr: gh-stack reports the installed version, run without the update notifier', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const calls = [];
+  const envs = [];
+  const r = ticketPr(dir, repo, ghTicketPr({ calls, envs }));
+  assert.equal(r.code, 0, r.err);
+  const check = checkOf(r, 'gh-stack');
+  assert.deepEqual([check.ok, check.stack, check.version], [true, true, STACK_VERSION]);
+  assert.deepEqual(calls.filter((a) => a[0] === 'stack'), [['stack', '--version']]);
+  assert.equal(envs[0]?.GH_STACK_NO_UPDATE_NOTIFIER, '1');
+});
+
+test('ticket-pr: gh stack not installed never fails the preflight and names the install command', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const r = ticketPr(dir, repo, ghTicketPr({ stack: null }));
+  assert.equal(r.code, 0, r.err);
+  const check = checkOf(r, 'gh-stack');
+  assert.deepEqual([check.ok, check.stack, check.version], [true, false, null]);
+  assert.match(check.detail, /gh extension install github\/gh-stack/);
+  assert.equal(r.json.preflight.ok, true);
+  assert.deepEqual(r.json.candidates.map((c) => c.id), ['#1']);
+});
+
+// gh 2.91 without the extension: `gh stack --version` exits 0, prints nothing on stdout and the install hint on
+// stderr (measured). A hint on stdout is not a version either.
+test('ticket-pr: gh stack exiting 0 without a version is not installed', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  for (const stack of ['', 'gh stack is available as an official extension.\nTo install it, run:\n  gh extension install github/gh-stack']) {
+    const r = ticketPr(dir, repo, ghTicketPr({ stack }));
+    assert.equal(r.code, 0, r.err);
+    const check = checkOf(r, 'gh-stack');
+    assert.deepEqual([check.ok, check.stack, check.version], [true, false, null], JSON.stringify(stack));
+    assert.match(check.detail, /gh extension install github\/gh-stack/);
+    assert.equal(r.json.preflight.ok, true);
+  }
 });
 
 // ---------- held files and exclusion ----------
