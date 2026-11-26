@@ -210,8 +210,7 @@ record carries the bundle's review block; the implementation agent leaves a one-
 member's status record. At delivery every member is closed (the aggregate PR and FINISH.md's reconciliation table list
 each one).
 
-Under `integrate: ticket-pr` a bundle is one ticket-level PR: its body's summary lists every member, each with its own
-`Closes #N` line, so merging it closes the whole bundle. <!-- pending #193 --> Stacked with `gh stack`, the bundle is
+Stacked with `gh stack`, the bundle is
 one layer: a downstream ticket that depends on any member waits for that layer's PR, and `stackParent` and
 `waitingOn` name the lead; when judging "exactly one unmerged upstream", several upstreams in one bundle count as
 one. <!-- pending #198 -->
