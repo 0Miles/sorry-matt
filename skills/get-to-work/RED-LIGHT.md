@@ -71,5 +71,33 @@ do not queue.
    No `gh pr merge` and no merge queue: the aggregate PR says so and is left for a human to merge, and the human-work
    list names the failed jobs.
 
+## The `integrate: ticket-pr` handling
+
+Under `integrate: ticket-pr` (#197) there is no integration branch; a red comes in two kinds, and the numbered
+procedure above does not apply:
+
+- **A red PR head** (`awaiting-ci` reads `red`): this red belongs to this ticket alone — no `ci.mjs earliest-red`,
+  no earliest red SHA. tick first saves the failing output with `gh run view <id> --log-failed` (the `<id>`s from
+  the verdict output's `failed`), then hands out the `pr-red` judge. Record `fix`: the CI failure is the finding
+  and goes through the batched fix — back to that ticket's original agent (a SendMessage while it is there, a
+  respawn as usual when it is gone), pointed at the saved failing output, not at review findings, under the
+  ticket's fix-round cap and the `timeout-fix` time limit. tick pushes the fix commit back to the same PR with
+  `integrate.mjs pr-push`, the ticket returns to `awaiting-ci`, and the verdict is read again at the newly pushed
+  head. Still red with the fix rounds used: record stuck or awaiting-ruling.
+- **A base that turns red after a merge** (once any ticket's merge is recorded, tick reads the base with
+  `ci.mjs base` every wake-up; it reads `red`): the mapping follows ruling 1 — `earliest-red` scans the base itself
+  (the plan's `line` is the base branch, its lower bound the parent of the oldest recorded merge), and the causing
+  ticket is matched by merge order and merge SHA in the stretch from the first green up to the earliest red,
+  starting from the earliest. tick hands out `integrate.mjs revert`: it reverts each merge, newest first, on the
+  revert branch `<ticket branch>-revert`, pushes that branch and opens a revert PR against the base — **never a
+  direct base push**; the ticket is marked stuck, and the tickets depending on it (`stackParent` and `waitingOn`,
+  transitively) go to the same command as `--dependent` and get the existing "upstream reverted" handling. Per
+  ruling 2 the revert PR is not reviewed — its content is a mechanical revert — but waits for its own CI to be
+  green; its merge is a prompting call all the same: with merge authorization send `gh pr merge <PR>` (never
+  `--admin`, never auto-merge), without it record left-for-human onto the human-work list. tick then reads the base
+  again each wake-up, and the red episode ends only once it is green; meanwhile no new push phase starts, and the
+  finish waits too. When it maps to no ticket (no merge of this run in the stretch), the host rules; record
+  settled.
+
 Done when: every revert went through `integrate.mjs revert` with every dependent ticket as a `--dependent`; every line
 that failed verification has its failed jobs on the human-work list; every round's result is recorded.
