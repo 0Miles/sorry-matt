@@ -1,6 +1,6 @@
 ---
 name: get-to-work
-description: Clear a set of already-filed tickets as a per-ticket pipeline. Tickets that are ready and touch no overlapping files are implemented at the same time; each one is reviewed and integrated as soon as it is done, and every line delivers one GitHub aggregate PR or local integration branch.
+description: Clear a set of already-filed tickets as a per-ticket pipeline. Tickets that are ready and touch no overlapping files are implemented at the same time; each one is reviewed and integrated as soon as it is done. On GitHub every ticket is its own PR (one with a single upstream stacked on it with gh stack), merged once reviewed and green on CI; under Local Markdown every line delivers one local integration branch.
 disable-model-invocation: true
 ---
 
@@ -31,7 +31,9 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 4. Write a plan and run `scripts/freeze.mjs` (preflight, held files, exclusions, **joined lines**, candidate order).
    When `preflight.ok` is false, fix what `checks` lists and rerun; a holder git cannot see (another session you know
    of) goes into the plan's `held`. Each `excluded` ticket is **awaiting ruling**, with its holder and release
-   condition. The plan's `base` is the base branch the lines merge into (required).
+   condition. The plan's `base` is the base branch the lines merge into (required); its `integrate` is this run's
+   `integrate` (the profile step 6 writes, or the tracker's default: `ticket-pr` on GitHub) — without it freeze judges
+   by `aggregate-pr`, and `ticket-pr`'s default-branch, tracker and gh-stack checks never run (#202).
    **Base CI**: the `base-ci` check reads the CI of the base's latest SHA and never blocks the freeze. The CI comes
    from the git remote, not from where the tickets live: Local Markdown reads it too (`gh`, in the repo, finds the
    GitHub repo from its remotes); a repo with no `origin` has no CI to read, `ci` is null and it is no warning.
@@ -74,7 +76,8 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
    - **Yes**: it counts as "the user said to merge during this run" (`ASKING.md` section 5); record it in ledger
      field 5 (question, answer and time). **Refused or no answer**: record that in ledger field 5 too; PRs are still
      opened and stacked as usual, but every merge is left for a human, and no merge command is sent.
-6. `state.mjs init`; if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
+6. `state.mjs init --run <run> --tracker github|local` (`integrate`'s default follows it: `ticket-pr` on GitHub,
+   `aggregate-pr` under Local Markdown); if this run relaxes the flow, write it once here with `state.mjs profile` (`ASKING.md` section 4;
    when composed, the one written at the ruling point stands). `state.mjs add` each line's tickets,
    `state.mjs line --lines` for the joined lines, `state.mjs bundle <state> <lead> <the other tickets>...` for each of
    `freeze.mjs`'s `bundles`, then `scripts/integrate.mjs line-init` for each line.
@@ -209,11 +212,6 @@ A bundle is this run's scheduling only: the tracker's tickets are not merged, cl
 record carries the bundle's review block; the implementation agent leaves a one-line pointer to it in every other
 member's status record. At delivery every member is closed (the aggregate PR and FINISH.md's reconciliation table list
 each one).
-
-Stacked with `gh stack`, the bundle is
-one layer: a downstream ticket that depends on any member waits for that layer's PR, and `stackParent` and
-`waitingOn` name the lead; when judging "exactly one unmerged upstream", several upstreams in one bundle count as
-one. <!-- pending #198 -->
 
 ### Close-out checks and review
 

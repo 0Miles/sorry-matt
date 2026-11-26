@@ -15,8 +15,9 @@ branch is the next step for the user to run.
   Carry forward existing grilling; when none exists, build the requirements context from evidence, open
   grill-them only on a material disagreement, then write the spec and tickets.
 - **Finish tickets that are ready to implement** → `/get-to-work`. Implement and verify them ticket by ticket in
-  parallel according to the tracker configuration, delivering one aggregate GitHub PR or Local Markdown
-  integration branch per line until the initial ticket set is complete or explicitly stuck.
+  parallel according to the tracker configuration — on GitHub one PR per ticket, merged once reviewed and green on
+  CI; under Local Markdown one integration branch per line — until the initial ticket set is complete or explicitly
+  stuck.
 - **Delegate existing grilling, planning, and implementation end to end, with controlled scope, convergent
   requirements, and reliable acceptance checks** → `/have-it-all-done`. After clearing its risk gate, it runs
   take-this → get-to-work autonomously and asks you what needs your ruling only at a single ruling point.

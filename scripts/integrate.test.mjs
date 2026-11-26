@@ -921,9 +921,22 @@ test('--local under a Windows 8.3 short name of the worktree: a file not on disk
 /** A recording `gh` stub: answers by the first two words of the call ("pr list", "stack add", …). */
 function ghStub(answers = {}) {
   const calls = [];
+  // #199 live run: as gh stack does — `view` fails on a branch in no stack, `init` adopts the branches it names, and
+  // `add` creates the new branch on top in the cwd and checks it out
+  const stacked = new Set();
+  const current = (cwd) => execFileSync('git', ['-C', cwd, 'branch', '--show-current'], { encoding: 'utf8' }).trim();
   const fn = (args, cwd, env) => {
     calls.push({ args, cwd, env });
     const a = answers[args.slice(0, 2).join(' ')];
+    if (a === undefined && args[0] === 'stack') {
+      if (args[1] === 'view' && !stacked.has(current(cwd))) throw new Error(`current branch "${current(cwd)}" is not part of a stack`);
+      if (args[1] === 'init') for (const b of args.slice(2)) stacked.add(b);
+      if (args[1] === 'add') {
+        execFileSync('git', ['-C', cwd, 'checkout', '-q', '-b', args[2]], { stdio: 'ignore' });
+        stacked.add(args[2]);
+      }
+      return '';
+    }
     return typeof a === 'function' ? a({ args, cwd, env }) : (a ?? '');
   };
   fn.calls = calls;
@@ -986,16 +999,18 @@ test('ticket-init (ticket-pr) cuts by the #188 fields: origin/<base>, the upstre
   const two = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
   assert.deepEqual([two.from, two.head, two.stack], [upstreamTip, upstreamTip, ['init run-1/01-a', 'add run-1/02-b']]);
   assert.equal(g(wt2, 'symbolic-ref', '--short', 'HEAD'), 'run-1/02-b');
-  assert.deepEqual(gh.calls.map((c) => c.args), [['stack', 'init', 'run-1/01-a'], ['stack', 'add', 'run-1/02-b']]);
+  // #199 live run: view (no stack yet) → init adopts the upstream branch → add cuts the ticket branch on top
+  assert.deepEqual(gh.calls.map((c) => c.args), [['stack', 'view'], ['stack', 'init', 'run-1/01-a'], ['stack', 'add', 'run-1/02-b']]);
+  assert.equal(g(wt1, 'symbolic-ref', '--short', 'HEAD'), 'run-1/01-a', "the upstream's own worktree is left as it was");
   for (const c of gh.calls) {
     assert.deepEqual(c.env, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }, 'every gh stack call silences the update notifier');
     samePath(c.cwd, wt2);
   }
   const againTwo = ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
   assert.deepEqual([againTwo.created, againTwo.from, againTwo.stack], [{ branch: false, worktree: false }, null, []]);
-  assert.equal(gh.calls.length, 2, 'a rerun reuses the branch and calls gh stack again not at all');
+  assert.equal(gh.calls.length, 3, 'a rerun reuses the branch and calls gh stack again not at all');
 
-  // An upstream that is stacked itself: the stack exists, so only `add` runs.
+  // An upstream that is in a stack already: view says so, and only `add` runs.
   st('set', '#3', '--stack-parent', '#2');
   const three = ok('ticket-init', '#3', '--branch', 'run-1/03-c', '--worktree', join(dir, 'wt-3'));
   assert.deepEqual(three.stack, ['add run-1/03-c']);
@@ -1269,14 +1284,18 @@ test('pr-merge --ready: gh pr ready, then merge-gate decides; merge or queue han
   assert.equal(out.phase, 'ready');
   assert.equal(out.base, 'main');
   assert.deepEqual(out.gate, { decision: 'merge', reason: 'no-queue' });
-  assert.deepEqual(out.send, { status: 'host', command: 'gh pr merge 12' }, 'the host sends the merge, never the script');
+  // #199: #2 is stacked on #1, so #1's PR is in a stack too: GitHub takes only gh stack merge for it
+  assert.deepEqual(out.send, { status: 'host', command: 'gh stack merge 12 --yes --squash' }, 'the host sends the merge, never the script');
   assert.deepEqual(gh.of('pr', 'ready')[0].args, ['pr', 'ready', '12']);
   assert.equal(gh.of('api', 'graphql').length, 1, "merge-gate's merge-queue query went through the same gh seam");
   assert.equal(state().tickets['#1'].stage, 'integrating');
 
   const stacked = ok('pr-merge', '#2', '--ready', '--base', 'main');
-  assert.deepEqual(stacked.send, { status: 'host', command: 'gh stack merge 13' });
+  assert.deepEqual(stacked.send, { status: 'host', command: 'gh stack merge 13 --yes --squash' });
   assert.deepEqual(gh.of('pr', 'ready')[1].args, ['pr', 'ready', '13']);
+  // with nothing live stacked on it, #1 is in no stack: plain gh pr merge
+  st('stage', 'stuck', '#2', '--reason', 'gone');
+  assert.deepEqual(ok('pr-merge', '#1', '--ready', '--base', 'main').send, { status: 'host', command: 'gh pr merge 12' });
 
   // A failed gate query decides human: nothing is sent, and the gate's reason is carried.
   graphql = 'not json at all';
@@ -1326,4 +1345,141 @@ test('pr-merge refuses a ticket that is not queued or integrating, or has no bra
   ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', join(dir, 'wt-2'), '--base', 'main');
   env.queue('#2');
   refused(/#2 has no pull request recorded \(pr-open first\)/, 'pr-merge', '#2', '--base', 'main');
+});
+
+// ---- revert under integrate: ticket-pr (#197) ----------------------------------------------------------------------
+
+/** withQueuedPr, then the PR merged on the base: the branch lands on origin's main and the merge SHA is recorded. */
+function mergedPr(t, env, id, branch, pr) {
+  const q = withQueuedPr(t, env, id, branch, pr);
+  env.g(env.repo, 'push', '-q', 'origin', `refs/heads/${branch}:refs/heads/main`);
+  env.git('fetch', '-q', 'origin');
+  const msha = env.git('rev-parse', 'origin/main');
+  env.st('stage', 'integrating', id);
+  env.st('merge', id, msha);
+  env.st('stage', 'delivered', id);
+  return { ...q, msha };
+}
+
+test('revert (ticket-pr): reverts the merge on a revert branch, opens the revert PR against the base, never pushes the base, and is idempotent', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":31}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/31\n',
+  });
+  const env = withPrLine(t, ['#1'], gh);
+  const { dir, bare, state, ok, integrate } = env;
+  const { msha } = mergedPr(t, env, '#1', 'run-1/01-a', 12);
+  const inBare = (...args) => execFileSync('git', ['-C', bare, ...args], { encoding: 'utf8' }).trim();
+  const baseBefore = inBare('rev-parse', 'refs/heads/main');
+  assert.equal(baseBefore, msha);
+
+  const wt = join(dir, 'wt-revert');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red').code, 2, '--base is required under ticket-pr');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red', '--base', 'main', '--local', 'x.md').code, 2, '--local is refused');
+  assert.equal(integrate('revert', '#1', '--worktree', wt, '--reason', 'base red', '--base', 'main', '--push').code, 2, '--push is refused');
+
+  const out = ok('revert', '#1', '--worktree', wt, '--reason', `base CI red at ${msha}`, '--base', 'main');
+  assert.deepEqual(
+    [out.result, out.revertBranch, out.pr, out.prCreated, out.record, out.completion, out.stage],
+    ['reverted', 'run-1/01-a-revert', 31, true, 'host', 'none', 'stuck'],
+  );
+  assert.equal(out.reverts.length, 1);
+  assert.deepEqual([out.reverts[0].merge, out.reverts[0].found], [msha, 'reverted']);
+  assert.equal(out.reverts[0].revert, out.head);
+  assert.deepEqual(out.push, { status: 'revert-pr', branch: 'run-1/01-a-revert' });
+  // the revert branch is on origin at the revert commit; the base branch itself was never pushed
+  assert.equal(inBare('rev-parse', 'refs/heads/run-1/01-a-revert'), out.head);
+  assert.equal(inBare('rev-parse', 'refs/heads/main'), baseBefore, 'the base branch is untouched');
+  // the revert PR targets the base from the revert branch, and is not a draft (ruling 2: a mechanical revert, no review)
+  const create = gh.of('pr', 'create');
+  assert.equal(create.length, 1);
+  const args = create[0].args;
+  assert.equal(args[args.indexOf('--base') + 1], 'main');
+  assert.equal(args[args.indexOf('--head') + 1], 'run-1/01-a-revert');
+  assert.ok(!args.includes('--draft'), 'a mechanical revert is not reviewed: the PR opens ready');
+  assert.equal(args[args.indexOf('--title') + 1], 'Revert #1');
+  const s = state();
+  assert.equal(s.tickets['#1'].stage, 'stuck');
+  assert.match(s.tickets['#1'].reason, new RegExp(`^base CI red at ${msha}; reverted ${msha} by `));
+  assert.equal(existsSync(join(wt, '01-a.md')), false, "the ticket's change is reverted at the revert head");
+
+  // a rerun finds the revert, reuses the open PR and opens nothing new
+  const again = ok('revert', '#1', '--worktree', wt, '--reason', `base CI red at ${msha}`, '--base', 'main');
+  assert.deepEqual([again.prCreated, again.pr, again.reverts[0].found], [false, 31, 'git']);
+  assert.equal(gh.of('pr', 'create').length, 1, 'no second PR is created');
+});
+
+test('revert (ticket-pr): an integrated dependent becomes stuck; in-flight and candidate ones await a ruling, the branch tip kept', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":41}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/41\n',
+  });
+  const env = withPrLine(t, ['#1', '#2', '#3', '#4'], gh);
+  const { dir, git, ok, st, state, integrate, work } = env;
+  const { msha } = mergedPr(t, env, '#1', 'run-1/01-a', 12);
+  mergedPr(t, env, '#2', 'run-1/02-b', 13); // integrated dependent: its merge stays, the ticket goes stuck
+  const wt3 = join(dir, 'wt-3');
+  ok('ticket-init', '#3', '--branch', 'run-1/03-c', '--worktree', wt3, '--base', 'main');
+  const tip3 = work(wt3, { 'three.md': 'three\n' }, '#3: in flight');
+  st('set', '#3', '--snapshot', 'a'.repeat(64));
+  st('stage', 'implementing', '#3');
+
+  assert.equal(integrate('revert', '#1', '--worktree', join(dir, 'wt-revert'), '--reason', 'base red', '--base', 'main', '--dependent', '#2=x.md').code, 2, 'a dependent ticket file goes with --local');
+
+  const out = ok('revert', '#1', '--worktree', join(dir, 'wt-revert'), '--reason', 'base red', '--base', 'main', '--dependent', '#2', '--dependent', '#3', '--dependent', '#4');
+  const rows = Object.fromEntries(out.dependents.map((r) => [r.ticket, r]));
+  assert.deepEqual([rows['#2'].treatment, rows['#2'].stage], ['integrated', 'stuck']);
+  assert.deepEqual([rows['#3'].treatment, rows['#3'].stage], ['in-flight', 'awaiting-ruling']);
+  assert.deepEqual(rows['#3'].kept, { ref: 'refs/sorry-matt/run-1/03-c/upstream-reverted', sha: tip3 });
+  assert.deepEqual(rows['#3'].cleanup, { worktree: 'removed', branch: 'deleted' });
+  assert.equal(existsSync(wt3), false);
+  assert.throws(() => git('rev-parse', '--verify', '-q', 'refs/heads/run-1/03-c'), 'the branch is deleted; the ref keeps its tip');
+  assert.equal(git('rev-parse', 'refs/sorry-matt/run-1/03-c/upstream-reverted'), tip3);
+  assert.deepEqual([rows['#4'].treatment, rows['#4'].stage, rows['#4'].kept], ['in-flight', 'awaiting-ruling', null]);
+  const s = state();
+  const upstream = new RegExp(`^upstream reverted: #1 \\(${out.reverts[0].revert}\\)$`);
+  assert.match(s.tickets['#2'].reason, upstream);
+  assert.match(s.tickets['#3'].reason, upstream);
+  assert.match(s.tickets['#4'].reason, upstream);
+  assert.deepEqual(s.tickets['#2'].merges.length, 1, "the integrated dependent's merge stays");
+});
+
+test('revert: --base outside integrate: ticket-pr is a usage error; under it a ticket with no merge is refused', (t) => {
+  const aggregate = withLine(t, ['#1']);
+  assert.equal(aggregate.integrate('revert', '#1', '--worktree', aggregate.lineWt, '--reason', 'x', '--base', 'main').code, 2);
+
+  const env = withPrLine(t, ['#1'], ghStub());
+  withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  env.refused(/#1 is queued; revert takes a delivered ticket/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
+  env.st('stage', 'integrating', '#1');
+  env.refused(/#1 has no merge recorded; there is nothing to revert/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'main');
+});
+
+test('patch-id (ticket-pr, #199): the same own change gives the same id after a rebase onto another base; a changed one does not', (t) => {
+  const gh = ghStub();
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, repo, git, ok, st, integrate, work } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  st('set', '#2', '--stack-parent', '#1');
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2);
+  work(wt2, { 'two.md': 'two\n' }, '#2: stacked work');
+  assert.equal(integrate('patch-id', '#2').code, 2, '--from is required');
+  const before = ok('patch-id', '#2', '--from', 'run-1/01-a');
+  assert.match(before.patchId, /^[0-9a-f]{40}$/);
+  assert.equal(before.base, one.tip, 'taken from the merge base with the upstream branch');
+  // #1 lands on main (a merge commit), and #2 is rebased onto it: its own change is the same patch
+  git('merge', '-q', '--no-ff', '-m', 'merge #1', 'run-1/01-a');
+  git('push', '-q', 'origin', 'main');
+  execFileSync('git', ['-C', wt2, 'fetch', '-q', 'origin'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', wt2, 'rebase', '-q', 'origin/main'], { stdio: 'ignore' });
+  const after = ok('patch-id', '#2', '--from', 'origin/main');
+  assert.equal(after.patchId, before.patchId, 'a clean rebase keeps the patch-id');
+  assert.notEqual(after.head, before.head, 'though the SHA changed');
+  work(wt2, { 'two.md': 'two, changed\n' }, '#2: changed');
+  assert.notEqual(ok('patch-id', '#2', '--from', 'origin/main').patchId, before.patchId, 'a changed own change changes it');
+  // outside ticket-pr the command is refused
+  const other = setup(t, { tracker: 'github' });
+  other.st('add', '#9', '--line', LINE);
+  assert.equal(other.integrate('patch-id', '#9', '--from', 'main').code, 3);
 });

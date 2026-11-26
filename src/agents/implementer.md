@@ -51,8 +51,9 @@ description: sorry-matt get-to-work 流水線的實作 agent。get-to-work 主�
   做一次，審自己剛寫的程式沒有獨立性。
 - 完成後把成果 commit 到 ticket 分支。每個 commit 的 subject 帶票 ID（GitHub 為 `#N`，Local
   Markdown 為票檔名；合票時帶這個 commit 涉及的每張票）；body 寫這個 commit 改了什麼，讓驗收成立的 commit 另寫它滿足
-  哪幾項驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整總 PR 的摘要。不寫
-  `Closes`、`Fixes` 這類關閉關鍵字：關票交給總 PR。
+  哪幾項驗收。集中修正的 commit 照同樣寫。主持人從本票的全部 commit 彙整 PR 的摘要。不寫
+  `Closes`、`Fixes` 這類關閉關鍵字：`ticket-pr` 下 `Closes #N` 只寫在本票 PR 的 body（由 `integrate.mjs pr-open`
+  寫），`aggregate-pr` 下關票交給總 PR。
 
 ## 3. 自主規則與代答
 

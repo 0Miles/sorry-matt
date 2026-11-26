@@ -67,7 +67,8 @@
 //   finish                     The finish is done.
 //     end-state          every ticket is delivered, stuck or awaiting-ruling.
 //     end-reason         every stuck or awaiting-ruling ticket has a reason.
-//     delivered-merge    every delivered ticket has a merge SHA.
+//     delivered-merge    every delivered ticket has a merge SHA; under profile integrate: ticket-pr (#196) a
+//                        left-for-human record (the ready PR is left for a person to merge) counts too.
 //     base-sync          every line with a delivered ticket has its base sync recorded; when synced, the base SHA is
 //                        an ancestor of the line's local tip.
 //     full-verification  every line with a delivered ticket has a final result recorded for its local tip: a CI
@@ -75,6 +76,11 @@
 //     tip-recorded       (as in merged, for every line with a delivered ticket)
 //     pushed             (as in integrated, for every line with a delivered ticket)
 //     cleaned            (as in integrated, for every ticket with a recorded branch)
+//     pr-recorded        (integrate: ticket-pr, #200) every delivered ticket has its pull request recorded. Under
+//                        ticket-pr the lines have no branch: base-sync, full-verification, tip-recorded and pushed
+//                        are not asserted — each PR synced the base before its merge, and its head's CI stood in for
+//                        the full verification. cleaned is asserted for the merged tickets only (a PR left for a
+//                        person still has its branch).
 //   ledger     --ledger <path> [--ended]   The run ledger has its shape (ASKING.md section 7).
 //     marker             the first line (a BOM aside) is `<!-- sorry-matt:run active -->`, or with --ended
 //                        `<!-- sorry-matt:run ended -->`, with nothing before it.
@@ -94,8 +100,9 @@ import { canonical } from './cli.mjs';
 
 const END = ['delivered', 'stuck', 'awaiting-ruling'];
 const AGENT_STAGES = ['expanding', 'implementing', 'fixing'];
-const SNAPSHOT_STAGES = ['implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered'];
-const QUEUED_ON = ['queued', 'integrating', 'delivered'];
+// #196: awaiting-ci and awaiting-merge (the ticket-pr merge path) sit between integrating and delivered
+const SNAPSHOT_STAGES = ['implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'];
+const QUEUED_ON = ['queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'];
 const LIMITS = ['spawns', 'rounds', 'hours', 'no-progress'];
 const STAGE_LIMITS = ['timeout-implement', 'timeout-fix', 'timeout-expand', 'timeout-merge', 'timeout-review'];
 const MERGE_SUBJECT = /^Merge branch '([^']+)'(?: into \S.*)?$/;
@@ -438,14 +445,25 @@ const gates = {
     }
   },
 
-  finish(state, r, g) {
+  finish(state, r, g, _opts, profile) {
     const failEnd = r.check('end-state');
     const failReason = r.check('end-reason');
     const failMerge = r.check('delivered-merge');
+    const ticketPr = profile?.integrate === 'ticket-pr';
     for (const [id, t] of Object.entries(state.tickets)) {
       if (!END.includes(t.stage)) failEnd(id, `is ${t.stage}; the finish reconciles every ticket to delivered, stuck or awaiting-ruling`);
       if ((t.stage === 'stuck' || t.stage === 'awaiting-ruling') && !t.reason) failReason(id, `is ${t.stage} with no reason`);
-      if (t.stage === 'delivered' && !t.merges.length) failMerge(id, 'is delivered with no merge SHA');
+      // #196, integrate: ticket-pr: a left-for-human record (the ready PR a person merges) counts as the delivery
+      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && (t.leftForHuman ?? null) !== null)) {
+        failMerge(id, `is delivered with no merge SHA${ticketPr ? ' and no left-for-human record' : ''}`);
+      }
+    }
+    if (ticketPr) {
+      const failPr = r.check('pr-recorded');
+      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && (t.pr ?? null) === null) failPr(id, 'is delivered with no pull request recorded');
+      // only a merged ticket's branch is spent: a PR left for a person, or one stopped short, still has its branch
+      cleaned(r, g, state, Object.keys(state.tickets).filter((id) => state.tickets[id].merges.length));
+      return;
     }
     const lines = deliveredLines(state);
     const failBase = r.check('base-sync');

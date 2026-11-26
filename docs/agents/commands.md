@@ -126,6 +126,7 @@ src/skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
 src/skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
 src/skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
 src/skills/get-to-work/scripts/state.mjs#TRACKERS
+src/skills/get-to-work/scripts/state.mjs#integrateDefault
 src/skills/get-to-work/scripts/state.mjs#profileOf
 src/skills/get-to-work/scripts/state.mjs#VERDICTS
 src/skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
@@ -158,6 +159,7 @@ skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
 skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
 skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
 skills/get-to-work/scripts/state.mjs#TRACKERS
+skills/get-to-work/scripts/state.mjs#integrateDefault
 skills/get-to-work/scripts/state.mjs#profileOf
 skills/get-to-work/scripts/state.mjs#VERDICTS
 skills/get-to-work/scripts/state.mjs#LOCAL_REASONS

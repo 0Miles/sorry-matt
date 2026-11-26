@@ -15,7 +15,7 @@ when it has some); change its two texts together with the definition's
 section 1, item 3. Where the definition's rules overlap
 `ASKING.md` sections 3 and 5, the report limit in `ASKING.md` section 7, or `have-it-all-done` section 0, change them
 together. Change the definition's section 2 commit message format together with the aggregate PR body in
-[`FINISH.md`](FINISH.md), finishing the run. Change the definition's section 1 read-only acceptance criteria together
+[`FINISH.md`](FINISH.md), finishing the run, and the ticket-level PR body `integrate.mjs pr-open` writes. Change the definition's section 1 read-only acceptance criteria together
 with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in the expansion agent's
 definition, and the acceptance diff in `prove-it` section 1. Change this file's send-back record placeholder and the
 definition's section 1 redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). The

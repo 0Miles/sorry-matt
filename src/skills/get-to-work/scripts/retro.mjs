@@ -100,7 +100,8 @@
 //                             current directory; a ticket that went from delivered to stuck for its own red light
 //                             counts as reverted, one stuck as `upstream reverted:` is looked up like any other), and
 //                             `ciRed`, whether its delivery turned CI red on the branch it was merged into (its
-//                             integration branch, the base branch under `integrate: direct`): of that branch's runs
+//                             integration branch, the base branch under `integrate: direct` and `ticket-pr`, where
+//                             every ticket's own PR merged into it): of that branch's runs
 //                             with a `conclusion` of `success` or `failure` (cancelled, skipped and running ones are
 //                             left out), in `createdAt` order, the first whose `headSha` has the ticket's `mergeSha`
 //                             (the delivery merge, not a later `-ci` merge; `git merge-base --is-ancestor <mergeSha>
@@ -131,7 +132,7 @@ import { fileURLToPath } from 'node:url';
 import { UsageError, failure, parseJson, run, runIfEntry } from './cli.mjs';
 import { SESSION } from './gates.mjs';
 import { ROLE_OF_AGENT, STAGE_OF_ROLE, category, roleOf, ticketsOf } from './spawns.mjs';
-import { FINDING_COUNTS, PROFILE_DEFAULTS, load, withLock, writeAtomic } from './state.mjs';
+import { FINDING_COUNTS, profileOf, load, withLock, writeAtomic } from './state.mjs';
 
 export const FORMAT = 'sorry-matt/retro@1';
 export const RECORD_FORMAT = 'sorry-matt/retro-record@1';
@@ -310,7 +311,7 @@ export function rowsOf({ state, log, logReason, session, places, version, repo, 
   const started = state.usage?.started ?? state.created;
   // #171: the run's end the wrap-up recorded; a run not finished yet has no other bound than --now
   const host = hostUsage(places, session, started, state.tick?.finished ?? now);
-  const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
+  const profile = profileOf(state); // #201: the integrate default follows the run's tracker
   const agents = log.map((entry) => {
     const u = agentUsage(places, entry);
     return {
@@ -521,7 +522,8 @@ function escapes(row, look) {
     const bodies = look.log();
     if (bodies !== null) reverted = shas.some((s) => bodies.includes(`This reverts commit ${s}`));
   }
-  const branch = row.profile?.integrate === 'direct' ? row.base : row.line;
+  // under direct and ticket-pr (#200) the delivery merge lands on the base branch itself
+  const branch = ['direct', 'ticket-pr'].includes(row.profile?.integrate) ? row.base : row.line;
   const runs = row.repo && branch ? look.runs(row.repo, branch) : null;
   const ciRed = runs ? wentRed(runs, row.mergeSha, look.covers) : UNKNOWN;
   const escaped = (Array.isArray(mentions) && mentions.length > 0) || reverted === true || ciRed === true;

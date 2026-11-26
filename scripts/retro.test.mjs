@@ -697,3 +697,20 @@ test('the scripts are in CI and in the targeted checks table', () => {
   const commands = readFileSync(join(ROOT, 'docs', 'agents', 'commands.md'), 'utf8');
   assert.match(commands, /\| `src\/skills\/get-to-work\/scripts\/retro\.mjs` \| `scripts\/retro\.test\.mjs` \|/);
 });
+
+test('#200: report reads CI of the base branch under integrate: ticket-pr, where each ticket\'s own PR merged', (t) => {
+  const at = '2026-03-10T13:00:00Z';
+  const rows = [row({ ticket: '#1', merges: ['1'.repeat(40)], deliveredAt: at, profile: { review: 'full', integrate: 'ticket-pr' }, base: 'main' })];
+  const branches = [];
+  const gh = (args) => {
+    if (args[0] === 'issue') return '[]';
+    if (args[0] === 'run') {
+      branches.push(args[args.indexOf('--branch') + 1]);
+      return JSON.stringify(args.includes('main') ? [ciRun('failure', '2026-03-10T14:00:00Z', 'h1')] : []);
+    }
+    throw new Error(args.join(' '));
+  };
+  const e = reportOf(t, rows, [], { gh, git: () => 'nothing reverted\n' }).groups[0].escaped;
+  assert.deepEqual(branches, ['main']);
+  assert.equal(e.tickets[0].ciRed, true);
+});

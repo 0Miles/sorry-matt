@@ -45,8 +45,10 @@
 //     "error":   "<gh's error message>" | null,   // set only for query-failed
 //     "runs":    [{ "id": 123, "workflow": "check", "event": "push" | "pull_request" | ... | null,
 //                   "status": "completed", "conclusion": "success" }],
-//     "rerun":   [123]                             // for cancelled: the ids of the cancelled runs, for
+//     "rerun":   [123],                            // for cancelled: the ids of the cancelled runs, for
 //                                                  // `gh run rerun <id>`, which the caller runs; else []
+//     "failed":  [123]                             // the ids of the red runs, for `gh run view <id> --log-failed`
+//                                                  // (#197: a red PR head's failing output is saved from these)
 //   }
 //
 // base
@@ -188,10 +190,10 @@ export function verdict({ branch, sha, repo, cwd }, gh) {
   const args = ['--branch', branch, '--commit', sha, '--limit', '100', '--json', RUN_FIELDS, ...(repo ? ['--repo', repo] : [])];
   const q = queryRuns(gh, args, cwd);
   const head = { format: FORMAT, command: 'verdict', branch, sha };
-  if (q.error !== undefined) return { ...head, verdict: 'query-failed', reason: null, error: q.error, runs: [], rerun: [] };
+  if (q.error !== undefined) return { ...head, verdict: 'query-failed', reason: null, error: q.error, runs: [], rerun: [], failed: [] };
   const runs = q.rows.map(toRun);
   const c = classify(runs);
-  return { ...head, verdict: c.verdict, reason: c.reason, error: null, runs, rerun: c.rerun };
+  return { ...head, verdict: c.verdict, reason: c.reason, error: null, runs, rerun: c.rerun, failed: runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id) };
 }
 
 const LOCAL_RECORD = /^local:\s+(\S+)\s+([0-9a-f]{40,64})\s+(green|red)(?:\s|$)/;
@@ -380,8 +382,7 @@ export function baseVerdict({ base, repo, cwd }, gh) {
     return { ...head, sha: null, verdict: 'query-failed', reason: null, error, runs: [], rerun: [], failed: [] };
   }
   const v = verdict({ branch, sha, repo, cwd }, gh);
-  const failed = v.runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id);
-  return { ...head, sha, verdict: v.verdict, reason: v.reason, error: v.error, runs: v.runs, rerun: v.rerun, failed };
+  return { ...head, sha, verdict: v.verdict, reason: v.reason, error: v.error, runs: v.runs, rerun: v.rerun, failed: v.failed };
 }
 
 // --repo and the positional arguments of verdict (2) and base (1).

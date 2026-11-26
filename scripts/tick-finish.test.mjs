@@ -291,3 +291,38 @@ test('with a relative state path every spawn prompt names its brief by an absolu
     if (a.spawn.fallback) assert.ok(isAbsolute(briefOf({ spawn: a.spawn.fallback })), `${a.id} fallback: ${a.spawn.fallback.prompt}`);
   }
 });
+
+// ---- #200: the finish under integrate: ticket-pr -------------------------------------------------------------------
+
+test('#200: the ticket-pr finish skips the line delivery, passes the finish gate, polishes only the PR left for a person, and reconciles every ticket with its PR', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.policy['pr-send'] = (a) => {
+    if (a.tickets[0] === ID2) return 'left-for-human';
+    h.mergePr(a.tickets[0]);
+    return 'sent';
+  };
+  h.untilDone();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done');
+  const once = distinct(h.log);
+  assert.ok(once.some((a) => a.id === 'gate:finish'), 'the finish gate runs under ticket-pr');
+  for (const step of ['simplify', 'sync-base', 'verify-local', 'deliver-line']) assert.ok(!once.some((a) => a.step === step), `no ${step} under ticket-pr`);
+  assert.ok(!once.some((a) => (a.argv ?? []).some((x) => String(x).endsWith('review-guide.mjs'))), 'no review-guide.mjs');
+  const polish = once.filter((a) => a.step === 'pr-polish');
+  assert.deepEqual(polish.map((a) => a.tickets[0]), [ID2], 'only the PR left for a person is polished');
+  assert.match(polish[0].do, /Skill tool with `no-bullshit`/);
+  const wrap = once.find((a) => a.id === 'wrap-up');
+  assert.ok(h.log.findIndex((a) => a.id === 'wrap-up') > h.log.findIndex((a) => a.step === 'pr-polish'), 'polished before the wrap-up');
+  const s = h.state();
+  const rows = Object.fromEntries(wrap.meta.tickets.map((r) => [r.ticket, r]));
+  assert.equal(rows[ID1].merge, 'merged');
+  assert.equal(rows[ID1].mergeSha, s.tickets[ID1].merges[0].sha);
+  assert.equal(rows[ID2].merge, 'left-for-human');
+  assert.equal(rows[ID1].url, `https://github.com/o/r/pull/${s.tickets[ID1].pr}`);
+  assert.deepEqual(rows[ID1].ci?.verdict, 'green', "the PR head's CI result");
+  assert.equal(rows[ID1].stack, null);
+  assert.equal(wrap.meta.humanWork.length, 1);
+  assert.equal(wrap.meta.humanWork[0].ticket, ID2);
+  assert.match(wrap.meta.humanWork[0].text, /merge-gate\.mjs: merge, no-queue/);
+  assert.match(wrap.do, /no aggregate PR/);
+});

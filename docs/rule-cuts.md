@@ -201,6 +201,16 @@ wc -lw skills/have-it-all-done/SKILL.md skills/have-it-all-done/ASKING.md skills
   關票。總 PR 留給人合併時（`gh pr merge` 被權限設定擋下或被拒，見 #8），關票指令進人工作業清單。
 - `frontier.mjs` 不變：整併後票仍是 open，GitHub 模式照舊由主持人以 `--done` 傳入。
 
+## #187：`integrate: ticket-pr` 下部分推翻 #13
+
+`ticket-pr`（#187，#201 起是 GitHub 模式的預設）把票級 PR 帶回來，但不是 #13 拿掉的那種：
+
+| 規則 | 處置 | 理由 |
+| --- | --- | --- |
+| #13「取消票級 PR，關票交給總 PR」 | `ticket-pr` 下推翻：每張票一支 PR，body 帶 `Closes #N`（`integrate.mjs pr-open`），審查過、CI 綠就合併，沒有整合分支也沒有總 PR；`aggregate-pr` 與 Local Markdown 照 #13 | #13 的兩個理由都不成立了：PR 直接指向預設分支，或以 `gh stack` 疊在上游票上、由下往上合併進預設分支，`Closes` 生效；人審的是每張票自己那一層的 diff，不是一千行的總 PR。 |
+| `IMPLEMENTER.md` 第 2 節「不寫關閉關鍵字，關票只走總 PR」 | 留：commit message 仍不寫關閉關鍵字；`ticket-pr` 下 `Closes #N` 只寫在票級 PR 的 body | 關票只有一條路：PR body。合併後主持人仍查 issue 實際狀態，沒關就照 tracker 契約補關（#196）。 |
+| `FINISH.md` 線級三道關、`review-guide.mjs`、總 PR | `ticket-pr` 下不做（#200） | 併入基底在每支 PR 合併前做，完整驗證就是 PR head 的 CI；跨票的重複留給之後的 run。 |
+
 ## #7：驗收項改由實作者以外的 agent 在開工前補齊
 
 | 規則 | 處置 | 理由 |

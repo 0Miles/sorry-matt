@@ -71,6 +71,33 @@
 //                    or skipped, with a one-line reason; the wrap-up lists the skipped lines and their reasons
 //                    (`meta.simplifySkipped`) for the closing summary and the self-answer log
 //   integrate: direct  merges go into the base branch; the finish neither syncs the base nor opens aggregate PRs
+//   integrate: ticket-pr  every ticket is its own pull request (#193, #195) and walks its own merge through the
+//                    waiting stages awaiting-ci and awaiting-merge (#196, stepPrMerge); the finish has no line
+//                    delivery (no simplify pass, base sync or full verification: the PR head's CI stood in).
+//                    A red PR head belongs to this ticket alone (#197, prAwaitCi): no earliest-red scan — the
+//                    failing runs' output is saved with `gh run view <id> --log-failed` (the ids from the verdict's
+//                    `failed` field) and the ticket goes to a fix round for its original agent (the ticket's
+//                    fix-round cap and the timeout-fix limit as ever); the fix commit is pushed to the same PR by
+//                    stepTicketPr and the verdict read again at the new head. A base that turns red after a merge
+//                    is a base-red episode (#197, prBaseRed): the earliest-red scan runs against the base, the red
+//                    is mapped to the causing ticket by merge order and merge SHA, and integrate.mjs revert opens a
+//                    revert PR (never a base push), merged as a prompting call once its own CI is green.
+//                    Upstreams (#198, prUpstreams): only a merged ticket is done upstream. A ticket with exactly
+//                    one unmerged upstream in this run (a bundle counts once) is stacked on it — stackParent, cut
+//                    from the upstream branch, its PR by gh stack submit — when freeze.json's gh-stack check passed
+//                    and no other live ticket is stacked on that upstream; any other waits at waiting-upstream
+//                    (waitingOn) until its upstreams are merged, then starts from the new base. gh stack missing
+//                    brings one `gh-stack-missing` judge (the install on the human-work list).
+//                    A stack merges from the bottom up (#199): a stacked ticket walks the merge path once the ticket
+//                    below it has merged (its fixed point is then origin/<base>), its push phase (gh stack sync) only
+//                    while no agent is at work in its stack, and a PR in a stack merges with `gh stack merge <PR>
+//                    --yes --squash`. Review freshness: the stacked ticket's own patch-id (integrate.mjs patch-id) is
+//                    taken when its review passes and again after the sync; the same id keeps the review, any other
+//                    is a recheck (integrating → in-review, the initial review's tier) — as is a base sync whose
+//                    conflict a merge agent resolved.
+//                    The finish (#200): the finish gate (no line checks), one `pr-polish` judge per PR left for a
+//                    person, and the wrap-up with `meta.tickets` (the reconciliation rows: PR link, stack, merge
+//                    state, PR head CI) and `meta.humanWork` (the merges left for a person, a stack's bottom first)
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -266,6 +293,10 @@
 //   "flags": { "<ticket>": {…} }, "failed": { "<line>": "<UTC>" },
 //   "red": { "<line>": { "sha", "at", "ciFix"?: { "round", "status": "pending" | "dispatched" | "ended", "sha",
 //                                                  "failure" } } },     // the ci-fix of a red light with no ticket
+//   "baseRed": { "sha", "at", "n", "sent"?, "left"?, "settled"? } | absent, "baseRedN": <n>,
+//   "baseSeen": { "tip", "verdict" } | absent,     // #197: the base-red episode under integrate: ticket-pr; n counts
+//                                                  // episode instances (it keys the fetch and the unmatched judge);
+//                                                  // baseSeen is the last base read and the tip it was taken at
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
@@ -296,7 +327,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
-import { load, update, main as stateMain, TERMINAL, PROFILE_DEFAULTS, FINDING_COUNTS, isText } from './state.mjs';
+import { load, update, main as stateMain, TERMINAL, profileOf, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { ticketOwners } from './merges.mjs';
 import { description as roleDescription, fallbackPath, AGENT_TYPES, reportField } from './brief.mjs';
@@ -320,8 +351,11 @@ const doc = (file, part) => ({
 // host's own Bash tool (#129, #146), as integrate.mjs leaves its push of one (isProtected there).
 const isProtected = (c, branch) => branch === 'main' || branch === 'master' || branch === c.cfg.base;
 
-const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating'];
-const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating'];
+const BUSY = ['expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci'];
+const IN_FLIGHT = ['implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci'];
+// #196: a ticket at awaiting-merge holds no in-flight slot (it blocks no dispatch point), but its planned files
+// stay occupied in dispatch file-overlap until the merge lands.
+const OCCUPIES = [...IN_FLIGHT, 'awaiting-merge'];
 export const LIMIT_DEFAULTS = Object.freeze({
   spawns: 200,
   rounds: 40,
@@ -484,9 +518,17 @@ function checksText(t) {
 
 /** One builder per operation the host is handed: an exec of the script that owns it. */
 export const OPERATIONS = {
-  // integrate.mjs ticket-init: the ticket branch from the line's tip, its worktree, the branch recorded
+  // integrate.mjs ticket-init: the ticket branch from the line's tip, its worktree, the branch recorded.
+  // Under integrate: ticket-pr (#193, #195) the cut point is the ticket's own: origin/<base> for a ticket that is not
+  // stacked, the upstream ticket branch for a stacked one — integrate.mjs decides by the ticket's #188 fields; --base
+  // names the base branch it needs for the first case. Nothing merges the ticket into an integration branch.
   createTicketBranch: (c, { id, branch, worktree, tag }) =>
-    exec(`branch:${id}:${basename(worktree)}:${tag}`, 'ticket-branch', ['node', js('integrate.mjs'), 'ticket-init', c.path, id, '--branch', branch, '--worktree', worktree, '--repo', c.cfg.root], { tickets: [id] }),
+    exec(
+      `branch:${id}:${basename(worktree)}:${tag}`,
+      'ticket-branch',
+      ['node', js('integrate.mjs'), 'ticket-init', c.path, id, '--branch', branch, '--worktree', worktree, ...(c.profile.integrate === 'ticket-pr' ? ['--base', c.cfg.base] : []), '--repo', c.cfg.root],
+      { tickets: [id] },
+    ),
   // integrate.mjs merge: merge, record, deliver, delivered, push, clean; a conflict is aborted and exits 4
   merge: (c, { id, t, wt, tag }) =>
     exec(
@@ -558,7 +600,7 @@ function context(path, state, now, deps) {
   if (!isObject(state.tick) || state.tick.format !== FORMAT) throw new UsageError(`${path} has no tick configuration: run tick.mjs setup first`);
   const book = structuredClone(state.tick);
   const cfg = book.config;
-  const profile = { ...PROFILE_DEFAULTS, ...(state.profile ?? {}) };
+  const profile = profileOf(state); // #201: the integrate default follows the run's tracker
   const W = runDir(path, state.run);
   const limits = { ...LIMIT_DEFAULTS };
   if (cfg.ledger) {
@@ -1308,7 +1350,7 @@ function againstFile(c, id, t, tag) {
  * SendMessage to the agent that has the context, or the merge agent. `create` is set for a fresh dispatch from
  * candidate: the worktree and branch actions it waits for, and the stage move to implementing.
  */
-function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null }) {
+function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false, prevAgent = null, why = null, create = null, note = null, files = null, mergeOf = null }) {
   const n = (c.book.dispatches[id] ?? 0) + 1;
   const tag = `${keyOf(id)}-${n}`;
   const rec = c.tick('rec', `${tag}.json`);
@@ -1324,7 +1366,7 @@ function dispatchAgent(c, id, t, { role, stage, mode, worktree, reassign = false
   );
   let r3 = null;
   if (create) r3 = c.emit(exec(`stage:${id}:implementing:h${hist(t)}`, 'stage', stateArgv(c, 'stage', 'implementing', id), { tickets: [id], line: t.line, after: [r2, ...(create.stageAfter ?? [])] }));
-  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}) };
+  const pending = { mode, role, n, worktree, prevAgent, why, branch: create?.branch ?? t.branch, ...(note ? { note } : {}), ...(files ? { files } : {}), ...(mergeOf ? { mergeOf } : {}) };
   c.flag(id).pending = pending;
   agentTail(c, id, t, pending, [r2, r3, ...before]);
 }
@@ -1336,11 +1378,16 @@ const WHY = {
 };
 /** review: minimal leaves its findings in the reviewer's report file (the ticket's flag `report`), not in a review block. */
 const reportAt = (flag) => (flag.report ? `${flag.report} (the reviewer's report)` : null);
-/** Why an agent gets the work: WHY's text for `why`, or the reviewer's report for a minimal review's fix round. */
+/**
+ * Why an agent gets the work: WHY's text for `why`, the reviewer's report for a minimal review's fix round, or
+ * (#197) the saved failing output for a pr-red fix round — the PR head's CI is red, there are no review findings.
+ */
 const whyText = (flag, why) =>
-  why === 'fix' && reportAt(flag)
-    ? `the review's findings, verbatim, in ${reportAt(flag)}: close them all in this one round (close-out step 3)`
-    : (WHY[why] ?? why);
+  why === 'fix' && flag.prRed
+    ? `the PR head's CI is red at ${flag.prRed.sha}; the failing runs' output is in ${flag.prRed.failure.join(', ') || 'the CI read'}: find the cause, fix it to green (do not weaken a test or a check), and the fix commit is pushed back to the same pull request (no review findings this round)`
+    : why === 'fix' && reportAt(flag)
+      ? `the review's findings, verbatim, in ${reportAt(flag)}: close them all in this one round (close-out step 3)`
+      : (WHY[why] ?? why);
 
 /** What fills the assignment's agent id: a spawn, a SendMessage or the merge agent's spawn. */
 function agentTail(c, id, t, p, after) {
@@ -1360,11 +1407,14 @@ function agentTail(c, id, t, p, after) {
   }
   if (p.mode === 'merge') {
     const files = p.files?.length ? ` (${p.files.join(', ')})` : '';
+    // #196, integrate: ticket-pr: the conflict is the base sync, origin/<base> merged into the ticket branch
+    const sides = p.mergeOf ? `Merging ${p.mergeOf} into ${t.branch}` : `Merging ${t.branch} into ${c.target(t.line)}`;
+    const command = p.mergeOf ? `git merge --no-edit ${p.mergeOf}` : `git merge --no-ff --no-edit ${t.branch}`;
     c.emit(
       judge(
         `merge-agent:${id}:${p.n}`,
         'merge-agent',
-        `Merging ${t.branch} into ${c.target(t.line)} conflicts${files}; integrate.mjs aborted the merge, so ${p.worktree} is clean. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the merge-conflict brief (both sides' ticket text and commit messages, the intent rule): in ${p.worktree} it runs \`git merge --no-ff --no-edit ${t.branch}\` again, resolves each conflict, and ends with \`git commit --no-edit\`; when it cannot resolve them safely it runs \`git merge --abort\` and reports unresolved. Record spawned with --agent.`,
+        `${sides} conflicts${files}; integrate.mjs aborted the merge, so ${p.worktree} is clean. Spawn a merge agent in the background with description \`${roleDescription('merge', [id])}\` and the merge-conflict brief (both sides' ticket text and commit messages, the intent rule): in ${p.worktree} it runs \`${command}\` again, resolves each conflict, and ends with \`git commit --no-edit\`; when it cannot resolve them safely it runs \`git merge --abort\` and reports unresolved. Record spawned with --agent.`,
         ['spawned'],
         [doc('SKILL.md', 'section 2, Merge conflicts')],
         { tickets: [id], line: t.line, after, needs: { agent: 'the merge agent id' } },
@@ -1472,7 +1522,25 @@ function unfixed(c, id, t, what) {
 }
 
 /** The review a ticket in in-review is due: a recheck when it came back from a fix round, else the initial one. */
-const reviewMode = (t) => (t.history[lastEntry(t, 'in-review')]?.from === 'fixing' ? 'recheck' : 'initial');
+// #199: a review entered from integrating (the base sync changed the ticket's own change) is a recheck too
+const reviewMode = (t) => (['fixing', 'integrating'].includes(t.history[lastEntry(t, 'in-review')]?.from) ? 'recheck' : 'initial');
+
+/**
+ * The fixed point of a ticket's review (#191, #195): the line's integration branch (the base branch under
+ * integrate: direct). Under integrate: ticket-pr it is decided per ticket, not per line: `origin/<base>` for a ticket
+ * that is not stacked, the upstream ticket's recorded branch for a stacked one (origin/<base> when none is recorded
+ * yet — ticket-init refuses that order, so it does not come up in a run tick drove).
+ */
+const fixedPointOf = (c, t) =>
+  c.profile.integrate === 'ticket-pr'
+    ? // #199: once the upstream is merged the ticket is the stack's bottom, and its fixed point is the base again
+      ((t.stackParent ?? null) !== null && !upstreamMerged(c, t) && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}`
+    : c.target(t.line);
+/** #199: whether a stacked ticket's upstream is merged (delivered with its merge recorded). */
+const upstreamMerged = (c, t) => {
+  const u = c.state.tickets[t.stackParent ?? ''];
+  return !!u && u.stage === 'delivered' && u.merges.length > 0;
+};
 
 function stepInReview(c, id, t) {
   const k = t.history.filter((h) => h.to === 'in-review').length;
@@ -1484,7 +1552,12 @@ function stepInReview(c, id, t) {
   // #143: the review host is in flight (it went to the background): its report, or the deadline scan, comes first
   if (!cr && t.assignment?.deadline && t.assignment.agentId) return;
   if (cr) {
-    if (cr.verdict === 'pass') return stageTo(c, id, t, 'queued');
+    if (cr.verdict === 'pass') {
+      // #199: a stacked ticket's own patch-id at this passed review, against its fixed point now (the upstream
+      // branch): after its stack is synced (rebased) it is compared, and the same id keeps this review
+      const p = stackPatch(c, id, t, `r${t.reviews.length}`);
+      return stageTo(c, id, t, 'queued', { after: [p?.pending ?? null] });
+    }
     if (cr.verdict === 'fix') {
       if (t.fixRounds < c.profile.fixRounds) return stageTo(c, id, t, 'fixing');
       return unfixed(c, id, t, `the ${cr.mode} review still says fix and the ${c.profile.fixRounds} fix rounds are used`);
@@ -1527,7 +1600,7 @@ function stepInReview(c, id, t) {
         '',
         `- Ticket text: ${resolve(body.file)} (${c.cfg.tracker === 'local' ? 'the ticket file' : 'the full ticket text'}).`,
         acceptance,
-        `- Ticket branch: ${t.branch}; compare it with ${c.target(t.line)} (\`git diff ${c.target(t.line)}...${t.branch}\`).`,
+        `- Ticket branch: ${t.branch}; compare it with ${fixedPointOf(c, t)} (\`git diff ${fixedPointOf(c, t)}...${t.branch}\`).`,
         `- Acceptance snapshot: ${c.acceptanceFile(id)}; the comparison with the ticket now: ${against}.`,
         ...(c.members(id).length ? [`- This is a bundle of ${c.group(id).join(', ')} (#205): review the whole diff once against every ticket's criteria; each criterion names its ticket.`] : []),
         `- A blocking finding is a criterion the change does not meet, or a defect it introduces that breaks behaviour. Style, taste and pre-existing problems are not findings.`,
@@ -1563,9 +1636,10 @@ function stepInReview(c, id, t) {
  */
 function reviewTier(c, id, t) {
   const entries = t.history.filter((h) => h.to === 'in-review');
-  const k = entries.findLastIndex((h) => h.from !== 'fixing') + 1 || entries.length;
+  // #199: a recheck after the base sync (from integrating) keeps the tier of the initial review, as a fix's does
+  const k = entries.findLastIndex((h) => h.from !== 'fixing' && h.from !== 'integrating') + 1 || entries.length;
   const file = c.tick('tier', `${keyOf(id)}-${k}.json`);
-  const argv = ['node', TIER_SCRIPT, 'judge', '--base', c.target(t.line), '--head', t.branch];
+  const argv = ['node', TIER_SCRIPT, 'judge', '--base', fixedPointOf(c, t), '--head', t.branch];
   if (c.emit(exec(`tier:${id}:${k}`, 'tier', argv, { stdout: file, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return undefined;
   const out = readJsonFile(c.deps, file);
   // #156: the judge's reasons go on the review's record with its tier
@@ -1629,7 +1703,7 @@ function proveItReview(c, id, t, { mode, tag, against, ag, previous, tier }) {
         statusRecord: statusRecordOf(c, id, t),
         snapshot: c.acceptanceFile(id),
         against,
-        fixedPoint: c.target(t.line),
+        fixedPoint: fixedPointOf(c, t),
         branch: t.branch,
         checksReport: flag.agentReport,
         ci: ciCoverage(c, t),
@@ -1769,11 +1843,14 @@ function stepFixing(c, id, t) {
 
 function reassignNote(c, id, t, r) {
   const link = t.statusRecord ? ` (${t.statusRecord})` : '';
+  const prRed = t.stage === 'fixing' ? c.flag(id).prRed : null; // #197: a pr-red fix round has no review findings
   const at = t.stage === 'fixing' ? reportAt(c.flag(id)) : null;
-  if (!r?.reassign) return `The fix round of ${id}: the findings are in ${at ?? `the latest review block of its status record${link}`}; close them all.`;
+  if (!r?.reassign) return `The fix round of ${id}: ${prRed ? whyText(c.flag(id), 'fix') : `the findings are in ${at ?? `the latest review block of its status record${link}`}; close them all`}.`;
   const head = `The previous agent on ${id} timed out and was stopped. Its commits and uncommitted changes are in the worktree: decide whether to keep them.`;
   // The record it updates is always the status record; under review: minimal the findings are in the report file.
-  const findings = at ? ` The findings of this fix round are in ${at}, not in the status record.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
+  const findings = prRed
+    ? ` This fix round is for the PR head's red CI: ${whyText(c.flag(id), 'fix')}.`
+    : at ? ` The findings of this fix round are in ${at}, not in the status record.` : t.stage === 'fixing' ? ' The findings of this fix round are in the latest review block there.' : '';
   return `${head} Update the existing status record in place${link}.${findings}`;
 }
 
@@ -1818,9 +1895,615 @@ function stepExpandReassign(c) {
   expandDispatch(c, `${Math.max(1, c.state.usage.rounds)}x${n}`, group, { reassign: true });
 }
 
+// ---- ticket-level pull requests (#195) ------------------------------------------------------------------------------
+
+/** The commit the latest implementation or fix report carries (its `commit:` line; agents/implementer.md section 5), or null: no report kept, or it says none. */
+function reportedCommit(c, id) {
+  const file = c.flag(id).agentReport;
+  if (!file) return null;
+  try {
+    const v = reportField(c.deps.read(file), 'commit');
+    return v && !/^none\b/i.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #195: under integrate: ticket-pr every ticket is its own pull request from its first reported commit on. A ticket
+ * whose latest agent report carries a commit and has no PR recorded gets one `pr-open` exec (integrate.mjs pushes the
+ * ticket branch and opens the draft PR; the number goes into the state); a report carrying no commit opens nothing
+ * and the report's own rules go on as ever. Once the PR is recorded, a branch tip the remote does not have yet — a
+ * batched fix's commit, a redo after a send-back — gets a `pr-push` exec to the same pull request; the number never
+ * changes and no second PR is opened. Neither exec is marked `host` (a ticket branch is never a protected branch),
+ * and the review's actions do not wait for them: the review and the PR's CI run in parallel. While an agent holds the
+ * ticket (an implementation or fix round, a review host in flight) nothing is pushed: its report comes first.
+ */
+function stepTicketPr(c) {
+  if (c.profile.integrate !== 'ticket-pr') return;
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (TERMINAL.includes(t.stage) || !t.branch) continue;
+    if (t.assignment?.deadline && t.assignment.agentId) continue; // an agent is at work: its report comes first
+    const tip = c.git.ref(t.branch);
+    if (!tip || !reportedCommit(c, id)) continue;
+    if ((t.pr ?? null) === null) {
+      const title = c.book.titles?.[id] ?? String(id);
+      c.emit(
+        exec(`pr-open:${id}`, 'pr-open', ['node', js('integrate.mjs'), 'pr-open', c.path, id, '--title', title, '--base', c.cfg.base, '--repo', c.cfg.root], {
+          stdout: c.tick('pr', `${keyOf(id)}-open.json`),
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    } else if (c.git.remote(t.branch) !== tip) {
+      c.emit(
+        exec(`pr-push:${id}@${tip.slice(0, 12)}`, 'pr-push', ['node', js('integrate.mjs'), 'pr-push', c.path, id, '--repo', c.cfg.root], {
+          stdout: c.tick('pr', `${keyOf(id)}-push-${tip.slice(0, 12)}.json`),
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    }
+  }
+}
+
+// ---- the ticket-pr merge path (#196) --------------------------------------------------------------------------------
+
+/**
+ * #196: under integrate: ticket-pr a reviewed ticket that is not stacked walks its own merge, one ticket at a time
+ * per line: pr-merge's push phase (sync the base into the ticket branch, push; queued → integrating) → awaiting-ci
+ * (ci.mjs verdict on the PR head, read once per wake-up; the wait is the existing fallback wake-up, no polling loop)
+ * → green: pr-merge --ready (`gh pr ready` + merge-gate.mjs) → awaiting-merge, the merge command handed to the host
+ * as a prompting call (send status `host`) → the host reports the merge sent, and pr-merge --merged (checked once
+ * per wake-up) records the merge SHA and delivers. Without merge authorization the host records left-for-human: the
+ * PR stays ready for a person, and the ticket is delivered with a left-for-human record (state.mjs set
+ * --left-for-human). A red PR head goes to a fix round (the fix commit is pushed back to the same PR by
+ * stepTicketPr); cancelled is rerun once and no-run counted per ticket, as the line-level CI rules have it. A
+ * stacked ticket parks at queued: its stack's merge order is not driven here.
+ */
+function stepPrMerge(c) {
+  prCloseIssues(c);
+  const paused = prBaseRed(c); // #197: a red base pauses new push phases until the revert PR lands
+  const byLine = new Map();
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (!byLine.has(t.line)) byLine.set(t.line, []);
+    byLine.get(t.line).push([id, t]);
+  }
+  for (const tickets of byLine.values()) {
+    let busy = false;
+    for (const [id, t] of tickets) {
+      if (t.stage === 'integrating') prIntegrating(c, id, t);
+      else if (t.stage === 'awaiting-ci') prAwaitCi(c, id, t);
+      else if (t.stage === 'awaiting-merge') prAwaitMerge(c, id, t);
+      else continue;
+      busy = true;
+    }
+    if (busy || paused) continue;
+    // #199: a stacked ticket walks the merge path once the ticket below it has merged (it is then the stack's bottom:
+    // stacks merge from the bottom up, each with gh stack merge), and its push phase — gh stack sync, which rebases
+    // the stack — only while no agent is at work anywhere in its stack (gh stack stops at a dirty or busy worktree)
+    const stackIdle = (id) => stackOf(c, id).every((k) => !(c.state.tickets[k].assignment?.deadline && c.state.tickets[k].assignment.agentId));
+    const queued = tickets
+      .filter(([id, t]) => t.stage === 'queued' && ((t.stackParent ?? null) === null || (upstreamMerged(c, t) && stackIdle(id))) && (t.pr ?? null) !== null && t.branch)
+      .sort((x, y) => ((x[1].history[lastEntry(x[1], 'queued')]?.at ?? '') < (y[1].history[lastEntry(y[1], 'queued')]?.at ?? '') ? -1 : 1));
+    if (queued.length) prPushPhase(c, queued[0][0], queued[0][1]); // the push phase moves queued → integrating itself
+  }
+}
+
+/**
+ * #197: the base branch's CI after a merge, under integrate: ticket-pr. Once any ticket has a merge recorded, the
+ * base verdict is read once per wake-up (ci.mjs base). A red opens an episode (book.baseRed): the earliest-red scan
+ * runs against the base itself (ruling 1: the plan's `line` is the base branch, its lower bound the parent of the
+ * oldest recorded merge), the red is mapped to the causing ticket by merge order and merge SHA (the recorded merges
+ * in the stretch from the first green up to the earliest red, the oldest first), and integrate.mjs revert opens the
+ * revert PR — never a base push — with the tickets depending on the reverted one (by stackParent and waitingOn,
+ * transitively) as --dependent: they get the upstream-reverted handling. The revert PR's own CI is read once per
+ * wake-up; once green the merge goes to the host as a prompting call (ruling 2: a mechanical revert, no review),
+ * sent under merge authorization or left for a person. The base is then read again each wake-up (and at once when
+ * its tip moves within the wake-up: the read is keyed by the tip); green ends the episode, and a base red at another
+ * SHA (the next causing ticket's red once the revert landed, or red anew) opens a new episode instance, so the scan
+ * reruns and the next ticket is mapped and reverted — tickets whose merges are already reverted on the base are
+ * never mapped again, and a ticket is reverted once. A red that the walk cannot pin above this run's merges (no
+ * green concluded inside the walk, and the base verdict at the lower bound is red: the red was there before the
+ * oldest merge) maps to no ticket, like a stretch with no recorded merge: a `base-red-unmatched` judge, one per
+ * episode instance, and after `settled` the base keeps being read each wake-up until it is green. Returns true
+ * while an episode is open: new push phases wait, and the finish does too (unless the revert is left for a person).
+ */
+function prBaseRed(c) {
+  if (c.profile.ci === 'skip') return false;
+  const merged = Object.entries(c.state.tickets).filter(([, t]) => t.merges.length);
+  if (!merged.length) return false;
+  // The base read is keyed by the wake-up and the base tip as this repository sees it: a merge seen within the
+  // wake-up (a revert PR merged and fetched) is a new read, and a read never outlives the tip it was taken at.
+  const baseTip = c.git.remote(c.cfg.base);
+  const key = `${baseTip ? baseTip.slice(0, 12) : 'none'}-w${c.book.wakeup}`;
+  const out = c.tick('ci', `base-${key}.json`);
+  const read = c.emit(
+    exec(`base-ci:${key}`, 'base-ci', ['node', js('ci.mjs'), 'base', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), c.cfg.base], {
+      stdout: out,
+      cwd: c.cfg.repo ? null : c.cfg.root,
+    }),
+  );
+  if (read !== null) return !!c.book.baseRed;
+  const v = readJsonFile(c.deps, out);
+  c.book.baseSeen = { tip: baseTip, verdict: v?.verdict ?? null }; // the finish waits for a concluded read at the current tip
+  if (v?.verdict === 'green') {
+    delete c.book.baseRed; // the revert landed (or the red cleared): the episode is over
+    return false;
+  }
+  const redNow = v?.verdict === 'red' && v.sha ? v.sha : null;
+  if (!redNow) return !!c.book.baseRed; // running, no run or unread: an open episode stays open
+  let red = c.book.baseRed ?? null;
+  // Settled, or the revert sent (or left for a person), at this same red: wait for the base to move. A red at
+  // another SHA — still red after a revert landed, or red anew — opens a new episode instance (F1, F2, review 1):
+  // the scan reruns, and tickets whose merges are already reverted on the base are never mapped again.
+  if (red && red.sha === redNow && (red.sent || red.settled)) return true;
+  if (!red || red.sha !== redNow) red = c.book.baseRed = { sha: redNow, at: c.now, n: (c.book.baseRedN = (c.book.baseRedN ?? 0) + 1) };
+  const sha12 = red.sha.slice(0, 12);
+  // the walk and the mapping read the base's history: fetch it first, once per episode instance
+  if (c.git.hasOrigin && c.emit(exec(`base-fetch:${sha12}:e${red.n}`, 'sync-base', ['git', '-C', c.cfg.root, 'fetch', 'origin', c.cfg.base]))) return true;
+  // a ticket whose merges are all reverted on the base already (an earlier episode's revert PR merged) is never mapped
+  // again; the revert commit may sit on a merged revert PR's side of the history, so the whole history is searched
+  const revertedOnBase = (t) =>
+    t.merges.every((m) => {
+      try {
+        return c.deps.git(c.cfg.root, ['log', '--format=%H', '--fixed-strings', `--grep=This reverts commit ${m.sha}`, `${m.sha}..origin/${c.cfg.base}`]).trim() !== '';
+      } catch {
+        return false;
+      }
+    });
+  // An earlier episode's revert that has not landed on the base yet is finished first, before any new mapping: a
+  // red at a new SHA (another merge landing meanwhile) must not strand a revert PR that was opened and not merged.
+  const pending = merged.find(([id, t]) => c.done(`revert:${keyOf(id)}`) && !revertedOnBase(t));
+  const cause = pending ?? baseRedCause(c, red, merged, revertedOnBase);
+  if (!Array.isArray(cause)) return cause;
+  return baseRedRevert(c, red, cause);
+}
+
+/**
+ * #197: the base-red episode's mapping (ruling 1) — the earliest-red scan against the base, the pre-existing-red
+ * guard, and the causing ticket by merge order and merge SHA. Returns [id, ticket], or prBaseRed's return value.
+ */
+function baseRedCause(c, red, merged, revertedOnBase) {
+  const sha12 = red.sha.slice(0, 12);
+  // ruling 1: the earliest-red scan against the base; the walk reaches back past the oldest recorded merge
+  const shas = merged.flatMap(([, t]) => t.merges.map((m) => m.sha));
+  let oldest = shas[0];
+  for (const s of shas.slice(1)) if (c.git.ancestor(s, oldest)) oldest = s;
+  const plan = c.tick('ci', `base-${sha12}.plan.json`);
+  c.write(
+    plan,
+    `${JSON.stringify(
+      {
+        worktree: c.cfg.root,
+        line: c.cfg.base,
+        base: `${oldest}^`,
+        ci: true,
+        ...(c.cfg.repo ? { repo: c.cfg.repo } : {}),
+        tickets: merged.map(([id, t]) => ({ id, merges: t.merges.map((m) => m.sha), ...(t.branch ? { branch: t.branch } : {}) })),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const scanOut = c.tick('ci', `base-${sha12}.json`);
+  if (c.emit(exec(`base-scan:${sha12}`, 'base-scan', ['node', js('ci.mjs'), 'earliest-red', plan], { stdout: scanOut, cwd: c.cfg.root })) !== null) return true;
+  const scan = readJsonFile(c.deps, scanOut);
+  if (!scan) return true; // the scan's output could not be read; its exec's failure judge leads
+  if (scan.earliestRed === null) {
+    // nothing concluded red in the walk although the base read red: the episode stays open (pushes stay paused)
+    // and the base is read afresh next wake-up, where a new tip or a green read moves it on
+    red.settled = true;
+    return true;
+  }
+  // F3 (review 1): the pre-existing-red guard. The plan's `base` is a raw SHA, so ci.mjs's own baseCi guard cannot
+  // query runs by it; when no green concluded inside the walk (lowerBound kind merge-base), the red may pre-date
+  // this run's merges — the base verdict at the lower bound, a branch-valid query, decides. Red there: the red was
+  // on the base below the oldest merge and belongs to no ticket of this run. Any other verdict (green, no-run,
+  // running, query-failed) changes nothing, as ci.mjs's guard has it.
+  if (scan.lowerBound?.kind === 'merge-base') {
+    const lowOut = c.tick('ci', `base-low-${sha12}.json`);
+    const lowRead = c.emit(
+      exec(`base-low:${sha12}`, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), c.cfg.base, scan.lowerBound.sha], {
+        stdout: lowOut,
+        cwd: c.cfg.repo ? null : c.cfg.root,
+      }),
+    );
+    if (lowRead !== null) return true;
+    if (readJsonFile(c.deps, lowOut)?.verdict === 'red') {
+      return baseRedUnmatched(c, red, `the base was already red at ${scan.lowerBound.sha}, below this run's oldest merge (the scan is in ${scanOut})`);
+    }
+  }
+  // the causing tickets, by merge order and merge SHA: the recorded merges in the stretch, the oldest merge first
+  let stretch = null;
+  try {
+    stretch = c.deps
+      .git(c.cfg.root, ['rev-list', '--first-parent', `${scan.lowerBound.sha}..${scan.earliestRed}`])
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .reverse();
+  } catch {}
+  if (stretch === null) return true; // git could not walk the stretch: tried again at the next list or wake-up
+  const at = (t) => Math.min(...t.merges.map((m) => stretch.indexOf(m.sha)).filter((i) => i >= 0));
+  const causing = merged.filter(([, t]) => t.merges.some((m) => stretch.includes(m.sha)) && !revertedOnBase(t)).sort((a, b) => at(a[1]) - at(b[1]));
+  if (!causing.length) {
+    return baseRedUnmatched(c, red, `no recorded merge of this run that is not already reverted lies in ${scan.lowerBound.sha}..${scan.earliestRed} (the scan is in ${scanOut})`);
+  }
+  return causing[0];
+}
+
+/**
+ * #197: the revert of the causing ticket — integrate.mjs revert opens the revert PR (once per ticket) with its
+ * dependents, its own CI is read, and green brings the merge as a prompting call (ruling 2).
+ */
+function baseRedRevert(c, red, [tid, t]) {
+  const sha12 = red.sha.slice(0, 12);
+  // the tickets depending on the reverted one, by stackParent and waitingOn, transitively
+  const seen = new Set([tid]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [id2, t2] of Object.entries(c.state.tickets)) {
+      if (seen.has(id2)) continue;
+      if (((t2.stackParent ?? null) !== null && seen.has(t2.stackParent)) || (t2.waitingOn ?? []).some((x) => seen.has(x))) {
+        seen.add(id2);
+        grew = true;
+      }
+    }
+  }
+  const dependents = [...seen].filter((x) => x !== tid);
+  const out2 = c.tick('pr', `${keyOf(tid)}-revert.json`);
+  const revertId = c.emit(
+    exec(
+      `revert:${keyOf(tid)}`, // once per ticket: a later episode that still maps it (its revert not landed) goes on
+      'revert',
+      [
+        'node',
+        js('integrate.mjs'),
+        'revert',
+        c.path,
+        tid,
+        '--worktree',
+        join(c.cfg.worktrees, `${keyOf(tid)}-revert`),
+        '--reason',
+        `base CI red at ${red.sha}`,
+        '--base',
+        c.cfg.base,
+        '--repo',
+        c.cfg.root,
+        ...dependents.flatMap((d) => ['--dependent', d]),
+      ],
+      { stdout: out2, tickets: [tid], line: t.line },
+    ),
+  );
+  if (revertId !== null) return true;
+  const rv = readJsonFile(c.deps, out2);
+  const rbranch = rv?.revertBranch ?? null;
+  const pr = rv?.pr ?? null;
+  if (!rbranch || pr === null) return true; // the output could not be read; the revert exec's failure judge leads
+  // ruling 2: the revert PR is merged only after its own CI is green — read once per wake-up, then the prompting call
+  const tip = c.git.ref(rbranch);
+  const head = c.git.remote(rbranch);
+  if (!tip || !head || head !== tip) return true;
+  const head12 = head.slice(0, 12);
+  const ciOut = c.tick('ci', `revert-${keyOf(tid)}-w${c.book.wakeup}.json`);
+  const ciRead2 = c.emit(
+    exec(`revert-ci:${tid}@${head12}:w${c.book.wakeup}`, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), rbranch, head], {
+      stdout: ciOut,
+      cwd: c.cfg.repo ? null : c.cfg.root,
+      tickets: [tid],
+      line: t.line,
+    }),
+  );
+  if (ciRead2 !== null) return true;
+  const v2 = readJsonFile(c.deps, ciOut);
+  if (v2?.verdict !== 'green') return true; // red, running or unread: read again next wake-up (the fallback waits)
+  if (c.done(`revert-send:${tid}:${pr}`)) {
+    red.sent = true; // sent (or left for a person) already: back to reading the base until it is green (F1, review 1)
+    return true;
+  }
+  c.emit(
+    judge(
+      `revert-send:${tid}:${pr}`,
+      'revert-send',
+      `The revert pull request ${pr} (${rbranch}, reverting ${tid}) is green on CI. It is a mechanical revert: no review (ruling 2). With merge authorization — a standing grant in the ledger's authorization field, or the user's instruction this run — run \`gh pr merge ${pr}\` with your own tool under the user's permission settings (never --admin, never auto-merge) and record sent. Without authorization record left-for-human: the merge goes on the human-work list. Either way tick reads the base again, and the episode ends when it is green.`,
+      ['sent', 'left-for-human'],
+      [doc('RED-LIGHT.md', 'the ticket-pr handling (a red base)'), doc('FINISH.md', 'the merge where authority allows')],
+      { tickets: [tid], line: t.line, meta: { pr, branch: rbranch, command: `gh pr merge ${pr}` } },
+    ),
+  );
+  return true;
+}
+
+/**
+ * #197: a base red that maps to no ticket, one judge per episode instance (F2, review 1: a per-SHA id could never
+ * come back after `settled` at a red that stays). `settled` keeps the episode in a settled state: the base is read
+ * each wake-up until it is green, and a red at a new SHA re-opens the episode (a new instance, a new judge).
+ */
+function baseRedUnmatched(c, red, why) {
+  c.emit(
+    judge(
+      `base-red-unmatched:${red.sha.slice(0, 12)}:e${red.n ?? 1}`,
+      'base-red-unmatched',
+      `The base branch ${c.cfg.base} is red at ${red.sha}, and ${why}. The red did not come in with a merge this run can revert: settle it outside this run (a fix on the base, or a person on the human-work list) and record settled; tick then keeps reading the base each wake-up until it is green.`,
+      ['settled'],
+      [doc('RED-LIGHT.md', 'the ticket-pr handling (a red base)')],
+      { meta: { sha: red.sha } },
+    ),
+  );
+  return true;
+}
+
+/**
+ * #196: after a ticket's merge the issue may still be open (`Closes` did not fire, or was edited away): its state is
+ * read once, and an open one is closed with a comment pointing at the PR — idempotent, never relying on `Closes`.
+ * A bundle closes every member's issue; a left-for-human ticket has no merge yet, so the person closing is theirs.
+ */
+function prCloseIssues(c) {
+  if (c.cfg.tracker !== 'github') return;
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    if (t.stage !== 'delivered' || !t.merges.length) continue;
+    for (const m of c.group(id)) {
+      const out = c.tick('pr', `issue-${keyOf(m)}.json`);
+      if (c.emit(exec(`issue-state:${m}`, 'issue-state', ['gh', 'issue', 'view', numOf(m), '--json', 'state', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: out, tickets: [id], line: t.line })) !== null) continue;
+      if (readJsonFile(c.deps, out)?.state !== 'OPEN') continue; // closed already (Closes fired): nothing to do
+      c.emit(
+        exec(`issue-close:${m}`, 'issue-close', ['gh', 'issue', 'close', numOf(m), '--comment', `Delivered by pull request #${t.pr} (merge ${t.merges.at(-1).sha}).`, ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], {
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    }
+  }
+}
+
+/** A ticket integrating under ticket-pr: its base sync's conflict goes to a merge agent, else the push phase runs. */
+function prIntegrating(c, id, t) {
+  const flag = c.flag(id);
+  if (flag.sendBack) {
+    c.emit(
+      judge(
+        `send-back:${id}:h${hist(t)}`,
+        'send-back',
+        `Send ${id} back for a redo as SEND-BACK.md says (integrate.mjs send-back, then the send-back record, also written to ${c.sendBack(id)}, and the widened prediction). Record sent-back; when it was sent back once already, mark it stuck instead (SEND-BACK.md) and record stuck with --value <reason>.`,
+        ['sent-back', 'stuck'],
+        [doc('SEND-BACK.md', 'Send back for a redo')],
+        { tickets: [id], line: t.line },
+      ),
+    );
+    return;
+  }
+  const a = t.assignment;
+  if (a && a.deadline !== null) {
+    if (!a.agentId) pendingAgent(c, id, t);
+    return; // the merge agent resolves the base sync's conflict in the ticket worktree
+  }
+  prPushPhase(c, id, t);
+}
+
+/** pr-merge's push phase; exit 0 → awaiting-ci, exit 4 (base-sync conflict, aborted) → a merge agent, then a rerun. */
+function prPushPhase(c, id, t) {
+  const flag = c.flag(id);
+  let n = flag.prSync ?? 1;
+  // A ticket back at queued with its attempt already spent (a pr-red fix round re-queued it; the push phase itself
+  // leaves queued at once) starts a new attempt: the spent exec id must not swallow the new round (review F1).
+  if (t.stage === 'queued' && c.book.done[`pr-sync:${id}:${n}`]) flag.prSync = n += 1;
+  const pid = `pr-sync:${id}:${n}`;
+  const out = c.tick('pr', `${keyOf(id)}-sync-${n}.json`);
+  if (c.emit(exec(pid, 'pr-merge', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, okExit: [0, 4, 5], tickets: [id], line: t.line })) !== null) return;
+  const done = c.book.done[pid];
+  if (done.exit === 0) {
+    // #199: a resolved conflict of the base sync changed the ticket's own change: a recheck (the initial review's
+    // tier) before the PR head's CI, as for a fix
+    if (n > 1 && c.book.done[`pr-sync:${id}:${n - 1}`]?.exit === 4 && t.reviews.length) return void stageTo(c, id, t, 'in-review');
+    // #199: a stacked ticket's sync rebased it (new SHAs): its own patch-id against its fixed point now is compared
+    // with the one taken when its review passed — the same keeps the review, any other (or none on record) rechecks
+    if ((t.stackParent ?? null) !== null && t.reviews.length) {
+      const now = stackPatch(c, id, t, `s${n}`);
+      if (now.pending) return;
+      const before = readJsonFile(c.deps, c.tick('pr', `${keyOf(id)}-patch-r${t.reviews.length}.json`));
+      const after = readJsonFile(c.deps, now.file);
+      if (!before?.patchId || before.patchId !== after?.patchId) return void stageTo(c, id, t, 'in-review');
+    }
+    return void stageTo(c, id, t, 'awaiting-ci');
+  }
+  if (done.exit === 4) {
+    // the conflict of merging origin/<base> into the ticket branch; the rerun after the resolution is a new attempt
+    flag.prSync = n + 1;
+    const handed = Object.values(c.book.agents).some((x) => x.role === 'merge' && x.tickets.includes(id) && x.at >= done.at);
+    if (!handed) {
+      const o = readJsonFile(c.deps, out);
+      dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: c.git.wtOf(t.branch) ?? c.cfg.root, files: Array.isArray(o?.files) ? o.files : null, mergeOf: `origin/${c.cfg.base}` });
+    }
+    return;
+  }
+  // exit 5: gh stack sync aborted on stack divergence — a ruling, not a retry
+  c.emit(
+    judge(
+      `pr-diverged:${id}:${n}`,
+      'pr-diverged',
+      `${id}'s stack diverged while pr-merge synced it (${out} holds the lines). Rule on the divergence (whose branch moved, what the stack should look like), put it right, and record retry; or record stuck / awaiting-ruling with --value <reason>.`,
+      ['retry', 'stuck', 'awaiting-ruling'],
+      [{ path: js('integrate.mjs'), part: 'header, pr-merge (diverged)' }],
+      { tickets: [id], line: t.line, meta: { of: pid } },
+    ),
+  );
+}
+
+/**
+ * #199: the patch-id exec of a stacked ticket's own change against its fixed point now (integrate.mjs patch-id),
+ * under `tag`: { pending: its id while it runs, else null; file }, or null for a ticket that is not stacked.
+ */
+function stackPatch(c, id, t, tag) {
+  if (c.profile.integrate !== 'ticket-pr' || (t.stackParent ?? null) === null || !t.branch) return null;
+  const file = c.tick('pr', `${keyOf(id)}-patch-${tag}.json`);
+  const pending = c.emit(
+    exec(`patch:${id}:${tag}`, 'patch-id', ['node', js('integrate.mjs'), 'patch-id', c.path, id, '--from', fixedPointOf(c, t), '--repo', c.cfg.root], {
+      stdout: file,
+      tickets: [id],
+      line: t.line,
+    }),
+  );
+  return { pending, file };
+}
+
+/** #199: the tickets of `id`'s stack, below and above it (by stackParent), `id` left out. */
+function stackOf(c, id) {
+  const out = new Set();
+  for (let p = c.state.tickets[id]?.stackParent ?? null; p !== null && !out.has(p); p = c.state.tickets[p]?.stackParent ?? null) out.add(p);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [k, t] of Object.entries(c.state.tickets)) {
+      if (k === id || out.has(k) || (t.stackParent ?? null) === null) continue;
+      if (t.stackParent === id || out.has(t.stackParent)) {
+        out.add(k);
+        grew = true;
+      }
+    }
+  }
+  return [...out];
+}
+
+/** A ticket awaiting CI on its PR head: one ci.mjs read per wake-up; green goes on to the ready phase. */
+function prAwaitCi(c, id, t) {
+  const flag = c.flag(id);
+  const tip = c.git.ref(t.branch);
+  const head = c.git.remote(t.branch);
+  if (!tip || !head || head !== tip) return; // stepTicketPr pushes the tip first; CI is read at the pushed head
+  const head12 = head.slice(0, 12);
+  if (flag.prCiWaived === head) return void prReadyPhase(c, id, t, head12);
+  const out = c.tick('ci', `pr-${keyOf(id)}-w${c.book.wakeup}.json`);
+  const readId = `pr-ci:${id}@${head12}:w${c.book.wakeup}`;
+  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+  const v = readJsonFile(c.deps, out);
+  const verdict = v?.verdict ?? null;
+  if (verdict) flag.prCi = { sha: head, verdict }; // #200: the PR head's last CI result, for the reconciliation table
+  if (verdict !== 'no-run' && flag.prNoRun) {
+    delete flag.prNoRun;
+    delete flag.prNoRunAt;
+  }
+  if (verdict === 'green') return void prReadyPhase(c, id, t, head12);
+  if (verdict === 'red') {
+    const fixable = t.fixRounds < c.profile.fixRounds;
+    // #197: this red is the ticket's own — no earliest-red scan. The failing runs' output is saved first, from the
+    // verdict's `failed` ids, and the fix round points its original agent at it.
+    const logs = [];
+    const after = [];
+    for (const run of v?.failed ?? []) {
+      const log = c.tick('ci-fix', `pr-${keyOf(id)}-${head12}-${run}.log`);
+      const did = c.emit(
+        exec(`pr-red-log:${id}@${head12}:${run}`, 'ci-log', ['gh', 'run', 'view', String(run), '--log-failed', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], {
+          stdout: log,
+          cwd: c.cfg.repo ? null : c.cfg.root,
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+      if (did) after.push(did);
+      logs.push(log);
+    }
+    c.emit(
+      judge(
+        `pr-red:${id}@${head12}`,
+        'pr-red',
+        `${id}'s pull request head ${head} (${t.branch}) is red on CI${logs.length ? `; the failing runs' output is saved to ${logs.join(', ')}` : ''}. This red belongs to this ticket alone: no earliest-red scan.${fixable ? ' Record fix: the ticket goes to a fix round for its original agent, pointed at that failing output (not at review findings), and the fix commit is pushed back to the same PR.' : ` The ${c.profile.fixRounds} fix rounds are used.`} Or record stuck / awaiting-ruling with --value <reason>.`,
+        [...(fixable ? ['fix'] : []), 'stuck', 'awaiting-ruling'],
+        [doc('RED-LIGHT.md', 'the ticket-pr handling (a red PR head)')],
+        { tickets: [id], line: t.line, after, meta: { sha: head, failure: logs } },
+      ),
+    );
+    return;
+  }
+  if (verdict === 'cancelled') {
+    // the line-level rule, applied to the PR head run: rerun each cancelled run once, read again next wake-up
+    for (const run of v?.rerun ?? []) c.emit(exec(`pr-rerun:${id}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { tickets: [id], line: t.line }));
+    return;
+  }
+  if (verdict === 'no-run' && v?.reason === 'empty') {
+    // the line-level no-run counting, per ticket: at two empty reads the branch's run list settles it
+    if (flag.prNoRunAt !== readId) {
+      flag.prNoRun = (flag.prNoRun ?? 0) + 1;
+      flag.prNoRunAt = readId;
+    }
+    if ((flag.prNoRun ?? 0) < 2) return;
+    const runsOut = c.tick('ci', `pr-${keyOf(id)}-branch-w${c.book.wakeup}.json`);
+    if (c.emit(exec(`pr-ci-branch:${id}:w${c.book.wakeup}`, 'ci-branch', ['gh', 'run', 'list', '--branch', t.branch, '--limit', '1', '--json', 'databaseId', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: runsOut, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+    const listed = readJsonFile(c.deps, runsOut);
+    if (Array.isArray(listed) && listed.length === 0) {
+      c.emit(
+        judge(
+          `pr-no-ci:${id}@${head12}`,
+          'pr-no-ci',
+          `No CI run covers ${id}'s pull request head ${head} after two reads, and ${t.branch} has no runs at all. Record ready to go on to the ready phase (merge-gate.mjs still guards the merge); or record stuck / awaiting-ruling with --value <reason>.`,
+          ['ready', 'stuck', 'awaiting-ruling'],
+          [{ path: js('ci.mjs'), part: 'header (no-run)' }],
+          { tickets: [id], line: t.line, meta: { sha: head } },
+        ),
+      );
+    }
+    return;
+  }
+  // running or query-failed: read again next wake-up; the wait is the fallback wake-up
+}
+
+/** pr-merge --ready (`gh pr ready` + merge-gate.mjs), then awaiting-merge and the merge handed to the host. */
+function prReadyPhase(c, id, t, head12) {
+  const out = c.tick('pr', `${keyOf(id)}-ready-${head12}.json`);
+  if (c.emit(exec(`pr-ready:${id}@${head12}`, 'pr-ready', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--ready', '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, tickets: [id], line: t.line })) !== null) return;
+  c.flag(id).prReady = out;
+  const s = stageTo(c, id, t, 'awaiting-merge');
+  prSendJudge(c, id, t, readJsonFile(c.deps, out), s ? [s] : []);
+}
+
+/**
+ * The prompting call of the merge (#196): the command goes to the host, which sends it only under merge
+ * authorization (a standing grant in the ledger's authorization field, or the user's instruction this run) with its
+ * own tool, under the user's permission settings; without authorization the ticket is recorded left-for-human.
+ * True while the judge is still open.
+ */
+function prSendJudge(c, id, t, ready, after) {
+  const sid = `pr-send:${id}:${t.pr}`;
+  if (c.done(sid)) return false;
+  const gate = ready?.gate ?? null;
+  const send = ready?.send ?? null;
+  const human = send?.status !== 'host';
+  const command = send?.command ?? `gh pr merge ${t.pr}`;
+  const what = human
+    ? `${id}'s pull request ${t.pr} is ready, and merge-gate.mjs says a person merges it (${gate ? `${gate.decision}: ${gate.reason}` : 'its output could not be read'}). Put the merge on the human-work list and record left-for-human: the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`
+    : `${id}'s pull request ${t.pr} is ready (merge-gate.mjs: ${gate.decision}, ${gate.reason}). With merge authorization — a standing grant in the ledger's authorization field, or the user's instruction this run — run \`${command}\` with your own tool under the user's permission settings (never --admin, never auto-merge) and record sent: tick then watches for the merge, GitHub's merge queue included. Without authorization record left-for-human: the PR stays ready for a person to merge and the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`;
+  c.emit(
+    judge(sid, 'pr-send', what, [...(human ? [] : ['sent']), 'left-for-human', 'stuck', 'awaiting-ruling'], [doc('FINISH.md', 'the merge where authority allows'), { path: js('merge-gate.mjs'), part: 'header (decisions)' }], {
+      tickets: [id],
+      line: t.line,
+      after,
+      meta: { pr: t.pr, command },
+    }),
+  );
+  return true;
+}
+
+/** A ticket awaiting its merge: once the command was sent, pr-merge --merged is checked once per wake-up. */
+function prAwaitMerge(c, id, t) {
+  const flag = c.flag(id);
+  const ready = flag.prReady ? readJsonFile(c.deps, flag.prReady) : null;
+  if (prSendJudge(c, id, t, ready, [])) return;
+  if (c.book.done[`pr-send:${id}:${t.pr}`]?.outcome !== 'sent') return; // left-for-human and the rulings moved it in record
+  // exit 3: the PR is not merged yet (the queue is running); checked again next wake-up — the fallback wake-up waits
+  c.emit(
+    exec(`pr-merged:${id}:w${c.book.wakeup}`, 'pr-merged', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--merged', '--repo', c.cfg.root], {
+      stdout: c.tick('pr', `${keyOf(id)}-merged-w${c.book.wakeup}.json`),
+      okExit: [0, 3],
+      tickets: [id],
+      line: t.line,
+    }),
+  );
+}
+
 // ---- integration ----------------------------------------------------------------------------------------------------
 
 function stepIntegration(c) {
+  // #195: under integrate: ticket-pr nothing merges into an integration branch — the line has none (#193). The
+  // merge path is the ticket's own pull request's: integrate.mjs pr-merge, driven by stepPrMerge (#196).
+  if (c.profile.integrate === 'ticket-pr') return stepPrMerge(c);
   const { state, book } = c;
   const byTarget = new Map();
   for (const [id, t] of Object.entries(state.tickets)) {
@@ -1966,6 +2649,10 @@ function dueReasons(c) {
       else if (h.from === 'expanding') reasons.add('an expansion agent reported');
     }
     if (t.merges.length > (last.merges[id] ?? 0)) reasons.add('a ticket was merged');
+    // #198: the one upstream a waiting ticket waits on got its branch (it was dispatched): it can be stacked now
+    if (t.stage === 'waiting-upstream' && (t.waitingOn ?? []).length === 1 && c.profile.integrate === 'ticket-pr' && stackFree(c, t.waitingOn[0], id) && ghStackReady(c)) {
+      reasons.add('an upstream can take a stacked ticket');
+    }
   }
   for (const line of last.red) if (!book.red[line]) reasons.add('a red line turned green');
   for (const line of Object.keys(book.failed)) if (!last.failed.includes(line)) reasons.add('a line failed verification');
@@ -2083,6 +2770,8 @@ function dispatchSteps(c, d) {
       stageTo(c, id, t, 'awaiting-ruling', { reason });
     }
   }
+  // 4b. #198: under integrate: ticket-pr, the tickets whose upstreams in this run are not merged: stacked, or waiting
+  const { stacked, held } = profile.integrate === 'ticket-pr' ? prUpstreams(c, info, known, d) : { stacked: [], held: new Set() };
   // 5. candidates, the most unblocking first
   const dependents = (id) => {
     const g = c.group(id);
@@ -2100,9 +2789,11 @@ function dispatchSteps(c, d) {
       ...fr.frontier.map(known).filter(Boolean).map((x) => c.leadOf(x)),
       ...Object.keys(state.tickets).filter((id) => c.members(id).length && groupReady(id)),
     ]),
-  ].filter((id) => !c.members(id).length || groupReady(id));
+  ]
+    .filter((id) => !c.members(id).length || groupReady(id))
+    .concat(stacked.filter((id) => state.tickets[id].stackParent)); // #198: a stacked ticket is ready on its upstream
   const candidates = order
-    .filter((id) => state.tickets[id].stage === 'candidate' && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
+    .filter((id) => state.tickets[id].stage === 'candidate' && !held.has(id) && !info.get(id)?.stalled && !book.failed[state.tickets[id].line] && !book.red[state.tickets[id].line])
     .map((id, i) => ({ id, i, n: dependents(id) }))
     .sort((x, y) => y.n - x.n || x.i - y.i)
     .map((x) => x.id);
@@ -2154,30 +2845,172 @@ function dispatchSteps(c, d) {
   if (expand.length) expandDispatch(c, r, expand);
   if (pending || !ready.length) return;
   // 6. overlap, then a ticket branch and an implementation agent for each `start`
-  const planPath = join(c.W, 'overlap', `${r}.plan.json`);
-  const outPath = join(c.W, 'overlap', `${r}.json`);
-  const ov = c.done(`overlap:r${r}`) ? readJsonFile(c.deps, outPath) : null;
-  if (!ov) {
-    const running = Object.entries(state.tickets)
-      .filter(([, t]) => IN_FLIGHT.includes(t.stage))
-      .map(([id, t]) => {
-        let files = predictedOf(c, id);
-        if (!c.deps.exists(files)) {
-          files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
-          c.write(files, '/\n'); // no prediction on record: it holds the whole repository
-        }
-        const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
-        return { id, files, ...(wt ? { worktree: wt, base: c.target(t.line) } : {}) };
-      });
-    c.write(planPath, `${JSON.stringify({ running, candidates: ready.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
-    c.emit(exec(`overlap:r${r}`, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
-    return;
+  const ov = overlapRun(c, `overlap:r${r}`, `${r}`, ready);
+  if (!ov) return;
+  // #198: a ticket stacked within this dispatch point, after its overlap ran (its upstream got its branch meanwhile),
+  // gets an overlap run of its own, so it starts now rather than after its upstream merges
+  const covered = new Set([...(ov.start ?? []), ...(ov.wait ?? []).map((w) => w.id)]);
+  const late = ready.filter((x) => !covered.has(x.id) && state.tickets[x.id].stackParent);
+  const ov2 = late.length ? overlapRun(c, `overlap:r${r}:${late.map((x) => keyOf(x.id)).join('+')}`, `${r}-${late.map((x) => keyOf(x.id)).join('+')}`, late) : null;
+  if (late.length && !ov2) return;
+  // #198: a stacked ticket builds on its upstream's branch, so its overlap with the tickets below it in the stack is
+  // no conflict: it starts when those are all it overlaps
+  const chainOf = (id) => {
+    const out = [];
+    for (let p = state.tickets[id]?.stackParent ?? null; p !== null && !out.includes(p); p = state.tickets[p]?.stackParent ?? null) out.push(p);
+    return out;
+  };
+  const starts = new Set();
+  for (const o of [ov, ov2].filter(Boolean)) {
+    for (const id of o.start ?? []) starts.add(id);
+    for (const w of o.wait ?? []) {
+      const chain = chainOf(w.id);
+      if (chain.length && (w.overlaps ?? []).every((x) => chain.includes(x.with))) starts.add(w.id);
+    }
   }
-  for (const id of ov.start ?? []) {
+  for (const { id, title } of ready.filter((x) => starts.has(x.id))) {
     const t = state.tickets[id];
     if (!t || t.stage !== 'candidate') continue;
-    createDispatch(c, id, t, ready.find((x) => x.id === id)?.title);
+    createDispatch(c, id, t, title);
   }
+}
+
+/** overlap.mjs for `cands` against the tickets holding files now: its output, or null while it runs. */
+function overlapRun(c, oid, tag, cands) {
+  const { state } = c;
+  const planPath = join(c.W, 'overlap', `${tag}.plan.json`);
+  const outPath = join(c.W, 'overlap', `${tag}.json`);
+  if (c.done(oid)) return readJsonFile(c.deps, outPath);
+  const running = Object.entries(state.tickets)
+    .filter(([, t]) => OCCUPIES.includes(t.stage))
+    .map(([id, t]) => {
+      let files = predictedOf(c, id);
+      if (!c.deps.exists(files)) {
+        files = c.tick('overlap', `${keyOf(id)}.whole.txt`);
+        c.write(files, '/\n'); // no prediction on record: it holds the whole repository
+      }
+      const wt = t.assignment?.worktree && c.deps.exists(t.assignment.worktree) ? t.assignment.worktree : null;
+      // #196: under ticket-pr the base a running worktree is diffed against is the ticket's own fixed point
+      return { id, files, ...(wt ? { worktree: wt, base: fixedPointOf(c, t) } : {}) };
+    });
+  c.write(planPath, `${JSON.stringify({ running, candidates: cands.map(({ id }) => ({ id, files: predictedOf(c, id) })) }, null, 2)}\n`);
+  c.emit(exec(oid, 'overlap', ['node', js('overlap.mjs'), planPath], { stdout: outPath }));
+  return null;
+}
+
+/** #198: whether gh stack passed the freeze's check (#189: freeze.json's preflight `gh-stack` with `stack` true). */
+function ghStackReady(c) {
+  const f = join(c.W, 'freeze.json');
+  if (!c.deps.exists(f)) return false;
+  return readJsonFile(c.deps, f)?.preflight?.checks?.some((x) => x?.name === 'gh-stack' && x.stack === true) ?? false;
+}
+
+const prMerged = (t) => t.stage === 'delivered' && t.merges.length > 0;
+
+/**
+ * #198: whether ticket `u` can take `id` on top of it in a stack: its ticket branch is there, it is not at an end state
+ * (or it is delivered with its PR left for a person, not merged), and no other live ticket is stacked on it yet —
+ * gh stack is linear, so the first ticket dispatched on it takes it (the open question's recommendation).
+ */
+function stackFree(c, u, id) {
+  const U = c.state.tickets[u];
+  if (!U || !U.branch || !c.git.ref(U.branch)) return false;
+  if (TERMINAL.includes(U.stage) && !(U.stage === 'delivered' && !U.merges.length)) return false;
+  return !Object.entries(c.state.tickets).some(([k, t]) => k !== id && t.stackParent === u && !['stuck', 'awaiting-ruling'].includes(t.stage) && !prMerged(t));
+}
+
+/**
+ * #198: under integrate: ticket-pr, the candidates whose blockers in this run are not all merged (#187 ruling 2). Only
+ * a merged ticket counts as done upstream (a delivered ticket left for a person is not merged). A ticket with exactly
+ * one unmerged upstream — a bundle's tickets count as one, its lead (#205) — is stacked on it when gh stack passed the
+ * freeze's check and the upstream can take it (stackFree): its stackParent is recorded, and it dispatches with the
+ * frontier's ready ones; integrate.mjs ticket-init cuts it from the upstream branch and adds it to the stack. Any
+ * other — two or more unmerged upstreams, gh stack missing, an upstream with no branch yet or already taken — goes to
+ * waiting-upstream with waitingOn naming them; once none is left unmerged it goes back to candidate and starts from
+ * the new base (a later dispatch point may stack it instead, once its one upstream can take it). When every upstream
+ * it waits on is at an end state that is not a merge (stuck, awaiting a ruling, or left for a person), nothing in this
+ * run will merge them: awaiting-ruling. gh stack missing while a ticket could have been stacked brings one judge (not
+ * one per ticket) to put its install on the human-work list. Returns { stacked: the ids stacked this list, held: the
+ * ids that wait (they are not dispatched, whatever the frontier says) }.
+ */
+function prUpstreams(c, info, known, d) {
+  const { state } = c;
+  const canStack = ghStackReady(c);
+  const stacked = [];
+  const held = new Set();
+  const claimed = new Map(); // upstream → the ticket stacked on it in this list
+  let wanted = false;
+  for (const [id, t] of Object.entries(state.tickets)) {
+    if (t.stage !== 'candidate' && t.stage !== 'waiting-upstream') continue;
+    const g = c.group(id);
+    if (g.some((m) => info.get(m)?.stalled)) continue; // step 4 rules on it
+    const ups = new Set();
+    for (const m of g) {
+      for (const b of info.get(m)?.blockedBy ?? []) {
+        if (!b.inSet) continue;
+        const lead = c.leadOf(known(b.id));
+        if (lead === null || lead === id || prMerged(state.tickets[lead])) continue;
+        ups.add(lead);
+      }
+    }
+    const waiting = [...ups].sort();
+    const parent = t.stackParent ?? null;
+    const was = [...(t.waitingOn ?? [])].sort();
+    const setTo = (stack, wait) => {
+      if (parent === stack && was.join(',') === wait.join(',')) return null;
+      return c.emit(
+        exec(`upstream:${id}:h${hist(t)}:${stack ?? 'none'}:${wait.join(',') || 'none'}`, 'upstream', stateArgv(c, 'set', id, '--stack-parent', stack ?? 'none', '--waiting-on', wait.join(',') || 'none'), {
+          tickets: [id],
+          line: t.line,
+        }),
+      );
+    };
+    if (!waiting.length) {
+      // nothing unmerged upstream (any more): the frontier's own rules; a wait or a stack recorded before is cleared
+      const s = setTo(null, []);
+      if (t.stage === 'waiting-upstream') {
+        d.touched.push(id);
+        stageTo(c, id, t, 'candidate', { after: [s] });
+      }
+      continue;
+    }
+    const u = waiting.length === 1 ? waiting[0] : null;
+    const free = u !== null && stackFree(c, u, id) && (!claimed.has(u) || claimed.get(u) === id);
+    if (free && canStack) {
+      claimed.set(u, id);
+      const s = setTo(u, []);
+      if (t.stage === 'waiting-upstream') {
+        d.touched.push(id);
+        stageTo(c, id, t, 'candidate', { after: [s] });
+      }
+      stacked.push(id);
+      continue;
+    }
+    if (free) wanted = true;
+    held.add(id);
+    const s = setTo(null, waiting);
+    if (waiting.every((w) => TERMINAL.includes(state.tickets[w].stage))) {
+      d.touched.push(id);
+      stageTo(c, id, t, 'awaiting-ruling', { reason: `waits on ${waiting.join(', ')}, which this run will not merge (${waiting.map((w) => `${w} ${state.tickets[w].stage}`).join(', ')})`, after: [s] });
+      continue;
+    }
+    if (t.stage === 'candidate') {
+      d.touched.push(id);
+      stageTo(c, id, t, 'waiting-upstream', { after: [s] });
+    }
+  }
+  if (wanted) {
+    c.emit(
+      judge(
+        'gh-stack-missing',
+        'gh-stack-missing',
+        `gh stack did not pass the freeze's check (freeze.json preflight gh-stack), so a ticket with one unmerged upstream waits for it to merge (waiting-upstream) instead of stacking on it. Put \`gh extension install github/gh-stack\` on the human-work list (once, not per ticket; never install it yourself) and record listed.`,
+        ['listed'],
+        [doc('SKILL.md', 'section 0 (freeze)')],
+      ),
+    );
+  }
+  return { stacked, held };
 }
 
 /** #205: a ticket's predicted files, or for a bundle one list of all its tickets' (written once each has one). */
@@ -2219,7 +3052,8 @@ function frontier(c, r) {
     const out = c.tick('frontier', `r${r}.json`);
     const read = c.done(`frontier:r${r}`) ? readJsonFile(c.deps, out) : null;
     if (read) return read;
-    const done = ids.filter((id) => c.ticketOf(id).stage === 'delivered').map(numOf);
+    // #198: under ticket-pr only a merged ticket is done upstream (one left for a person to merge is not, yet)
+    const done = ids.filter((id) => c.ticketOf(id).stage === 'delivered' && (c.profile.integrate !== 'ticket-pr' || c.ticketOf(id).merges.length)).map(numOf);
     const stuck = ids.filter((id) => c.ticketOf(id).stage === 'stuck').map(numOf);
     const argv = ['node', js('frontier.mjs'), 'github', '--repo', c.cfg.repo, ...(done.length ? ['--done', done.join(',')] : []), ...(stuck.length ? ['--stuck', stuck.join(',')] : []), ...ids];
     c.emit(exec(`frontier:r${r}`, 'frontier', argv, { stdout: out }));
@@ -2325,7 +3159,7 @@ function stepStop(c) {
   if (!stop) return;
   const u = stop.usage ?? {};
   const reason = `run stopped at ${stop.stoppedBy.join(', ')} (rounds ${u.rounds}, spawns ${u.spawns}, hours ${u.hours === null || u.hours === undefined ? 'unknown' : Number(u.hours).toFixed(1)})`;
-  for (const [id, t] of Object.entries(c.state.tickets)) if (t.stage === 'candidate' || t.stage === 'expanding') stageTo(c, id, t, 'awaiting-ruling', { reason });
+  for (const [id, t] of Object.entries(c.state.tickets)) if (t.stage === 'candidate' || t.stage === 'expanding' || t.stage === 'waiting-upstream') stageTo(c, id, t, 'awaiting-ruling', { reason });
 }
 
 // ---- the finish -----------------------------------------------------------------------------------------------------
@@ -2334,21 +3168,50 @@ function stepFinish(c) {
   const { state, book, profile } = c;
   const tickets = Object.values(state.tickets);
   if (!tickets.every((t) => TERMINAL.includes(t.stage)) || book.dispatch || book.finished) return;
-  // One finish per target: under direct every line's target is the base, finished once (on its own line when the
-  // state has one, which is where its CI is recorded).
-  const byTarget = new Map();
-  for (const line of Object.keys(state.lines)) {
-    const target = c.target(line);
-    if (!byTarget.has(target) || line === target) byTarget.set(target, line);
+  // #197: the base-red episode (the revert PR) ends first — a revert left for a person goes on the human-work list
+  // instead — and the base must have been read at its current tip after the last merge, with a concluded verdict
+  if (profile.integrate === 'ticket-pr' && book.baseRed && !book.baseRed.left) return;
+  if (profile.integrate === 'ticket-pr' && profile.ci !== 'skip' && tickets.some((t) => t.merges.length)) {
+    if (book.baseSeen?.tip !== c.git.remote(c.cfg.base) || book.baseSeen?.verdict === 'running') return;
   }
-  let all = true;
-  for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
-  if (!all) return;
-  // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs and a CI read.
+  // #196: under integrate: ticket-pr there is no line delivery — every delivered ticket merged its own PR with CI
+  // green on the PR head, or is recorded left-for-human; the lines have no branch, base sync or full verification.
+  if (profile.integrate !== 'ticket-pr') {
+    // One finish per target: under direct every line's target is the base, finished once (on its own line when the
+    // state has one, which is where its CI is recorded).
+    const byTarget = new Map();
+    for (const line of Object.keys(state.lines)) {
+      const target = c.target(line);
+      if (!byTarget.has(target) || line === target) byTarget.set(target, line);
+    }
+    let all = true;
+    for (const [target, line] of byTarget) if (!finishLine(c, line, target)) all = false;
+    if (!all) return;
+  }
+  // The gates of the stop and the finish (gates.mjs); the finish's assertions assume aggregate PRs (or ticket-level
+  // PRs, #200: delivered by its own definition, no line checks) and a CI read.
   const gates = [];
   if (state.stop) gates.push(c.emit(OPERATIONS.gate(c, { gate: 'stopped' })));
-  if (profile.integrate === 'aggregate-pr' && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
+  if (['aggregate-pr', 'ticket-pr'].includes(profile.integrate) && profile.ci === 'read') gates.push(c.emit(OPERATIONS.gate(c, { gate: 'finish' })));
   if (gates.some(Boolean)) return;
+  // #200: the PRs left for a person get their body polished (ASKING section 6); the ones merged here are not
+  const rows = profile.integrate === 'ticket-pr' ? prRows(c) : null;
+  const polish = [];
+  for (const row of rows ?? []) {
+    if (row.lead !== null || row.merge !== 'left-for-human' || row.pr === null) continue;
+    polish.push(
+      c.emit(
+        judge(
+          `pr-polish:${row.ticket}`,
+          'pr-polish',
+          `Pull request ${row.pr} (${row.ticket}) is left for a person to merge. Polish its body as ASKING section 6 says — call the Skill tool with \`no-bullshit\` on it — keeping its \`Closes\` lines, and write it back with \`gh pr edit ${row.pr} --body-file <file>\`. Record polished.`,
+          ['polished'],
+          [doc('ASKING.md', 'section 6'), doc('FINISH.md', 'integrate: ticket-pr')],
+          { tickets: [row.ticket], meta: { pr: row.pr } },
+        ),
+      ),
+    );
+  }
   // #205: each line's observation ticket, checked once against the line's final tip
   for (const l of Object.keys(state.lines)) {
     const issue = book.flags[`line:${l}`]?.observationsIssue;
@@ -2366,6 +3229,25 @@ function stepFinish(c) {
     );
   }
   const skipped = simplifySkipped(c);
+  const after = [...c.actions.filter((a) => a.step === 'observations' || a.step === 'observations-final').map((a) => a.id), ...polish]; // #142: the raw tickets are filed first
+  if (rows) {
+    // #200: integrate: ticket-pr — every ticket was its own delivery; no simplify pass, base sync, full verification,
+    // review-guide.mjs or aggregate PR
+    const human = humanMerges(c, rows);
+    c.emit(
+      judge(
+        'wrap-up',
+        'wrap-up',
+        `Every ticket is at an end state; under integrate: ticket-pr each one was its own delivery (FINISH.md, integrate: ticket-pr): no simplify pass, no base sync, no full verification, no review-guide.mjs, no aggregate PR. Do what is left: the cleanup (clean-it-up), the final output with the reconciliation table — one row per ticket (a bundle's members each), with the PR link, its stack, the merge state and the PR head's CI result, as meta.tickets has them — run metrics and spawn breakdown, and the ledger's ended marker when standalone.${
+          human.length ? ` Put each PR left for a person on the human-work list with merge-gate.mjs's reason, a stack's in its merge order (the bottom first): ${human.map((x) => x.text).join('; ')}.` : ''
+        } Record done.`,
+        ['done'],
+        [doc('FINISH.md', 'integrate: ticket-pr')],
+        { after, meta: { tickets: rows, humanWork: human } },
+      ),
+    );
+    return;
+  }
   c.emit(
     judge(
       'wrap-up',
@@ -2376,11 +3258,75 @@ function stepFinish(c) {
       ['done'],
       [doc('FINISH.md', 'after the delivery of each line')],
       {
-        after: c.actions.filter((a) => a.step === 'observations' || a.step === 'observations-final').map((a) => a.id), // #142: the raw tickets are filed first
+        after,
         ...(skipped.length ? { meta: { simplifySkipped: skipped } } : {}),
       },
     ),
   );
+}
+
+/**
+ * #200: the reconciliation rows under integrate: ticket-pr, one per ticket — a bundle's members each, with the lead's
+ * PR (`lead` names it; null on the lead's own row): the PR number and link, the stack it is in (its tickets bottom
+ * first, null outside a stack), the merge state (merged, in-queue, left-for-human, waiting-upstream, not-merged), the
+ * merge SHA, the PR head's last CI result, and for a PR left for a person merge-gate.mjs's decision and reason.
+ */
+function prRows(c) {
+  const rows = [];
+  const depth = (k) => {
+    let n = 0;
+    for (let p = c.state.tickets[k]?.stackParent ?? null; p !== null && n < 100; p = c.state.tickets[p]?.stackParent ?? null) n += 1;
+    return n;
+  };
+  for (const [id, t] of Object.entries(c.state.tickets)) {
+    const others = stackOf(c, id);
+    const stack = others.length ? [...others, id].sort((a, b) => depth(a) - depth(b)) : null;
+    const merge =
+      t.stage === 'delivered'
+        ? t.merges.length
+          ? 'merged'
+          : 'left-for-human'
+        : t.stage === 'awaiting-merge'
+          ? 'in-queue'
+          : t.stage === 'waiting-upstream' || /^waits on /.test(String(t.reason ?? ''))
+            ? 'waiting-upstream'
+            : 'not-merged';
+    const pr = t.pr ?? null;
+    const ci = c.book.flags[id]?.prCi ?? null;
+    const ready = c.book.flags[id]?.prReady ? readJsonFile(c.deps, c.book.flags[id].prReady) : null;
+    const gate = merge === 'left-for-human' && ready?.gate ? { decision: ready.gate.decision, reason: ready.gate.reason } : null;
+    for (const m of c.group(id)) {
+      rows.push({
+        ticket: m,
+        lead: m === id ? null : id,
+        stage: t.stage,
+        pr,
+        url: pr !== null && c.cfg.repo ? `https://github.com/${c.cfg.repo}/pull/${pr}` : null,
+        stack,
+        merge,
+        mergeSha: t.merges.at(-1)?.sha ?? null,
+        ci: ci ? { verdict: ci.verdict, sha: ci.sha } : null,
+        gate,
+        reason: t.reason ?? t.leftForHuman ?? null,
+      });
+    }
+  }
+  return rows;
+}
+
+/** #200: the human-work list's merges — the PRs left for a person, a stack's bottom first, with merge-gate's reason. */
+function humanMerges(c, rows) {
+  const left = rows.filter((r) => r.lead === null && r.merge === 'left-for-human' && r.pr !== null);
+  const pos = (r) => (r.stack ? r.stack.indexOf(r.ticket) : 0);
+  left.sort((a, b) => String(a.stack?.[0] ?? a.ticket).localeCompare(String(b.stack?.[0] ?? b.ticket)) || pos(a) - pos(b));
+  return left.map((r) => ({
+    ticket: r.ticket,
+    pr: r.pr,
+    url: r.url,
+    stack: r.stack,
+    gate: r.gate,
+    text: `merge PR ${r.pr}${r.url ? ` (${r.url})` : ''} for ${r.ticket}${r.gate ? ` — merge-gate.mjs: ${r.gate.decision}, ${r.gate.reason}` : ''}${r.stack ? ` — stack ${r.stack.join(' ← ')}, merge position ${r.stack.indexOf(r.ticket) + 1} of ${r.stack.length}, with \`gh stack merge ${r.pr} --yes --squash\`` : ''}`,
+  }));
 }
 
 /** One line's simplify pass, base sync, full verification and delivery; true once all are done. */
@@ -2584,6 +3530,7 @@ export function next(path, reported, now, deps, { hold = false } = {}) {
   }
   stepObservations(c);
   stepExpandReassign(c);
+  stepTicketPr(c);
   stepIntegration(c);
   stepDispatch(c);
   stepFinish(c);
@@ -2840,6 +3787,7 @@ export function record(path, id, flags, now, deps) {
         const ruling = flags.value ? list(flags.value, '--value') : [];
         for (const x of tickets) stageIf(x, ruling.includes(x) ? 'awaiting-ruling' : 'candidate', ruling.includes(x) ? 'the expansion agent reported it as awaiting ruling' : undefined);
       } else if (meta.stage === 'fixing') {
+        delete flag(tid).prRed; // #197: a pr-red fix round ends with its report; a later fix round is the review's
         if (outcome === 'blocked') stageIf(tid, 'awaiting-ruling', flags.value ?? 'blocked: see the status record');
         else if (live().profile?.recheck === false) {
           if (flags.fixed === undefined && flags.unfixed === undefined) throw new UsageError(`${id}: under recheck: false the fix report needs --fixed and/or --unfixed`);
@@ -2969,6 +3917,38 @@ export function record(path, id, flags, now, deps) {
       delete flag(tickets[0]).sendBack;
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
       break;
+    // #196: the ticket-pr merge path's judges
+    case 'pr-red':
+      // #197: the fix round is pointed at the saved failing output, not at review findings
+      if (outcome === 'fix') flag(tickets[0]).prRed = { sha: meta.sha, failure: meta.failure ?? [] };
+      stageIf(tickets[0], outcome === 'fix' ? 'fixing' : outcome, flags.value ?? `the PR head's CI is red at ${meta.sha}`);
+      break;
+    case 'pr-no-ci':
+      if (outcome === 'ready') flag(tickets[0]).prCiWaived = meta.sha;
+      else stageIf(tickets[0], outcome, flags.value ?? 'no CI run covers the PR head');
+      break;
+    case 'pr-send': {
+      const [tid] = tickets;
+      if (outcome === 'left-for-human') {
+        if ((ticket(tid)?.leftForHuman ?? null) === null) S('set', tid, '--left-for-human', flags.value ?? `pull request ${meta.pr} is ready; the merge is left for a person`);
+        stageIf(tid, 'delivered');
+      } else if (outcome !== 'sent') stageIf(tid, outcome, flags.value ?? 'the merge could not be sent');
+      break;
+    }
+    case 'pr-diverged':
+      if (outcome === 'retry') reissue(meta.of);
+      else stageIf(tickets[0], outcome, flags.value ?? 'the stack diverged while pr-merge synced it');
+      break;
+    // #197: the base-red episode under integrate: ticket-pr
+    case 'revert-send':
+      if (book.baseRed) {
+        book.baseRed.sent = true; // sent, or left for a person: the base is read until it is green
+        if (outcome === 'left-for-human') book.baseRed.left = true; // the finish need not wait for a person's merge
+      }
+      break;
+    case 'base-red-unmatched':
+      if (book.baseRed) book.baseRed.settled = true; // the base keeps being read each wake-up until it is green (F2)
+      break;
     case 'timeout': {
       if (meta.stage === 'ci-fix') {
         ciFixEnded(issued.line, meta.agent, outcome === 'collected' ? 'collected' : 'stopped', true);
@@ -2990,6 +3970,7 @@ export function record(path, id, flags, now, deps) {
       else if (outcome === 'collected') {
         if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
         if (meta.stage === 'implementing' || meta.stage === 'fixing') delete flag(tid).agentReport; // #138: an earlier round's report is not this one's; the review has it written
+        if (meta.stage === 'fixing') delete flag(tid).prRed; // #197
         if (meta.stage === 'implementing') stageIf(tid, 'in-review');
         else if (meta.stage === 'expanding') for (const x of tickets) stageIf(x, 'candidate');
         else if (meta.stage === 'fixing') stageIf(tid, 'in-review');

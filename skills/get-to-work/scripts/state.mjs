@@ -23,6 +23,7 @@
 //   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
 //                           [--pr <number>] [--stack-parent <ticket>|none] [--waiting-on <ticket>,<ticket>|none]
+//                           [--left-for-human <text>|none]
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full [--tier-reason <reason>]...]
@@ -95,6 +96,9 @@
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
 //                                                          // implementer's per-finding report (recheck: false)
 //         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
+//         "leftForHuman": <text> | null,                   // #196, integrate: ticket-pr only: the ticket's PR is
+//                                                          // ready and the merge is left for a person (no merge
+//                                                          // authorization); missing in an older file: null
 //         "pr": <the ticket's own pull request number> | null,           // its ticket-level PR (#188)
 //         "stackParent": "<ticket>" | null,                // the ticket its PR is stacked on
 //         "waitingOn": ["<ticket>"],                       // the upstream tickets it waits to see merged
@@ -115,7 +119,9 @@
 //     "stop": null | { "at", "stoppedBy": [<limit>], "usage": { "rounds", "spawns", "hours" }, "note" } }
 //
 // Stages: candidate → expanding → implementing → in-review → fixing → queued → integrating → an end state:
-// delivered, stuck, awaiting-ruling. In flight means implementing through integrating. `stage` moves tickets only
+// delivered, stuck, awaiting-ruling. Under integrate: ticket-pr (#196) integrating goes on through two waiting
+// stages first: awaiting-ci (the PR head's CI is read) and awaiting-merge (the merge command went to the host, or
+// the merge is left for a person). In flight means implementing through integrating. `stage` moves tickets only
 // along these edges; every other move is refused:
 //   candidate     → expanding, implementing, awaiting-ruling, stuck
 //   expanding     → candidate, awaiting-ruling, stuck          (the expansion agent reported, or timed out twice)
@@ -123,15 +129,20 @@
 //   in-review     → fixing, queued, awaiting-ruling, stuck
 //   fixing        → in-review, awaiting-ruling, stuck          (the recheck after a fix round)
 //   queued        → integrating, awaiting-ruling, stuck
-//   integrating   → delivered, candidate (send back for a redo), awaiting-ruling, stuck
+//   integrating   → delivered, candidate (send back for a redo), awaiting-ci (#196), awaiting-ruling, stuck
+//   awaiting-ci   → awaiting-merge, fixing (the PR head's CI is red), awaiting-ruling, stuck
+//   awaiting-merge → delivered, awaiting-ruling, stuck
 //   delivered     → stuck                                       (red-light revert, or upstream reverted)
 //   stuck, awaiting-ruling → nothing
 // and these guards hold on top, each refused with what is missing (the profile's defaults shown; see Profile):
 //   - implementing from candidate needs the acceptance snapshot's sha256 (`set --snapshot`);
 //   - queued needs a `pass` from a prove-it review (or a minimal review recorded with review tier light) as the latest review
 //     recorded since the ticket last entered in-review; fixing needs a `fix` there, and at most two fix rounds per ticket (a third is refused: mark it
-//     stuck);
-//   - delivered needs a merge SHA recorded with `merge`;
+//     stuck); fixing from awaiting-ci (#196) needs no review verdict — the PR head's red CI is the reason — but
+//     still counts a fix round and stays under the cap;
+//   - awaiting-ci and awaiting-merge are the ticket-pr merge path: entering either needs profile integrate: ticket-pr;
+//   - delivered needs a merge SHA recorded with `merge`; under integrate: ticket-pr a left-for-human record
+//     (`set --left-for-human`) counts too (#196): the PR is ready and a person merges it;
 //   - integrating → candidate (send back) at most once per ticket (a second is refused: mark it stuck);
 //   - an end state never returns to a stage in flight or to candidate; implementing and fixing never skip
 //     in-review to queued or integrating.
@@ -155,10 +166,11 @@
 //              findings in the report — only with that issue recorded (`set --unfixed-issue`).
 //   expand     agent (default) | skip: the ticket's own done-when is the acceptance; expanding is refused. The
 //              snapshot sha256 is still needed for implementing.
-//   integrate  aggregate-pr (default, whichever the tracker) | direct (merge straight into the base branch) |
-//              ticket-pr (a pull request per ticket, #188): written only when the state's tracker is github (init
-//              --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing to
-//              aggregate-pr), by `profile` and by `import` alike;
+//   integrate  ticket-pr (a pull request per ticket, #188; the default when the state's tracker is github, #201) |
+//              aggregate-pr (the default for a local or unknown tracker: a state from before #188 keeps it) | direct
+//              (merge straight into the base branch). ticket-pr is written only when the state's tracker is github
+//              (init --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing
+//              to aggregate-pr), by `profile` and by `import` alike;
 //   ci         read (default) | skip;
 //   simplify   true (default) | false.
 //              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
@@ -212,7 +224,8 @@
 //   set       Fills a ticket's free-text, snapshot and unfixed-issue fields, and its ticket-level PR fields: `--pr`
 //             the PR number (1 or more), `--stack-parent` the ticket it is stacked on, `--waiting-on` the upstream
 //             tickets it waits on (`none` clears either). Each ticket named must be another ticket of this state,
-//             else refused (3); a ticket named twice in `--waiting-on` is bad input (2).
+//             else refused (3); a ticket named twice in `--waiting-on` is bad input (2). `--left-for-human <text>`
+//             (#196) records that the ticket's ready PR is left for a person to merge (`none` clears it).
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
 //             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
@@ -228,8 +241,8 @@
 //             counts is not a state file (1). Without them each is null. Adds one to usage `reviewRounds`.
 //   report    Records the implementer's per-finding report of a fix round; only in fixing, and each finding id of
 //             the latest (fix) review exactly once.
-//   merge     Records a merge SHA; only in integrating, or in delivered for a red-light fix's `-ci` merge. Also the
-//             line's tip.
+//   merge     Records a merge SHA; only in integrating or awaiting-merge (#196, the ticket-pr merge path), or in
+//             delivered for a red-light fix's `-ci` merge. Also the line's tip.
 //   assign    Records an assignment from `deadline.mjs record`'s output (record.json) with the agent type, for
 //             each ticket the agent covers. `--worktree` is required with a { head, tree } fingerprint and not
 //             allowed with { expansions }. The agent id is filled by `agent` after the spawn. `--reassign` marks a
@@ -289,16 +302,24 @@ import { GATES, TARGETS, runGate } from './gates.mjs';
 export const FORMAT = 'sorry-matt/state@1';
 /** The review tiers of prove-it's tier.mjs (#139): a review records the one tick judged. */
 export const TIERS = ['light', 'standard', 'full'];
-export const STAGES = ['candidate', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'delivered', 'stuck', 'awaiting-ruling'];
+export const STAGES = ['candidate', 'waiting-upstream', 'expanding', 'implementing', 'in-review', 'fixing', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered', 'stuck', 'awaiting-ruling'];
 export const TERMINAL = ['delivered', 'stuck', 'awaiting-ruling'];
 const EDGES = {
-  candidate: ['expanding', 'implementing', 'awaiting-ruling', 'stuck'],
+  candidate: ['waiting-upstream', 'expanding', 'implementing', 'awaiting-ruling', 'stuck'],
+  // #198, integrate: ticket-pr: a ticket that cannot be stacked waits for its upstreams (waitingOn) to merge, then
+  // goes back to candidate and starts from the new base
+  'waiting-upstream': ['candidate', 'awaiting-ruling', 'stuck'],
   expanding: ['candidate', 'awaiting-ruling', 'stuck'],
   implementing: ['in-review', 'awaiting-ruling', 'stuck'],
   'in-review': ['fixing', 'queued', 'awaiting-ruling', 'stuck'],
   fixing: ['in-review', 'awaiting-ruling', 'stuck'],
   queued: ['integrating', 'awaiting-ruling', 'stuck'],
-  integrating: ['delivered', 'candidate', 'awaiting-ruling', 'stuck'],
+  // #199, integrate: ticket-pr: back to in-review for a recheck when the base sync changed the ticket's own change (a
+  // resolved conflict, or a stack rebase whose patch-id moved)
+  integrating: ['delivered', 'candidate', 'awaiting-ci', 'in-review', 'awaiting-ruling', 'stuck'],
+  // #196, integrate: ticket-pr: the PR head's CI, then the merge the host (or a person) sends
+  'awaiting-ci': ['awaiting-merge', 'fixing', 'awaiting-ruling', 'stuck'],
+  'awaiting-merge': ['delivered', 'awaiting-ruling', 'stuck'],
   delivered: ['stuck'],
   stuck: [],
   'awaiting-ruling': [],
@@ -328,7 +349,12 @@ const PROFILE_VALUES = {
 };
 /** The trackers a run can record (#188), as acceptance.mjs names them; null in the state: unknown. */
 export const TRACKERS = ['github', 'local'];
-export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
+/**
+ * #201: the integrate default by the run's tracker — ticket-pr on GitHub; Local Markdown, and an unknown tracker (a
+ * state from before #188), keep aggregate-pr. PROFILE_DEFAULTS holds the tracker-less one.
+ */
+export const integrateDefault = (tracker) => (tracker === 'github' ? 'ticket-pr' : PROFILE_DEFAULTS.integrate);
+export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...(state.profile ?? {}) });
 const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];
@@ -410,6 +436,7 @@ const newTicket = (line) => ({
   reviews: [],
   fixReports: [],
   unfixedIssue: null,
+  leftForHuman: null,
   pr: null,
   stackParent: null,
   waitingOn: [],
@@ -540,6 +567,8 @@ function check(state, bad) {
       'is not a list of { fixed, unfixed, after }',
     );
     need(t.unfixedIssue === null || isId(t.unfixedIssue), `${w}.unfixedIssue`, 'is not an issue id or null');
+    // #196: a state written before has no key: read as null
+    need(t.leftForHuman === undefined || optText(t.leftForHuman), `${w}.leftForHuman`, 'is not text or null');
     // #188: a state written before has none of the three: read as null, null, []
     need(t.pr == null || (Number.isInteger(t.pr) && t.pr > 0), `${w}.pr`, 'is not a pull request number or null');
     need(t.waitingOn === undefined || Array.isArray(t.waitingOn), `${w}.waitingOn`, 'is not a list of tickets');
@@ -629,9 +658,21 @@ function stageGuard(id, t, to, from, profile) {
   if (to === 'implementing' && from === 'candidate' && t.snapshotSha256 === null) {
     return `${id}: implementing needs the acceptance snapshot's sha256 recorded (set --snapshot)`;
   }
+  // #196: the two waiting stages are the ticket-pr merge path
+  if ((to === 'awaiting-ci' || to === 'awaiting-merge' || to === 'waiting-upstream') && profile.integrate !== 'ticket-pr') {
+    return `${id}: ${to} is the ticket-pr merge path; this run's profile integrate is ${profile.integrate}`;
+  }
+  // #198: a ticket waits on named upstreams; it leaves the wait only once none is left
+  if (to === 'waiting-upstream' && !(t.waitingOn ?? []).length) return `${id}: waiting-upstream needs the upstreams it waits on recorded (set --waiting-on)`;
+  if (from === 'waiting-upstream' && to === 'candidate' && (t.waitingOn ?? []).length) {
+    return `${id}: candidate: it still waits on ${t.waitingOn.join(', ')} (set --waiting-on none once they are merged)`;
+  }
   if (to === 'fixing') {
-    const r = currentReview(t);
-    if (!r || r.verdict !== 'fix') return `${id}: fixing needs the latest review since it entered in-review to be fix; it is ${r ? r.verdict : 'missing'}`;
+    // #196: fixing from awaiting-ci needs no review verdict — the PR head's red CI is the reason
+    if (from !== 'awaiting-ci') {
+      const r = currentReview(t);
+      if (!r || r.verdict !== 'fix') return `${id}: fixing needs the latest review since it entered in-review to be fix; it is ${r ? r.verdict : 'missing'}`;
+    }
     if (t.fixRounds >= profile.fixRounds) return `${id}: fixing: ${t.fixRounds} of ${profile.fixRounds} fix rounds used; mark it stuck${profile.onUnfixed === 'file-issue' ? ', or file an issue and queue it' : ''}`;
   }
   if (to === 'queued') {
@@ -641,7 +682,11 @@ function stageGuard(id, t, to, from, profile) {
     if (viaReview === null || from !== null || profile.recheck) return viaReview;
     return queueFromFix(id, t, profile) === null ? null : viaReview;
   }
-  if (to === 'delivered' && !t.merges.length) return `${id}: delivered needs a merge SHA; none is recorded (record it with merge)`;
+  if (to === 'delivered' && !t.merges.length) {
+    // #196, integrate: ticket-pr: a ready PR left for a person to merge is delivered too
+    if (profile.integrate === 'ticket-pr' && (t.leftForHuman ?? null) !== null) return null;
+    return `${id}: delivered needs a merge SHA; none is recorded (record it with merge${profile.integrate === 'ticket-pr' ? ', or record the ready PR as left for a person with set --left-for-human' : ''})`;
+  }
   return null;
 }
 
@@ -920,7 +965,7 @@ function importLedger(path, rest, flags, ctx) {
     state.usage.startedNote = `imported ${ctx.now}: the time before the import is not counted`;
   }
   if (seed.stop !== undefined) state.stop = seed.stop;
-  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, ...seed.profile };
+  if (seed.profile !== undefined && seed.profile !== null) state.profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...seed.profile };
   let records = 0;
   if (flags.ledger !== undefined) {
     let text;
@@ -947,7 +992,7 @@ function importLedger(path, rest, flags, ctx) {
   if (integrate) throw new Refusal(`seed: ${integrate}`);
   const profile = profileOf(state);
   for (const [id, t] of Object.entries(state.tickets)) {
-    if (!['queued', 'integrating', 'delivered'].includes(t.stage)) continue;
+    if (!['queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered'].includes(t.stage)) continue;
     const guard = stageGuard(id, t, t.stage === 'delivered' ? 'delivered' : 'queued', null, profile);
     if (guard) throw new Refusal(`seed: ${guard}`);
   }
@@ -955,8 +1000,8 @@ function importLedger(path, rest, flags, ctx) {
   return { revision: state.revision, run: state.run, tickets: Object.keys(state.tickets).length, lines: Object.keys(state.lines).length, localRecords: records };
 }
 
-/** A ticket's own PR fields (#188), as an older file without them reads. */
-const prFields = (t) => ({ pr: t.pr ?? null, stackParent: t.stackParent ?? null, waitingOn: t.waitingOn ?? [] });
+/** A ticket's own PR fields (#188, #196), as an older file without them reads. */
+const prFields = (t) => ({ pr: t.pr ?? null, stackParent: t.stackParent ?? null, waitingOn: t.waitingOn ?? [], leftForHuman: t.leftForHuman ?? null });
 
 /** The state as `show` prints it: the file, with the fields an older file lacks read as their defaults (#188). */
 const show = (state) => ({
@@ -1070,6 +1115,7 @@ function set(path, rest, flags, ctx) {
     deliverable: 'deliverable',
     verification: 'verification',
     'unfixed-issue': 'unfixedIssue',
+    'left-for-human': 'leftForHuman',
     pr: 'pr',
     'stack-parent': 'stackParent',
     'waiting-on': 'waitingOn',
@@ -1079,6 +1125,7 @@ function set(path, rest, flags, ctx) {
   if (flags.snapshot !== undefined && !/^[0-9a-f]{64}$/.test(flags.snapshot)) throw new UsageError('--snapshot: expected the 64-digit sha256 of the acceptance snapshot');
   if (flags['unfixed-issue'] !== undefined && !isId(flags['unfixed-issue'])) throw new UsageError('--unfixed-issue: expected an issue id');
   const values = { ...flags };
+  if (flags['left-for-human'] === 'none') values['left-for-human'] = null;
   if (flags.pr !== undefined) {
     if (!/^[1-9]\d*$/.test(flags.pr)) throw new UsageError(`--pr: expected a pull request number, 1 or more, got ${JSON.stringify(flags.pr)}`);
     values.pr = Number(flags.pr);
@@ -1152,7 +1199,7 @@ function profile(path, rest, flags, ctx) {
     if (moved) {
       throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
     }
-    const profile = { ...PROFILE_DEFAULTS, ...given };
+    const profile = { ...PROFILE_DEFAULTS, integrate: integrateDefault(state.tracker ?? null), ...given };
     const integrate = integrateProblem(profile, state.tracker ?? null);
     if (integrate) throw new Refusal(integrate);
     state.profile = profile;
@@ -1190,8 +1237,8 @@ function merge(path, rest, flags, ctx) {
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, [rest[0]]);
     const t = state.tickets[id];
-    if (t.stage !== 'integrating' && t.stage !== 'delivered') {
-      throw new Refusal(`${id}: a merge SHA is recorded in integrating (or delivered, for a -ci merge); it is ${t.stage}`);
+    if (t.stage !== 'integrating' && t.stage !== 'awaiting-merge' && t.stage !== 'delivered') {
+      throw new Refusal(`${id}: a merge SHA is recorded in integrating or awaiting-merge (or delivered, for a -ci merge); it is ${t.stage}`);
     }
     if (t.merges.some((m) => m.sha === merged)) throw new Refusal(`${id}: ${merged} is already recorded`);
     t.merges.push({ sha: merged, at: ctx.now });
@@ -1446,7 +1493,7 @@ const COMMANDS = {
   bundle: [bundle, NOW],
   line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
-  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', pr: 'one', 'stack-parent': 'one', 'waiting-on': 'one', ...NOW }],
+  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', 'left-for-human': 'one', pr: 'one', 'stack-parent': 'one', 'waiting-on': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
   review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', covered: 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],

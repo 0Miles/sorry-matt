@@ -22,6 +22,7 @@ import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
 import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
+import { main as ciMain } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
 import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
 
@@ -57,6 +58,10 @@ export const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id
  */
 export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"' } = {}) {
   const local = tracker === 'local';
+  // #195: under integrate: ticket-pr the line has no integration branch and no worktree (#193): every ticket is its
+  // own pull request, cut from origin/<base>. The world then makes neither, records the line with no tip, and seeds
+  // the state's tracker (state.mjs refuses the profile without a GitHub run).
+  const ticketPr = profile?.integrate === 'ticket-pr';
   const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
   // the long form: on a Windows runner tmpdir() is an 8.3 short path (RUNNER~1), git prints the long one
   const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-tick-')));
@@ -80,8 +85,10 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'remote', 'add', 'origin', origin);
   git(repo, 'push', '-q', '-u', 'origin', 'main');
-  git(repo, 'worktree', 'add', '-q', '-b', LINE, intWt, 'main');
-  git(intWt, 'push', '-q', '-u', 'origin', LINE);
+  if (!ticketPr) {
+    git(repo, 'worktree', 'add', '-q', '-b', LINE, intWt, 'main');
+    git(intWt, 'push', '-q', '-u', 'origin', LINE);
+  }
   const runs = join(dir, 'runs');
   mkdirSync(runs, { recursive: true });
   const path = join(runs, 'r1.state.json');
@@ -102,6 +109,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     ids: [ID1, ID2],
     titles: { [ID1]: 'First thing', [ID2]: 'Second thing' },
     comments: {}, // GitHub: ticket id → the issue's comments, as `gh issue view --json comments` gives them
+    issueState: {}, // #196: ticket id → the issue's state for `gh issue view --json state` (default CLOSED: `Closes` fired)
     blockers: {},
     acceptance: {},
     ci: () => 'green',
@@ -128,9 +136,9 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   h.state = () => JSON.parse(readFileSync(path, 'utf8'));
   h.tick = (...args) => tick([...args, '--now', h.iso()]);
 
-  h.S('init', '--run', 'r1');
+  h.S('init', '--run', 'r1', ...(ticketPr ? ['--tracker', 'github'] : []));
   h.S('add', ID1, ID2, '--line', h.line);
-  h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
+  if (!ticketPr) h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
   if (profile) h.S('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
   write(join(W, 'files', `${numOf(ID1)}.txt`), 'a.txt\n');
   write(join(W, 'files', `${numOf(ID2)}.txt`), 'b.txt\n');
@@ -155,7 +163,29 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         : verdict === 'no-run'
           ? []
           : [{ id: 7, workflow: 'check', status: 'completed', conclusion: verdict === 'red' ? 'failure' : 'success' }];
-    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [] };
+    // #197: `failed` holds the red runs' ids, as ci.mjs verdict reports them for `gh run view <id> --log-failed`
+    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [], failed: verdict === 'red' ? [7] : [] };
+  };
+  /** #197: `ci.mjs base <branch>` — origin's tip of the base branch, judged by h.ci as a verdict is. */
+  h.base = (args) => {
+    const branch = args.filter((x, k, all) => x !== 'base' && x !== '--repo' && all[k - 1] !== '--repo').at(-1);
+    const sha = git(h.repo, 'rev-parse', `origin/${branch}`);
+    const v = h.verdict(['verdict', branch, sha]);
+    return { ...v, command: 'base' };
+  };
+  /** #197: the run list the real `ci.mjs earliest-red` reads — one row per first-parent SHA of the branch, from h.ci. */
+  h.ghRuns = (args) => {
+    if (args[0] !== 'run' || args[1] !== 'list') throw new Error(`no gh stub for earliest-red: gh ${args.join(' ')}`);
+    const branch = args[args.indexOf('--branch') + 1];
+    const commit = args.includes('--commit') ? args[args.indexOf('--commit') + 1] : null;
+    const shas = commit ? [commit] : git(h.repo, 'log', '--first-parent', '--format=%H', `origin/${branch}`).split('\n').filter(Boolean);
+    const rows = [];
+    for (const sha of shas) {
+      const v = h.ci(branch, sha);
+      if (v === 'no-run') continue;
+      rows.push({ headSha: sha, databaseId: 7, workflowName: 'check', event: 'push', status: v === 'running' ? 'in_progress' : 'completed', conclusion: v === 'red' ? 'failure' : v === 'green' ? 'success' : v === 'running' ? null : v });
+    }
+    return JSON.stringify(rows);
   };
   h.frontier = (args) => {
     const flag = (name) => (args.includes(name) ? new Set(args[args.indexOf(name) + 1].split(',')) : new Set());
@@ -179,6 +209,96 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     return out;
   };
 
+  // #195: the `gh` seam of integrate.mjs (pr-open, pr-push, gh stack): the canned pull requests, head branch → PR.
+  // Every call is logged in h.ghCalls, so a replay can assert what was sent (`gh pr create --draft …`).
+  h.prs = {};
+  h.prNext = 11;
+  h.ghCalls = [];
+  h.gh = (args, cwd) => {
+    h.ghCalls.push(args);
+    // #198: `gh stack`, run by integrate.mjs in the ticket worktree (cwd): init and add record the stack; submit --auto
+    // pushes and opens the stacked draft PR on the parent ticket's branch (idempotent); push pushes; sync is h.stackSync
+    if (args[0] === 'stack') {
+      const branch = cwd ? git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD') : null;
+      // #199 live run: as gh stack does — view fails off a stack, init adopts, add creates the branch and checks it out
+      h.stacked ??= new Set();
+      if (args[1] === 'view') {
+        if (!h.stacked.has(branch)) throw new Error(`current branch "${branch}" is not part of a stack`);
+        return '';
+      }
+      if (args[1] === 'init') {
+        for (const b of args.slice(2)) h.stacked.add(b);
+        return '';
+      }
+      if (args[1] === 'add') {
+        git(cwd, 'checkout', '-q', '-b', args[2]);
+        h.stacked.add(args[2]);
+        return '';
+      }
+      if (args[1] === 'push' || args[1] === 'submit') git(cwd, 'push', '-q', '-f', '-u', 'origin', branch); // gh stack pushes with --force-with-lease
+      if (args[1] === 'submit' && !h.prs[branch]) {
+        const st = h.state();
+        const t = Object.values(st.tickets).find((x) => x.branch === branch);
+        const base = t?.stackParent ? st.tickets[t.stackParent].branch : 'main';
+        h.prs[branch] = { number: h.prNext++, base, title: null, body: null, draft: true, stacked: true };
+      }
+      if (args[1] === 'sync') {
+        // #199: the merged layers below are dropped and the branch rebased onto origin's main (h.stackSync to change it)
+        if (h.stackSync) return h.stackSync(cwd, branch);
+        git(cwd, 'fetch', '-q', 'origin');
+        git(cwd, 'rebase', '-q', 'origin/main');
+        h.syncs = (h.syncs ?? 0) + 1;
+        return '';
+      }
+      return '';
+    }
+    if (args[0] === 'pr' && args[1] === 'list') {
+      const pr = h.prs[args[args.indexOf('--head') + 1]];
+      return JSON.stringify(pr ? [{ number: pr.number }] : []);
+    }
+    if (args[0] === 'pr' && args[1] === 'create') {
+      const head = args[args.indexOf('--head') + 1];
+      const number = h.prNext++;
+      h.prs[head] = { number, base: args[args.indexOf('--base') + 1], title: args[args.indexOf('--title') + 1], body: args[args.indexOf('--body') + 1], draft: args.includes('--draft') };
+      return `https://github.com/${REPO}/pull/${number}\n`;
+    }
+    if (args[0] === 'pr' && args[1] === 'edit') return '';
+    // #196: the pr-merge seam — ready, the merge-gate queries, and the merged PR's view
+    if (args[0] === 'pr' && args[1] === 'ready') {
+      const pr = Object.values(h.prs).find((x) => x.number === Number(args[2]));
+      if (pr) pr.draft = false;
+      return '';
+    }
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const pr = Object.values(h.prs).find((x) => x.number === Number(args[2]));
+      return JSON.stringify({ mergeCommit: pr?.merged ? { oid: pr.mergeOid } : null, state: pr?.merged ? 'MERGED' : 'OPEN' });
+    }
+    if (args[0] === 'repo' && args[1] === 'view') return JSON.stringify({ nameWithOwner: REPO });
+    if (args[0] === 'api' && args[1] === 'graphql') return JSON.stringify(h.mergeQueue ?? { data: { repository: { mergeQueue: null } } });
+    throw new Error(`no gh stub for: gh ${args.join(' ')}`);
+  };
+  /**
+   * #196: GitHub merges a ticket's PR — origin's main takes the branch, and `gh pr view` reports MERGED. #197: as
+   * GitHub's "Create a merge commit" does, always a merge commit whose first parent is main, never a fast-forward:
+   * the base's first-parent history is then the merges, which the base-red attribution walks.
+   */
+  h.mergeBranch = (branch) => {
+    const wt = join(h.dir, `merge-${(h.mergeN = (h.mergeN ?? 0) + 1)}`);
+    git(h.repo, 'fetch', '-q', 'origin');
+    git(h.repo, 'worktree', 'add', '-q', '--detach', wt, 'origin/main');
+    git(wt, 'merge', '-q', '--no-ff', '-m', `Merge pull request #${h.prs[branch]?.number ?? 0} from ${branch}`, branch);
+    git(wt, 'push', '-q', 'origin', 'HEAD:main');
+    git(h.repo, 'worktree', 'remove', '--force', wt);
+    git(h.repo, 'fetch', '-q', 'origin');
+  };
+  h.mergePr = (tid) => {
+    const branch = h.state().tickets[tid].branch;
+    h.mergeBranch(branch);
+    const pr = h.prs[branch];
+    pr.merged = true;
+    pr.mergeOid = git(h.repo, 'rev-parse', 'origin/main');
+  };
+
   // ---- the host ----
   h.exec = (a) => {
     const [cmd, ...args] = a.argv;
@@ -189,13 +309,22 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
       const rest = args.slice(1);
       let r;
       if (script === 'state.mjs') r = stateMain(rest[0] === 'check' ? rest : [...rest, '--now', h.iso()]);
-      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()]);
+      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()], { gh: h.gh });
       else if (script === 'verify.mjs') r = verifyMain([...rest, '--now', h.iso()]);
       else if (script === 'deadline.mjs') r = deadlineMain(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
       else if (script === 'brief.mjs') r = briefMain(rest);
       else if (script === 'overlap.mjs') r = overlapMain(rest);
       else if (script === 'tier.mjs') r = tierMain(rest, tierDeps(a.cwd ?? process.cwd())); // #139: run for real, on the repo
-      else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
+      else if (script === 'ci.mjs' && rest[0] === 'base') r = { code: 0, out: JSON.stringify(h.base(rest)) };
+      else if (script === 'ci.mjs' && rest[0] === 'earliest-red') {
+        // #197: run for real on the repo, the network canned (gh run list rows built from h.ci per SHA)
+        r = ciMain(rest, {
+          read: (p) => readFileSync(p, 'utf8'),
+          git: (cwd, args2) => execFileSync('git', ['-C', cwd, ...args2], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: ENV }),
+          gh: h.ghRuns,
+          cwd: process.cwd(),
+        });
+      } else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
       else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
       else if (script === 'acceptance.mjs') r = { code: 0, out: JSON.stringify(h.accept(rest)) };
       else throw new Error(`no stand-in for ${script}`);
@@ -212,14 +341,16 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         // gh issue view off a TTY: --json gives the fields asked for; --comments prints the comments only, not the body
         const id = `#${args[2]}`;
         const comments = h.comments[id] ?? [];
+        if (args[1] === 'close') h.issueState[id] = 'CLOSED'; // #196: the idempotent close after the merge
         if (args.includes('--json')) {
           const fields = args[args.indexOf('--json') + 1].split(',');
-          const all = { title: h.titles[id], body: `The ticket text of ${id}.`, comments };
+          const all = { title: h.titles[id], body: `The ticket text of ${id}.`, comments, state: h.issueState[id] ?? 'CLOSED' };
           out = `${JSON.stringify(Object.fromEntries(fields.map((f) => [f, all[f]])))}\n`;
         } else if (args.includes('--comments')) out = comments.map((x) => `author:\t${x.author.login}\n--\n${x.body}\n--\n`).join('');
         else out = `title:\t${h.titles[id]}\n--\nThe ticket text of ${id}.\n`;
       }
       else if (args[0] === 'run' && args[1] === 'list') out = '[]';
+      else if (args[0] === 'run' && args[1] === 'view') out = `log of run ${args[2]}\n`; // #197: gh run view <id> --log-failed
     } else throw new Error(`unknown command ${cmd}`);
     if (a.stdout) write(a.stdout, out);
     return code;
@@ -276,6 +407,13 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     'deliver-ticket': () => 'done',
     'deliver-line': () => 'done',
     simplify: () => ({ outcome: 'none', value: 'looked at the line: nothing to reuse or remove' }),
+    // #196: the host holds merge authorization by default: it sends the merge and GitHub merges at once
+    'pr-send': (a) => {
+      h.mergePr(a.tickets[0]);
+      return 'sent';
+    },
+    'gh-stack-missing': () => 'listed', // #198
+    'pr-polish': () => 'polished', // #200
     'wrap-up': () => 'done',
     'wakeup-end': () => 'done',
   };

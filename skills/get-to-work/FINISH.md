@@ -4,6 +4,27 @@ This file is the finish after the pipeline stops: read it in full when a tick `j
 order of the three line-level gates and the commands of the base sync and the full verification; this file holds only
 what you judge or write.
 
+## `integrate: ticket-pr`
+
+Under `ticket-pr` (#200) every ticket is its own delivery: there is no integration branch and no aggregate PR. The
+three line-level gates below (simplify pass, base sync, full verification), `review-guide.mjs` and the aggregate PR are
+all left out — the base is synced into each PR before its merge (`pr-merge`'s push phase), duplication across tickets
+is left to a later run, and the full verification is each PR head's CI before its merge. tick's finish gate checks
+#196's `delivered`: a merge SHA, or a record that the PR is left for a person, and a PR recorded for every delivered
+ticket.
+
+- **Reconciliation table**: the `wrap-up`'s `meta.tickets` has one row per ticket (each member of a bundle its own
+  row, `lead` naming the lead and carrying the lead's one PR): the PR link, the stack it is in (bottom first), the
+  merge state (`merged`, `in-queue`, `left-for-human`, `waiting-upstream`, `not-merged`), the merge SHA and the PR
+  head's CI result. Write it into the final output's reconciliation table as it is.
+- **PRs left for a person**: each of `meta.humanWork` goes on the human-work list with `merge-gate.mjs`'s decision and
+  reason; one stack's in its merge order (the bottom first), with `gh stack merge <PR> --yes --squash`.
+- **Polish pass**: only a PR left for a person gets tick's `pr-polish` judge: per `ASKING.md` section 6, call the
+  Skill tool with `no-bullshit` on the PR body (its `Closes` lines kept) and write it back with
+  `gh pr edit <PR> --body-file <file>`. The PRs this run merged itself are not polished.
+- No ticket is still at `awaiting-merge` at the finish: tick waits on the fallback wake-up until the merge queue has
+  merged.
+
 Every line first passes the **three line-level gates**, in a fixed order:
 
 1. **Simplify pass**: one quality pass over the whole line's changes — reuse, simplification, efficiency, level of
@@ -101,8 +122,7 @@ final tip, mark the item in that ticket "still present" or "resolved by <ticket>
 **Final output**: each line's aggregate PR or integration branch, the synced base SHA (or that it is unsynced), the full
 verification's SHA and source, the **reconciliation table** covering every initial ticket (`state.mjs show`, with each
 ticket's send-back count, each row pointing to its status record; each member of a bundle has its own row, with the
-lead's end state, merge SHA and status record, and says which bundle it is in; under `ticket-pr` each member of a
-bundle shows that bundle's one PR link and merge state <!-- pending #200 -->), **this run's metrics and budget** (the state's
+lead's end state, merge SHA and status record, and says which bundle it is in), **this run's metrics and budget** (the state's
 `usage`, with `stop` after a stop) with the **spawn breakdown**, the authorization outcomes (ledger field 5), the
 **lines that skipped the simplify pass** (the `wrap-up`'s `meta.simplifySkipped`, each with its reason; left out when
 there are none), and the list of raw tickets filed during the run, asking the user to run `/triage`. The spawn breakdown is `byType` and

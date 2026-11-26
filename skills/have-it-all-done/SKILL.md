@@ -162,8 +162,9 @@ It includes:
 - **The human-work list:** every item carries steps someone can follow to completion. Where the steps are many or
   run through a third-party interface, call the Skill tool with `wizard` to generate an interactive wizard and
   point the list at it.
-- Each line's delivery (a GitHub aggregate PR, or a Local Markdown integration branch and tip SHA) and the
-  **reconciliation table**, with each ticket's send-back count and where its send-back records are.
+- The delivery (GitHub: each ticket's PR and its merge state, or each line's aggregate PR under `aggregate-pr`;
+  Local Markdown: each line's integration branch and tip SHA) and the **reconciliation table**, with each ticket's
+  send-back count and where its send-back records are.
 - Raw tickets created through filing along the way, a recommendation that the user run `/triage`, and every
   awaiting-ruling item.
 - **This run's metrics and budget** (the limits in the ledger's ninth field, `usage` and `stop` in `get-to-work`'s
@@ -174,7 +175,7 @@ Once the report is out, if step 5 will not run, change the ledger's first line t
 
 Done when: all seven categories are present; the authorization outcomes match the actions actually sent, row by row;
 every line has a traceable deliverable and acceptance evidence that lets someone outside the run decide whether
-to merge its aggregate PR or local integration branch; every human-work item has followable steps or a wizard; no
+to merge a PR left for a person, an aggregate PR or a local integration branch; every human-work item has followable steps or a wizard; no
 section of the report duplicates text that is of record elsewhere; when step 5 does not run, the ledger's first
 line is the ended marker.
 

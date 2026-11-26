@@ -53,5 +53,30 @@
 6. **兩輪仍紅，對不到票**（judge 已沒有 `unmatched`）：這條線**驗證未過**，record `failed`：tick 把它的候選與沒派過的票標待裁決、佇列不再
    為紅燈暫停。不送 `gh pr merge`、不進 merge queue，總 PR 寫明並留給人合併，人工作業清單列出失敗的 job。
 
+## `integrate: ticket-pr` 的處置
+
+`integrate: ticket-pr`（#197）下沒有整合分支，紅燈分兩種，上面的逐點流程不適用：
+
+- **PR 的 CI 紅**（`awaiting-ci` 讀到 `red`）：這個紅只屬於這張票，不跑 `ci.mjs earliest-red`、不找最早的紅
+  SHA。tick 先以 `gh run view <id> --log-failed` 存下失敗輸出（`<id>` 取 verdict 輸出的 `failed`），再發
+  `pr-red` judge。record `fix`：CI 失敗就是 finding，走集中修正——交回那張票的原 agent（在了就 SendMessage，
+  不在就照常重 spawn），指著存下的失敗輸出而不是審查 findings，受票的修正輪上限與 `timeout-fix` 時限約束。
+  修完的 commit 由 tick 以 `integrate.mjs pr-push` 推回同一支 PR，票回到 `awaiting-ci`，在新推出的 head 重讀
+  verdict。修正輪用完仍紅就 record stuck 或 awaiting-ruling。
+- **合併後基底紅**（任一張票的 merge 已記錄後，tick 每次喚醒以 `ci.mjs base` 讀基底，讀到 `red`）：對票照
+  裁決 1——`earliest-red` 掃基底本身（計畫檔的 `line` 是基底分支，下界是最舊已記錄 merge 的 parent），在
+  第一個綠到最早的紅之間，以合併順序與合併 SHA 對出造成紅的票，從最早的開始。tick 發 `integrate.mjs revert`：
+  在 `<ticket 分支>-revert` 分支上逐一 revert（最新的先）、push 該分支並開一支指向基底的 revert PR，**不直接
+  推基底**；票標卡住，依賴它的票（`stackParent` 與 `waitingOn`，遞移）以 `--dependent` 交給同一個指令，照
+  既有「上游撤回」規則處理。revert PR 照裁決 2 不審查——內容是機械 revert——但要等它自己的 CI 綠，合併同樣
+  是確認呼叫：有合併授權就送 `gh pr merge <PR>`（不 `--admin`、不 auto-merge），沒有就 record left-for-human
+  進人工作業清單。之後 tick 每次喚醒重讀基底（同一次喚醒裡基底 tip 動了也立刻重讀：讀值以 tip 為鍵），綠了
+  這輪紅燈才結束；期間不開新的 push phase，收官也等它（revert 留給人合併時不等，它已在人工作業清單上）。
+  revert 合併後基底仍紅、或在另一個 SHA 轉紅，就是新的一輪：重掃，已在基底上被 revert 的票不再對到，每張票
+  只 revert 一次；前一輪開了 revert PR 還沒合併的票先收完，不被新的紅蓋掉。
+  對不到票時——範圍內沒有本 run 尚未 revert 的 merge，或走到最舊 merge 之下仍沒有綠、而下界本身就是紅（紅在
+  本 run 合併之前就在）——由主持人裁決，record settled，tick 之後每次喚醒照讀基底直到綠。
+  收官前，基底必須在最新 tip 上讀過一次、而且不是 running。
+
 完成判準：撤回都經 `integrate.mjs revert`，依賴票都列為 `--dependent`；驗證未過的線在人工作業清單列出失敗的
 job；每輪的結果都已 record。
