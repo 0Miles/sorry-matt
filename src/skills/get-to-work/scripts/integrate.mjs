@@ -9,6 +9,7 @@
 //                                  [--base <base branch>] [--repo <dir>]
 //   node integrate.mjs pr-open     <state> <ticket> --title <text> [--base <base branch>] [--repo <dir>]
 //   node integrate.mjs pr-push     <state> <ticket> [--repo <dir>]
+//   node integrate.mjs pr-merge    <state> <ticket> [--base <base branch>] [--ready | --merged] [--repo <dir>]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> [--branch <ticket branch>]
 //                                  [--local <ticket file> [--checks <text>]] [--push]
 //   node integrate.mjs merge       <state> <ticket> --worktree <integration worktree> --ci [--push]
@@ -97,11 +98,52 @@
 //              branch rule holds), so the push always runs here and the output carries no `host` marker.
 //              Output: { "format", "command": "pr-push", "ticket", "branch", "stacked", "pushed": "git push" |
 //                        "gh stack push", "head": "<sha pushed>" }
+// pr-merge     integrate: ticket-pr only (#194). Brings a reviewed ticket-level PR (recorded with pr-open) to
+//              mergeable: the ticket is queued or integrating (a first call moves it queued → integrating), and the
+//              script itself never polls and never sends the merge. Three calls, each one phase:
+//                (default)  Phase "push": syncs the base, then pushes the ticket branch.
+//                             - not stacked: `git merge` of `origin/<--base>` (`--base` is the base branch, required
+//                               here; refused when `origin/<--base>` is not a commit) into the ticket branch, in the
+//                               worktree holding it; skipped ("already") when `origin/<--base>` is already an
+//                               ancestor. A conflict: `git merge --abort`, exit 4 with { "result": "conflict",
+//                               "files" }; the state, the worktree and HEAD are as before (the host hands it to a
+//                               merge agent as with merge; after the resolution is committed a rerun pushes).
+//                               Then `git push -u origin <branch>`.
+//                             - stacked: non-interactive `gh stack sync` in the worktree holding the branch. A sync
+//                               that aborted on stack divergence still exits 0: its output is read, and any line
+//                               matching /diverg/i marks the divergence — exit 5 with { "result": "diverged",
+//                               "divergence": [those lines] }, nothing pushed and nothing recorded, for the host to
+//                               rule on. Then `gh stack push`.
+//                           The output reports the branch and pushed head SHA; waiting for CI is tick's fallback
+//                           wake-up, not this script's.
+//                           Output: { "format", "command": "pr-merge", "phase": "push", "ticket", "line", "pr",
+//                                     "branch", "stacked", "result": "pushed", "synced": "merged origin/<base>" |
+//                                     "already" | "gh stack sync", "head": "<sha pushed>" }
+//                --ready    Phase "ready", after the host confirms CI is green on that head: `gh pr ready <PR>`,
+//                           then merge-gate.mjs (unchanged, via its main) with `--base <--base>` (required here) and
+//                           `--repo` read from `gh repo view --json nameWithOwner`. The gate's decision and reason
+//                           are carried in the output; on "merge" or "queue" the output gives the merge command for
+//                           the host to run with its own tool ("host", as merge's protected-branch push does):
+//                           `gh pr merge <PR>` for a ticket that is not stacked, `gh stack merge <PR>` for a stacked
+//                           one — never `--admin`, never auto-merge (`gh stack merge` supports neither rule bypass
+//                           nor auto-merge). On "human" nothing is sent: human-work list.
+//                           Output: { "format", "command": "pr-merge", "phase": "ready", "ticket", "line", "pr",
+//                                     "branch", "stacked", "base", "gate": { "decision", "reason" },
+//                                     "send": { "status": "host", "command" } | { "status": "human" } }
+//                --merged   Phase "merged", after the host reports the merge done: the merge SHA and confirmation
+//                           are read with `gh pr view <PR> --json mergeCommit,state` (refused unless "MERGED"), the
+//                           SHA is recorded (`state.mjs merge`), the ticket becomes delivered, and the cleanup
+//                           removes the ticket's worktree and local branch (`git branch -D`: the merge lives on the
+//                           remote). The remote branch is never deleted here: it is deleted with the merge itself
+//                           only when the authorization scope allows the host that.
+//                           Output: { "format", "command": "pr-merge", "phase": "merged", "ticket", "line", "pr",
+//                                     "branch", "stacked", "merge": "<sha>", "stage": "delivered", "cleanup" }
 //              Every `gh stack` call these commands make is non-interactive (explicit branch names or flags, no
-//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Two gh-stack behaviours are
-//              stubbed here per its docs and are #187 live-run items: whether `gh stack submit --auto` is idempotent
-//              over PRs already open lower in the stack, and this layer's number being read back with `gh pr list`
-//              rather than parsed from submit's output.
+//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Three gh behaviours are
+//              stubbed here per their docs and are #187 live-run items: whether `gh stack submit --auto` is
+//              idempotent over PRs already open lower in the stack, this layer's number being read back with
+//              `gh pr list` rather than parsed from submit's output, and `gh stack sync` naming a divergence it
+//              aborted on in its output while exiting 0.
 // merge        Integrates one ticket (stage queued, integrating, or delivered for a rerun) in the integration
 //              worktree, which must have the ticket's line checked out. The steps, in order; each one checks
 //              whether it is already done and only does what is missing, so a rerun after an interruption at any
@@ -253,17 +295,20 @@
 // Exit codes: 0 done; 1 git or the state could not be read or written (the message says which step); 2 bad
 // arguments; 3 refused: well-formed, but the state or the repository does not allow it (the message says what
 // is missing; steps finished before it stay finished); 4 merge or revert conflict (JSON on stdout; the step that
-// conflicted changed nothing). On 1, 2 and 3 nothing is written to stdout.
+// conflicted changed nothing); 5 stack divergence: `gh stack sync` aborted on a diverged stack (JSON on stdout;
+// nothing was pushed and nothing recorded). On 1, 2 and 3 nothing is written to stdout.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { main as stateMain, load, PROFILE_DEFAULTS, TERMINAL } from './state.mjs';
 import { ticketOwners } from './merges.mjs';
 import { scan, ownRows, lastRecordIndex, sectionAt } from './ticket.mjs';
+import { main as gateMain } from './merge-gate.mjs';
 
 export const FORMAT = 'sorry-matt/integrate@1';
 const CONFLICT = 4;
+const DIVERGED = 5;
 
 /** Well-formed, but the state or the repository does not allow it: exit 3. */
 class Refusal extends Error {}
@@ -581,6 +626,108 @@ function prPush(ctx, rest, _flags) {
   return {
     out: { command: 'pr-push', ticket: id, branch, stacked: parent !== null, pushed: parent !== null ? 'gh stack push' : 'git push', head: branchTip(repo, branch) },
   };
+}
+
+// ---- pr-merge (#194) -----------------------------------------------------------------------------------------------
+
+/**
+ * The ticket pr-merge acts on: { t, branch, pr, parent }. The ticket is queued or integrating (delivered too when
+ * `delivered`: the --merged phase reruns), with its branch and PR recorded.
+ */
+function prMergeTicket(ctx, s, id, delivered) {
+  const t = ticketOf(s, id);
+  const stages = ['queued', 'integrating', ...(delivered ? ['delivered'] : [])];
+  if (!stages.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; pr-merge takes a ticket that is ${stages.join(' or ')}`);
+  if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded (ticket-init first)`);
+  if ((t.pr ?? null) === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
+  checkTicketBranch(s, id, t, t.branch, ctx.repo);
+  return { t, branch: t.branch, pr: t.pr, parent: t.stackParent ?? null };
+}
+
+const prMergeOut = (phase, id, t, branch, pr, parent, rest) => ({
+  command: 'pr-merge', phase, ticket: id, line: t.line, pr, branch, stacked: parent !== null, ...rest,
+});
+
+/** Phase "push": sync the base into the ticket branch, push it, and report the head for tick's CI wake-up. */
+function prMergePush(ctx, id, s, flags) {
+  const repo = ctx.repo;
+  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, false);
+  if (branchTip(repo, branch) === null) throw new Refusal(`${id}'s ticket branch ${branch} does not exist`);
+  if (tryGit(repo, 'remote', 'get-url', 'origin') === null) throw new Refusal('the repository has no origin remote; pr-merge pushes the ticket branch there');
+  const wt = stackCwd(repo, branch);
+  let synced;
+  if (parent === null) {
+    if (!flags.base) throw new UsageError('pr-merge needs --base (the base branch) for a ticket that is not stacked');
+    const from = `origin/${flags.base}`;
+    const fromSha = commitOf(repo, from);
+    if (fromSha === null) throw new Refusal(`${from} is not a commit; fetch the base branch first`);
+    if (isAncestor(repo, fromSha, `refs/heads/${branch}`)) synced = 'already';
+    else {
+      const m = mergeBranch(wt, from);
+      if (m.files) return { code: CONFLICT, out: prMergeOut('push', id, t, branch, pr, parent, { result: 'conflict', files: m.files }) };
+      synced = `merged ${from}`;
+    }
+    git(repo, 'push', '-q', '-u', 'origin', branch);
+  } else {
+    // A sync that aborted on stack divergence exits 0; its output names the divergence (#187 live-run item).
+    const out = String(ghStack(ctx, wt, 'sync'));
+    const divergence = out.split(/\r?\n/).filter((l) => /diverg/i.test(l));
+    if (divergence.length) return { code: DIVERGED, out: prMergeOut('push', id, t, branch, pr, parent, { result: 'diverged', divergence }) };
+    synced = 'gh stack sync';
+    ghStack(ctx, wt, 'push');
+  }
+  if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
+  return { out: prMergeOut('push', id, t, branch, pr, parent, { result: 'pushed', synced, head: branchTip(repo, branch) }) };
+}
+
+/** Phase "ready" (after the host confirms CI green): `gh pr ready`, then merge-gate.mjs decides what may be sent. */
+function prMergeReady(ctx, id, s, flags) {
+  const repo = ctx.repo;
+  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, false);
+  if (!flags.base) throw new UsageError('pr-merge --ready needs --base (the base branch) for merge-gate.mjs');
+  ctx.gh(['pr', 'ready', String(pr)], repo);
+  const slug = JSON.parse(String(ctx.gh(['repo', 'view', '--json', 'nameWithOwner'], repo)))?.nameWithOwner;
+  if (typeof slug !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(slug)) throw new Error(`gh repo view printed no nameWithOwner: ${String(slug)}`);
+  const r = gateMain(['--repo', slug, '--base', flags.base], {
+    cwd: repo,
+    gh: (args, cwd) => ctx.gh(args, cwd),
+    git: (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 << 20 }),
+  });
+  if (r.code !== 0) throw new Error(`merge-gate.mjs exited ${r.code}: ${r.err.trim()}`);
+  const gate = JSON.parse(r.out);
+  // The script never sends the merge: on "merge" or "queue" the command goes to the host, never --admin, never
+  // auto-merge; on "human" nothing is sent.
+  const send = ['merge', 'queue'].includes(gate.decision)
+    ? { status: 'host', command: `${parent !== null ? 'gh stack merge' : 'gh pr merge'} ${pr}` }
+    : { status: 'human' };
+  if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
+  return { out: prMergeOut('ready', id, t, branch, pr, parent, { base: flags.base, gate: { decision: gate.decision, reason: gate.reason }, send }) };
+}
+
+/** Phase "merged" (after the host reports the merge done): record the merge SHA, deliver, and clean up locally. */
+function prMergeMerged(ctx, id, s) {
+  const repo = ctx.repo;
+  const { t, branch, pr, parent } = prMergeTicket(ctx, s, id, true);
+  const view = JSON.parse(String(ctx.gh(['pr', 'view', String(pr), '--json', 'mergeCommit,state'], repo)));
+  if (view?.state !== 'MERGED') throw new Refusal(`${id}'s pull request ${pr} is ${view?.state ?? 'in an unknown state'}, not MERGED; the host sends the merge first`);
+  const sha = view?.mergeCommit?.oid;
+  if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`gh pr view printed no merge commit for pull request ${pr}`);
+  if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
+  if (!t.merges.some((m) => m.sha === sha)) state(ctx, 'merge', id, sha);
+  if (load(ctx.state).tickets[id].stage === 'integrating') state(ctx, 'stage', 'delivered', id);
+  const cleanup = cleanBranch(repo, branch, `${id} is merged and recorded`, true);
+  return { out: prMergeOut('merged', id, t, branch, pr, parent, { merge: sha, stage: load(ctx.state).tickets[id].stage, cleanup }) };
+}
+
+function prMerge(ctx, rest, flags) {
+  if (rest.length !== 1) throw new UsageError('pr-merge takes exactly one ticket');
+  if (flags.ready && flags.merged) throw new UsageError('--ready and --merged are different calls: one phase at a time');
+  const [id] = rest;
+  const s = load(ctx.state);
+  ticketPrOnly(s, 'pr-merge');
+  if (flags.merged) return prMergeMerged(ctx, id, s);
+  if (flags.ready) return prMergeReady(ctx, id, s, flags);
+  return prMergePush(ctx, id, s, flags);
 }
 
 /** The merges on the line's first-parent history, oldest first: [{ sha, parents, subject }]. */
@@ -1282,6 +1429,7 @@ const COMMANDS = {
   'ticket-init': [ticketInit, { branch: 'one', worktree: 'one', base: 'one', repo: 'one', now: 'one' }],
   'pr-open': [prOpen, { title: 'one', base: 'one', repo: 'one', now: 'one' }],
   'pr-push': [prPush, { repo: 'one', now: 'one' }],
+  'pr-merge': [prMerge, { base: 'one', ready: 'bool', merged: 'bool', repo: 'one', now: 'one' }],
   merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
   'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
   revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', now: 'one' }],
