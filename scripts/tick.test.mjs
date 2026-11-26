@@ -493,6 +493,15 @@ test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR
   assert.equal(h.state().tickets[ID2].pr, pr2, 'the same PR number throughout');
   const b2 = h.state().tickets[ID2].branch;
   assert.equal(git(h.repo, 'rev-parse', b2), git(h.repo, 'rev-parse', `origin/${b2}`), 'the fix commit is on the remote ticket branch');
+
+  // F1: the ticket-pr guard of stepIntegration is pinned — even with a ref by the line's name present, the queued
+  // tickets stay parked: the next list carries no merge, no stage-to-integrating and no no-worktree action
+  git(h.repo, 'branch', LINE, 'main');
+  const parked = JSON.parse(h.tick('next', h.path).out);
+  assert.ok(
+    parked.actions.every((a) => !['merge', 'no-worktree'].includes(a.step) && !(a.argv ?? []).includes('integrating')),
+    `nothing merges a queued ticket under ticket-pr: ${parked.actions.map((a) => a.id).join(', ')}`,
+  );
 });
 
 test('#195: ticket-pr — a report carrying no commit opens no PR; the report goes on through the existing rules', (t) => {
