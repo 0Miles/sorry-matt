@@ -9,11 +9,11 @@
 // No dependencies: runs on a bare Node 20+.
 //
 // Usage (every command takes the state file first; `--now <UTC>` fixes the clock on the commands that write)
-//   node state.mjs init     <state> --run <run>
+//   node state.mjs init     <state> --run <run> [--tracker github|local]
 //   node state.mjs import   <state> --from <seed.json> [--ledger <ledger.md>]
 //   node state.mjs profile  <state> [--review full|minimal] [--fixRounds 0|1|2] [--recheck true|false]
-//                           [--onUnfixed stuck|file-issue] [--expand agent|skip] [--integrate aggregate-pr|direct]
-//                           [--ci read|skip] [--simplify true|false]
+//                           [--onUnfixed stuck|file-issue] [--expand agent|skip]
+//                           [--integrate aggregate-pr|direct|ticket-pr] [--ci read|skip] [--simplify true|false]
 //   node state.mjs show     <state>
 //   node state.mjs resume   <state>
 //   node state.mjs add      <state> <ticket>... --line <integration branch>
@@ -22,6 +22,7 @@
 //                           [--base <sha> --synced yes|no]
 //   node state.mjs set      <state> <ticket> [--snapshot <sha256>] [--status-record <where>] [--branch <ticket branch>]
 //                           [--deliverable <text>] [--verification <text>] [--unfixed-issue <issue id>]
+//                           [--pr <number>] [--stack-parent <ticket>|none] [--waiting-on <ticket>,<ticket>|none]
 //   node state.mjs stage    <state> <stage> <ticket>... [--reason <text>]
 //   node state.mjs review   <state> <ticket> --mode initial|recheck --verdict pass|fix|stuck [--kind full|minimal]
 //                           [--tier light|standard|full [--tier-reason <reason>]...]
@@ -49,6 +50,8 @@
 // The file (format "sorry-matt/state@1"; fields are only ever added, never renamed; keys this version does not
 // know are kept as they are on every write, so fields a later script adds survive)
 //   { "format": "sorry-matt/state@1", "run": "<run>",
+//     "tracker": "github" | "local" | null,               // set by init --tracker or the seed's `tracker`; null:
+//                                                          // unknown (missing in an older file: null; #188)
 //     "created": "<UTC>", "updated": "<UTC>", "revision": <writes so far>,
 //     "imported": "<UTC>" | null,                         // set by import
 //     "profile": null | { "review", "fixRounds", "recheck", "onUnfixed", "expand", "integrate", "ci", "simplify" },
@@ -92,6 +95,12 @@
 //         "fixReports": [{ "fixed": [<finding id>], "unfixed": [<finding id>], "at", "after": <n> }],   // the
 //                                                          // implementer's per-finding report (recheck: false)
 //         "unfixedIssue": "<issue filed for unfixed findings>" | null,   // onUnfixed: file-issue
+//         "pr": <the ticket's own pull request number> | null,           // its ticket-level PR (#188)
+//         "stackParent": "<ticket>" | null,                // the ticket its PR is stacked on
+//         "waitingOn": ["<ticket>"],                       // the upstream tickets it waits to see merged
+//                                                          // stackParent and each waitingOn: another ticket of this
+//                                                          // state, none twice; all three missing in an older file:
+//                                                          // read as null, null, []
 //         "merges": [{ "sha", "at" }],                     // every merge of the ticket, `-ci` merges included
 //         "reason": "<why stuck or awaiting ruling>" | null,
 //         "history": [{ "from", "to", "at", "reason" }],
@@ -146,7 +155,10 @@
 //              findings in the report — only with that issue recorded (`set --unfixed-issue`).
 //   expand     agent (default) | skip: the ticket's own done-when is the acceptance; expanding is refused. The
 //              snapshot sha256 is still needed for implementing.
-//   integrate  aggregate-pr (default) | direct (merge straight into the base branch);
+//   integrate  aggregate-pr (default, whichever the tracker) | direct (merge straight into the base branch) |
+//              ticket-pr (a pull request per ticket, #188): written only when the state's tracker is github (init
+//              --tracker github, or the seed's `tracker`); a local or unknown tracker is refused (3, pointing to
+//              aggregate-pr), by `profile` and by `import` alike;
 //   ci         read (default) | skip;
 //   simplify   true (default) | false.
 //              These three are read by the host and the later scripts; no guard here relaxes for them (delivered
@@ -156,21 +168,25 @@
 // `budget:` lines; an unknown field is refused.
 //
 // Commands
-//   init      Creates the state with no lines and no tickets. Refused when the file exists.
+//   init      Creates the state with no lines and no tickets. `--tracker` records the run's tracker; without it the
+//             tracker is null (unknown). Refused when the file exists.
 //   import    One-time takeover of a ledger that has no state file. seed.json is written by the host from the
-//             ledger: { "run", "profile", "lines", "tickets", "usage", "stop" } in the shape above, any field left out
-//             taking its default (a ticket needs `line` and `stage`). `--ledger` also reads every
+//             ledger: { "run", "tracker", "profile", "lines", "tickets", "usage", "stop" } in the shape above, any
+//             field left out taking its default (a ticket needs `line` and `stage`). `--ledger` also reads every
 //             `local: <branch> <full sha> <green|red> <reason>` line of the ledger (a list bullet and backticks
 //             allowed) into the lines' `local`, the first record of a SHA winning. Without `usage.started` the
 //             import time is taken and `startedNote` says the time before it was not counted. The imported
 //             tickets must satisfy the guards of the seed's `profile` (queued and integrating as if entering
-//             queued, delivered with a merge SHA); refused when the file exists.
+//             queued, delivered with a merge SHA), and integrate ticket-pr needs the seed's tracker github (see
+//             Profile); refused when the file exists.
 //   profile   Writes the profile once (see Profile). Refused when one is already written, or once any ticket has
-//             left candidate or has a review.
-//   show      Prints the state.
+//             left candidate or has a review, or with integrate ticket-pr on a run whose tracker is not github.
+//   show      Prints the state; the fields an older file lacks are printed as they read (`tracker` null; a ticket's
+//             `pr`, `stackParent`, `waitingOn` null, null, []), and the file is not changed.
 //   resume    What a resumed host needs, from the state alone:
-//             { "format", "command": "resume", "run", "revision", "profile": <effective>, "profileWritten",
-//               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline", "members"? }],  // not at an end
+//             { "format", "command": "resume", "run", "tracker", "revision", "profile": <effective>, "profileWritten",
+//               "open": [{ "id", "stage", "line", "agent": { "id", "type" } | null, "deadline", "members"?,
+//                          "pr", "stackParent", "waitingOn" }],   // not at an end
 //               "inFlight": [{ "id": "<agent id>", "type", "tickets": [<ticket>], "assigned", "limit", "deadline",
 //                              "extended", "fingerprint", "worktree"?, "line"? }],   // one per agent with a
 //                                                         // deadline (`line` and no tickets: a line's agent);
@@ -193,7 +209,10 @@
 //             at candidate with no history, review, assignment or merge, on the lead's line, and none leads a
 //             bundle already. Which tickets to bundle is the host's ruling at the freeze (freeze.mjs `bundles`).
 //   line      Creates or updates an integration branch: the joined frontier lines, the tip, the base sync.
-//   set       Fills a ticket's free-text, snapshot and unfixed-issue fields.
+//   set       Fills a ticket's free-text, snapshot and unfixed-issue fields, and its ticket-level PR fields: `--pr`
+//             the PR number (1 or more), `--stack-parent` the ticket it is stacked on, `--waiting-on` the upstream
+//             tickets it waits on (`none` clears either). Each ticket named must be another ticket of this state,
+//             else refused (3); a ticket named twice in `--waiting-on` is bad input (2).
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
 //             Entering fixing adds a fix round (ticket and usage); a send back adds one to `sendBacks` (both).
 //   review    Records a review conclusion; only in in-review. `--kind` defaults to full; `--tier` is the review
@@ -303,11 +322,13 @@ const PROFILE_VALUES = {
   recheck: [true, false],
   onUnfixed: ['stuck', 'file-issue'],
   expand: ['agent', 'skip'],
-  integrate: ['aggregate-pr', 'direct'],
+  integrate: ['aggregate-pr', 'direct', 'ticket-pr'],
   ci: ['read', 'skip'],
   simplify: [true, false],
 };
-const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
+/** The trackers a run can record (#188), as acceptance.mjs names them; null in the state: unknown. */
+export const TRACKERS = ['github', 'local'];
+export const profileOf = (state) => ({ ...PROFILE_DEFAULTS, ...(state.profile ?? {}) });
 const VERDICTS = ['query-failed', 'no-run', 'red', 'running', 'cancelled', 'green'];
 const LOCAL_REASONS = ['no-origin', 'ci-not-covering', 'no-verdict'];
 const ADDABLE = ['fullVerifications', 'compactions'];
@@ -389,13 +410,17 @@ const newTicket = (line) => ({
   reviews: [],
   fixReports: [],
   unfixedIssue: null,
+  pr: null,
+  stackParent: null,
+  waitingOn: [],
   merges: [],
   reason: null,
   history: [],
 });
-const newState = (run, now) => ({
+const newState = (run, now, tracker = null) => ({
   format: FORMAT,
   run,
+  tracker,
   created: now,
   updated: now,
   revision: 0,
@@ -426,6 +451,21 @@ function countsProblem({ candidates, confirmed, invalid, blocking }) {
   return null;
 }
 
+/**
+ * What is wrong with a ticket's stack parent and the tickets it waits on, or null (#188): each must be another
+ * ticket of this state, and none is named twice.
+ */
+function stackProblem(state, id, stackParent, waitingOn) {
+  const named = [...(stackParent === null ? [] : [['stackParent', stackParent]]), ...waitingOn.map((x) => ['waitingOn', x])];
+  for (const [what, other] of named) {
+    if (!isId(other)) return `${what} has ${JSON.stringify(other)}, which is not a ticket id`;
+    if (other === id) return `${what} names the ticket itself; it must be another ticket of this run`;
+    if (!(other in state.tickets)) return `${what} names ${other}, which is not a ticket of this run`;
+  }
+  if (new Set(waitingOn).size !== waitingOn.length) return 'waitingOn names a ticket twice';
+  return null;
+}
+
 // Every check throws `bad(where, what)`; the caller decides whether that is a corrupt file (1) or bad input (2).
 function check(state, bad) {
   const need = (ok, where, what) => {
@@ -437,6 +477,8 @@ function check(state, bad) {
   need(isTime(state.created) && isTime(state.updated), 'created/updated', 'are not UTC times');
   need(isCount(state.revision), 'revision', 'is not a count');
   need(state.imported === null || isTime(state.imported), 'imported', 'is not a UTC time or null');
+  // a state written before #188 has no key: read as null (unknown)
+  need(state.tracker == null || TRACKERS.includes(state.tracker), 'tracker', `is not one of ${TRACKERS.join(', ')} or null`);
   const why = profileProblem(state.profile ?? null);
   need(why === null, 'profile', why);
   need(isObject(state.lines) && isObject(state.tickets) && isObject(state.usage), 'lines/tickets/usage', 'are not objects');
@@ -498,6 +540,11 @@ function check(state, bad) {
       'is not a list of { fixed, unfixed, after }',
     );
     need(t.unfixedIssue === null || isId(t.unfixedIssue), `${w}.unfixedIssue`, 'is not an issue id or null');
+    // #188: a state written before has none of the three: read as null, null, []
+    need(t.pr == null || (Number.isInteger(t.pr) && t.pr > 0), `${w}.pr`, 'is not a pull request number or null');
+    need(t.waitingOn === undefined || Array.isArray(t.waitingOn), `${w}.waitingOn`, 'is not a list of tickets');
+    const stacked = stackProblem(state, id, t.stackParent ?? null, t.waitingOn ?? []);
+    need(stacked === null, w, stacked);
     need(Array.isArray(t.merges) && t.merges.every((m) => isObject(m) && SHA.test(m.sha)), `${w}.merges`, 'is not a list of { sha }');
     need(Array.isArray(t.history) && t.history.every((h) => isObject(h) && STAGES.includes(h.to)), `${w}.history`, 'is not a list of transitions');
     // #205: a bundle's other tickets; missing in an older file and on a ticket that leads no bundle
@@ -526,6 +573,12 @@ function profileProblem(p) {
     if (!PROFILE_VALUES[k].includes(v)) return `${k} is ${JSON.stringify(v)}, expected one of ${PROFILE_VALUES[k].map((x) => JSON.stringify(x)).join(', ')}`;
   }
   return null;
+}
+
+/** Why this run's tracker does not allow the profile's integrate value, or null (#188): ticket-pr is for GitHub. */
+function integrateProblem(profile, tracker) {
+  if (profile === null || profile.integrate !== 'ticket-pr' || tracker === 'github') return null;
+  return `integrate: ticket-pr opens a pull request per ticket and needs a GitHub run (init --tracker github); this run's tracker is ${tracker ?? 'unknown'}: use integrate aggregate-pr`;
 }
 
 const lastEntry = (t, stage) => t.history.findLastIndex((h) => h.to === stage);
@@ -831,8 +884,9 @@ function hookSpawns(path, read) {
 function init(path, rest, flags, ctx) {
   if (rest.length) throw new UsageError(`init takes no more arguments, got ${rest[0]}`);
   if (!isText(flags.run)) throw new UsageError('init needs --run <run>');
-  const state = create(path, newState(flags.run, ctx.now));
-  return { revision: state.revision, run: state.run };
+  const tracker = flags.tracker === undefined ? null : oneOf(flags.tracker, TRACKERS, '--tracker');
+  const state = create(path, newState(flags.run, ctx.now, tracker));
+  return { revision: state.revision, run: state.run, tracker: state.tracker };
 }
 
 const LEDGER_LOCAL = /^\s*(?:[-*]\s+)?`?local:\s+(\S+)\s+([0-9a-f]{40}|[0-9a-f]{64})\s+(green|red)\s+(\S+)/;
@@ -842,7 +896,7 @@ function importLedger(path, rest, flags, ctx) {
   if (flags.from === undefined) throw new UsageError('import needs --from <seed.json>');
   const seed = readJson(flags.from, 'seed', ctx.read);
   if (!isObject(seed) || !isText(seed.run)) throw new UsageError(`seed ${flags.from}: needs { "run": "<run>", … }`);
-  const state = newState(seed.run, ctx.now);
+  const state = newState(seed.run, ctx.now, seed.tracker ?? null);
   state.imported = ctx.now;
   for (const [branch, l] of Object.entries(seed.lines ?? {})) {
     if (!isObject(l)) throw new UsageError(`seed: lines.${branch} is not an object`);
@@ -889,6 +943,8 @@ function importLedger(path, rest, flags, ctx) {
   check(state, (where, what) => {
     throw new UsageError(`seed ${flags.from}: ${where} ${what}`);
   });
+  const integrate = integrateProblem(state.profile, state.tracker);
+  if (integrate) throw new Refusal(`seed: ${integrate}`);
   const profile = profileOf(state);
   for (const [id, t] of Object.entries(state.tickets)) {
     if (!['queued', 'integrating', 'delivered'].includes(t.stage)) continue;
@@ -898,6 +954,16 @@ function importLedger(path, rest, flags, ctx) {
   create(path, state);
   return { revision: state.revision, run: state.run, tickets: Object.keys(state.tickets).length, lines: Object.keys(state.lines).length, localRecords: records };
 }
+
+/** A ticket's own PR fields (#188), as an older file without them reads. */
+const prFields = (t) => ({ pr: t.pr ?? null, stackParent: t.stackParent ?? null, waitingOn: t.waitingOn ?? [] });
+
+/** The state as `show` prints it: the file, with the fields an older file lacks read as their defaults (#188). */
+const show = (state) => ({
+  ...state,
+  tracker: state.tracker ?? null,
+  tickets: Object.fromEntries(Object.entries(state.tickets).map(([id, t]) => [id, { ...t, ...prFields(t) }])),
+});
 
 const localLine = (branch, r) => `local: ${branch} ${r.sha} ${r.result} ${r.reason}`;
 
@@ -909,7 +975,7 @@ function resume(state) {
   for (const [id, t] of Object.entries(state.tickets)) {
     const a = t.assignment;
     if (TERMINAL.includes(t.stage)) terminal[t.stage].push(id);
-    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null, ...(t.members ? { members: t.members } : {}) });
+    else open.push({ id, stage: t.stage, line: t.line, agent: a && a.agentId ? { id: a.agentId, type: a.type } : null, deadline: a ? a.deadline : null, ...(t.members ? { members: t.members } : {}), ...prFields(t) });
     if (!a || a.deadline === null) continue;
     if (a.agentId === null) {
       unnamed.push(id);
@@ -938,7 +1004,7 @@ function resume(state) {
     ]),
   );
   const bundles = Object.fromEntries(Object.entries(state.tickets).filter(([, t]) => t.members).map(([id, t]) => [id, t.members]));
-  return { run: state.run, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, bundles, lines, usage: state.usage, stop: state.stop };
+  return { run: state.run, tracker: state.tracker ?? null, revision: state.revision, profile: profileOf(state), profileWritten: state.profile !== null, open, inFlight: [...agents.values()], unnamed, unnamedLines, terminal, bundles, lines, usage: state.usage, stop: state.stop };
 }
 
 function add(path, rest, flags, ctx) {
@@ -1004,14 +1070,31 @@ function set(path, rest, flags, ctx) {
     deliverable: 'deliverable',
     verification: 'verification',
     'unfixed-issue': 'unfixedIssue',
+    pr: 'pr',
+    'stack-parent': 'stackParent',
+    'waiting-on': 'waitingOn',
   };
   const given = Object.keys(fields).filter((k) => flags[k] !== undefined);
   if (!given.length) throw new UsageError(`set needs at least one of ${Object.keys(fields).map((k) => `--${k}`).join(', ')}`);
   if (flags.snapshot !== undefined && !/^[0-9a-f]{64}$/.test(flags.snapshot)) throw new UsageError('--snapshot: expected the 64-digit sha256 of the acceptance snapshot');
   if (flags['unfixed-issue'] !== undefined && !isId(flags['unfixed-issue'])) throw new UsageError('--unfixed-issue: expected an issue id');
+  const values = { ...flags };
+  if (flags.pr !== undefined) {
+    if (!/^[1-9]\d*$/.test(flags.pr)) throw new UsageError(`--pr: expected a pull request number, 1 or more, got ${JSON.stringify(flags.pr)}`);
+    values.pr = Number(flags.pr);
+  }
+  if (flags['stack-parent'] !== undefined && flags['stack-parent'] !== 'none' && !isId(flags['stack-parent'])) throw new UsageError('--stack-parent: expected a ticket id or none');
+  if (flags['stack-parent'] === 'none') values['stack-parent'] = null;
+  if (flags['waiting-on'] !== undefined) {
+    values['waiting-on'] = flags['waiting-on'] === 'none' ? [] : ids(flags['waiting-on'], '--waiting-on');
+    if (new Set(values['waiting-on']).size !== values['waiting-on'].length) throw new UsageError('--waiting-on: a ticket is named twice');
+  }
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
-    for (const k of given) state.tickets[id][fields[k]] = flags[k];
+    const t = state.tickets[id];
+    for (const k of given) t[fields[k]] = values[k];
+    const stacked = stackProblem(state, id, t.stackParent ?? null, t.waitingOn ?? []);
+    if (stacked) throw new Refusal(`${id}: ${stacked}`);
     return { tickets: view(state, [id]) };
   });
 }
@@ -1069,7 +1152,10 @@ function profile(path, rest, flags, ctx) {
     if (moved) {
       throw new Refusal(`the profile is written before the first ticket moves; ${moved[0]} is already ${moved[1].stage} under the defaults, which hold for the rest of the run`);
     }
-    state.profile = { ...PROFILE_DEFAULTS, ...given };
+    const profile = { ...PROFILE_DEFAULTS, ...given };
+    const integrate = integrateProblem(profile, state.tracker ?? null);
+    if (integrate) throw new Refusal(integrate);
+    state.profile = profile;
     return { profile: state.profile };
   });
 }
@@ -1352,15 +1438,15 @@ function checkGate(path, rest, flags, ctx) {
 
 const NOW = { now: 'one' };
 const COMMANDS = {
-  init: [init, { run: 'one', ...NOW }],
+  init: [init, { run: 'one', tracker: 'one', ...NOW }],
   import: [importLedger, { from: 'one', ledger: 'one', ...NOW }],
-  show: [(path) => load(path), {}],
+  show: [(path) => show(load(path)), {}],
   resume: [(path) => resume(load(path)), {}],
   add: [add, { line: 'one', ...NOW }],
   bundle: [bundle, NOW],
   line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],
   profile: [profile, { ...Object.fromEntries(Object.keys(PROFILE_VALUES).map((k) => [k, 'one'])), ...NOW }],
-  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', ...NOW }],
+  set: [set, { snapshot: 'one', 'status-record': 'one', branch: 'one', deliverable: 'one', verification: 'one', 'unfixed-issue': 'one', pr: 'one', 'stack-parent': 'one', 'waiting-on': 'one', ...NOW }],
   stage: [stage, { reason: 'one', ...NOW }],
   review: [review, { mode: 'one', verdict: 'one', kind: 'one', tier: 'one', 'tier-reason': 'many', findings: 'one', observations: 'one', 'pre-existing': 'one', covered: 'one', ...Object.fromEntries(FINDING_COUNTS.map((k) => [k, 'one'])), ...NOW }],
   report: [report, { fixed: 'one', unfixed: 'one', ...NOW }],

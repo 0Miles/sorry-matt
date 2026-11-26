@@ -125,6 +125,7 @@ src/skills/get-to-work/scripts/state.mjs#EDGES
 src/skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
 src/skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
 src/skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
+src/skills/get-to-work/scripts/state.mjs#TRACKERS
 src/skills/get-to-work/scripts/state.mjs#profileOf
 src/skills/get-to-work/scripts/state.mjs#VERDICTS
 src/skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
@@ -136,8 +137,10 @@ src/skills/get-to-work/scripts/state.mjs#newTicket
 src/skills/get-to-work/scripts/state.mjs#newState
 src/skills/get-to-work/scripts/state.mjs#checkAssignment
 src/skills/get-to-work/scripts/state.mjs#countsProblem
+src/skills/get-to-work/scripts/state.mjs#stackProblem
 src/skills/get-to-work/scripts/state.mjs#check
 src/skills/get-to-work/scripts/state.mjs#profileProblem
+src/skills/get-to-work/scripts/state.mjs#integrateProblem
 src/skills/get-to-work/scripts/state.mjs#lastEntry
 src/skills/get-to-work/scripts/state.mjs#currentReview
 src/skills/get-to-work/scripts/state.mjs#currentReport
@@ -154,6 +157,7 @@ skills/get-to-work/scripts/state.mjs#EDGES
 skills/get-to-work/scripts/state.mjs#TIMEOUT_STAGES
 skills/get-to-work/scripts/state.mjs#PROFILE_DEFAULTS
 skills/get-to-work/scripts/state.mjs#PROFILE_VALUES
+skills/get-to-work/scripts/state.mjs#TRACKERS
 skills/get-to-work/scripts/state.mjs#profileOf
 skills/get-to-work/scripts/state.mjs#VERDICTS
 skills/get-to-work/scripts/state.mjs#LOCAL_REASONS
@@ -165,8 +169,10 @@ skills/get-to-work/scripts/state.mjs#newTicket
 skills/get-to-work/scripts/state.mjs#newState
 skills/get-to-work/scripts/state.mjs#checkAssignment
 skills/get-to-work/scripts/state.mjs#countsProblem
+skills/get-to-work/scripts/state.mjs#stackProblem
 skills/get-to-work/scripts/state.mjs#check
 skills/get-to-work/scripts/state.mjs#profileProblem
+skills/get-to-work/scripts/state.mjs#integrateProblem
 skills/get-to-work/scripts/state.mjs#lastEntry
 skills/get-to-work/scripts/state.mjs#currentReview
 skills/get-to-work/scripts/state.mjs#currentReport
