@@ -241,9 +241,10 @@ export function remoteSlug(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
-export function preflight({ repo, tracker, source, base, integrate = 'aggregate-pr' }, { git, gh }) {
+export function preflight({ repo, tracker, source, base, integrate }, { git, gh }) {
   const checks = [];
   let top = null;
+  let baseBranch = null; // github: the base as baseVerdict normalized it, for ticket-pr's default-branch check
   try {
     top = git(repo, ['rev-parse', '--show-toplevel']).trim();
   } catch (e) {
@@ -283,8 +284,8 @@ export function preflight({ repo, tracker, source, base, integrate = 'aggregate-
       );
     }
     const v = baseVerdict({ base, repo: source }, gh);
+    baseBranch = v.branch;
     checks.push(baseCheck(v));
-    if (integrate === 'ticket-pr') checks.push(defaultBranchCheck(source, v.branch, gh));
   } else if (top) {
     // The base's CI comes from the git remote, not the tracker: gh, run in the repository, finds the GitHub
     // repository from its remotes. No `origin`: no CI to read (the lines go on local verification, as in tick).
@@ -301,14 +302,16 @@ export function preflight({ repo, tracker, source, base, integrate = 'aggregate-
     );
   }
   if (integrate === 'ticket-pr') {
-    if (tracker === 'local') {
-      checks.push({
-        name: 'tracker',
-        ok: false,
-        detail: 'integrate ticket-pr opens a pull request per ticket, and a Local Markdown (local) tracker has none to open; use integrate aggregate-pr',
-      });
-    }
-    checks.push(ghStackCheck(gh));
+    checks.push(
+      tracker === 'github'
+        ? defaultBranchCheck(source, baseBranch, gh)
+        : {
+            name: 'tracker',
+            ok: false,
+            detail: 'integrate ticket-pr opens a pull request per ticket, and a Local Markdown (local) tracker has none to open; use integrate aggregate-pr',
+          },
+      ghStackCheck(gh),
+    );
   }
   return { top, result: { ok: checks.every((c) => c.ok), checks } };
 }
@@ -349,7 +352,7 @@ function ghStackCheck(gh) {
   } catch (e) {
     return missing(detail(e));
   }
-  const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
+  const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
   if (!version) return missing('gh stack --version exited 0 but printed no version');
   if (out.includes(GH_STACK_INSTALL)) return missing('gh stack --version printed the install hint');
   return { name: 'gh-stack', ok: true, stack: true, version, detail: `gh stack is installed: ${version}` };

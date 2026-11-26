@@ -282,7 +282,7 @@ function entry(sha, verdict, source, rows = [], partial = false) {
     verdict,
     source,
     partial,
-    runs: mine.map((r) => ({ id: r.databaseId, workflow: r.workflowName, status: r.status, conclusion: r.conclusion || null })),
+    runs: mine.map((r) => ({ id: r.databaseId, workflow: r.workflowName, event: r.event || null, status: r.status, conclusion: r.conclusion || null })),
     failed: mine.filter((r) => RED_CONCLUSIONS.includes(r.conclusion)).map((r) => r.databaseId),
   };
 }
@@ -325,7 +325,7 @@ test('earliest-red: a red SHA right after a green one maps to the one ticket mer
   assert.deepEqual(j.verdicts[0].failed, [red.databaseId]);
   assert.deepEqual(j.verdicts[1].failed, []);
   assert.deepEqual(ci.calls, [
-    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
   ]);
 });
 
@@ -475,8 +475,8 @@ test('earliest-red: with no green on the line and the base already red at the me
     failed: [failed.databaseId],
   });
   assert.deepEqual(ci.calls, [
-    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
-    ['run', 'list', '--branch', 'main', '--commit', r.base, '--limit', '100', '--json', 'headSha,databaseId,workflowName,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
+    ['run', 'list', '--branch', 'main', '--commit', r.base, '--limit', '100', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
   ]);
 });
 

@@ -81,7 +81,7 @@
 //   The walk is `git log --first-parent <merge-base>..<tip>`, newest first, where <tip> is `origin/<line>` when
 //   `ci` is true and the local `<line>` otherwise, and <merge-base> is `git merge-base <tip> <base>`.
 //   Each SHA's verdict: with `ci` true, the runs of
-//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowName,status,conclusion
+//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowName,event,status,conclusion
 //   grouped by `headSha` and judged by the rules of `verdict`; only red and green are conclusions (running,
 //   cancelled and no-run, all-skipped SHAs included, are not). A SHA with no CI conclusion takes its local
 //   verification record, when it has one. When `gh` fails, only the local records are used and `ci` in the
@@ -99,7 +99,7 @@
 //   `lowerBound`: that green SHA (`kind` "green"), or the merge base when there is no earlier green conclusion
 //   (`kind` "merge-base"), on lines with CI as well.
 //   `baseCi`: with `ci` true, a red and no green on the line, the base's runs of the merge base, from
-//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,status,conclusion
+//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,event,status,conclusion
 //   where <base branch> is `base` without a leading `origin/`, `refs/remotes/origin/` or `refs/heads/`, judged by
 //   the rules of `verdict`. When that verdict is red, the base was already red where the line left it: the red
 //   came in with the base, `tickets` is empty and `unmatched` true. Any other verdict (green, running, cancelled,
@@ -133,7 +133,8 @@
 //     "merges":      [{ "sha": "<merge>", "subject": "...", "tickets": ["#12"],
 //                       "matchedBy": "sha" | "branch" | "id" | null }],   // the stretch's merges, oldest first
 //     "verdicts":    [{ "sha": "<sha>", "verdict": "red", "source": "ci" | "local", "partial": false,
-//                       "runs": [{ "id": 123, "workflow": "check", "status": "completed", "conclusion": "failure" }],
+//                       "runs": [{ "id": 123, "workflow": "check", "event": "push", "status": "completed",
+//                                  "conclusion": "failure" }],
 //                       "failed": [123] }]
 //                                                              // newest first: walked SHAs with CI runs or a
 //                                                              // local record; verdict as in `verdict`, from the
@@ -153,16 +154,14 @@ import { ticketOwners } from './merges.mjs';
 export const FORMAT = 'sorry-matt/ci@1';
 
 const RED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required', 'stale']);
-const RUN_FIELDS = 'databaseId,workflowName,status,conclusion';
-// verdict (and base, through it) also reads each run's event: a ticket PR's head SHA has push and pull_request runs.
-const VERDICT_FIELDS = 'databaseId,workflowName,event,status,conclusion';
+// Each run's event too: a ticket PR's head SHA has push and pull_request runs.
+const RUN_FIELDS = 'databaseId,workflowName,event,status,conclusion';
 // earliest-red reads at most this many runs of the line; a list this long may have been cut.
 export const RUN_LIMIT = 200;
 
-const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, status: r.status ?? null, conclusion: r.conclusion || null });
-const toEventRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, event: r.event || null, status: r.status ?? null, conclusion: r.conclusion || null });
+const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, event: r.event || null, status: r.status ?? null, conclusion: r.conclusion || null });
 
-/** One verdict for the runs of one SHA (`{ id, workflow, status, conclusion }` each): rules 2 to 6 of the header. */
+/** One verdict for the runs of one SHA (`{ id, workflow, event, status, conclusion }` each): rules 2 to 6 of the header. */
 export function classify(runs) {
   const result = (verdict, extra = {}) => ({ verdict, reason: null, rerun: [], ...extra });
   if (!runs.length) return result('no-run', { reason: 'empty' });
@@ -186,11 +185,11 @@ function queryRuns(gh, args, cwd) {
 }
 
 export function verdict({ branch, sha, repo, cwd }, gh) {
-  const args = ['--branch', branch, '--commit', sha, '--limit', '100', '--json', VERDICT_FIELDS, ...(repo ? ['--repo', repo] : [])];
+  const args = ['--branch', branch, '--commit', sha, '--limit', '100', '--json', RUN_FIELDS, ...(repo ? ['--repo', repo] : [])];
   const q = queryRuns(gh, args, cwd);
   const head = { format: FORMAT, command: 'verdict', branch, sha };
   if (q.error !== undefined) return { ...head, verdict: 'query-failed', reason: null, error: q.error, runs: [], rerun: [] };
-  const runs = q.rows.map(toEventRun);
+  const runs = q.rows.map(toRun);
   const c = classify(runs);
   return { ...head, verdict: c.verdict, reason: c.reason, error: null, runs, rerun: c.rerun };
 }
