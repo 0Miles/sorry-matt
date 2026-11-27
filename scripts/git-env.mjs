@@ -2,11 +2,14 @@
 // Every git process a test starts, its own and those of the scripts under test, inherits process.env; this adds two
 // config values to it through GIT_CONFIG_COUNT, after any the environment already carries:
 //   maintenance.auto=false  a commit, merge, rebase, fetch or push does not start `git maintenance run --auto`
-//   gc.auto=0               nor `git gc --auto` (receive-pack on a bare origin, older paths)
+//   gc.auto=0               a `git gc --auto` that does start has nothing to do
+//   receive.autogc=false    a push into a bare origin: receive-pack does not start `git gc --auto` (gc.auto=0 alone
+//                           only makes it return at once)
 // The repositories are throwaway; on Windows each of those extra processes cost 120-150 ms.
 const VALUES = [
   ['maintenance.auto', 'false'],
   ['gc.auto', '0'],
+  ['receive.autogc', 'false'],
 ];
 
 const env = process.env;
