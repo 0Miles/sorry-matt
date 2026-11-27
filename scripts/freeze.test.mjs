@@ -50,7 +50,8 @@ function frontierOf(spec, { tracker = 'github', source = 'acme/widgets' } = {}) 
 }
 
 const BASE_SHA = 'b'.repeat(40);
-const ghRun = (id, conclusion, status = 'completed') => ({ databaseId: id, workflowName: 'check', status, conclusion });
+// Each fixture run is its own workflow: ci.mjs counts only the latest run of a workflow and event (#209).
+const ghRun = (id, conclusion, status = 'completed') => ({ databaseId: id, workflowDatabaseId: id, workflowName: 'check', status, conclusion });
 
 // gh with a logged-in account, the given open PRs, and the base branch's latest SHA whose runs are `baseRuns`.
 // `calls` collects every gh argument list.
@@ -265,7 +266,7 @@ test('base-ci: a green base latest SHA passes without a warning, read from the f
   assert.equal(r.json.preflight.ok, true);
   assert.deepEqual(calls.find((a) => a[0] === 'api'), ['api', 'repos/acme/widgets/commits/main', '--jq', '.sha']);
   assert.deepEqual(calls.find((a) => a[0] === 'run'), [
-    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion', '--repo', 'acme/widgets',
+    'run', 'list', '--branch', 'main', '--commit', BASE_SHA, '--limit', '100', '--json', 'databaseId,workflowDatabaseId,workflowName,event,status,conclusion', '--repo', 'acme/widgets',
   ]);
 });
 
@@ -478,7 +479,7 @@ const ghTicketPr = ({ defaultBranch = 'main', stack = STACK_VERSION, calls = [],
         e.stderr = 'unknown command "stack" for "gh"';
         throw e;
       }
-      return `${stack}\n`;
+      return typeof stack === 'object' ? stack : `${stack}\n`;
     }
     return ok(args, cwd);
   };
@@ -618,6 +619,19 @@ test('ticket-pr: gh stack exiting 0 without a version is not installed', (t) => 
     assert.match(check.detail, /gh extension install github\/gh-stack/);
     assert.equal(r.json.preflight.ok, true);
   }
+});
+
+// #209: which stream the installed extension prints its version on is not on record: stderr is read when stdout is
+// empty, and stderr's install hint is still no version.
+test('#209: ticket-pr: gh stack printing its version on stderr is installed; the install hint on stderr is not', (t) => {
+  const dir = scratch(t);
+  const repo = repoIn(dir);
+  const onStderr = ticketPr(dir, repo, ghTicketPr({ stack: { stdout: '', stderr: `${STACK_VERSION}\n` } }));
+  assert.deepEqual([checkOf(onStderr, 'gh-stack').stack, checkOf(onStderr, 'gh-stack').version], [true, STACK_VERSION]);
+  const both = ticketPr(dir, repo, ghTicketPr({ stack: { stdout: `${STACK_VERSION}\n`, stderr: 'a notice\n' } }));
+  assert.equal(checkOf(both, 'gh-stack').version, STACK_VERSION, 'stdout wins');
+  const hint = ticketPr(dir, repo, ghTicketPr({ stack: { stdout: '', stderr: 'To install it, run:\n  gh extension install github/gh-stack\n' } }));
+  assert.deepEqual([checkOf(hint, 'gh-stack').stack, checkOf(hint, 'gh-stack').version], [false, null]);
 });
 
 // ---------- held files and exclusion ----------

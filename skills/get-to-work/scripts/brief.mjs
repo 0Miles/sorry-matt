@@ -133,7 +133,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve, isAbsolute, basename, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UsageError, failure, runIfEntry } from './cli.mjs';
+import { UsageError, TRACKERS, failure, runIfEntry } from './cli.mjs';
 import { ticketOf } from './spawns.mjs';
 
 export const FORMAT = 'sorry-matt/brief@1';
@@ -257,7 +257,7 @@ function implement(values) {
   const snapshot = readJson(snapshotPath);
   const wrong = () => new Error(`${snapshotPath} is not a sorry-matt acceptance snapshot`);
   if (!snapshot || snapshot.format !== 'sorry-matt/acceptance@1' || !text(snapshot.id)) throw wrong();
-  if (!['github', 'local'].includes(snapshot.tracker) || !Array.isArray(snapshot.expansions)) throw wrong();
+  if (!TRACKERS.includes(snapshot.tracker) || !Array.isArray(snapshot.expansions)) throw wrong();
   const id = snapshot.id;
   const desc = description(role, [id]);
   const expansion = snapshot.expansions.map((e) => String(e?.text ?? '').trim()).filter(Boolean).join('\n\n');

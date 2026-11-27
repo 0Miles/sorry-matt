@@ -182,8 +182,11 @@ test('cli: bad arguments and a snapshot of another ticket exit 2; an unreadable 
   const { gh } = fakeGh({ 7: { title: 'Export', body: BODY, comments: [] } });
   const deps = { gh, readFile: () => JSON.stringify({ format: 'sorry-matt/acceptance@1', tracker: 'github', id: '#8', items: [] }) };
   assert.equal(main(['github', '7'], deps).code, 2);
-  // #218: a tracker outside state.mjs's TRACKERS is bad input, not read as a local ticket
-  const unknown = main(['gitlab', 't.md'], deps);
+  // #218: a tracker outside TRACKERS is bad input, not read as a local ticket. #228: the deps can read a local
+  // ticket (a git seam and a ticket file), so without the guard this would exit 0 as local, not fail on a missing seam
+  const localDeps = { ...deps, cwd: tmpdir(), git: () => `${tmpdir()}\n`, readFile: () => '# T\n\n## Acceptance criteria\n\n- [ ] one\n' };
+  assert.equal(main(['local', 't.md'], localDeps).code, 0, 'the same deps read a local ticket');
+  const unknown = main(['gitlab', 't.md'], localDeps);
   assert.equal(unknown.code, 2);
   assert.match(unknown.err, /first argument must be github or local/);
   assert.equal(main(['github', '--repo', REPO, '7', '8'], deps).code, 2);

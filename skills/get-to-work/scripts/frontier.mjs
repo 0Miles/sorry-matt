@@ -70,7 +70,7 @@
 // Exit codes: 0 output written; 1 tracker or git read failed, or --line names no line; 2 bad arguments.
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { resolve, relative, sep, posix } from 'node:path';
-import { UsageError, run, canonical, failure, runIfEntry } from './cli.mjs';
+import { UsageError, TRACKERS, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { scan, section, sectionAt, lastRecordIndex, listItem, openingRows, ownRows, lines } from './ticket.mjs';
 
 export const FORMAT = 'sorry-matt/frontier@1';
@@ -403,7 +403,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--')) throw new UsageError(`unknown option ${a}`);
     else opts.positional.push(a);
   }
-  if (tracker !== 'github' && tracker !== 'local') throw new UsageError('first argument must be github or local');
+  if (!TRACKERS.includes(tracker)) throw new UsageError(`first argument must be ${TRACKERS.join(' or ')}`);
   if (tracker === 'local' && (opts.repo || opts.done.length || opts.stuck.length)) {
     throw new UsageError('local reads done and stuck from the ticket files; --repo, --done and --stuck are github only');
   }

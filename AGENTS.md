@@ -505,7 +505,8 @@ vendored 檔。上游改了就回來對一次,並更新 `NOTICE.md` 的 pin 與 
    量到的值換一台機器就對不上。更新 pin 的同一輪,把本 repo 以 Skill tool 引用的每個第三方
    skill 逐一確認仍存在且仍是 model-invoked:上游移除或改名不會讓任何檢查轉紅
 5. 新 skill 已加進 `.claude-plugin/plugin.json` 的 `skills` 陣列
-6. `.claude-plugin/plugin.json` 的 `version` 已 bump
+6. `.claude-plugin/plugin.json` 的 `version` 已 bump。`integrate: ticket-pr` 的 run 由收官開一支 bump PR，票級 PR
+   不碰它（`get-to-work/FINISH.md`，#228）
 7. `README.md` 的 skills 表格與 src 一致
 
 ## Agent skills
