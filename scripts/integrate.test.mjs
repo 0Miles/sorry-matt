@@ -1226,6 +1226,75 @@ test('pr-merge (ticket-pr) phase push: a conflict with the base aborts, exits 4 
   assert.equal(state().tickets['#1'].stage, 'integrating');
 });
 
+test('send-back (ticket-pr, #222): --base is the fixed point the attempt is compared with; the PR branch stays on origin, and pr-push replaces its head with the redo, leased', (t) => {
+  const env = withPrLine(t, ['#1', '#2'], ghStub());
+  const { dir, repo, bare, git, g, ok, state, integrate, refused, work } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  work(one.wt, { 'a.md': 'one\nTWO\n' }, '#1: edit a');
+  g(one.wt, 'push', '-q', '-u', 'origin', 'run-1/01-a'); // the PR's head, as pr-open pushed it
+  const attempt = g(one.wt, 'rev-parse', 'HEAD');
+  work(repo, { 'a.md': 'one\nTHREE\n' }, 'base: conflicting edit');
+  git('push', '-q', 'origin', 'main');
+  const baseSha = git('rev-parse', 'origin/main');
+  assert.equal(integrate('pr-merge', '#1', '--base', 'main').code, 4);
+
+  assert.equal(integrate('send-back', '#1', '--conflicts', 'a.md').code, 2, '--base is required for a ticket that is not stacked');
+  const out = ok('send-back', '#1', '--conflicts', 'a.md', '--predicted', '01-a.md', '--base', 'main');
+  assert.equal(out.sha, attempt);
+  assert.equal(out.lineTip, baseSha, 'the tip the redo is cut from: origin/main');
+  assert.deepEqual(out.touched, ['01-a.md', 'a.md'], 'what the attempt changed against origin/main');
+  assert.deepEqual(out.uncovered, ['a.md']);
+  assert.equal(out.stage, 'candidate');
+  assert.deepEqual(out.cleanup, { worktree: 'removed', branch: 'deleted' });
+  assert.equal(git('rev-parse', out.ref), attempt, 'the old attempt is kept');
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), attempt, "the PR's branch on origin is untouched");
+  assert.equal(state().tickets['#1'].pr, 12, 'the pull request stays recorded');
+  assert.equal(state().tickets['#1'].sendBacks, 1);
+
+  // the redo: cut anew from origin/main, one commit; pr-push replaces the PR's head, leased on the old one
+  const wt = join(dir, 'wt-redo');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
+  const redo = work(wt, { 'a.md': 'one\nTHREE\nTWO\n' }, '#1: redo on the latest base');
+  // review F2: someone else pushes a third commit to the PR branch meanwhile. Fetched or not, pr-push refuses to
+  // overwrite it: origin's head is read from origin and is not part of the old attempt
+  const other = join(dir, 'wt-other');
+  git('worktree', 'add', '-q', '--detach', other, attempt);
+  const theirs = work(other, { 'theirs.md': 'theirs\n' }, 'a collaborator on the PR');
+  g(other, 'push', '-q', 'origin', 'HEAD:refs/heads/run-1/01-a');
+  refused(/origin's run-1\/01-a is at .*not part of the old attempt kept at refs\/sorry-matt\/run-1\/01-a\/sent-back-1/, 'pr-push', '#1');
+  git('fetch', '-q', 'origin');
+  assert.equal(git('rev-parse', 'refs/remotes/origin/run-1/01-a'), theirs, 'the tracking ref has moved to their commit');
+  refused(/not part of the old attempt/, 'pr-push', '#1');
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), theirs, "origin keeps their commit");
+  // put back as the old attempt left it (a person settles it), and the redo goes on
+  g(other, 'push', '-q', '--force', 'origin', `${attempt}:refs/heads/run-1/01-a`);
+  git('fetch', '-q', 'origin');
+  const pushed = ok('pr-push', '#1');
+  assert.equal(pushed.pushed, 'git push --force-with-lease');
+  assert.equal(pushed.head, redo);
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), redo);
+  // a later fix commit is a fast-forward again: a plain push
+  const fix = work(wt, { 'a.md': 'one\nTHREE\nTWO, fixed\n' }, '#1: fix');
+  assert.equal(ok('pr-push', '#1').pushed, 'git push');
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), fix);
+
+  // a ticket never sent back is never force-pushed: a rewritten branch the remote does not take fails the push
+  const wt2 = join(dir, 'wt-2');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', wt2, '--base', 'main');
+  const first = work(wt2, { 'b.md': 'b\n' }, '#2: work');
+  g(wt2, 'push', '-q', '-u', 'origin', 'run-1/02-b');
+  g(wt2, 'reset', '-q', '--hard', 'origin/main');
+  work(wt2, { 'b.md': 'b, rewritten\n' }, '#2: rewritten');
+  assert.equal(integrate('pr-push', '#2').code, 1, 'the non-fast-forward push is rejected');
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/02-b'), first, 'origin keeps the PR head');
+  refused(/#2 is candidate; send-back takes a ticket that is queued or integrating/, 'send-back', '#2', '--base', 'main');
+});
+
+test('send-back: --base outside integrate: ticket-pr is a usage error', (t) => {
+  const env = withLine(t, ['#1']);
+  assert.equal(env.integrate('send-back', '#1', '--base', 'main').code, 2);
+});
+
 test('pr-merge (ticket-pr) phase push for a stacked ticket: gh stack sync then push; a divergence exits 5 and pushes nothing', (t) => {
   let diverged = true;
   const gh = ghStub({
@@ -1444,9 +1513,19 @@ test('revert (ticket-pr): an integrated dependent becomes stuck; in-flight and c
   assert.deepEqual(s.tickets['#2'].merges.length, 1, "the integrated dependent's merge stays");
 });
 
-test('revert: --base outside integrate: ticket-pr is a usage error; under it a ticket with no merge is refused', (t) => {
+test('revert: --base or --repo outside integrate: ticket-pr is a usage error; under it a ticket with no merge is refused', (t) => {
   const aggregate = withLine(t, ['#1']);
   assert.equal(aggregate.integrate('revert', '#1', '--worktree', aggregate.lineWt, '--reason', 'x', '--base', 'main').code, 2);
+  // #222: --repo too is the ticket-pr form's; outside it, it is refused before anything is touched, not ignored
+  const m1 = integrateOne(aggregate, '#1', 'run-1/01-a', { 'b.md': 'b\n' });
+  const tip = aggregate.g(aggregate.lineWt, 'rev-parse', 'HEAD');
+  const r = aggregate.integrate('revert', '#1', '--worktree', aggregate.lineWt, '--reason', 'x', '--repo', aggregate.repo);
+  assert.equal(r.code, 2, `--repo outside ticket-pr is a usage error: ${r.out}${r.err}`);
+  assert.match(r.err, /--repo is for integrate: ticket-pr/);
+  assert.equal(r.out, '');
+  assert.equal(aggregate.g(aggregate.lineWt, 'rev-parse', 'HEAD'), tip, 'nothing is reverted on the line');
+  assert.equal(aggregate.state().tickets['#1'].stage, 'delivered', 'the ticket keeps its delivery');
+  assert.equal(aggregate.state().tickets['#1'].merges[0].sha, m1);
 
   const env = withPrLine(t, ['#1'], ghStub());
   withQueuedPr(t, env, '#1', 'run-1/01-a', 12);

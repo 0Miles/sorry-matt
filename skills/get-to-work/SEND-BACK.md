@@ -8,14 +8,22 @@ integration. Do not force a resolution: redo the ticket from the latest integrat
 
 1. `integrate.mjs send-back <state> <ticket> --conflicts <conflicted files> --predicted <each line of the predicted files>`:
    it keeps the old attempt at a ref, moves the stage back to candidate, and removes the worktree and branch. A ticket
-   is sent back once: a second time is refused, so mark it stuck instead.
+   is sent back once: a second time is refused, so mark it stuck instead. Under `integrate: ticket-pr` the line has no
+   integration branch: add `--base <base branch>`, and the old attempt is compared with the ticket's fixed point
+   (`origin/<base branch>`, or the upstream's branch for a stacked ticket), whose tip is `lineTip`. The ticket-level PR
+   stays open, its branch on origin untouched, and its number stays in the state.
 2. **Send-back record**: from its output, add a paragraph to the ticket's status record — the `ref` and `sha`,
    `conflicts`, `lineTip`, `uncovered` (files the old attempt changed that the predicted files did not cover) — and
    write the same paragraph to `sorry-matt/runs/<run>/sendback/<ticket>.md`, which tick hands to the new
    implementation agent at the redispatch.
 3. **Widen the prediction**: write the output's `predicted` back to the ticket's predicted files.
 4. tick redispatches it at the next dispatch point: the acceptance snapshot is reused, and the branch of the same name
-   is rebuilt from the latest tip of the integration branch. The old attempt is reference only, never merged.
+   is rebuilt from the latest tip of the integration branch. The old attempt is reference only, never merged. Under
+   `ticket-pr` it is rebuilt from the latest tip of the fixed point; once the redo's agent reports a commit, tick
+   issues `pr-push` to the same PR, never a second `pr-open`, and `pr-push` replaces the PR's head with
+   `--force-with-lease`: the head is read from origin, must be part of the old attempt kept at the `sent-back` ref,
+   and the lease is on it; a head someone else pushed is not part of it, so `pr-push` refuses (3) and overwrites
+   nothing, for a person to sort out.
 
 **Mark stuck** (whenever this skill says "mark stuck", do this):
 
