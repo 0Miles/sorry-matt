@@ -160,9 +160,17 @@ Each wake-up:
    field, chain the others after it as ` + <action id> <flags>`, and join the next `run` with `&&` — one Bash call for
    all of it (each host call reads its whole context again). When one of them is refused, none after it is recorded and
    the output's `failed` names it; settle the refusal as its message says, then record again from that one. `end`'s last action closes the wake-up:
-   the ledger's narrative fields brought up to date and, while agents are in flight, a **fallback wake-up** —
-   `ScheduleWakeup`, else a background `sleep` through Bash with its task id in the record, else the same `/loop` in
-   interval mode at the shortest stage time limit.
+   the ledger's narrative fields brought up to date and, while any background work is running — an agent in flight,
+   or a command of your own running in the background — a **fallback wake-up**: `ScheduleWakeup`, else a background
+   `sleep` through Bash with its task id in the record, else the same `/loop` in interval mode at the shortest stage
+   time limit. When only your own command is left, tick gives no wait in seconds; wait at most `budget: wake-check`
+   minutes.
+   **A long command of your own in the background** (a full test suite you rerun at the finish, say) is treated like a
+   check of `verify.mjs`: send its output to a log file, bound it by `budget: timeout-verify` (30 minutes without that
+   line), and add a 10-minute output idle watchdog. Never rely on its completion notice alone: a hung command sends
+   none. On every wake-up, check whether its log is still growing; past the bound or idle for 10 minutes, kill its
+   whole process tree (on Windows `taskkill /PID <pid> /T /F`, elsewhere its process group) and record it in the
+   ledger as a timeout, with the command and the log path — not as a red light.
 
 `record` exiting 3 is a refusal: the result fails the state's guards. Act on the message; never force it another way.
 

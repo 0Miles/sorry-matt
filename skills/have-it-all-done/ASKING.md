@@ -277,7 +277,11 @@ plugin's hooks read only the first line (a BOM aside). Ten fields:
      section 4 once the ticket count is known.
    - **Stage time limits**: the same format, in minutes: `budget: timeout-implement 30`, `budget: timeout-fix 20`
      (red-light fixes included), `budget: timeout-expand 15`, `budget: timeout-merge 15`, `budget: timeout-review 60`
-     (the review host agent). One more line may be left out: `budget: wake-check 20`, the most minutes the fallback
+     (the review host agent), `budget: timeout-verify 30` (each check of a local verification, and each long command
+     you run in the background yourself: past it, its whole process tree is killed and it is recorded as a timeout,
+     not a red light; a fixed 10-minute output idle bound comes on top). Written along with the others when the
+     ledger is created; a ledger taken over without the `timeout-verify` line counts as 30, and the ledger check does
+     not turn red for its absence. One more line may be left out: `budget: wake-check 20`, the most minutes the fallback
      wake-up waits (20 without it), so an agent whose turn ended without its report is looked at before its stage time
      limit.
    - **Usage and the stop reason** are the state's `usage` and `stop`. The spawn count comes from

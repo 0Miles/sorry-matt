@@ -385,6 +385,7 @@ export const LIMIT_DEFAULTS = Object.freeze({
   'timeout-expand': 15,
   'timeout-merge': 15,
   'timeout-review': 60,
+  'timeout-verify': 30, // each check of a local verification, minutes: verify.mjs --timeout (#215)
   'wake-check': 20, // the fallback wake-up's longest wait, minutes
 });
 // The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
@@ -573,7 +574,7 @@ export const OPERATIONS = {
     exec(
       `verify${selfFound ? '-self' : ''}:${line}@${sha}:${tag}`,
       'verify-local',
-      ['node', js('verify.mjs'), c.path, line, '--worktree', wt ?? c.cfg.root, '--reason', reason, '--sha', sha, ...(selfFound ? ['--self-found', selfFound] : [])],
+      ['node', js('verify.mjs'), c.path, line, '--worktree', wt ?? c.cfg.root, '--reason', reason, '--sha', sha, '--timeout', String(c.limits['timeout-verify']), ...(selfFound ? ['--self-found', selfFound] : [])],
       { stdout: c.tick('verify', `${slugOf(line)}-${sha.slice(0, 12)}-${tag}${selfFound ? '-self' : ''}.json`), okExit: [0, 4, 5], line },
     ),
   // state.mjs check: a stage-exit gate (gates.mjs)
@@ -3757,7 +3758,7 @@ export function next(path, reported, now, deps, { hold = false } = {}) {
       `Nothing else this wake-up. Write the ledger's narrative fields up to date (next action, self-answer log, human-work list). ${
         f
           ? `Then schedule the fallback wake-up: ScheduleWakeup ${f.scheduleWakeup} seconds; without it, stop the previous background sleep and start \`sleep ${Math.ceil(f.seconds)}\` in the background, recording its task id with --value.`
-          : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep).'
+          : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep) — unless a command of your own still runs in the background: then schedule a fallback wake-up all the same and check its log on waking (SKILL.md section 1, step 3).'
       } Record done.`,
       ['done'],
       [doc('SKILL.md', 'section 1 (the loop: fallback wake-up)'), doc('ASKING.md', 'section 7 (the ledger)')],

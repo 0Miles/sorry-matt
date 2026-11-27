@@ -879,6 +879,13 @@ test('ledger fails on stage-limits: a stage time limit line is missing', (t) => 
   failsOnly(check(ledgerText(rule, { budget: noReview })), 'stage-limits', /no budget: timeout-review/);
 });
 
+test('#215: stage-limits does not require budget: timeout-verify; a ledger with it passes too', (t) => {
+  const { rule, check } = ledgerWorld(t);
+  const five = ['budget: spawns 200', 'budget: rounds 40', 'budget: hours 12', 'budget: no-progress 3', 'budget: timeout-implement 30', 'budget: timeout-fix 20', 'budget: timeout-expand 15', 'budget: timeout-merge 15', 'budget: timeout-review 60'];
+  passes(check(ledgerText(rule, { budget: five })), ['budget-limits', 'stage-limits']);
+  passes(check(ledgerText(rule, { budget: [...five, '- `budget: timeout-verify 30`'] })), ['budget-limits', 'stage-limits']);
+});
+
 test('ledger fails on session: the session line is another session, or missing while one is known', (t) => {
   const { rule, check } = ledgerWorld(t);
   failsOnly(check(ledgerText(rule, { session: 'sess-old' })), 'session', /session: sess-old, but this session is sess-1/);

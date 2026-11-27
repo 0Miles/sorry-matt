@@ -292,6 +292,7 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | fallback 喚醒 | fallback wake-up |
 | 派送紀錄 | assignment record |
 | 超時延長次數 | timeout extensions |
+| 輸出閒置（watchdog） | output idle |
 | 超時停止次數 | timeout stops |
 | 在途 agent | agent in flight |
 | 探查 | explore |

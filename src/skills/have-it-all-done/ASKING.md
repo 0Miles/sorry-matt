@@ -223,8 +223,10 @@ hook 沒擋下的同類操作也一樣不做。subagent 把它寫進回報交給
      `budget: spawns 200`、`budget: rounds 40`（派票點次數，不是審查或修正的輪）、`budget: hours 12`、
      `budget: no-progress 3`。`spawns` 與 `rounds` 在票數確定時照第 4 節改寫。
    - **階段時限**：同樣格式，單位分鐘：`budget: timeout-implement 30`、`budget: timeout-fix 20`（含紅燈修正）、
-     `budget: timeout-expand 15`、`budget: timeout-merge 15`、`budget: timeout-review 60`（審查主持 agent）。
-     另有一行可省略的 `budget: wake-check 20`：fallback 喚醒最多等幾分鐘（沒寫就是 20），讓回合結束卻沒交回報的
+     `budget: timeout-expand 15`、`budget: timeout-merge 15`、`budget: timeout-review 60`（審查主持 agent）、
+     `budget: timeout-verify 30`（本機驗證的每個 check，以及主持人自己在背景跑的長命令：超過就殺掉整棵程序樹，
+     記成 timeout，不是紅燈；另有固定 10 分鐘的輸出閒置上限）。建立 ledger 時一併寫入；接手沒有
+     `timeout-verify` 這行的 ledger 時照預設 30 算，ledger 檢查不因缺它轉紅。另有一行可省略的 `budget: wake-check 20`：fallback 喚醒最多等幾分鐘（沒寫就是 20），讓回合結束卻沒交回報的
      agent 不必等到它的階段時限才被看到。
    - **用量與停止原因**在 state 的 `usage` 與 `stop`。spawn 數取自 hook 寫的 `<run>.counters.json`，只讀不寫。
      向使用者提問時，從送出到收到回答的秒數以 `state.mjs usage --wait` 加進等人時間。token 數除非執行環境自己
