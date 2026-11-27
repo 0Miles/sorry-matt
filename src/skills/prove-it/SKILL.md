@@ -65,7 +65,8 @@ Verifier 獨立裁決，集中修正後由 Fix Verifier 複驗。差別在讀者
 **驗收被改過就不通過。** 比對輸出的 `check.changed` 為 true 時（含 `check.snapshotIntact` 為 false：快照本身被改過），直接記一則 blocking finding
 （lens `acceptance`），不經 Finder 與 Verifier：證據是比對輸出的路徑與 `removed`／`added`，修法方向
 是把 tracker 上的驗收恢復成快照，要改的項目由實作 agent 回報為待裁決。審查照常進行，驗收對照一律
-以快照為準，不以改過的版本為準。
+以快照為準，不以改過的版本為準。主持人依代答裁定改了驗收時，`get-to-work` 已重存快照：比對輸出不會報改過，
+驗收對照照樣以快照為準。
 
 在 scratchpad 開**審查用 worktree**，實跑與突變都只在這裡做，實作 agent 的 worktree 保持原狀。在 repo 內執行：
 

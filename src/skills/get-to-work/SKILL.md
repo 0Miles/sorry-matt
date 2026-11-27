@@ -28,7 +28,8 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
 3. 為每張票寫預計檔案（第 2 節「預計檔案」）。
 4. 寫計畫檔跑 `scripts/freeze.mjs`：前置檢查、他線佔用、排除、**合線**與候選順序都由它算。`preflight.ok` 是
    false 就照 `checks` 修好重跑；腳本看不到的佔用（本 session 已知的其他 session）寫進計畫檔的 `held`。
-   `excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）；`integrate`
+   由 `have-it-all-done` 組合時，ledger 第 2 欄記著裁決點對凍結試算的選擇：選「照做」的佔用者寫進計畫檔的
+   `ignore`，衝突在整併時照第 2 節「合併衝突」解。`excluded` 的票標**待裁決**，寫出佔用來源與解除條件。計畫檔的 `base` 寫線要併入的基底分支（必填）；`integrate`
    寫本 run 的 `integrate`（第 6 步要寫的 profile，沒另寫就是 tracker 的預設：GitHub 是 `ticket-pr`）—— 缺了 freeze
    以 `aggregate-pr` 判，`ticket-pr` 的 default-branch、tracker 與 gh-stack 檢查都不會跑（#202）。
    **基底 CI**：`base-ci` 這項讀基底最新 SHA 的 CI，不擋下凍結。CI 來自 git remote，與票放在哪無關：Local Markdown
@@ -257,6 +258,11 @@ merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來
 
 - 中途事項走 `ASKING.md` 第 4 節的三條出路。`ask` 動作同樣：答不出來的標待裁決，只有人能做的進人工作業清單。
   獨立執行而沒有裁決點時，答不出來的事累積到下一個派票點前一次問完。
+- **代答裁定**（由 `have-it-all-done` 組合時）：實作或修正 agent 的回報有待裁決的項目，而它屬 `ASKING.md` 第 2 節
+  (a)(b)(d)、寫得出建議時，不 record `blocked`：照 `ASKING.md` 第 4 節寫裁定檔、改到驗收就先改 tracker，再以
+  `ruled --value <裁定檔>` 記下。tick 重存驗收快照，把票交回同一個 agent（它不在了就新派一個），票留在原階段，
+  不算修正輪；快照變了的票，`ticket-pr` 下 pr-send 只給 `left-for-human`（`tick.mjs` 檔頭「An on-behalf
+  ruling」）。寫不出建議才 record `blocked`，原因寫進 `--value`。
 - spawn 被 plugin 的 hook 以預算為由擋下：不重試、不換路。沒派出的票以 `state.mjs release` 與
   `state.mjs stage awaiting-ruling --reason <hook 的訊息>` 擱置；下一個派票點由 tick 判上限而停下。收官需要的
   spawn 被擋下，照 `ASKING.md` 第 4 節記進人工作業清單。
@@ -264,4 +270,4 @@ merge commit 裡，取捨在自答清單；期間新開的 raw tickets 都有來
   tick 發下收官的動作與 gate，最後一個 `judge` 指向 [`FINISH.md`](FINISH.md)。
 
 完成判準：每張初始票恰好對帳為已交付、卡住或待裁決（`check finish`；停下時另有 `check stopped`）；被預算擋下的
-spawn 沒有重試或換路。
+spawn 沒有重試或換路；組合時每個寫得出建議的待裁決回報都以 `ruled` 記下，裁定檔都在。

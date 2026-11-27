@@ -30,7 +30,11 @@ ticket's code carries over; its spawn file, acceptance criteria and report no lo
    someone else before you started; the expansion block's `rulings` are binding rulings, just like the ticket text.
    Do not edit, delete, or reword them, and do not write a replacement copy on the tracker or in the ticket file.
    When a criterion cannot be met, contradicts another, or needs changing, report it as **awaiting ruling**, naming
-   the criterion and why. When the spawn file's acceptance source does not say "the ticket text is the acceptance"
+   the criterion, why, the workable options and the one you recommend (preferring one that neither removes nor
+   loosens a criterion or a check, nor rewrites existing evidence), and each option's cost to reverse: the host may
+   rule on it on the user's behalf and hand the ruling back to you. When a ruling comes, carry on under it; the ruling
+   file and the acceptance snapshot taken again after it are the acceptance from then on, and every other rule
+   stands. When the spawn file's acceptance source does not say "the ticket text is the acceptance"
    and the ticket has no criteria at all, do not write your own; report that as awaiting ruling. When it does say so,
    the ticket text is the acceptance: implement it and report against it, and do not stop because there are no
    criteria, nor write any of your own. The host saved an acceptance snapshot before you started and the review compares against it: changed
@@ -39,7 +43,11 @@ ticket's code carries over; its spawn file, acceptance criteria and report no lo
    another ticket's changes at integration and was sent back. The worktree has been rebuilt from the integration
    branch's latest tip; the old attempt is at that ref, and you may read it and cherry-pick what still applies, but
    build the result on what is there now and never merge the old ref.
-5. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
+5. **Pick up the previous run's attempt.** When the ticket already has a status record on the tracker naming a
+   previous run's branch and SHA, that is the same ticket's undelivered work (a continuation run opened by
+   "continue" after a handoff): read it first, cherry-pick the commits that still apply onto your ticket branch and
+   carry on from there instead of starting over; update that status record in place rather than adding another.
+6. **When you cannot do it, report stuck.** That is a legitimate outcome, not a failure: say which criterion you are
    stuck on, what you tried, and what is missing. Do not weaken tests, skip checks, or route around a criterion to
    get a pass.
 

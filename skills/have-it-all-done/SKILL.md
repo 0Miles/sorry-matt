@@ -14,7 +14,8 @@ answered on the user's behalf.
 ## 0. Autonomy
 
 Once the risk gate clears it (step 1), this run aims to reach the handoff, calling the user back only at step 2's
-ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
+ruling point and step 5's eyes-on acceptance; the next question after that is the review at the handoff. Seven
+rules hold throughout:
 
 - **Make reversible internal decisions yourself.** Local files, commits on local branches, worktrees, tests, and
   merges or deploys the permission settings let through: decide, record it per `ASKING.md` section 3, and continue.
@@ -40,8 +41,16 @@ ruling point and step 5's eyes-on acceptance. Six rules hold throughout:
   the ruling point at the first stage:** when it has to define a new set of permissions, trigger conditions or an
   external interface, and neither the ticket nor the spec settles that design, it is a design decision under
   `ASKING.md` section 2(d) — list it as one question at the ruling point with a recommendation; one that does not
-  make the four questions is marked awaiting ruling together with the tickets it blocks, and this run does not
-  dispatch them.
+  make the four questions is settled by an **on-behalf ruling** per `ASKING.md` section 4, and the ticket is
+  dispatched as usual.
+- **After the gate clears, whatever needs a ruling mid-run is ruled on the user's behalf.** A section 2(a), (b) or
+  (d) matter that comes up after the ruling point — something an implementation or fix agent reports as awaiting
+  ruling, acceptance criteria that cannot be met or contradict each other, a design not yet settled — is settled by
+  the host with an on-behalf ruling per `ASKING.md` section 4 whenever a recommendation can be written, and the ticket
+  keeps going: no question, no stop. Only when no recommendation can be written, the matter is (c), or what it needs
+  is an action requiring authority or a catastrophic action does it take one of the three exits, awaiting ruling or
+  the human-work list. A fix an in-scope ticket needs to pass its acceptance is that ticket's work: it goes back to
+  the ticket's agent under the ruling, not into a new ticket for the next run.
 - **The host's context has a budget**, per `ASKING.md` section 7.
 
 Whatever a subagent receives must be self-contained: every rule it has to follow is written into what it is
@@ -51,7 +60,8 @@ may tell it to.
 Done when: between the risk gate and the handoff, only the ruling point and the eyes-on acceptance called the
 user back; every hard stop is on the human-work list; every prompting call ran after the other steps,
 consecutively; every in-scope needs-triage ticket has cleared its first expansion stage, or is marked awaiting
-ruling with the fact that could not be found.
+ruling with the fact that could not be found; every section 2(a), (b) or (d) matter after the ruling point has an
+on-behalf ruling, or says why no recommendation could be written.
 
 ## 1. Pick up the handoff and pass the risk gate
 
@@ -90,7 +100,10 @@ Done when: the tracker configuration, one task, and the grilling source are reco
 or created; all three lights have a red-or-green result; if any light was red, the user's explicit approval is on
 record and the proposal opened at full scope.
 
-## 2. Complete the kickoff (skip when tickets already exist)
+## 2. Complete the kickoff and run the ruling point
+
+When tickets already exist, skip the kickoff agent (the next two paragraphs) and start from the freeze trial; the
+ruling point runs either way.
 
 The whole opening goes to a **kickoff agent**. Resolve the absolute paths of the sibling `../take-this/SKILL.md`
 and `ASKING.md` from this skill's base directory, hand them over with the ledger path, and have it read both in
@@ -103,7 +116,23 @@ context budget; the spec and the ticket bodies stay on the tracker.
 One run opens one kickoff agent. When it stops short or reports incompletely, start another from the ledger's
 next action instead of re-running what is already published.
 
-After the kickoff agent delivers and before step 3, run the single **ruling point** from `ASKING.md` section 4.
+After the kickoff agent delivers (when tickets already exist, after step 1) and before step 3, run the single
+**ruling point** from `ASKING.md` section 4. The three items below are done before it; what they need to ask joins
+the ruling point's one round of questions.
+
+**Freeze trial**: follow `get-to-work`'s `SKILL.md` section 0, freeze steps 2–4, for this run's tickets — run
+`frontier.mjs`, write the predicted files, run `freeze.mjs` — and only read its output; do not run `state.mjs init`.
+Tickets another line's holds keep out must show up here, not first at the freeze. Write the predicted files per
+that file's section 2, "Predicted files", with **index files left out** (the build list, the test list, a README
+table, a manifest array that every ticket adds one line to): an index file in the list makes every line touching it
+exclude the others. When `excluded` or `stalled` is not empty, list one question at the ruling point, "<these
+tickets> change the same files as <holder>: go ahead, with the conflicts resolved at integration; or wait for it to
+release them", with each excluded and stalled ticket, the overlapping paths and the release conditions; it falls
+under section 2(a), so recommend "go ahead". When the four-question limit cuts it, answer "go ahead" on the user's
+behalf and log it in the self-answer log. Record the outcome in ledger field 2: the holders chosen "go ahead" go into
+the plan file's `ignore` at `get-to-work`'s freeze; those chosen "wait" are excluded as before and marked awaiting
+ruling. When `preflight.ok` is false, fix what `checks` lists and run it again; what cannot be fixed goes on the
+human-work list.
 
 **Base CI**: before the ruling point, in the repo, read the CI of the base's latest SHA with
 `node <base directory>/../get-to-work/scripts/ci.mjs base [--repo <owner>/<repo>] <base branch>` (its output fields are in
@@ -133,8 +162,11 @@ human, and PRs are still opened and stacked as usual. `get-to-work` follows fiel
 again.
 
 Done when: tickets are published to the configured tracker and every blocker edge is explicit; the kickoff
-agent's requirements context points to the same grilling result selected in step 1; the ruling point ran exactly
-once; when the base is red, the ruling point has the question "continue, or fix the base first" and its outcome is
+agent's requirements context points to the same grilling result selected in step 1 (neither applies when tickets
+already existed); the ruling point ran exactly once; the freeze trial ran, with no index file in the predicted files,
+and when `excluded` or `stalled` is not empty the ruling point has the "go ahead or wait" question, or the
+self-answer log has "go ahead" answered on the user's behalf, with the outcome recorded in ledger field 2; when the
+base is red, the ruling point has the question "continue, or fix the base first" and its outcome is
 recorded in ledger field 2; when `integrate` is `ticket-pr` and the permission settings do not cover both merge
 commands, the ruling point has the merge authority question and its outcome is recorded in ledger field 5.
 
@@ -143,10 +175,13 @@ commands, the ruling point has the merge authority question and its outcome is r
 Starting from this skill's base directory, read the sibling `../get-to-work/SKILL.md` and follow it, giving it the
 tickets created in step 2, or the executable links selected in step 1, as its explicit argument in tracker-native
 identifiers (GitHub issue numbers or URLs, or Local Markdown paths), and keeping this run's ledger. Anything that
-comes up meanwhile takes only the three exits in `ASKING.md` section 4.
+comes up meanwhile takes only the three exits in `ASKING.md` section 4; what an implementation or fix agent reports
+as awaiting ruling becomes an on-behalf ruling per section 0, handed back to the same agent with tick's `ruled`
+(`get-to-work` section 3).
 
 Done when: `get-to-work` has stopped; every supplied ticket appears in its reconciliation table with a
-delivered, stuck, or awaiting-ruling result and supporting evidence; no question was asked while it ran.
+delivered, stuck, or awaiting-ruling result and supporting evidence; no question was asked while it ran; every
+ticket awaiting ruling says why no recommendation could be written.
 
 ## 4. Hand off
 
@@ -157,8 +192,9 @@ It includes:
 - Task scope, selected grilling source, and all three risk-light results.
 - **Authorization outcomes** (ledger field 5): every action sent and whether it went through, with a permission
   rule snippet for each blocked one.
-- **The run-level self-answer log**, or an explicit `none`; ticket-level self-answers are cited by location. Then
-  the **review pass** from `ASKING.md` section 4.
+- **The run-level self-answer log**, or an explicit `none`; ticket-level self-answers are cited by location. Each
+  on-behalf ruling is marked, and one that amended acceptance also names its ticket and where its ruling file is.
+  Then the **review pass** from `ASKING.md` section 4.
 - **The human-work list:** every item carries steps someone can follow to completion. Where the steps are many or
   run through a third-party interface, call the Skill tool with `wizard` to generate an interactive wizard and
   point the list at it.
@@ -192,3 +228,29 @@ rules; no code changes here. After the last result is fed back, change the ledge
 
 Done when: every criterion that cannot be verified mechanically has the user's per-item response and a landing
 place, or is explicitly recorded as not applicable; the ledger's first line is the ended marker.
+
+## 6. "Continue" after the handoff
+
+When the ledger's first line is already the ended marker and the user says "continue", or the like, about the same
+task, it carries on the original approval; it is not a new task: no new risk gate, no second ruling point, no
+question; the next question is still the review at the handoff. Take over the same ledger per `ASKING.md` section 7,
+change its first line back to `<!-- sorry-matt:run active -->`, then:
+
+1. Go through the tickets awaiting ruling in the reconciliation table. One whose reason allows a recommendation gets
+   an on-behalf ruling per section 0; one held by another line gets step 2's freeze trial again, and "go ahead"
+   answered on the user's behalf when the hold is still there; the tickets those block come back with them. One with
+   no recommendation, under (c), or needing an action that requires authority stays awaiting ruling. A ticket the
+   previous run filed along the way for one of these blocks has its work folded back into the ticket it blocks, per
+   section 0, not dispatched on its own.
+2. When tickets come back, go to step 3 again with them as the explicit argument: `get-to-work` opens a continuation
+   run (the run name with `-c<n>` appended, a new state file, ledger fields 4 and 8 listing the old and new state
+   paths side by side), with each on-behalf ruling written where the ticket's spawn file can reach it: its status
+   record, and its acceptance on the tracker when the ruling amends it. The branches and commits the previous run left
+   are in the status record, and the implementation agent picks up from there instead of redoing them. Delivered
+   tickets are not dispatched again. When no ticket comes back, go straight to the handoff, with the report saying for
+   each remaining ticket why a recommendation still cannot be written.
+3. Then finish with steps 4 and 5; the review pass covers both runs' self-answers.
+
+Done when: no question was asked between "continue" and the handoff; every ticket that was awaiting ruling is either
+back in the continuation run or says why a recommendation still cannot be written; ledger fields 4 and 8 list every
+run's state path.
