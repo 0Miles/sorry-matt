@@ -158,7 +158,9 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   h.verdict = (args) => {
     const i = args.indexOf('verdict');
     const [branch, sha] = args.slice(i + 1).filter((x, k, all) => x !== '--repo' && all[k - 1] !== '--repo');
-    const verdict = h.ci(branch, sha);
+    const judged = h.ci(branch, sha);
+    // #209: 'no-pull-request' stands for ci.mjs --pr finding a push run but no pull_request run
+    const verdict = judged === 'no-pull-request' ? 'no-run' : judged;
     const runs =
       verdict === 'running'
         ? [{ id: 7, workflow: 'check', status: 'in_progress', conclusion: null }]
@@ -166,7 +168,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
           ? []
           : [{ id: 7, workflow: 'check', status: 'completed', conclusion: verdict === 'red' ? 'failure' : 'success' }];
     // #197: `failed` holds the red runs' ids, as ci.mjs verdict reports them for `gh run view <id> --log-failed`
-    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [], failed: verdict === 'red' ? [7] : [] };
+    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: judged === 'no-pull-request' ? 'no-pull-request' : verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [], failed: verdict === 'red' ? [7] : [] };
   };
   /** #197: `ci.mjs base <branch>` — origin's tip of the base branch, judged by h.ci as a verdict is. */
   h.base = (args) => {

@@ -41,8 +41,9 @@
 //              never fails (`ok` is always true): when that verdict is red or query-failed its `warning` is true
 //              and the freeze goes on (what the host does with a warning is in SKILL.md, freeze step 4); any other
 //              verdict is no warning.
-//              With integrate "ticket-pr" (each ticket gets its own PR into the base) three more; "aggregate-pr" and
-//              "direct" add none and never call `gh repo view` or `gh stack`:
+//              With integrate "ticket-pr" (each ticket gets its own PR into the base) two more: `default-branch` or
+//              `tracker` by the tracker, and `gh-stack`; "aggregate-pr" and "direct" add none and never call
+//              `gh repo view` or `gh stack`:
 //              - tracker "github": `default-branch`: `gh repo view <source> --json defaultBranchRef` reads the default
 //                branch; it fails when the plan's `base` (without a leading `origin/`, `refs/remotes/origin/` or
 //                `refs/heads/`) is not it, since a PR's `Closes #N` only closes its issue on the default branch, and
@@ -50,9 +51,11 @@
 //                a failed query's detail is `could not be read: <gh's message>` and names no setting.
 //              - tracker "local": `tracker` fails: Local Markdown has no PR to open; its detail names `aggregate-pr`.
 //              - either tracker: `gh-stack`: `gh stack --version` with `GH_STACK_NO_UPDATE_NOTIFIER=1` in the
-//                environment, with `stack` (true when it exited 0 and printed a version on stdout: without the
-//                extension gh 2.91 exits 0 with an empty stdout and the install hint on stderr) and `version` (the
-//                first non-empty stdout line, null when not installed). It never fails (`ok` is always true): without gh stack every ticket with an unmerged
+//                environment, stdout and stderr both read (#209: which stream the installed extension prints its
+//                version on was not recorded by the #199 live run), with `stack` (true when it exited 0 and printed
+//                a version: without the extension gh 2.91 exits 0 with an empty stdout and the install hint on
+//                stderr) and `version` (the first non-empty, trimmed line of stdout, or of stderr when stdout has
+//                none; an output holding the install hint is no version; null when not installed). It never fails (`ok` is always true): without gh stack every ticket with an unmerged
 //                upstream waits for that upstream to merge, and the detail names the install command, `gh extension
 //                install github/gh-stack`, which a human runs (freeze never downloads and runs it).
 //              When a check fails, `ok` is false and everything below is null.
@@ -113,7 +116,7 @@
 //                   // base-ci also has "warning": true | false and "ci": ci.mjs base's output without format and
 //                   // command ({ branch, sha, verdict, reason, error, runs, rerun, failed }), or null when a local
 //                   // tracker's repo has no origin; gh-stack (ticket-pr only, like default-branch and tracker) also
-//                   // has "stack": true | false and "version": "<gh stack --version's first line>" | null
+//                   // has "stack": true | false and "version": "<the version line, as under gh-stack above>" | null
 //     "held":       [{ "source": "worktree" | "branch" | "pr" | "host", "id": "<path | branch | #n | who>",
 //                      "branch": "<branch>" | null, "files": ["src/a.md"], "release": "..." }],
 //     "excluded":   [{ "id": "#12", "overlaps": [{ "with": "<holder id>", "source": "branch",
@@ -345,13 +348,17 @@ function ghStackCheck(gh) {
     version: null,
     detail: `gh stack is not installed (${why}); tickets with an unmerged upstream wait for it to merge; to stack them, a human runs: ${GH_STACK_INSTALL}`,
   });
-  let out;
+  let r;
   try {
-    out = String(gh(['stack', '--version'], undefined, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }));
+    r = gh(['stack', '--version'], undefined, { GH_STACK_NO_UPDATE_NOTIFIER: '1' }, { both: true });
   } catch (e) {
     return missing(detail(e));
   }
-  const version = out.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+  // #209: stdout first, stderr when stdout has nothing; a seam that answers with a string gave stdout alone
+  const [stdout, stderr] = typeof r === 'string' ? [r, ''] : [String(r?.stdout ?? ''), String(r?.stderr ?? '')];
+  const first = (text) => text.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+  const out = first(stdout) ? stdout : stderr;
+  const version = first(out);
   if (!version) return missing('gh stack --version exited 0 but printed no version');
   if (out.includes(GH_STACK_INSTALL)) return missing('gh stack --version printed the install hint');
   return { name: 'gh-stack', ok: true, stack: true, version, detail: `gh stack is installed: ${version}` };

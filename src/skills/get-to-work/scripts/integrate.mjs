@@ -177,11 +177,11 @@
 //              Output: { "format", "command": "patch-id", "ticket", "branch", "from": "<ref>", "base": "<merge
 //                        base sha>", "head": "<sha>", "patchId": "<id>" | null }   (null: the diff is empty)
 //              Every `gh stack` call these commands make is non-interactive (explicit branch names or flags, no
-//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Three gh behaviours are
-//              stubbed here per their docs and are #187 live-run items: whether `gh stack submit --auto` is
-//              idempotent over PRs already open lower in the stack, this layer's number being read back with
-//              `gh pr list` rather than parsed from submit's output, and `gh stack sync` naming a divergence it
-//              aborted on in its output while exiting 0.
+//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. The #187 live run (#199,
+//              docs/agents/environment.md) confirmed that `gh stack submit --auto` is idempotent over PRs already open
+//              lower in the stack and that this layer's number is read back with `gh pr list`; how `gh stack sync`
+//              names a divergence it aborted on while exiting 0 is still stubbed per its docs, read from stdout and
+//              stderr both (#219).
 // merge        Integrates one ticket (stage queued, integrating, or delivered for a rerun) in the integration
 //              worktree, which must have the ticket's line checked out. The steps, in order; each one checks
 //              whether it is already done and only does what is missing, so a rerun after an interruption at any

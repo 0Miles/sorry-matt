@@ -2560,7 +2560,9 @@ function prAwaitCi(c, id, t) {
   }
   const out = c.tick('ci', `pr-${keyOf(id)}-w${c.book.wakeup}.json`);
   const readId = `pr-ci:${id}@${head12}:w${c.book.wakeup}`;
-  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+  // --pr (#209): a PR head with a push run but no pull_request run, where the base's workflows trigger on
+  // pull_request, is no-run (no-pull-request), not green; ci.mjs greps the workflows in the repository (cwd)
+  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head, '--pr', `origin/${c.cfg.base}`], { stdout: out, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return;
   const v = readJsonFile(c.deps, out);
   const verdict = v?.verdict ?? null;
   if (verdict) flag.prCi = { sha: head, verdict }; // #200: the PR head's last CI result, for the reconciliation table
@@ -2613,13 +2615,27 @@ function prAwaitCi(c, id, t) {
     for (const run of v?.rerun ?? []) c.emit(exec(`pr-rerun:${id}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { tickets: [id], line: t.line }));
     return;
   }
-  if (verdict === 'no-run' && v?.reason === 'empty') {
+  if (verdict === 'no-run' && (v?.reason === 'empty' || v?.reason === 'no-pull-request')) {
     // the line-level no-run counting, per ticket: at two empty reads the branch's run list settles it
     if (flag.prNoRunAt !== readId) {
       flag.prNoRun = (flag.prNoRun ?? 0) + 1;
       flag.prNoRunAt = readId;
     }
     if ((flag.prNoRun ?? 0) < 2) return;
+    if (v.reason === 'no-pull-request') {
+      // #209: the branch has its push runs; the PR's own pull_request run is what is missing, two reads running
+      c.emit(
+        judge(
+          `pr-no-ci:${id}@${head12}`,
+          'pr-no-ci',
+          `${id}'s pull request head ${head} has a push run but no pull_request run after two reads, though the workflows of ${c.cfg.base} run on pull_request (a PR GitHub runs nothing for, such as one with merge conflicts, or a run not created yet). Record ready to go on to the ready phase (merge-gate.mjs still guards the merge); or record stuck / awaiting-ruling with --value <reason>.`,
+          ['ready', 'stuck', 'awaiting-ruling'],
+          [{ path: js('ci.mjs'), part: 'header (verdict, --pr)' }],
+          { tickets: [id], line: t.line, meta: { sha: head } },
+        ),
+      );
+      return;
+    }
     const runsOut = c.tick('ci', `pr-${keyOf(id)}-branch-w${c.book.wakeup}.json`);
     if (c.emit(exec(`pr-ci-branch:${id}:w${c.book.wakeup}`, 'ci-branch', ['gh', 'run', 'list', '--branch', t.branch, '--limit', '1', '--json', 'databaseId', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: runsOut, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
     const listed = readJsonFile(c.deps, runsOut);
@@ -2960,9 +2976,10 @@ function dispatchSteps(c, d) {
   const known = (fid) => [fid, basename(String(fid))].find((x) => c.leadOf(x) !== null) ?? null;
   const info = new Map(fr.tickets.map((x) => [known(x.id), x]).filter(([k]) => k));
   book.titles = { ...(book.titles ?? {}), ...Object.fromEntries([...info].filter(([, x]) => x.title).map(([k, x]) => [k, x.title])) };
-  // 4. stalled tickets and the lines that failed verification leave the pipeline
+  // 4. stalled tickets and the lines that failed verification leave the pipeline; a ticket at waiting-upstream too
+  //    (#231): prUpstreams leaves a stalled one to this step, and an upstream that went stuck leaves it stalled
   for (const [id, t] of Object.entries(state.tickets)) {
-    if (t.stage !== 'candidate') continue;
+    if (t.stage !== 'candidate' && t.stage !== 'waiting-upstream') continue;
     // a bundle stalls when any of its tickets does (#205)
     const sid = c.group(id).find((m) => info.get(m)?.stalled) ?? id;
     const f = info.get(sid);

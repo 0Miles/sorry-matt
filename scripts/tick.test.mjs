@@ -1048,6 +1048,27 @@ test('#220: a PR head CI read that stays query-failed brings an unreadable judge
   assert.ok(log.every((x) => x.at && x.decided && Number.isInteger(x.wakeup)));
 });
 
+test('#209: a PR head read with --pr that has no pull_request run, two reads running, brings a pr-no-ci judge; ready goes on', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1] = h.ids;
+  let ci1 = 'running';
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? ci1 : 'green');
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  const read = distinct(h.log).find((a) => a.step === 'ci-read' && a.tickets[0] === ID1);
+  assert.deepEqual(read.argv.slice(-2), ['--pr', 'origin/main'], 'the PR head is read with --pr <base>');
+  ci1 = 'no-pull-request';
+  const noCi = () => distinct(h.log).filter((a) => a.step === 'pr-no-ci');
+  h.wake();
+  assert.equal(noCi().length, 0, 'one read: no judge yet');
+  h.policy['pr-no-ci'] = () => 'ready';
+  h.wake();
+  assert.equal(noCi().length, 1, 'the second read brings it');
+  assert.match(noCi()[0].do, /no pull_request run after two reads/);
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'delivered'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'delivered', 'ready goes on to the ready phase and the merge');
+});
+
 test('#220: a ticket branch gone from the repository at awaiting-ci is counted as ref-missing; stuck lets the line go on', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
   const [ID1, ID2] = h.ids;
@@ -1294,6 +1315,23 @@ test('#198: without gh stack a ticket with an unmerged upstream waits for it to 
   const startAt = s.tickets[ID2].history.findIndex((x) => x.to === 'implementing');
   assert.ok(s.tickets[ID2].history[startAt].at >= s.tickets[ID1].history.find((x) => x.to === 'delivered').at);
   git(h.repo, 'merge-base', '--is-ancestor', s.tickets[ID1].merges[0].sha, s.tickets[ID2].merges[0].sha);
+});
+
+test('#231: a ticket waiting on an upstream that went stuck leaves the pipeline as awaiting-ruling, and the run finishes', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  freezeWithStack(h, false);
+  h.blockers[ID2] = [ID1];
+  h.policy.review = (a) => (a.tickets.includes(ID1) ? 'stuck' : 'pass');
+  h.untilDone();
+  for (let i = 0; i < 6 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run reaches its finish');
+  const s = h.state();
+  assert.equal(s.tickets[ID1].stage, 'stuck');
+  assert.ok(s.tickets[ID2].history.some((x) => x.to === 'waiting-upstream'), `${ID2} waited for its upstream`);
+  assert.equal(s.tickets[ID2].stage, 'awaiting-ruling');
+  assert.ok(s.tickets[ID2].reason.includes(ID1), s.tickets[ID2].reason);
+  assert.equal(s.tickets[ID2].history.some((x) => x.to === 'implementing'), false, 'never dispatched');
 });
 
 // ---- integrate: ticket-pr — the stack merges from the bottom up (#199) ---------------------------------------------
