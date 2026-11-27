@@ -234,7 +234,9 @@
 //             the PR number (1 or more), `--stack-parent` the ticket it is stacked on, `--waiting-on` the upstream
 //             tickets it waits on (`none` clears either). Each ticket named must be another ticket of this state,
 //             else refused (3); a ticket named twice in `--waiting-on` is bad input (2). `--left-for-human <text>`
-//             (#196) records that the ticket's ready PR is left for a person to merge (`none` clears it).
+//             (#196) records that the ticket's ready PR is left for a person to merge (`none` clears it); a first
+//             record is refused (3) outside integrate: ticket-pr and before the ticket is at awaiting-merge (#221:
+//             the record stands for a PR that pr-merge --ready made ready).
 //             `--pr-base <base branch>` (#219) records the base branch the ticket's PR merges toward; integrate.mjs
 //             writes it from the first `--base` and refuses a later `--base` that differs.
 //   stage     Moves tickets to <stage> by the rules above; `--reason` is kept on the ticket and in its history.
@@ -304,8 +306,8 @@
 // On 1, 2 or 3 nothing is written to stdout. On every code but 0 the state file is unchanged.
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { UsageError, TRACKERS, failure, run as exec, runIfEntry } from './cli.mjs';
-import { GATES, TARGETS, runGate } from './gates.mjs';
+import { UsageError, TRACKERS as CLI_TRACKERS, failure, run as exec, runIfEntry } from './cli.mjs';
+import { GATES, TARGETS, runGate, deliveryProblem } from './gates.mjs';
 
 // The sensitive paths of docs/agents/commands.md name each constant from FORMAT to FINDING_COUNTS and each function of
 // "the shape" and "the stage rules" below (#152): a change there makes prove-it's review tier full. A new constant
@@ -357,7 +359,7 @@ const PROFILE_VALUES = {
   simplify: [true, false],
 };
 /** The trackers a run can record (#188); null in the state: unknown. cli.mjs holds the one list (#228). */
-export { TRACKERS };
+export const TRACKERS = CLI_TRACKERS;
 /**
  * #201: the integrate default by the run's tracker — ticket-pr on GitHub; Local Markdown, and an unknown tracker (a
  * state from before #188), keep aggregate-pr. PROFILE_DEFAULTS holds the tracker-less one.
@@ -747,9 +749,8 @@ function stageGuard(id, t, to, from, profile) {
     if (viaReview === null || from !== null || profile.recheck) return viaReview;
     return queueFromFix(id, t, profile) === null ? null : viaReview;
   }
-  if (to === 'delivered' && !t.merges.length) {
-    // #196, integrate: ticket-pr: a ready PR left for a person to merge is delivered too
-    if (profile.integrate === 'ticket-pr' && t.leftForHuman !== null) return null;
+  // #196, #221: the delivery rule the finish gate applies too (gates.mjs deliveryProblem)
+  if (to === 'delivered' && deliveryProblem(t, profile) !== null) {
     return `${id}: delivered needs a merge SHA; none is recorded (record it with merge${profile.integrate === 'ticket-pr' ? ', or record the ready PR as left for a person with set --left-for-human' : ''})`;
   }
   return null;
@@ -1222,6 +1223,13 @@ function set(path, rest, flags, ctx) {
   return update(path, ctx.now, (state) => {
     const [id] = ticketsOf(state, rest);
     const t = state.tickets[id];
+    // #221: a left-for-human record says the ticket's PR is ready and a person merges it: under integrate: ticket-pr
+    // only, and only at awaiting-merge (pr-merge --ready made it ready and merge-gate.mjs handed the merge on)
+    if (given.includes('left-for-human') && values['left-for-human'] !== null) {
+      const integrate = profileOf(state).integrate;
+      if (integrate !== 'ticket-pr') throw new Refusal(`${id}: a left-for-human record is for integrate: ticket-pr (this run integrates by ${integrate})`);
+      if (t.stage !== 'awaiting-merge' && t.leftForHuman === null) throw new Refusal(`${id} is ${t.stage}; a PR is left for a person only once it is ready, at awaiting-merge`);
+    }
     for (const k of given) t[fields[k]] = values[k];
     const stacked = stackProblem(state, id, t.stackParent, t.waitingOn);
     if (stacked) throw new Refusal(`${id}: ${stacked}`);

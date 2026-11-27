@@ -1204,6 +1204,21 @@ test('#196: a left-for-human record stands in for the merge SHA under ticket-pr,
   assert.deepEqual(out.tickets['#1'].merges, []);
 });
 
+test('#221: a first left-for-human record needs integrate: ticket-pr and a ticket at awaiting-merge', (t) => {
+  const r = ticketPrRun(t);
+  at(r, '#1', 'integrating');
+  r.refused(/left for a person only once it is ready, at awaiting-merge/, 'set', '#1', '--left-for-human', 'too early');
+  r.ok('stage', 'awaiting-ci', '#1');
+  r.refused(/at awaiting-merge/, 'set', '#1', '--left-for-human', 'still too early');
+  r.ok('stage', 'awaiting-merge', '#1');
+  r.ok('set', '#1', '--left-for-human', 'PR 11 is ready');
+  r.ok('set', '#1', '--left-for-human', 'none');
+  const plain = run(t);
+  plain.ok('add', '#1', '--line', LINE);
+  plain.refused(/for integrate: ticket-pr/, 'set', '#1', '--left-for-human', 'no PR here');
+  plain.ok('set', '#1', '--left-for-human', 'none');
+});
+
 test('#196: awaiting-ci → fixing needs no review verdict (the red PR head is the reason) but still counts the round', (t) => {
   const r = ticketPrRun(t);
   at(r, '#1', 'integrating');

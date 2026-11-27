@@ -628,7 +628,7 @@ test('#196: ticket-pr — pr-merge, awaiting-ci on the PR head, ready + merge-ga
   const read1 = log.find((a) => a.step === 'ci-read' && a.id.startsWith(`pr-ci:${ID1}@`));
   assert.ok(read1, 'CI is read on the PR head');
   assert.ok(read1.argv.includes(branch1), 'the verdict is read for the ticket branch');
-  assert.match(read1.argv.at(-1), /^[0-9a-f]{40}$/, 'at the PR head SHA');
+  assert.match(read1.argv[read1.argv.indexOf(branch1) + 1], /^[0-9a-f]{40}$/, 'at the PR head SHA');
   // the ready phase: gh pr ready + merge-gate.mjs, then the merge command with send status host
   assert.ok(h.ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready' && Number(a[2]) === s.tickets[ID1].pr), 'gh pr ready ran');
   assert.ok(h.ghCalls.some((a) => a[0] === 'api' && a[1] === 'graphql'), 'merge-gate.mjs queried the merge queue');
@@ -791,7 +791,7 @@ test('#197: a red PR head saves the failing run with gh run view --log-failed, p
   // the failing run's output is saved first, from the verdict's `failed` ids, before the pr-red judge
   const saves = once.filter((a) => a.step === 'ci-log');
   assert.equal(saves.length, 1);
-  assert.deepEqual(saves[0].argv.slice(0, 5), ['gh', 'run', 'view', '7', '--log-failed']);
+  assert.deepEqual([saves[0].argv[0], basename(saves[0].argv[1]), ...saves[0].argv.slice(2).filter((x, i, all) => x !== '--repo' && all[i - 1] !== '--repo')], ['node', 'ci.mjs', 'failed-log', '7'], 'through ci.mjs, not gh straight (#221)');
   assert.equal(readFileSync(saves[0].stdout, 'utf8'), 'log of run 7\n');
   assert.deepEqual(h.prRedJudge.meta.failure, [saves[0].stdout], 'the judge names the saved output');
   assert.ok(log.findIndex((a) => a.step === 'ci-log') < log.findIndex((a) => a.step === 'pr-red'), 'the save runs before the judge');
@@ -1056,7 +1056,7 @@ test('#209: a PR head read with --pr that has no pull_request run, two reads run
   for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
   assert.equal(stage(h, ID1), 'awaiting-ci');
   const read = distinct(h.log).find((a) => a.step === 'ci-read' && a.tickets[0] === ID1);
-  assert.deepEqual(read.argv.slice(-2), ['--pr', 'origin/main'], 'the PR head is read with --pr <base>');
+  assert.equal(read.argv[read.argv.indexOf('--pr') + 1], 'origin/main', 'the PR head is read with --pr <base>');
   ci1 = 'no-pull-request';
   const noCi = () => distinct(h.log).filter((a) => a.step === 'pr-no-ci');
   h.wake();
@@ -1211,59 +1211,6 @@ test('#220: a fix round that pushes nothing and reads red again at the same head
   assert.equal(stage(h, ID1), 'stuck');
   const log = h.state().tick.judgeLog.filter((x) => x.step === 'pr-red');
   assert.deepEqual(log.map((x) => [x.id, x.outcome]), reds.map((a, i) => [a.id, i ? 'stuck' : 'fix']));
-});
-
-test('#220: a base-red rev-list that keeps failing brings an unreadable judge on the base at the third wake-up in a row; wait, and the mapping goes on once it reads', (t) => {
-  const h = world(t, { profile: { integrate: 'ticket-pr' } });
-  const [ID1, ID2] = h.ids;
-  h.S('set', ID2, '--waiting-on', ID1);
-  h.blockers[ID2] = [ID1];
-  const initSha = git(h.repo, 'rev-parse', 'origin/main');
-  let reverted = false;
-  h.ci = (branch, sha) => {
-    if (branch !== 'main') return 'green';
-    return !reverted && sha !== initSha && h.state().tickets[ID1].merges.length ? 'red' : 'green';
-  };
-  h.policy['revert-send'] = (a) => {
-    h.mergeBranch(a.meta.branch);
-    git(h.repo, 'fetch', '-q', 'origin');
-    reverted = true;
-    return 'sent';
-  };
-  // tick's own git: the stretch's rev-list fails until the judge is answered
-  let failing = true;
-  const failedAt = new Set();
-  const deps = defaultDeps();
-  const realGit = deps.git;
-  const flaky = {
-    ...deps,
-    git: (cwd, args, env) => {
-      if (failing && args[0] === 'rev-list' && args[1] === '--first-parent' && args.length === 3) {
-        failedAt.add(h.wakes.length);
-        throw new Error('rev-list failed');
-      }
-      return realGit(cwd, args, env);
-    },
-  };
-  h.tick = (...args) => tick([...args, '--now', h.iso()], flaky);
-  h.policy.unreadable = (a) => {
-    h.baseJudge = a;
-    h.failedBefore = failedAt.size;
-    failing = false;
-    return 'wait';
-  };
-  for (let i = 0; i < 12 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
-  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends');
-  assert.ok(h.baseJudge, 'the unreadable judge on the base came');
-  assert.deepEqual([h.baseJudge.meta.subject, h.baseJudge.meta.kind, h.baseJudge.meta.n], ['base', 'rev-list', 3]);
-  assert.deepEqual(h.baseJudge.tickets, []);
-  assert.equal(h.failedBefore, 3, 'at the third wake-up in a row of the failing rev-list');
-  assert.match(h.baseJudge.do, /git could not walk [0-9a-f]{40}\.\.[0-9a-f]{40}/);
-  // once rev-list reads, the red is mapped and reverted as ever
-  assert.equal(stage(h, ID1), 'stuck');
-  assert.ok(h.log.findIndex((a) => a.step === 'revert') > h.log.findIndex((a) => a.step === 'unreadable'), 'the revert follows the judge');
-  assert.deepEqual(h.state().tick.judgeLog.filter((x) => x.step === 'unreadable').map((x) => [x.subject, x.outcome]), [['base', 'wait']]);
-  assert.ok(!h.state().tick.unreadable?.base, 'the count is dropped once the stretch reads');
 });
 
 test('#198: a ticket with one unmerged upstream is stacked on it once it has a branch: cut from the upstream branch, gh stack init + add, the PR via gh stack submit on the upstream branch', (t) => {

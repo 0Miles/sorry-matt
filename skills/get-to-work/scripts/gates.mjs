@@ -114,6 +114,17 @@ const MERGE_SUBJECT = /^Merge branch '([^']+)'(?: into \S.*)?$/;
 const MARKER = { active: '<!-- sorry-matt:run active -->', ended: '<!-- sorry-matt:run ended -->' };
 
 export const GATES = ['freeze', 'ci', 'dispatch', 'review', 'merged', 'integrated', 'wake-end', 'stopped', 'finish', 'ledger'];
+
+/**
+ * #221: what makes a ticket delivered, the one copy state.mjs's stage guard and the finish gate both apply: a merge
+ * SHA, or under integrate: ticket-pr a left-for-human record — the ready PR a person merges (#196). A third form of
+ * delivery is added here only. Returns null when `t` has one, else why not.
+ */
+export function deliveryProblem(t, profile) {
+  if (t.merges.length) return null;
+  if (profile?.integrate === 'ticket-pr' && t.leftForHuman !== null) return null;
+  return profile?.integrate === 'ticket-pr' ? 'no merge SHA and no left-for-human record' : 'no merge SHA';
+}
 /** Which gates take targets (tickets or branches) and which require them. */
 export const TARGETS = { ci: 'branch', review: 'ticket', merged: 'ticket!', integrated: 'ticket!' };
 
@@ -465,10 +476,9 @@ const gates = {
     for (const [id, t] of Object.entries(state.tickets)) {
       if (!END.includes(t.stage)) failEnd(id, `is ${t.stage}; the finish reconciles every ticket to delivered, stuck or awaiting-ruling`);
       if ((t.stage === 'stuck' || t.stage === 'awaiting-ruling') && !t.reason) failReason(id, `is ${t.stage} with no reason`);
-      // #196, integrate: ticket-pr: a left-for-human record (the ready PR a person merges) counts as the delivery
-      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && t.leftForHuman !== null)) {
-        failMerge(id, `is delivered with no merge SHA${ticketPr ? ' and no left-for-human record' : ''}`);
-      }
+      // #196, #221: the delivery rule state.mjs's stage guard applies too (deliveryProblem)
+      const why = t.stage === 'delivered' ? deliveryProblem(t, profile) : null;
+      if (why) failMerge(id, `is delivered with ${why}`);
     }
     if (ticketPr) {
       const failPr = r.check('pr-recorded');

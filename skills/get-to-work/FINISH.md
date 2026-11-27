@@ -32,8 +32,7 @@ ticket.
   merged. A PR closed without a merge is not waited on (#220): tick issues a `pr-closed` judge; record `reopen` (run
   `gh pr reopen <PR>` with your own tool under the user's permission settings; the merge comes back to you as its
   `pr-send` prompting call) or `stuck`. When a waiting stage cannot read the same condition for 3 wake-ups in a row (a
-  missing ref, a tip out of step, a failed CI query, a queued ticket with no PR or branch, a failing `rev-list` in a
-  base-red episode), tick issues an `unreadable` judge; record `wait` or `stuck`. Each trigger and its outcome is kept
+  missing ref, a tip out of step, a failed CI query, a queued ticket with no PR or branch), tick issues an `unreadable` judge; record `wait` or `stuck`. Each trigger and its outcome is kept
   in the state's `judgeLog`.
 
 Every line first passes the **three line-level gates**, in a fixed order:

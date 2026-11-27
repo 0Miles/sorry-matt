@@ -275,6 +275,20 @@ test('#209: each usage error names what the command takes', () => {
   }
 });
 
+test('#221: failed-log prints a red run\'s failing output through the gh seam', () => {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    return 'step 3 failed\n';
+  };
+  const r = main(['failed-log', '--repo', 'acme/app', '42'], { ...defaultDeps(), gh });
+  assert.deepEqual([r.code, r.out], [0, 'step 3 failed\n']);
+  assert.deepEqual(calls, [['run', 'view', '42', '--log-failed', '--repo', 'acme/app']]);
+  for (const argv of [['failed-log'], ['failed-log', 'x7'], ['failed-log', '1', '2']]) assert.equal(main(argv, { ...defaultDeps(), gh }).code, 2, JSON.stringify(argv));
+  const failed = main(['failed-log', '42'], { ...defaultDeps(), gh: ghFailure('HTTP 404') });
+  assert.equal(failed.code, 1, failed.err);
+});
+
 test('bad arguments exit 2', () => {
   const deps = { ...defaultDeps(), gh: () => assert.fail('gh must not be called') };
   for (const argv of [[], ['nope'], ['verdict'], ['verdict', 'line'], ['verdict', 'line', SHA, 'extra'], ['verdict', '--bogus', 'line', SHA], ['verdict', 'line', SHA, '--repo'], ['base'], ['base', 'main', 'extra'], ['base', 'main', '--repo'], ['earliest-red'], ['earliest-red', 'a.json', 'b.json']]) {

@@ -10,6 +10,7 @@
 //   node ci.mjs verdict [--repo <owner>/<repo>] [--pr <base ref>] <branch> <sha>
 //   node ci.mjs base [--repo <owner>/<repo>] <base branch>
 //   node ci.mjs earliest-red <plan.json>
+//   node ci.mjs failed-log [--repo <owner>/<repo>] <run id>
 //
 // verdict
 //   Input: a branch and the SHA to read: an integration branch and its tip, or a ticket branch and the head SHA of
@@ -72,6 +73,11 @@
 //   Output: `verdict`'s fields with `command` "base", `branch` the base branch and `sha` its latest SHA or null,
 //   plus `failed`: the ids of the red runs, for `gh run view <id> --log-failed`. freeze.mjs reads it for its
 //   `base-ci` preflight check.
+//
+// failed-log (#221)
+//   The failing steps' output of one red run, `gh run view <run id> --log-failed`, printed as gh gives it (text,
+//   not JSON): tick saves it for a PR head's fix round (#197) through this seam rather than calling gh itself. A gh
+//   that fails is exit 1 with its message.
 //
 // earliest-red
 //   plan.json, written by the host for one line:
@@ -462,11 +468,15 @@ export function main(argv, deps = defaultDeps()) {
     } else if (command === 'base') {
       const { rest: [base], repo } = repoArgs(rest, 1, 'base takes <base branch>');
       result = baseVerdict({ base, repo, cwd: deps.cwd }, deps.gh);
+    } else if (command === 'failed-log') {
+      const { rest: [id], repo } = repoArgs(rest, 1, 'failed-log takes <run id>');
+      if (!/^\d+$/.test(id)) throw new UsageError('failed-log takes a numeric run id');
+      return { code: 0, out: String(deps.gh(['run', 'view', id, '--log-failed', ...(repo ? ['--repo', repo] : [])], deps.cwd)), err: '' };
     } else if (command === 'earliest-red') {
       if (rest.length !== 1 || rest[0].startsWith('-')) throw new UsageError('earliest-red takes exactly one plan file');
       result = earliestRed(readPlan(resolve(rest[0]), deps.read), deps);
     } else {
-      throw new UsageError('expected verdict, base or earliest-red');
+      throw new UsageError('expected verdict, base, earliest-red or failed-log');
     }
     return { code: 0, out: `${JSON.stringify(result, null, 2)}\n`, err: '' };
   } catch (e) {

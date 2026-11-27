@@ -362,7 +362,7 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { UsageError, run, gh, canonical, failure, parseJson, runIfEntry } from './cli.mjs';
 import { main as stateMain, load, leadOf, TERMINAL, profileOf } from './state.mjs';
-import { ticketOwners } from './merges.mjs';
+import { mergeCommand, ticketOwners } from './merges.mjs';
 import { scan, ownRows, lastRecordIndex, sectionAt } from './ticket.mjs';
 import { main as gateMain } from './merge-gate.mjs';
 
@@ -865,7 +865,7 @@ function prMergeReady(ctx, id, s, flags) {
   // #199: a PR in a stack — stacked itself, or with a live ticket stacked on it — merges with gh stack merge only
   const inStack = parent !== null || Object.values(s.tickets).some((o) => o.stackParent === id && !['stuck', 'awaiting-ruling'].includes(o.stage));
   const send = ['merge', 'queue'].includes(gate.decision)
-    ? { status: 'host', command: inStack ? `gh stack merge ${pr} --yes --squash` : `gh pr merge ${pr}` }
+    ? { status: 'host', command: mergeCommand(pr, { stacked: inStack }) }
     : { status: 'human' };
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
   recordBase(ctx, id, t, flags.base);
@@ -1341,6 +1341,35 @@ function ciMerge(ctx, id, s, wt, flags) {
 
 // ---- revert --------------------------------------------------------------------------------------------------------
 
+/**
+ * #221: one dependent of a reverted ticket, the one treatment the line revert and the ticket-pr revert share. An
+ * integrated dependent becomes stuck (`record(state)` writes its blocker record first — Local Markdown — and returns
+ * what it wrote, or 'none'); an in-flight one awaits a ruling, its branch kept at a ref and cleaned up in `cwd` (the
+ * integration worktree, or the repository under ticket-pr) unless an agent is still at work on it. Returns its row.
+ */
+function treatDependent(ctx, depId, upstream, cwd, record) {
+  const s = load(ctx.state);
+  const d = s.tickets[depId];
+  const row = { ticket: depId, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
+  if (INTEGRATED(d)) {
+    row.treatment = 'integrated';
+    row.record = record(s);
+    if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', depId, '--reason', upstream);
+  } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
+    row.treatment = 'in-flight';
+    if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', depId, '--reason', upstream);
+    if (d.assignment?.deadline) {
+      row.agent = d.assignment.agentId ?? null;
+      row.cleanup = 'agent-in-flight';
+    } else if (d.branch) {
+      row.kept = keepTip(cwd, d.branch, keptRef(s.run, d.branch, 'upstream-reverted'));
+      row.cleanup = cleanBranch(cwd, d.branch, `${depId} is awaiting a ruling`, true);
+    }
+  }
+  row.stage = load(ctx.state).tickets[depId].stage;
+  return row;
+}
+
 /** A dependent whose merge is on the line: it stays, and the dependent becomes stuck. */
 const INTEGRATED = (t) => t.merges.length > 0 && t.stage !== 'awaiting-ruling';
 
@@ -1439,36 +1468,18 @@ function revert(ctx, rest, flags) {
 
   // 4. dependents
   const upstream = `upstream reverted: ${id} (${revertShas})`;
-  const dependents = [];
-  for (const dep of deps) {
-    s = load(ctx.state);
-    const d = s.tickets[dep.id];
-    const row = { ticket: dep.id, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
-    if (INTEGRATED(d)) {
-      row.treatment = 'integrated';
-      if (local) {
-        row.record = blockLocal(wt, dep.file, line, dep.id, merges[0], [
-          `Reason: ${upstream}`,
-          ...reverts.map((r) => `Upstream merge: ${r.merge} reverted by ${r.revert}`),
-          `Integration branch: ${line}`,
-          `Run: ${s.run}`,
-        ]);
-      }
-      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep.id, '--reason', upstream);
-    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
-      row.treatment = 'in-flight';
-      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep.id, '--reason', upstream);
-      if (d.assignment?.deadline) {
-        row.agent = d.assignment.agentId ?? null;
-        row.cleanup = 'agent-in-flight';
-      } else if (d.branch) {
-        row.kept = keepTip(wt, d.branch, keptRef(s.run, d.branch, 'upstream-reverted'));
-        row.cleanup = cleanBranch(wt, d.branch, `${dep.id} is awaiting a ruling`, true);
-      }
-    }
-    row.stage = load(ctx.state).tickets[dep.id].stage;
-    dependents.push(row);
-  }
+  const dependents = deps.map((dep) =>
+    treatDependent(ctx, dep.id, upstream, wt, (s) =>
+      local
+        ? blockLocal(wt, dep.file, line, dep.id, merges[0], [
+            `Reason: ${upstream}`,
+            ...reverts.map((r) => `Upstream merge: ${r.merge} reverted by ${r.revert}`),
+            `Integration branch: ${line}`,
+            `Run: ${s.run}`,
+          ])
+        : 'none',
+    ),
+  );
 
   // 5. tip and push
   const tip = git(wt, 'rev-parse', 'HEAD');
@@ -1567,28 +1578,7 @@ function revertPr(ctx, rest, flags, s) {
 
   // 3. dependents, treated as the line revert treats them; the cleanup runs in the repository, there is no line worktree
   const upstream = `upstream reverted: ${id} (${revertShas})`;
-  const dependents = [];
-  for (const dep of deps) {
-    const live = load(ctx.state);
-    const d = live.tickets[dep];
-    const row = { ticket: dep, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
-    if (INTEGRATED(d)) {
-      row.treatment = 'integrated';
-      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep, '--reason', upstream);
-    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
-      row.treatment = 'in-flight';
-      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep, '--reason', upstream);
-      if (d.assignment?.deadline) {
-        row.agent = d.assignment.agentId ?? null;
-        row.cleanup = 'agent-in-flight';
-      } else if (d.branch) {
-        row.kept = keepTip(repo, d.branch, keptRef(live.run, d.branch, 'upstream-reverted'));
-        row.cleanup = cleanBranch(repo, d.branch, `${dep} is awaiting a ruling`, true);
-      }
-    }
-    row.stage = load(ctx.state).tickets[dep].stage;
-    dependents.push(row);
-  }
+  const dependents = deps.map((dep) => treatDependent(ctx, dep, upstream, repo, () => 'none'));
 
   // 4. push the revert branch (never the base) and open the revert PR; an open one with that head is reused
   pushable(repo, id, branch, 'the revert PR needs the revert branch on origin');

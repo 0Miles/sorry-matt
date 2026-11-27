@@ -9,6 +9,13 @@ const BRANCH_SUBJECT = /^Merge branch '([^']+)'/;
 const ID_SUBJECT = /^Merge (\S+?)(?=[\s:(]|$)(?:\s*\(([^)]*)\))?/;
 
 /** The ticket ids a merge subject names under rule 3: the leading id and its `(+<id>)` aliases. */
+/**
+ * #221: the command that merges a ticket's pull request, the one copy integrate.mjs's pr-merge --ready hands the
+ * host and tick names (its fallback, the human-work list, a revert PR): `gh stack merge` for a PR in a stack (#199),
+ * `gh pr merge` otherwise.
+ */
+export const mergeCommand = (pr, { stacked = false } = {}) => (stacked ? `gh stack merge ${pr} --yes --squash` : `gh pr merge ${pr}`);
+
 export function subjectIds(subject) {
   const m = ID_SUBJECT.exec(subject);
   if (!m || m[1] === 'branch') return [];

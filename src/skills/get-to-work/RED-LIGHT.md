@@ -14,7 +14,7 @@
 2. **對到票**：輸出的 `tickets` 由舊到新，從最早的開始，就是第一張（對票規則在 `scripts/review-guide.mjs` 檔頭）。
    `unmatched` 是 `true` —— 紅燈來自主持人 commit、精簡或併入基底，或線上沒有綠而基底在 merge-base 本來就紅
    （`baseCi.verdict` 是 `red`）—— 就**對不到票**。
-3. **失敗輸出**：有 CI 的線以 `gh run view <id> --log-failed` 存檔，`<id>` 是同一份輸出裡 `earliestRed` 那筆
+3. **失敗輸出**：有 CI 的線以 `node <scripts>/ci.mjs failed-log <id>`（`gh run view <id> --log-failed` 走 ci.mjs 的 seam，#221）存檔，`<id>` 是同一份輸出裡 `earliestRed` 那筆
    `failed` 的每個 id，`baseCi` 是紅時另存它 `failed` 的每個 id；本機驗證的紅取 `verify.mjs` 輸出的 `log`。
    主持人只取失敗那幾行。
 4. **修，最多兩輪**：
@@ -58,7 +58,7 @@
 `integrate: ticket-pr`（#197）下沒有整合分支，紅燈分兩種，上面的逐點流程不適用：
 
 - **PR 的 CI 紅**（`awaiting-ci` 讀到 `red`）：這個紅只屬於這張票，不跑 `ci.mjs earliest-red`、不找最早的紅
-  SHA。tick 先以 `gh run view <id> --log-failed` 存下失敗輸出（`<id>` 取 verdict 輸出的 `failed`），再發
+  SHA。tick 先以 `ci.mjs failed-log <id>`（#221）存下失敗輸出（`<id>` 取 verdict 輸出的 `failed`），再發
   `pr-red` judge。record `fix`：CI 失敗就是 finding，走集中修正——交回那張票的原 agent（在了就 SendMessage，
   不在就照常重 spawn），指著存下的失敗輸出而不是審查 findings，受票的修正輪上限與 `timeout-fix` 時限約束。
   修完的 commit 由 tick 以 `integrate.mjs pr-push` 推回同一支 PR，票回到 `awaiting-ci`，在新推出的 head 重讀

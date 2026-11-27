@@ -25,7 +25,7 @@
 - 收官時不會有還在 `awaiting-merge` 的票：tick 以 fallback 喚醒等 merge queue 合完才收官。PR 被關而沒合併時不等
   （#220）：tick 發 `pr-closed` judge，record `reopen`（以自己的工具在使用者權限設定下 `gh pr reopen <PR>`，合併再以
   `pr-send` 確認呼叫交回）或 `stuck`。等待階段連續 3 次喚醒都讀不到同一個狀況（ref 不見、tip 不同步、CI 查詢失敗、
-  排隊的票沒有 PR 或分支、基底紅燈的 `rev-list` 失敗）時，tick 發 `unreadable` judge，record `wait` 或 `stuck`；
+  排隊的票沒有 PR 或分支）時，tick 發 `unreadable` judge，record `wait` 或 `stuck`；
   每次觸發與結果都記在 state 的 `judgeLog`。
 
 每條線先過**線級的三道關**，順序固定：

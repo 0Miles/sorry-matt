@@ -157,7 +157,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   // ---- the canned network ----
   h.verdict = (args) => {
     const i = args.indexOf('verdict');
-    const [branch, sha] = args.slice(i + 1).filter((x, k, all) => x !== '--repo' && all[k - 1] !== '--repo');
+    const [branch, sha] = args.slice(i + 1).filter((x, k, all) => !['--repo', '--pr'].includes(x) && !['--repo', '--pr'].includes(all[k - 1]));
     const judged = h.ci(branch, sha);
     // #209: 'no-pull-request' stands for ci.mjs --pr finding a push run but no pull_request run
     const verdict = judged === 'no-pull-request' ? 'no-run' : judged;
@@ -329,7 +329,8 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
           gh: h.ghRuns,
           cwd: process.cwd(),
         });
-      } else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
+      } else if (script === 'ci.mjs' && rest[0] === 'failed-log') r = { code: 0, out: `log of run ${rest.at(-1)}\n` }; // #197, #221: the red run's failing output
+      else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
       else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
       else if (script === 'acceptance.mjs') r = { code: 0, out: JSON.stringify(h.accept(rest)) };
       else throw new Error(`no stand-in for ${script}`);
@@ -355,7 +356,6 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
         else out = `title:\t${h.titles[id]}\n--\nThe ticket text of ${id}.\n`;
       }
       else if (args[0] === 'run' && args[1] === 'list') out = '[]';
-      else if (args[0] === 'run' && args[1] === 'view') out = `log of run ${args[2]}\n`; // #197: gh run view <id> --log-failed
     } else throw new Error(`unknown command ${cmd}`);
     if (a.stdout) write(a.stdout, out);
     return code;
