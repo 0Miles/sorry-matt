@@ -2,6 +2,7 @@
 // Drives state.mjs through main(), against real state files in a temp dir. Times are fixed with --now. The
 // deadline.mjs and ci.mjs formats the state takes in come from deadline.mjs's own main where it can produce them,
 // so the two scripts are checked against each other, not against a copy of the format written here.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';

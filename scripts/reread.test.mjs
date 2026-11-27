@@ -1,6 +1,7 @@
 // node --test scripts/reread.test.mjs
 // The SessionStart(compact) hook in hooks/: a run in progress gets a plain-text reminder naming its
 // ledger and rule files; no git, no ledger, or only ended ledgers print nothing.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

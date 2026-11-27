@@ -2,6 +2,7 @@
 // Drives retro.mjs through main() on fake counters, state and transcript files in a temp dir. The state is written by
 // state.mjs's own main, so the two scripts are checked against each other; every expected token count is a literal
 // summed by hand from the fixture transcripts below, not recomputed the way the script does.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

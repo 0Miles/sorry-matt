@@ -2,6 +2,7 @@
 // hooks/end-run.mjs ends a run that stopped without its handoff: it changes the first line of a ledger in the
 // repo's shared directory from the active marker to the ended marker, and refuses, changing nothing, for any
 // other file or a ledger that is not active. The budget hook's deny names it.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

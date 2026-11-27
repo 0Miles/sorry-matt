@@ -2,6 +2,7 @@
 // The spawn budget hooks in hooks/: SubagentStart counts each new subagent of a run in progress next to its
 // ledger, PreToolUse on Agent denies a spawn once the count reaches the ledger's `budget: spawns` limit, and
 // with no run in progress, or no limit, nothing is counted against or blocked.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';

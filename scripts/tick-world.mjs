@@ -9,6 +9,7 @@
 // #160: the replays are split over several test files, which node --test runs in parallel. A replay starts a few
 // hundred git processes; on Windows each costs over ten times what it does on Linux, and the tests of one file run one
 // after another, so in one file they took past 600 s there.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, utimesSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';

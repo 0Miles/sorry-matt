@@ -1,6 +1,7 @@
 // node --test scripts/frontier.test.mjs
 // GitHub cases drive the script through its `gh` seam with fixtures; nothing calls the real GitHub.
 // Local Markdown cases use in-memory files, plus one real git repository in a temp dir for --ref.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';

@@ -1,6 +1,7 @@
 // node --test scripts/overlap.test.mjs
 // Drives overlap.mjs through main() with real plan and list files in a temp dir; the in-flight case uses a real
 // git repository with a ticket worktree.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';

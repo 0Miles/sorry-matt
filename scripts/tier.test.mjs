@@ -2,6 +2,7 @@
 // Real git repositories in temp dirs; expected tiers come from the table the script replaced in prove-it/SKILL.md
 // section 1 (prose only → light; sensitive path or more than 400 changed lines → full; at most 50 → light; else
 // standard), and the line counts from how each fixture is built.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
