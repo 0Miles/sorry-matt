@@ -197,8 +197,9 @@ const gone = (pid) => {
 };
 
 for (const [kind, bounds] of [
-  ['limit', { minuteMs: 400, timeout: '1' }],
-  ['idle', { idleMs: 400 }],
+  // bounds wide enough that the first check (a node start-up, slow in a loaded parallel run) is never cut
+  ['limit', { minuteMs: 3000, timeout: '1' }],
+  ['idle', { idleMs: 3000 }],
 ]) {
   test(`#215: a check past its ${kind} bound is killed: exit 6, verdict timeout, the rest skipped, nothing recorded`, (t) => {
     const r = setup(t, {});
@@ -235,21 +236,21 @@ for (const [kind, bounds] of [
 
 test('#215: a check that keeps printing is not idle; --timeout defaults to 30 minutes and must be a whole number', (t) => {
   const r = setup(t, {});
-  const chatty = `node -e "let n=0;const i=setInterval(()=>{console.log(n);if(++n===12)clearInterval(i)},100)"`;
+  const chatty = `node -e "let n=0;const i=setInterval(()=>{console.log(n);if(++n===10)clearInterval(i)},500)"`;
   r.commit({ 'docs/agents/commands.md': contract(fenced(chatty)) });
-  const res = bounded(r, { idleMs: 600 });
+  const res = bounded(r, { idleMs: 2500 });
   assert.equal(res.code, 0, res.err);
-  assert.equal(JSON.parse(res.out).result, 'green', 'about 1.2 s of output, never 600 ms of silence');
-  // no --timeout: 30 units; with 50 ms units a check gets 1.5 s, so a 0.8 s check passes and the hang is killed late
+  assert.equal(JSON.parse(res.out).result, 'green', 'about 5 s of output, never 2.5 s of silence');
+  // no --timeout: 30 units; with 200 ms units a check gets 6 s, so a 0.8 s check passes and the hang is killed late
   const nap = `node -e "setTimeout(()=>{},800)"`;
   r.commit({ 'docs/agents/commands.md': contract(fenced(nap, hang)) });
   const started = Date.now();
-  const late = bounded(r, { minuteMs: 50 });
+  const late = bounded(r, { minuteMs: 200 });
   const took = Date.now() - started;
   assert.equal(late.code, 6, late.err);
   const out = JSON.parse(late.out);
   assert.deepEqual([out.kind, out.checks.map((c) => c.exit)], ['limit', [0, null]]);
-  assert.ok(took >= 800 + 1500, `the hang ran its 30 units: ${took} ms in all`);
+  assert.ok(took >= 800 + 6000, `the hang ran its 30 units: ${took} ms in all`);
   for (const bad of ['0', '-5', '1.5', 'soon']) assert.equal(r.run('--reason', 'no-origin', '--timeout', bad).code, 2, `--timeout ${bad}`);
 });
 
