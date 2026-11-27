@@ -334,6 +334,53 @@ test('#152: a markdown heading, a nested symbol and a declaration over several l
   assert.deepEqual([inConstructor.tier, inConstructor.signals.sensitive], ['light', []]);
 });
 
+// The files a judge reads (the contract on both sides, the changed files a path#symbol entry matches) come from one
+// `git cat-file --batch` per round, not an ls-tree and a show per file and entry: on Windows each git process costs
+// 120-150 ms, and this repo's contract names 27+ symbols of state.mjs, 151 processes a judge before. The per-file
+// way (every name reported missing, as cat-file does for what it cannot find) must judge the same.
+const counting = (dir, { perFile = false } = {}) => {
+  const deps = defaultDeps(dir);
+  const calls = [];
+  const git = (args, input) => {
+    calls.push(args.find((a) => !a.startsWith('-') && !a.includes('=')));
+    if (perFile && args[0] === 'cat-file') return Buffer.from(input.split('\n').filter(Boolean).map((name) => `${name} missing\n`).join(''));
+    return deps.git(args, input);
+  };
+  return { calls, deps: { ...deps, git } };
+};
+test('a judge reads its files in one cat-file batch per round, and judges as the per-file reads do', (t) => {
+  const path = 'src/skills/get-to-work/scripts/state.mjs';
+  const own = { 'docs/agents/commands.md': OWN_CONTRACT, [path]: OWN_STATE };
+  const marker = 'function parseArgs(argv, spec) {';
+  const cases = {
+    'outside the symbols': repo(t, own, { [path]: swap(OWN_STATE, marker, `${marker}\n  void 0;`) }),
+    'inside a symbol': repo(t, own, { [path]: swap(OWN_STATE, "delivered: ['stuck'],", "delivered: ['stuck', 'candidate'],") }),
+    deleted: repo(t, own, { [path]: null }),
+    added: repo(t, { 'docs/agents/commands.md': OWN_CONTRACT }, { [path]: OWN_STATE }),
+    'no contract': repo(t, {}, { 'src/a.js': 'a();\n' }),
+  };
+  for (const [name, dir] of Object.entries(cases)) {
+    const batch = counting(dir);
+    const one = main(['judge', '--base', 'main'], batch.deps);
+    const perFile = counting(dir, { perFile: true });
+    const other = main(['judge', '--base', 'main'], perFile.deps);
+    assert.equal(one.code, 0, `${name}: ${one.err}`);
+    assert.equal(one.out, other.out, name);
+    assert.equal(batch.calls.filter((c) => c === 'show').length, 0, `${name}: ${batch.calls.join(' ')}`);
+    assert.ok(batch.calls.length <= 11, `${name}: ${batch.calls.length} git processes: ${batch.calls.join(' ')}`);
+  }
+});
+
+test('a submodule at a path#symbol path fails the judge as git show does: listed at head, missing to cat-file', (t) => {
+  const dir = repo(t, { 'docs/agents/commands.md': CONTRACT('```text\nsub#x\n```') }, {});
+  const git = gitIn(dir);
+  git('update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},sub`);
+  git('commit', '-q', '-m', 'a submodule');
+  const r = main(['judge', '--base', 'main'], defaultDeps(dir));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.err, /bad object/);
+});
+
 test('thresholds are configurable and reported; bad values exit 2', (t) => {
   const dir = repo(t, {}, { 'src/a.js': lines(51) });
   const raised = judge(dir, '--light-max-lines', '60', '--light-cap', '2');

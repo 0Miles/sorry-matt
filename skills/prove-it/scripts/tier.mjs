@@ -458,6 +458,16 @@ export function countLines(numstatText) {
   return { added, deleted, testLines };
 }
 
+// The sensitive entries of a judge: the union of the base and head contracts' lists, or the defaults when neither
+// has one.
+function sensitiveEntries(baseContract, headContract) {
+  const lists = [parseSensitive(baseContract), parseSensitive(headContract)].filter((l) => l && l.length > 0);
+  return {
+    sensitiveSource: lists.length ? 'commands.md' : 'default',
+    entries: (lists.length ? [...new Set(lists.flat())] : DEFAULT_SENSITIVE).map(sensitiveEntry),
+  };
+}
+
 // numstat: --no-renames -z (paths, old and new); counts: -M (line counts as a rename-aware diff reports them).
 // fileAt(side, path): the file's text on the old side (the merge-base the diff starts from) or the new side (head),
 // null where it does not exist; read only for changed paths a `path#symbol` entry matches.
@@ -471,9 +481,7 @@ export function collectSignals({ numstat, counts, diffText, base: baseContract, 
         testLines: rows.filter((r) => isTest(r.path)).reduce((n, r) => n + r.added + r.deleted, 0),
       }
     : countLines(counts);
-  const lists = [parseSensitive(baseContract), parseSensitive(headContract)].filter((l) => l && l.length > 0);
-  const sensitiveSource = lists.length ? 'commands.md' : 'default';
-  const entries = (lists.length ? [...new Set(lists.flat())] : DEFAULT_SENSITIVE).map(sensitiveEntry);
+  const { sensitiveSource, entries } = sensitiveEntries(baseContract, headContract);
   const changed = changedLineNumbers(diffText);
   const isSensitive = (p) =>
     entries.some((e) => e.re.test(p) && e.symbol.length === 0) ||
@@ -593,15 +601,78 @@ export function defaultDeps(cwd = process.cwd()) {
   return {
     cwd,
     read: (file) => readFileSync(resolve(cwd, file)),
-    git: (args) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }),
+    git: (args, input) =>
+      execFileSync('git', args, {
+        cwd,
+        input,
+        encoding: input === undefined ? 'utf8' : null, // null: a Buffer, read by exact byte sizes (cat-file --batch)
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      }),
   };
 }
 
+// One file at one ref, the per-file way: null where `ls-tree` lists nothing, else what `git show` prints (and its
+// failure, as for a submodule's commit).
 function fileAt(deps, ref, path) {
   const listed = deps.git(['ls-tree', '--full-tree', '--name-only', ref, '--', path]).trim();
   return listed === '' ? null : deps.git(['show', `${ref}:${path}`]);
 }
-const contractAt = (deps, ref) => fileAt(deps, ref, CONTRACT);
+
+const MISSING = Symbol('missing');
+
+// `git cat-file --batch` output for the names asked, in order: a blob's text, MISSING for `<name> missing` (or
+// ambiguous), undefined for an object that is not a blob.
+function parseCatFile(buf, count) {
+  const out = [];
+  let at = 0;
+  for (let n = 0; n < count; n += 1) {
+    const eol = buf.indexOf(0x0a, at);
+    const header = buf.subarray(at, eol).toString('utf8');
+    at = eol + 1;
+    const m = /^[0-9a-f]+ (\S+) (\d+)$/.exec(header);
+    if (!m) {
+      out.push(MISSING);
+      continue;
+    }
+    const size = Number(m[2]);
+    out.push(m[1] === 'blob' ? buf.subarray(at, at + size).toString('utf8') : undefined);
+    at += size + 1;
+  }
+  return out;
+}
+
+// The files a judge reads (the contract on base and head, the changed files a `path#symbol` entry matches on both
+// sides), as fileAt has them but with one `git cat-file --batch` per prefetch instead of two processes per file
+// (Windows pays 120-150 ms for each). What the batch cannot settle exactly goes the per-file way: a path with a line
+// break (cat-file reads names by line), an object that is not a blob, and a missing name that the head's tree
+// listing does not rule out (a submodule's commit is listed but missing; `git show` fails on it, as before).
+function fileReader(deps, head, treePaths) {
+  const cache = new Map();
+  const key = (ref, path) => `${ref}\0${path}`;
+  const listedAtHead = new Set(treePaths);
+  const settle = (ref, path, read) => {
+    if (typeof read === 'string') return read;
+    if (read === MISSING && ref === head && !listedAtHead.has(path)) return null;
+    return fileAt(deps, ref, path);
+  };
+  const prefetch = (pairs) => {
+    const todo = [...new Map(pairs.filter(([ref, path]) => !cache.has(key(ref, path))).map((p) => [key(...p), p])).values()];
+    const batchable = todo.filter(([, path]) => !/[\r\n]/.test(path));
+    const reads = batchable.length
+      ? parseCatFile(deps.git(['cat-file', '--batch'], batchable.map(([ref, path]) => `${ref}:${path}\n`).join('')), batchable.length)
+      : [];
+    const byKey = new Map(batchable.map(([ref, path], i) => [key(ref, path), reads[i]]));
+    for (const [ref, path] of todo) cache.set(key(ref, path), settle(ref, path, byKey.get(key(ref, path))));
+  };
+  return {
+    prefetch,
+    get: (ref, path) => {
+      if (!cache.has(key(ref, path))) prefetch([[ref, path]]);
+      return cache.get(key(ref, path));
+    },
+  };
+}
 
 export function main(argv, deps = defaultDeps()) {
   try {
@@ -634,14 +705,24 @@ export function main(argv, deps = defaultDeps()) {
     }
     const range = `${args.base}...${head}`;
     const sides = { old: deps.git(['merge-base', args.base, head]).trim(), new: head };
+    const numstat = deps.git(['diff', '--numstat', '-z', '--no-renames', '--no-color', '--no-ext-diff', range]);
+    const counts = deps.git(['diff', '--numstat', '-M', '--no-color', '--no-ext-diff', range]);
+    const diffText = deps.git(['-c', 'core.quotePath=false', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', range]);
+    const treePaths = deps.git(['ls-tree', '--full-tree', '-r', '--name-only', '-z', head]).split('\0').filter(Boolean);
+    const files = fileReader(deps, head, treePaths);
+    files.prefetch([[args.base, CONTRACT], [head, CONTRACT]]);
+    const contracts = { base: files.get(args.base, CONTRACT), head: files.get(head, CONTRACT) };
+    // the changed files a `path#symbol` entry matches, both sides, read in one batch before collectSignals asks
+    const { entries } = sensitiveEntries(contracts.base, contracts.head);
+    const symbolPaths = [...new Set(parseNumstat(numstat).map((r) => r.path))].filter((p) => entries.some((e) => e.symbol.length > 0 && e.re.test(p)));
+    files.prefetch(symbolPaths.flatMap((p) => [[sides.old, p], [sides.new, p]]));
     const signals = collectSignals({
-      numstat: deps.git(['diff', '--numstat', '-z', '--no-renames', '--no-color', '--no-ext-diff', range]),
-      counts: deps.git(['diff', '--numstat', '-M', '--no-color', '--no-ext-diff', range]),
-      diffText: deps.git(['-c', 'core.quotePath=false', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', range]),
-      base: contractAt(deps, args.base),
-      head: contractAt(deps, head),
-      treePaths: deps.git(['ls-tree', '--full-tree', '-r', '--name-only', '-z', head]).split('\0').filter(Boolean),
-      fileAt: (side, path) => fileAt(deps, sides[side], path),
+      numstat,
+      counts,
+      diffText,
+      ...contracts,
+      treePaths,
+      fileAt: (side, path) => files.get(sides[side], path),
     });
     const report = { ...judgeTier(signals, args.thresholds), base: args.base, head };
     const ordered = { format: report.format, base: report.base, head: report.head, ...report };
