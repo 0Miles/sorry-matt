@@ -12,6 +12,9 @@
 //     line-base          <ref> is an ancestor of (or is) every integration branch's tip: all were cut from one base.
 //     line-worktree      every integration branch is checked out in a worktree.
 //     commands-contract  every integration branch's tip has docs/agents/commands.md.
+//                        Under profile integrate: ticket-pr (#223) a line has no integration branch and no worktree
+//                        (integrate.mjs line-init, #193): line-branch, line-base and line-worktree are not applied, and
+//                        commands-contract checks <ref> itself, the commit every ticket branch is cut from.
 //   ci         [<branch>...]   CI was read for every line that reads it (default: every line).
 //     ci-latest          a line that reads CI (profile ci: read, an `origin` remote, not settled as CI not covering
 //                        it) has a CI verdict recorded for its local tip. A line `origin` does not have yet (never
@@ -299,13 +302,20 @@ function merges(r, g, state, ids) {
 // ---- the gates -----------------------------------------------------------------------------------------------------
 
 const gates = {
-  freeze(state, r, g, { base }) {
+  freeze(state, r, g, { base }, profile) {
     const ids = Object.keys(state.tickets);
     if (!ids.length) r.check('tickets')('state', 'no tickets: add the frozen ticket set');
     else r.check('tickets');
     const failMoved = r.check('not-dispatched');
     for (const [id, t] of Object.entries(state.tickets)) if (t.stage !== 'candidate') failMoved(id, `is ${t.stage}; the freeze ends before the first dispatch`);
     const baseSha = g.full(base);
+    if (profile?.integrate === 'ticket-pr') {
+      // #223: every ticket is its own PR cut from the base; there is no integration branch to check (line-init, #193)
+      const failContract = r.check('commands-contract');
+      if (baseSha === null) failContract(base, 'is not a commit in this repository');
+      else if (!g.hasFile(baseSha, 'docs/agents/commands.md')) failContract(base, 'has no docs/agents/commands.md; generate and commit it on the base before dispatching');
+      return;
+    }
     const failBranch = r.check('line-branch');
     const failBase = r.check('line-base');
     const failTree = r.check('line-worktree');
@@ -456,13 +466,13 @@ const gates = {
       if (!END.includes(t.stage)) failEnd(id, `is ${t.stage}; the finish reconciles every ticket to delivered, stuck or awaiting-ruling`);
       if ((t.stage === 'stuck' || t.stage === 'awaiting-ruling') && !t.reason) failReason(id, `is ${t.stage} with no reason`);
       // #196, integrate: ticket-pr: a left-for-human record (the ready PR a person merges) counts as the delivery
-      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && (t.leftForHuman ?? null) !== null)) {
+      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && t.leftForHuman !== null)) {
         failMerge(id, `is delivered with no merge SHA${ticketPr ? ' and no left-for-human record' : ''}`);
       }
     }
     if (ticketPr) {
       const failPr = r.check('pr-recorded');
-      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && (t.pr ?? null) === null) failPr(id, 'is delivered with no pull request recorded');
+      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && t.pr === null) failPr(id, 'is delivered with no pull request recorded');
       // only a merged ticket's branch is spent: a PR left for a person, or one stopped short, still has its branch
       cleaned(r, g, state, Object.keys(state.tickets).filter((id) => state.tickets[id].merges.length));
       return;

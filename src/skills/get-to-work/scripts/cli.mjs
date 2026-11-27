@@ -32,6 +32,12 @@ export function run(cmd, args, cwd, env, { both = false } = {}) {
 /** The `gh` seam integrate.mjs and freeze.mjs share (#219): `run('gh', …)`, env and `{ both }` as there. */
 export const gh = (args, cwd, env, opts) => run('gh', args, cwd, env, opts);
 
+/**
+ * The trackers a run can record (#188): GitHub Issues and Local Markdown. The one list every script reads (#228):
+ * state.mjs re-exports it, acceptance.mjs, brief.mjs, freeze.mjs, frontier.mjs and tick.mjs check against it.
+ */
+export const TRACKERS = Object.freeze(['github', 'local']);
+
 // A Windows 8.3 short name (C:\Users\RUNNER~1) and its long name are one directory, but path.relative compares
 // text; so do symlinked spellings elsewhere. Relativize only canonical paths: `p` against `base`, through the real
 // path of its nearest existing ancestor: a file not on disk yet (or a deleted directory) still gets the long

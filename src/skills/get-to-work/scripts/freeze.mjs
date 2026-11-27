@@ -138,7 +138,7 @@
 // 2 bad arguments or plan.
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { UsageError, canonical, failure, gh, run, runIfEntry } from './cli.mjs';
+import { UsageError, TRACKERS, canonical, failure, gh, run, runIfEntry } from './cli.mjs';
 import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
 import { baseVerdict } from './ci.mjs';
 
@@ -168,7 +168,7 @@ function readFrontier(frontier, where) {
     throw new UsageError(`${where}: frontier is not ${FRONTIER_FORMAT} output`);
   }
   const { tracker, source, tickets, frontier: ready } = frontier;
-  if (!['github', 'local'].includes(tracker) || typeof source !== 'string' || !Array.isArray(tickets) || !Array.isArray(ready)) {
+  if (!TRACKERS.includes(tracker) || typeof source !== 'string' || !Array.isArray(tickets) || !Array.isArray(ready)) {
     throw new UsageError(`${where}: frontier needs tracker, source, tickets and frontier`);
   }
   for (const t of tickets) {

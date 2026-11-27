@@ -345,7 +345,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { UsageError, parseJson, failure, runIfEntry } from './cli.mjs';
+import { UsageError, TRACKERS, parseJson, failure, runIfEntry } from './cli.mjs';
 import { load, update, main as stateMain, TERMINAL, profileOf, FINDING_COUNTS, isText } from './state.mjs';
 import { main as deadlineMain } from './deadline.mjs';
 import { ticketOwners } from './merges.mjs';
@@ -1618,7 +1618,7 @@ const reviewMode = (t) => (['fixing', 'integrating'].includes(t.history[lastEntr
 const fixedPointOf = (c, t) =>
   c.profile.integrate === 'ticket-pr'
     ? // #199: once the upstream is merged the ticket is the stack's bottom, and its fixed point is the base again
-      ((t.stackParent ?? null) !== null && !upstreamMerged(c, t) && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}`
+      (t.stackParent !== null && !upstreamMerged(c, t) && c.state.tickets[t.stackParent]?.branch) || `origin/${c.cfg.base}`
     : c.target(t.line);
 /** #199: whether a stacked ticket's upstream is merged (delivered with its merge recorded). */
 const upstreamMerged = (c, t) => {
@@ -2026,7 +2026,7 @@ function stepTicketPr(c) {
     if (t.assignment?.deadline && t.assignment.agentId) continue; // an agent is at work: its report comes first
     const tip = c.git.ref(t.branch);
     if (!tip || !reportedCommit(c, id)) continue;
-    if ((t.pr ?? null) === null) {
+    if (t.pr === null) {
       const title = c.book.titles?.[id] ?? String(id);
       c.emit(
         exec(`pr-open:${id}`, 'pr-open', ['node', js('integrate.mjs'), 'pr-open', c.path, id, '--title', title, '--base', c.cfg.base, '--repo', c.cfg.root], {
@@ -2072,7 +2072,7 @@ function stepPrMerge(c) {
   for (const tickets of byLine.values()) {
     let busy = false;
     for (const [id, t] of tickets) {
-      if (t.stage === 'queued' && (t.stackParent ?? null) === null) prQueuedReadable(c, id, t);
+      if (t.stage === 'queued' && t.stackParent === null) prQueuedReadable(c, id, t);
       if (t.stage === 'integrating') prIntegrating(c, id, t);
       else if (t.stage === 'awaiting-ci') prAwaitCi(c, id, t);
       else if (t.stage === 'awaiting-merge') prAwaitMerge(c, id, t);
@@ -2085,7 +2085,7 @@ function stepPrMerge(c) {
     // the stack — only while no agent is at work anywhere in its stack (gh stack stops at a dirty or busy worktree)
     const stackIdle = (id) => stackOf(c, id).every((k) => !(c.state.tickets[k].assignment?.deadline && c.state.tickets[k].assignment.agentId));
     const queued = tickets
-      .filter(([id, t]) => t.stage === 'queued' && ((t.stackParent ?? null) === null || (upstreamMerged(c, t) && stackIdle(id))) && (t.pr ?? null) !== null && t.branch)
+      .filter(([id, t]) => t.stage === 'queued' && (t.stackParent === null || (upstreamMerged(c, t) && stackIdle(id))) && t.pr !== null && t.branch)
       .sort((x, y) => ((x[1].history[lastEntry(x[1], 'queued')]?.at ?? '') < (y[1].history[lastEntry(y[1], 'queued')]?.at ?? '') ? -1 : 1));
     if (queued.length) prPushPhase(c, queued[0][0], queued[0][1]); // the push phase moves queued → integrating itself
   }
@@ -2251,7 +2251,7 @@ function baseRedRevert(c, red, [tid, t]) {
     grew = false;
     for (const [id2, t2] of Object.entries(c.state.tickets)) {
       if (seen.has(id2)) continue;
-      if (((t2.stackParent ?? null) !== null && seen.has(t2.stackParent)) || (t2.waitingOn ?? []).some((x) => seen.has(x))) {
+      if ((t2.stackParent !== null && seen.hast2.stackParent) || t2.waitingOn.some((x) => seen.has(x))) {
         seen.add(id2);
         grew = true;
       }
@@ -2368,8 +2368,8 @@ function prCloseIssues(c) {
  * neither (a report that carried no commit opens no PR, #195) would wait in silence. It is counted instead.
  */
 function prQueuedReadable(c, id, t) {
-  if ((t.pr ?? null) !== null && t.branch) return void clearUnreadable(c, id);
-  const missing = [...(t.branch ? [] : ['no ticket branch']), ...((t.pr ?? null) === null ? ['no pull request'] : [])].join(' and ');
+  if (t.pr !== null && t.branch) return void clearUnreadable(c, id);
+  const missing = [...(t.branch ? [] : ['no ticket branch']), ...(t.pr === null ? ['no pull request'] : [])].join(' and ');
   unreadable(c, id, t.branch ? 'no-pr' : 'no-branch', `${id} is queued for its merge, but it has ${missing} recorded: the merge path cannot start it`, { tickets: [id], line: t.line });
 }
 
@@ -2416,7 +2416,7 @@ function prPushPhase(c, id, t) {
     if (n > (flag.prSyncFrom ?? 1) && c.book.done[`pr-sync:${id}:${n - 1}`]?.exit === 4 && t.reviews.length) return void stageTo(c, id, t, 'in-review');
     // #199: a stacked ticket's sync rebased it (new SHAs): its own patch-id against its fixed point now is compared
     // with the one taken when its review passed — the same keeps the review, any other (or none on record) rechecks
-    if ((t.stackParent ?? null) !== null && t.reviews.length) {
+    if (t.stackParent !== null && t.reviews.length) {
       const now = stackPatch(c, id, t, `s${n}`);
       if (now.pending) return;
       const before = readJsonFile(c.deps, c.tick('pr', `${keyOf(id)}-patch-r${t.reviews.length}.json`));
@@ -2458,7 +2458,7 @@ function prPushPhase(c, id, t) {
  * under `tag`: { pending: its id while it runs, else null; file }, or null for a ticket that is not stacked.
  */
 function stackPatch(c, id, t, tag) {
-  if (c.profile.integrate !== 'ticket-pr' || (t.stackParent ?? null) === null || !t.branch) return null;
+  if (c.profile.integrate !== 'ticket-pr' || t.stackParent === null || !t.branch) return null;
   const file = c.tick('pr', `${keyOf(id)}-patch-${tag}.json`);
   const pending = c.emit(
     exec(`patch:${id}:${tag}`, 'patch-id', ['node', js('integrate.mjs'), 'patch-id', c.path, id, '--from', fixedPointOf(c, t), '--repo', c.cfg.root], {
@@ -2477,8 +2477,8 @@ function stackOf(c, id) {
   for (let grew = true; grew; ) {
     grew = false;
     for (const [k, t] of Object.entries(c.state.tickets)) {
-      if (k === id || out.has(k) || (t.stackParent ?? null) === null) continue;
-      if (t.stackParent === id || out.has(t.stackParent)) {
+      if (k === id || out.has(k) || t.stackParent === null) continue;
+      if (t.stackParent === id || out.hast.stackParent) {
         out.add(k);
         grew = true;
       }
@@ -2560,7 +2560,9 @@ function prAwaitCi(c, id, t) {
   }
   const out = c.tick('ci', `pr-${keyOf(id)}-w${c.book.wakeup}.json`);
   const readId = `pr-ci:${id}@${head12}:w${c.book.wakeup}`;
-  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
+  // --pr (#209): a PR head with a push run but no pull_request run, where the base's workflows trigger on
+  // pull_request, is no-run (no-pull-request), not green; ci.mjs greps the workflows in the repository (cwd)
+  if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head, '--pr', `origin/${c.cfg.base}`], { stdout: out, cwd: c.cfg.root, tickets: [id], line: t.line })) !== null) return;
   const v = readJsonFile(c.deps, out);
   const verdict = v?.verdict ?? null;
   if (verdict) flag.prCi = { sha: head, verdict }; // #200: the PR head's last CI result, for the reconciliation table
@@ -2613,13 +2615,27 @@ function prAwaitCi(c, id, t) {
     for (const run of v?.rerun ?? []) c.emit(exec(`pr-rerun:${id}:${run}`, 'ci-rerun', ['gh', 'run', 'rerun', String(run), ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { tickets: [id], line: t.line }));
     return;
   }
-  if (verdict === 'no-run' && v?.reason === 'empty') {
+  if (verdict === 'no-run' && (v?.reason === 'empty' || v?.reason === 'no-pull-request')) {
     // the line-level no-run counting, per ticket: at two empty reads the branch's run list settles it
     if (flag.prNoRunAt !== readId) {
       flag.prNoRun = (flag.prNoRun ?? 0) + 1;
       flag.prNoRunAt = readId;
     }
     if ((flag.prNoRun ?? 0) < 2) return;
+    if (v.reason === 'no-pull-request') {
+      // #209: the branch has its push runs; the PR's own pull_request run is what is missing, two reads running
+      c.emit(
+        judge(
+          `pr-no-ci:${id}@${head12}`,
+          'pr-no-ci',
+          `${id}'s pull request head ${head} has a push run but no pull_request run after two reads, though the workflows of ${c.cfg.base} run on pull_request (a PR GitHub runs nothing for, such as one with merge conflicts, or a run not created yet). Record ready to go on to the ready phase (merge-gate.mjs still guards the merge); or record stuck / awaiting-ruling with --value <reason>.`,
+          ['ready', 'stuck', 'awaiting-ruling'],
+          [{ path: js('ci.mjs'), part: 'header (verdict, --pr)' }],
+          { tickets: [id], line: t.line, meta: { sha: head } },
+        ),
+      );
+      return;
+    }
     const runsOut = c.tick('ci', `pr-${keyOf(id)}-branch-w${c.book.wakeup}.json`);
     if (c.emit(exec(`pr-ci-branch:${id}:w${c.book.wakeup}`, 'ci-branch', ['gh', 'run', 'list', '--branch', t.branch, '--limit', '1', '--json', 'databaseId', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : [])], { stdout: runsOut, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
     const listed = readJsonFile(c.deps, runsOut);
@@ -2854,7 +2870,7 @@ function dueReasons(c) {
     }
     if (t.merges.length > (last.merges[id] ?? 0)) reasons.add('a ticket was merged');
     // #198: the one upstream a waiting ticket waits on got its branch (it was dispatched): it can be stacked now
-    if (t.stage === 'waiting-upstream' && (t.waitingOn ?? []).length === 1 && c.profile.integrate === 'ticket-pr' && stackFree(c, t.waitingOn[0], id) && ghStackReady(c)) {
+    if (t.stage === 'waiting-upstream' && t.waitingOn.length === 1 && c.profile.integrate === 'ticket-pr' && stackFree(c, t.waitingOn[0], id) && ghStackReady(c)) {
       reasons.add('an upstream can take a stacked ticket');
     }
   }
@@ -2960,9 +2976,10 @@ function dispatchSteps(c, d) {
   const known = (fid) => [fid, basename(String(fid))].find((x) => c.leadOf(x) !== null) ?? null;
   const info = new Map(fr.tickets.map((x) => [known(x.id), x]).filter(([k]) => k));
   book.titles = { ...(book.titles ?? {}), ...Object.fromEntries([...info].filter(([, x]) => x.title).map(([k, x]) => [k, x.title])) };
-  // 4. stalled tickets and the lines that failed verification leave the pipeline
+  // 4. stalled tickets and the lines that failed verification leave the pipeline; a ticket at waiting-upstream too
+  //    (#231): prUpstreams leaves a stalled one to this step, and an upstream that went stuck leaves it stalled
   for (const [id, t] of Object.entries(state.tickets)) {
-    if (t.stage !== 'candidate') continue;
+    if (t.stage !== 'candidate' && t.stage !== 'waiting-upstream') continue;
     // a bundle stalls when any of its tickets does (#205)
     const sid = c.group(id).find((m) => info.get(m)?.stalled) ?? id;
     const f = info.get(sid);
@@ -3164,8 +3181,8 @@ function prUpstreams(c, info, known, d) {
       }
     }
     const waiting = [...ups].sort();
-    const parent = t.stackParent ?? null;
-    const was = [...(t.waitingOn ?? [])].sort();
+    const parent = t.stackParent;
+    const was = [...t.waitingOn].sort();
     const setTo = (stack, wait) => {
       if (parent === stack && was.join(',') === wait.join(',')) return null;
       return c.emit(
@@ -3505,7 +3522,7 @@ function prRows(c) {
           : t.stage === 'waiting-upstream' || /^waits on /.test(String(t.reason ?? ''))
             ? 'waiting-upstream'
             : 'not-merged';
-    const pr = t.pr ?? null;
+    const pr = t.pr;
     const ci = c.book.flags[id]?.prCi ?? null;
     const ready = c.book.flags[id]?.prReady ? readJsonFile(c.deps, c.book.flags[id].prReady) : null;
     const gate = merge === 'left-for-human' && ready?.gate ? { decision: ready.gate.decision, reason: ready.gate.reason } : null;
@@ -4418,7 +4435,7 @@ tick.mjs run: killed by ${p.signal}, not a normal end
 // ---- setup ----------------------------------------------------------------------------------------------------------
 
 export function setup(path, flags, now) {
-  if (!['github', 'local'].includes(flags.tracker)) throw new UsageError('setup needs --tracker github|local');
+  if (!TRACKERS.includes(flags.tracker)) throw new UsageError(`setup needs --tracker ${TRACKERS.join('|')}`);
   if (!flags.root || !flags.base) throw new UsageError('setup needs --root <repo working tree> and --base <base branch>');
   if (flags.tracker === 'github' && !/^[^/\s]+\/[^/\s]+$/.test(flags.repo ?? '')) throw new UsageError('--repo <owner>/<repo> is required with --tracker github');
   if (flags.tracker === 'local' && !flags['tickets-dir']) throw new UsageError('--tickets-dir <repo-relative dir> is required with --tracker local');

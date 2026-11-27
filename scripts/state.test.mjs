@@ -581,6 +581,27 @@ test('#188: an older file without the PR fields reads them as null, null and [];
   }
 });
 
+test('#228: an older file without profile, a line assignment or the in-review reassignment count reads them as their defaults and keeps them out on a write', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '--line', LINE);
+  r.ok('line', LINE);
+  const s = r.state();
+  delete s.profile;
+  delete s.lines[LINE].assignment;
+  delete s.tickets['#1'].timeoutReassignments['in-review'];
+  writeFileSync(r.path, JSON.stringify(s));
+  const shown = r.ok('show');
+  assert.equal(shown.profile, null);
+  assert.equal(shown.lines[LINE].assignment, null);
+  assert.equal(shown.tickets['#1'].timeoutReassignments['in-review'], 0);
+  assert.equal(r.ok('resume').profileWritten, false, 'no profile key: no profile written');
+  r.ok('profile', '--review', 'minimal');
+  const written = r.state();
+  assert.equal(written.profile.review, 'minimal', 'the first profile write goes through');
+  assert.equal('assignment' in written.lines[LINE], false, 'a filled-in default stays out of the file');
+  assert.equal('in-review' in written.tickets['#1'].timeoutReassignments, false);
+});
+
 test('#218: load() reads the fields an older file lacks as their defaults; a write leaves them out again', (t) => {
   const r = run(t);
   r.ok('add', '#1', '#2', '--line', LINE);
@@ -605,18 +626,33 @@ test('#218: load() reads the fields an older file lacks as their defaults; a wri
   assert.deepEqual([r.state().tickets['#2'].pr, r.state().tickets['#2'].waitingOn], [null, []]);
 });
 
-test('#218: a state file whose profile has integrate ticket-pr on a tracker other than github is not a state file (1)', (t) => {
+test('#218, #228: a state file whose profile has integrate ticket-pr on a tracker other than github: show and resume read it and name the problem; a write refuses it (1)', (t) => {
   for (const tracker of ['local', null, undefined]) {
     const r = run(t);
+    r.ok('add', '#1', '--line', LINE);
     const s = r.state();
     s.profile = { ...s.profile, integrate: 'ticket-pr' };
     if (tracker === undefined) delete s.tracker;
     else s.tracker = tracker;
     writeFileSync(r.path, JSON.stringify(s));
-    const out = r.cmd('show');
-    assert.equal(out.code, 1, `${tracker}: ${out.err}`);
-    assert.match(out.err, /profile\.integrate .*ticket-pr.*aggregate-pr/);
+    for (const command of ['show', 'resume']) {
+      const out = r.cmd(command);
+      assert.equal(out.code, 0, `${tracker} ${command}: ${out.err}`);
+      const json = JSON.parse(out.out);
+      assert.equal(json.problems.length, 1, `${tracker} ${command}`);
+      assert.match(json.problems[0], /profile\.integrate .*ticket-pr.*aggregate-pr/);
+    }
+    const write = r.cmd('set', '#1', '--branch', 'run-1/1-x');
+    assert.equal(write.code, 1, `${tracker}: ${write.err}`);
+    assert.match(write.err, /profile\.integrate .*ticket-pr.*aggregate-pr/);
   }
+  const shape = run(t);
+  const bad = shape.state();
+  bad.revision = 'many';
+  writeFileSync(shape.path, JSON.stringify(bad));
+  assert.equal(shape.cmd('show').code, 1, 'a shape problem is still not a state file, even for show');
+  const fine = run(t);
+  assert.equal('problems' in fine.ok('show'), false, 'a valid state has no problems key');
   const gh = run(t, { init: false });
   gh.ok('init', '--run', 'run-1', '--tracker', 'github');
   const s = gh.state();

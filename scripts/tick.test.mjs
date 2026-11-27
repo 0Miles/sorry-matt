@@ -1379,6 +1379,31 @@ test('#199: a stack merges from the bottom up with gh stack merge; the rebase th
   for (const id of [ID1, ID2]) assert.ok(h.log.some((a) => a.id === `issue-state:${id}`), `${id}'s issue is checked`);
 });
 
+test('#228: a stack divergence (pr-merge exit 5) at queued does not spend the sync attempt: one judge, and retry reruns the same attempt', (t) => {
+  const h = stackedPair(t);
+  const [, ID2] = h.ids;
+  let diverged = true;
+  const plain = h.stackSync;
+  h.stackSync = (cwd, branch) => {
+    if (diverged && branch === h.state().tickets[ID2].branch) return 'error: the stack diverged from its upstream; sync aborted\n';
+    if (plain) return plain(cwd, branch);
+    git(cwd, 'fetch', '-q', 'origin');
+    git(cwd, 'rebase', '-q', 'origin/main');
+    return '';
+  };
+  let judged = 0;
+  h.policy['pr-diverged'] = () => {
+    judged += 1;
+    diverged = false;
+    return 'retry';
+  };
+  for (let i = 0; i < 12 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(judged, 1, 'one divergence, one judge');
+  const syncs = [...new Set(h.log.filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID2 && /^pr-sync:/.test(a.id)).map((a) => a.id))];
+  assert.deepEqual(syncs, [`pr-sync:${ID2}:1`], 'the diverged attempt is retried as itself, not spent');
+  assert.equal(h.state().tickets[ID2].stage, 'delivered');
+});
+
 test('#199: a rebase that changes the stacked ticket\'s own patch sends it to a recheck before CI, with the tier of its initial review', (t) => {
   const h = stackedPair(t);
   const [, ID2] = h.ids;

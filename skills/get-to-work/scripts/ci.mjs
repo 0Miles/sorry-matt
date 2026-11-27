@@ -7,7 +7,7 @@
 // No dependencies: runs on a bare Node 20+ with git and the `gh` CLI.
 //
 // Usage
-//   node ci.mjs verdict [--repo <owner>/<repo>] <branch> <sha>
+//   node ci.mjs verdict [--repo <owner>/<repo>] [--pr <base ref>] <branch> <sha>
 //   node ci.mjs base [--repo <owner>/<repo>] <base branch>
 //   node ci.mjs earliest-red <plan.json>
 //
@@ -15,7 +15,7 @@
 //   Input: a branch and the SHA to read: an integration branch and its tip, or a ticket branch and the head SHA of
 //   its ticket PR. `gh` runs in the current directory; pass --repo when that is not inside the repository. The
 //   query is
-//     gh run list --branch <branch> --commit <sha> --limit 100 --json databaseId,workflowName,event,status,conclusion
+//     gh run list --branch <branch> --commit <sha> --limit 100 --json databaseId,workflowDatabaseId,workflowName,event,status,conclusion
 //   It lists the runs of every event on that SHA: a ticket PR's head SHA has a `push` run and a `pull_request` run,
 //   and `--branch` matches both (the head branch is the branch of a `pull_request` run; checked live on this repo
 //   with `gh run list --branch <PR head branch> --json event,headSha`), so no `--event` query is added. Each run
@@ -23,6 +23,16 @@
 //   beside a red `pull_request` run is red. Stacked ticket PRs need no workflow trigger of their own: per the
 //   gh-stack FAQ ("How do GitHub Actions work with Stacked PRs?"), every PR in a stack triggers `pull_request`
 //   workflows, branch protection and required checks as if it targeted the stack's base (main).
+//   Only the latest run counts (#209): of the runs that share a workflow (`workflowDatabaseId`, or `workflowName`
+//   when gh gives no id) and an event, the one with the highest `databaseId`; an older red or cancelled run of the
+//   same workflow and event — a run of a closed PR on the same head, or one that was rerun — is left out of `runs`,
+//   `rerun`, `failed` and the verdict. This holds for every command here.
+//   `--pr <base ref>` (#209): the SHA is a ticket PR's head. When <base ref>'s `.github/workflows` name
+//   `pull_request` (`git grep -l pull_request <base ref> -- .github/workflows`, run in the current directory)
+//   and no run of the SHA has event `pull_request`, a verdict that would be green is no-run with `reason`
+//   "no-pull-request": the PR's own run is missing (not created yet, or a PR GitHub runs nothing for, such as one
+//   with merge conflicts), and a `push` run alone does not stand for it. A repository whose workflows name no
+//   `pull_request` (push-triggered only), or a grep that fails, keeps the verdict as it is.
 //   All runs of the SHA together give one verdict, by the first rule that matches:
 //     1. query-failed  `gh` exited non-zero, could not be started, or printed something that is not a run list.
 //     2. no-run        the list is empty (`reason` "empty").
@@ -41,7 +51,7 @@
 //     "branch":  "<branch>",
 //     "sha":     "<sha>",
 //     "verdict": "query-failed" | "no-run" | "red" | "running" | "cancelled" | "green",
-//     "reason":  "empty" | "no-success" | null,   // set only for no-run
+//     "reason":  "empty" | "no-success" | "no-pull-request" | null,   // set only for no-run
 //     "error":   "<gh's error message>" | null,   // set only for query-failed
 //     "runs":    [{ "id": 123, "workflow": "check", "event": "push" | "pull_request" | ... | null,
 //                   "status": "completed", "conclusion": "success" }],
@@ -83,7 +93,7 @@
 //   The walk is `git log --first-parent <merge-base>..<tip>`, newest first, where <tip> is `origin/<line>` when
 //   `ci` is true and the local `<line>` otherwise, and <merge-base> is `git merge-base <tip> <base>`.
 //   Each SHA's verdict: with `ci` true, the runs of
-//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowName,event,status,conclusion
+//     gh run list --branch <line> --limit 200 --json headSha,databaseId,workflowDatabaseId,workflowName,event,status,conclusion
 //   grouped by `headSha` and judged by the rules of `verdict`; only red and green are conclusions (running,
 //   cancelled and no-run, all-skipped SHAs included, are not). A SHA with no CI conclusion takes its local
 //   verification record, when it has one. When `gh` fails, only the local records are used and `ci` in the
@@ -101,7 +111,7 @@
 //   `lowerBound`: that green SHA (`kind` "green"), or the merge base when there is no earlier green conclusion
 //   (`kind` "merge-base"), on lines with CI as well.
 //   `baseCi`: with `ci` true, a red and no green on the line, the base's runs of the merge base, from
-//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowName,event,status,conclusion
+//     gh run list --branch <base branch> --commit <merge-base> --limit 100 --json headSha,databaseId,workflowDatabaseId,workflowName,event,status,conclusion
 //   where <base branch> is `base` without a leading `origin/`, `refs/remotes/origin/` or `refs/heads/`, judged by
 //   the rules of `verdict`. When that verdict is red, the base was already red where the line left it: the red
 //   came in with the base, `tickets` is empty and `unmatched` true. Any other verdict (green, running, cancelled,
@@ -157,11 +167,23 @@ export const FORMAT = 'sorry-matt/ci@1';
 
 const RED = new Set(['failure', 'timed_out', 'startup_failure', 'action_required', 'stale']);
 // Each run's event too: a ticket PR's head SHA has push and pull_request runs.
-const RUN_FIELDS = 'databaseId,workflowName,event,status,conclusion';
+const RUN_FIELDS = 'databaseId,workflowDatabaseId,workflowName,event,status,conclusion';
 // earliest-red reads at most this many runs of the line; a list this long may have been cut.
 export const RUN_LIMIT = 200;
 
 const toRun = (r) => ({ id: r.databaseId, workflow: r.workflowName ?? null, event: r.event || null, status: r.status ?? null, conclusion: r.conclusion || null });
+
+/** #209: the latest run of each (workflow, event) of one SHA's raw rows, in their original order. */
+export function latestRows(rows) {
+  const key = (r) => `${r.workflowDatabaseId ?? `name:${r.workflowName ?? ''}`}|${r.event ?? ''}`;
+  const best = new Map();
+  for (const r of rows) {
+    const k = key(r);
+    if (!best.has(k) || (r.databaseId ?? 0) > (best.get(k).databaseId ?? 0)) best.set(k, r);
+  }
+  const keep = new Set(best.values());
+  return rows.filter((r) => keep.has(r));
+}
 
 /** One verdict for the runs of one SHA (`{ id, workflow, event, status, conclusion }` each): rules 2 to 6 of the header. */
 export function classify(runs) {
@@ -186,13 +208,25 @@ function queryRuns(gh, args, cwd) {
   }
 }
 
-export function verdict({ branch, sha, repo, cwd }, gh) {
+/** #209: whether `ref`'s workflows name `pull_request`; null when the grep could not tell. */
+function prTriggered(git, cwd, ref) {
+  try {
+    return String(git(cwd, ['grep', '-l', 'pull_request', ref, '--', '.github/workflows'])).trim() !== '';
+  } catch (e) {
+    return e.status === 1 ? false : null; // git grep exits 1 for no match
+  }
+}
+
+export function verdict({ branch, sha, repo, cwd, pr = null }, gh, git = null) {
   const args = ['--branch', branch, '--commit', sha, '--limit', '100', '--json', RUN_FIELDS, ...(repo ? ['--repo', repo] : [])];
   const q = queryRuns(gh, args, cwd);
   const head = { format: FORMAT, command: 'verdict', branch, sha };
   if (q.error !== undefined) return { ...head, verdict: 'query-failed', reason: null, error: q.error, runs: [], rerun: [], failed: [] };
-  const runs = q.rows.map(toRun);
-  const c = classify(runs);
+  const runs = latestRows(q.rows).map(toRun);
+  let c = classify(runs);
+  if (pr !== null && git && c.verdict === 'green' && !runs.some((r) => r.event === 'pull_request') && prTriggered(git, cwd, pr) === true) {
+    c = { ...c, verdict: 'no-run', reason: 'no-pull-request' };
+  }
   return { ...head, verdict: c.verdict, reason: c.reason, error: null, runs, rerun: c.rerun, failed: runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id) };
 }
 
@@ -266,7 +300,8 @@ export function earliestRed(plan, { git, gh }) {
       error = q.error;
     } else {
       ci = 'read';
-      for (const r of q.rows) runsBySha.set(r.headSha, [...(runsBySha.get(r.headSha) ?? []), toRun(r)]);
+      for (const r of q.rows) runsBySha.set(r.headSha, [...(runsBySha.get(r.headSha) ?? []), r]);
+      for (const [sha, rows] of runsBySha) runsBySha.set(sha, latestRows(rows).map(toRun));
       // A full list may have lost its oldest runs. The SHA of the last (oldest) row, every SHA with a row from
       // that SHA's first row on, and every walked SHA older than one of those may be missing runs.
       truncated = q.rows.length >= RUN_LIMIT;
@@ -319,7 +354,7 @@ export function earliestRed(plan, { git, gh }) {
     if (q.error !== undefined) {
       baseCi = { branch, sha: mergeBase, verdict: 'query-failed', error: q.error, runs: [], failed: [] };
     } else {
-      const runs = q.rows.filter((r) => r.headSha === mergeBase).map(toRun);
+      const runs = latestRows(q.rows.filter((r) => r.headSha === mergeBase)).map(toRun);
       const failed = runs.filter((r) => RED.has(r.conclusion)).map((r) => r.id);
       baseCi = { branch, sha: mergeBase, verdict: classify(runs).verdict, error: null, runs, failed };
     }
@@ -386,13 +421,17 @@ export function baseVerdict({ base, repo, cwd }, gh) {
 }
 
 // --repo and the positional arguments of verdict (2) and base (1).
-function repoArgs(argv, count, usage) {
+function repoArgs(argv, count, usage, { pr: allowPr = false } = {}) {
   const rest = [];
   let repo = null;
+  let pr = null;
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--repo') {
       repo = argv[(i += 1)];
       if (!repo || repo.startsWith('-')) throw new UsageError('--repo takes <owner>/<repo>');
+    } else if (allowPr && argv[i] === '--pr') {
+      pr = argv[(i += 1)];
+      if (!pr || pr.startsWith('-')) throw new UsageError('--pr takes <base ref>');
     } else if (argv[i].startsWith('-')) {
       throw new UsageError(`unknown option ${argv[i]}`);
     } else {
@@ -400,7 +439,7 @@ function repoArgs(argv, count, usage) {
     }
   }
   if (rest.length !== count) throw new UsageError(usage);
-  return { rest, repo };
+  return { rest, repo, pr };
 }
 
 export function defaultDeps() {
@@ -418,8 +457,8 @@ export function main(argv, deps = defaultDeps()) {
     const [command, ...rest] = argv;
     let result;
     if (command === 'verdict') {
-      const { rest: [branch, sha], repo } = repoArgs(rest, 2, 'verdict takes <branch> <sha>');
-      result = verdict({ branch, sha, repo, cwd: deps.cwd }, deps.gh);
+      const { rest: [branch, sha], repo, pr } = repoArgs(rest, 2, 'verdict takes <branch> <sha>', { pr: true });
+      result = verdict({ branch, sha, repo, cwd: deps.cwd, pr }, deps.gh, deps.git);
     } else if (command === 'base') {
       const { rest: [base], repo } = repoArgs(rest, 1, 'base takes <base branch>');
       result = baseVerdict({ base, repo, cwd: deps.cwd }, deps.gh);

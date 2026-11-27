@@ -304,7 +304,7 @@
 // On 1, 2 or 3 nothing is written to stdout. On every code but 0 the state file is unchanged.
 import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { UsageError, failure, run as exec, runIfEntry } from './cli.mjs';
+import { UsageError, TRACKERS, failure, run as exec, runIfEntry } from './cli.mjs';
 import { GATES, TARGETS, runGate } from './gates.mjs';
 
 // The sensitive paths of docs/agents/commands.md name each constant from FORMAT to FINDING_COUNTS and each function of
@@ -336,8 +336,6 @@ const EDGES = {
   'awaiting-ruling': [],
 };
 const TIMEOUT_STAGES = ['implementing', 'fixing', 'expanding', 'in-review'];
-// counts a state written before #143 does not have: read as 0
-const TIMEOUT_STAGES_ADDED = ['in-review'];
 export const PROFILE_DEFAULTS = Object.freeze({
   review: 'full',
   fixRounds: 2,
@@ -358,8 +356,8 @@ const PROFILE_VALUES = {
   ci: ['read', 'skip'],
   simplify: [true, false],
 };
-/** The trackers a run can record (#188); null in the state: unknown. The one list: acceptance.mjs reads tickets of these (#218). */
-export const TRACKERS = ['github', 'local'];
+/** The trackers a run can record (#188); null in the state: unknown. cli.mjs holds the one list (#228). */
+export { TRACKERS };
 /**
  * #201: the integrate default by the run's tracker — ticket-pr on GitHub; Local Markdown, and an unknown tracker (a
  * state from before #188), keep aggregate-pr. PROFILE_DEFAULTS holds the tracker-less one.
@@ -410,6 +408,44 @@ function count(text, where) {
 }
 
 // ---- the shape -----------------------------------------------------------------------------------------------------
+
+/**
+ * The fields a state from before them lacks, with what they read as (#143, #188, #196, #218, #219; #228). The one
+ * mechanism for an older file (#228): a new field an older file can lack is added here, load() fills it in before
+ * check() runs, and check() takes the field as always present; a write leaves out again each one it filled in that
+ * still holds that value, so it keeps an older file as it was. Optional by design — a field whose absence means
+ * something in a new file too, such as a ticket's `members`, a review's counts, or `timeoutExtensions` (absent: an
+ * imported ticket whose seed counted extensions for the run only, #156, #171) — is not an older-file default, and
+ * check() takes its absence as such. Dropping a key here makes every older state fail load (1): a sensitive path.
+ */
+const OLDER_FILE_DEFAULTS = Object.freeze({
+  state: { tracker: null, profile: null },
+  line: { assignment: null },
+  ticket: { leftForHuman: null, pr: null, prBase: null, stackParent: null, waitingOn: [] },
+  timeoutReassignments: { 'in-review': 0 },
+});
+/** Each object load() filled a field into → { field: the default's JSON }; save leaves those still at it out. */
+const filled = new WeakMap();
+
+/** Fills in what an older file lacks, so no reader needs a fallback; a value of the wrong shape is left to check. */
+function fillIn(state) {
+  const fill = (object, defaults) => {
+    if (!isObject(object)) return;
+    const missing = Object.entries(defaults).filter(([k]) => !(k in object));
+    if (!missing.length) return;
+    for (const [k, v] of missing) object[k] = structuredClone(v);
+    filled.set(object, new Map(missing.map(([k, v]) => [k, JSON.stringify(v)])));
+  };
+  fill(state, OLDER_FILE_DEFAULTS.state);
+  if (!isObject(state)) return;
+  if (isObject(state.lines)) for (const l of Object.values(state.lines)) fill(l, OLDER_FILE_DEFAULTS.line);
+  if (isObject(state.tickets)) {
+    for (const t of Object.values(state.tickets)) {
+      fill(t, OLDER_FILE_DEFAULTS.ticket);
+      if (isObject(t)) fill(t.timeoutReassignments, OLDER_FILE_DEFAULTS.timeoutReassignments);
+    }
+  }
+}
 
 const newUsage = () => ({
   started: null,
@@ -512,9 +548,15 @@ function stackProblem(state, id, stackParent, waitingOn) {
 }
 
 // Every check throws `bad(where, what)`; the caller decides whether that is a corrupt file (1) or bad input (2).
+/**
+ * Every way `state` is not a state file, each through `bad(where, what, kind)`. `kind` is 'shape' for a value of
+ * the wrong shape, 'rule' for a well-formed state a rule between its fields refuses (#228: ticket-pr on a tracker
+ * other than github): import refuses a rule (3) and takes a shape as bad input (2); show and resume still read a
+ * state whose only problems are rules.
+ */
 function check(state, bad) {
-  const need = (ok, where, what) => {
-    if (!ok) bad(where, what);
+  const need = (ok, where, what, kind = 'shape') => {
+    if (!ok) bad(where, what, kind);
   };
   const optText = (x) => x === null || typeof x === 'string';
   need(isObject(state) && state.format === FORMAT, 'format', `is not "${FORMAT}"`);
@@ -524,7 +566,7 @@ function check(state, bad) {
   need(state.imported === null || isTime(state.imported), 'imported', 'is not a UTC time or null');
   // a state written before #188 has no key: load() reads it as null (unknown)
   need(state.tracker === null || TRACKERS.includes(state.tracker), 'tracker', `is not one of ${TRACKERS.join(', ')} or null`);
-  const why = profileProblem(state.profile ?? null);
+  const why = profileProblem(state.profile);
   need(why === null, 'profile', why);
   need(isObject(state.lines) && isObject(state.tickets) && isObject(state.usage), 'lines/tickets/usage', 'are not objects');
   for (const [name, l] of Object.entries(state.lines)) {
@@ -541,7 +583,7 @@ function check(state, bad) {
     );
     need(l.base === null || (isObject(l.base) && SHA.test(l.base.sha) && typeof l.base.synced === 'boolean'), `${w}.base`, 'is not { sha, synced } or null');
     // a state written before lines held assignments has no key: read as null
-    if (l.assignment !== undefined && l.assignment !== null) {
+    if (l.assignment !== null) {
       checkAssignment(l.assignment, `${w}.assignment`, need);
       need(isObject(l.assignment.fingerprint) && !isObject(l.assignment.fingerprint.expansions), `${w}.assignment.fingerprint`, 'is not { head, tree }');
     }
@@ -554,7 +596,7 @@ function check(state, bad) {
     for (const k of ['branch', 'deliverable', 'verification', 'statusRecord', 'snapshotSha256', 'reason']) need(optText(t[k]), `${w}.${k}`, 'is not text or null');
     if (t.assignment !== null) checkAssignment(t.assignment, `${w}.assignment`, need);
     need(
-      isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s]) || (TIMEOUT_STAGES_ADDED.includes(s) && t.timeoutReassignments[s] === undefined)),
+      isObject(t.timeoutReassignments) && TIMEOUT_STAGES.every((s) => isCount(t.timeoutReassignments[s])),
       `${w}.timeoutReassignments`,
       'is not a count per stage',
     );
@@ -578,6 +620,7 @@ function check(state, bad) {
       const why = r.findingCounts ? countsProblem(r.findingCounts) : null;
       need(why === null, `${w}.reviews[${i}]`, `has findingCounts where ${why}`);
     });
+    // optional by design: absent for an imported ticket whose seed gave no count of its own (#156, #171)
     need(t.timeoutExtensions === undefined || isCount(t.timeoutExtensions), `${w}.timeoutExtensions`, 'is not a count');
     need(
       Array.isArray(t.fixReports) && t.fixReports.every((r) => isObject(r) && Array.isArray(r.fixed) && Array.isArray(r.unfixed) && isCount(r.after)),
@@ -608,9 +651,9 @@ function check(state, bad) {
   need(u.snapshot === null || (isObject(u.snapshot) && isObject(u.snapshot.tips) && Array.isArray(u.snapshot.terminal)), 'usage.snapshot', 'is not { tips, terminal } or null');
   need(state.stop === null || (isObject(state.stop) && Array.isArray(state.stop.stoppedBy)), 'stop', 'is not { stoppedBy, … } or null');
   // #218: ticket-pr is for a GitHub run. Last, so a malformed state is reported as such first; `profile` and
-  // `import` refuse it (3) themselves (import by this `where`), so only a file written by hand gets here.
-  const integrate = integrateProblem(state.profile ?? null, state.tracker);
-  need(integrate === null, INTEGRATE_WHERE, integrate);
+  // `import` refuse it (3) themselves (import by its kind, a rule), so only a file written by hand gets here.
+  const integrate = integrateProblem(state.profile, state.tracker);
+  need(integrate === null, 'profile.integrate', integrate, 'rule');
 }
 
 // ---- the stage rules -----------------------------------------------------------------------------------------------
@@ -625,9 +668,6 @@ function profileProblem(p) {
   }
   return null;
 }
-
-/** The `where` check() reports integrateProblem under (#218), so import can tell it from a malformed seed. */
-const INTEGRATE_WHERE = 'profile.integrate';
 
 /** Why this run's tracker does not allow the profile's integrate value, or null (#188): ticket-pr is for GitHub. */
 function integrateProblem(profile, tracker) {
@@ -812,8 +852,15 @@ export function writeAtomic(path, text) {
   }
 }
 
-/** The state at `path`; throws a StateError (exit 1) when it is missing or not a state file. */
-export function load(path) {
+/** The problems a lenient load() let through, by state object (#228): show and resume name them. */
+const problemsOf = new WeakMap();
+
+/**
+ * The state at `path`; throws a StateError (exit 1) when it is missing or not a state file. `lenient` (#228, show
+ * and resume): a state whose only problems are rules between well-formed fields (check()'s 'rule') is returned with
+ * those problems kept for problemsOf; a shape problem still throws.
+ */
+export function load(path, { lenient = false } = {}) {
   let text;
   try {
     text = retrying(() => readFileSync(path, 'utf8'));
@@ -828,29 +875,17 @@ export function load(path) {
     throw new StateError(`${path} is not JSON (${error.message})`);
   }
   fillIn(state);
-  check(state, (where, what) => {
+  const rules = [];
+  check(state, (where, what, kind) => {
+    if (lenient && kind === 'rule') return void rules.push(`${where} ${what}`);
     throw new StateError(`${path} is not a sorry-matt state file: ${where} ${what}`);
   });
+  if (rules.length) problemsOf.set(state, rules);
   return state;
 }
 
-/** The fields a state from before them lacks, with what they read as (#188, #196; #218). */
-const OLDER_FILE_DEFAULTS = { state: { tracker: null }, ticket: { leftForHuman: null, pr: null, prBase: null, stackParent: null, waitingOn: [] } };
-/** Each object load() filled a field into → { field: the default's JSON }; save leaves those still at it out. */
-const filled = new WeakMap();
-
-/** Fills in what an older file lacks, so no reader needs a fallback; a value of the wrong shape is left to check. */
-function fillIn(state) {
-  const fill = (object, defaults) => {
-    if (!isObject(object)) return;
-    const missing = Object.entries(defaults).filter(([k]) => !(k in object));
-    if (!missing.length) return;
-    for (const [k, v] of missing) object[k] = structuredClone(v);
-    filled.set(object, new Map(missing.map(([k, v]) => [k, JSON.stringify(v)])));
-  };
-  fill(state, OLDER_FILE_DEFAULTS.state);
-  if (isObject(state) && isObject(state.tickets)) for (const t of Object.values(state.tickets)) fill(t, OLDER_FILE_DEFAULTS.ticket);
-}
+/** show's and resume's output: the result, with `problems` (#228) when a lenient load let some through. */
+const withProblems = (state, result) => (problemsOf.has(state) ? { ...result, problems: problemsOf.get(state) } : result);
 
 const save = (path, state) =>
   writeAtomic(
@@ -1041,9 +1076,9 @@ function importLedger(path, rest, flags, ctx) {
   }
   const spawns = hookSpawns(path, ctx.read);
   if (spawns !== null) Object.assign(state.usage, { spawns, spawnsSource: 'counters' });
-  check(state, (where, what) => {
+  check(state, (where, what, kind) => {
     // a well-formed seed whose ticket-pr profile its tracker does not allow is refused (3), not bad input
-    if (where === INTEGRATE_WHERE) throw new Refusal(`seed: ${what}`);
+    if (kind === 'rule') throw new Refusal(`seed: ${what}`);
     throw new UsageError(`seed ${flags.from}: ${where} ${what}`);
   });
   const profile = profileOf(state);
@@ -1535,8 +1570,8 @@ const NOW = { now: 'one' };
 const COMMANDS = {
   init: [init, { run: 'one', tracker: 'one', ...NOW }],
   import: [importLedger, { from: 'one', ledger: 'one', ...NOW }],
-  show: [(path) => load(path), {}],
-  resume: [(path) => resume(load(path)), {}],
+  show: [(path) => ((s) => withProblems(s, s))(load(path, { lenient: true })), {}],
+  resume: [(path) => ((s) => withProblems(s, resume(s)))(load(path, { lenient: true })), {}],
   add: [add, { line: 'one', ...NOW }],
   bundle: [bundle, NOW],
   line: [line, { lines: 'one', tip: 'one', base: 'one', synced: 'one', ...NOW }],

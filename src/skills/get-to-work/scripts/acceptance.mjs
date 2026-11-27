@@ -66,7 +66,7 @@ import { createHash } from 'node:crypto';
 import { resolve, relative, sep } from 'node:path';
 import { UsageError, parseJson, run, canonical, failure, runIfEntry } from './cli.mjs';
 import { scan, section, ownRows, lines, startsHeading, listItem } from './ticket.mjs';
-import { TRACKERS } from './state.mjs';
+import { TRACKERS } from './cli.mjs';
 
 export const FORMAT = 'sorry-matt/acceptance@1';
 export const MARKER = '<!-- sorry-matt:expansion -->';

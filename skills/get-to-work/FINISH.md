@@ -22,6 +22,12 @@ ticket.
 - **Polish pass**: only a PR left for a person gets tick's `pr-polish` judge: per `ASKING.md` section 6, call the
   Skill tool with `no-bullshit` on the PR body (its `Closes` lines kept) and write it back with
   `gh pr edit <PR> --body-file <file>`. The PRs this run merged itself are not polished.
+- **The version number** (#228): when the repo's rule files ask for a version bump with every delivery (a plugin
+  manifest's `version`, say), ticket PRs leave the version alone — parallel PRs would conflict on that one line. At
+  the finish, when any ticket this run merged or left for a person changed a file that version covers, open one PR
+  from the latest base with your own tools that only bumps the version (subject without a ticket ID, body listing
+  the tickets it covers), send its merge under the merge authorization (without it, leave it for a person, on the
+  human-work list), and put it in the delivery report. A repo with no such rule gets none.
 - No ticket is still at `awaiting-merge` at the finish: tick waits on the fallback wake-up until the merge queue has
   merged. A PR closed without a merge is not waited on (#220): tick issues a `pr-closed` judge; record `reopen` (run
   `gh pr reopen <PR>` with your own tool under the user's permission settings; the merge comes back to you as its

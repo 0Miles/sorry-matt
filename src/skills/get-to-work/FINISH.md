@@ -18,6 +18,10 @@
 - **潤稿**：只有留給人合併的 PR 會收到 tick 發的 `pr-polish` judge：依 `ASKING.md` 第 6 節呼叫 Skill tool 帶入
   `no-bullshit` 潤 PR body（保留 `Closes` 行），以 `gh pr edit <PR> --body-file <檔>` 寫回。本 run 自己合併的 PR
   不潤。
+- **版本號**（#228）：repo 的規則檔要求每次交付 bump 版本號（例如 plugin manifest 的 `version`）時，票級 PR 不碰
+  版本號 —— 並行的 PR 會在同一行互相衝突。收官時，本 run 合併或留給人合併的票裡只要有一張改到該版本號涵蓋的檔案，
+  就以自己的工具從最新的基底開一支只 bump 版本號的 PR（subject 不帶票 ID，body 列出這次涵蓋的票），照合併授權送
+  合併（沒有授權就留給人合併，進人工作業清單），把它寫進交付報告。repo 沒有這種規則時不做。
 - 收官時不會有還在 `awaiting-merge` 的票：tick 以 fallback 喚醒等 merge queue 合完才收官。PR 被關而沒合併時不等
   （#220）：tick 發 `pr-closed` judge，record `reopen`（以自己的工具在使用者權限設定下 `gh pr reopen <PR>`，合併再以
   `pr-send` 確認呼叫交回）或 `stuck`。等待階段連續 3 次喚醒都讀不到同一個狀況（ref 不見、tip 不同步、CI 查詢失敗、

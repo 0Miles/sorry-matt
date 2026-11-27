@@ -474,7 +474,7 @@ const ticketOf = (s, id) => {
  * `--base` for the ticket); a `--base` that differs from the recorded one is refused before anything is touched.
  */
 function checkBase(id, t, base) {
-  const recorded = t.prBase ?? null;
+  const recorded = t.prBase;
   if (base !== undefined && recorded !== null && base !== recorded) {
     throw new Refusal(`${id}'s pull request base is ${recorded} (recorded), not --base ${base}`);
   }
@@ -482,7 +482,7 @@ function checkBase(id, t, base) {
 
 /** Records `--base` as the ticket's pull request base when none is recorded yet (after checkBase let it through). */
 function recordBase(ctx, id, t, base) {
-  if (base !== undefined && (t.prBase ?? null) === null) state(ctx, 'set', id, '--pr-base', base);
+  if (base !== undefined && t.prBase === null) state(ctx, 'set', id, '--pr-base', base);
 }
 
 // ---- commands ----------------------------------------------------------------------------------------------------
@@ -585,11 +585,11 @@ function stackCwd(repo, branch) {
 /** ticket-init under integrate: ticket-pr — cut by the ticket's #188 fields (see the header). */
 function ticketInitPr(ctx, id, s, t, flags) {
   const repo = ctx.repo;
-  const waiting = t.waitingOn ?? [];
+  const waiting = t.waitingOn;
   if (waiting.length) throw new Refusal(`${id} is waiting on ${waiting.join(', ')} to merge; no branch is cut until they are`);
   checkTicketBranch(s, id, t, flags.branch, repo);
   checkBase(id, t, flags.base);
-  const parent = t.stackParent ?? null;
+  const parent = t.stackParent;
   let from;
   if (parent !== null) {
     const up = s.tickets[parent];
@@ -669,7 +669,7 @@ function prTicket(ctx, s, id) {
   if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
   const branch = recordedBranch(s, id, t, ctx.repo);
   pushable(ctx.repo, id, branch, 'ticket-pr pushes every ticket branch there');
-  return { t, branch, parent: t.stackParent ?? null };
+  return { t, branch, parent: t.stackParent };
 }
 
 /** The number of the open pull request whose head is `branch`, or null. */
@@ -750,7 +750,7 @@ function prOpen(ctx, rest, flags) {
   }
 
   // 4. record
-  if ((t.pr ?? null) !== pr) state(ctx, 'set', id, '--pr', String(pr));
+  if (t.pr !== pr) state(ctx, 'set', id, '--pr', String(pr));
   recordBase(ctx, id, t, flags.base);
   return { out: { command: 'pr-open', ticket: id, line: t.line, branch, stacked: parent !== null, pr, created, body } };
 }
@@ -798,12 +798,12 @@ function prMergeTicket(ctx, s, id, stages) {
   const t = ticketOf(s, id);
   if (!stages.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; pr-merge takes a ticket that is ${stages.join(' or ')}`);
   const branch = recordedBranch(s, id, t, ctx.repo);
-  if ((t.pr ?? null) === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
-  return { t, branch, pr: t.pr, parent: t.stackParent ?? null };
+  if (t.pr === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
+  return { t, branch, pr: t.pr, parent: t.stackParent };
 }
 
 const prMergeOut = (phase, id, t, rest) => ({
-  command: 'pr-merge', phase, ticket: id, line: t.line, pr: t.pr, branch: t.branch, stacked: (t.stackParent ?? null) !== null, ...rest,
+  command: 'pr-merge', phase, ticket: id, line: t.line, pr: t.pr, branch: t.branch, stacked: t.stackParent !== null, ...rest,
 });
 
 /** Phase "push": sync the base into the ticket branch, push it, and report the head for tick's CI wake-up. */
@@ -1649,7 +1649,7 @@ function sendBack(ctx, rest, flags) {
   // point — origin/<--base>, or its upstream's branch when stacked — and the attempt is compared with that
   let from = `refs/heads/${t.line}`;
   if (prMode) {
-    const parent = t.stackParent ?? null;
+    const parent = t.stackParent;
     if (parent !== null) {
       const up = s.tickets[parent]?.branch;
       if (!up) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);

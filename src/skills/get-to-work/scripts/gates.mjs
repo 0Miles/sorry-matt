@@ -466,13 +466,13 @@ const gates = {
       if (!END.includes(t.stage)) failEnd(id, `is ${t.stage}; the finish reconciles every ticket to delivered, stuck or awaiting-ruling`);
       if ((t.stage === 'stuck' || t.stage === 'awaiting-ruling') && !t.reason) failReason(id, `is ${t.stage} with no reason`);
       // #196, integrate: ticket-pr: a left-for-human record (the ready PR a person merges) counts as the delivery
-      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && (t.leftForHuman ?? null) !== null)) {
+      if (t.stage === 'delivered' && !t.merges.length && !(ticketPr && t.leftForHuman !== null)) {
         failMerge(id, `is delivered with no merge SHA${ticketPr ? ' and no left-for-human record' : ''}`);
       }
     }
     if (ticketPr) {
       const failPr = r.check('pr-recorded');
-      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && (t.pr ?? null) === null) failPr(id, 'is delivered with no pull request recorded');
+      for (const [id, t] of Object.entries(state.tickets)) if (t.stage === 'delivered' && t.pr === null) failPr(id, 'is delivered with no pull request recorded');
       // only a merged ticket's branch is spent: a PR left for a person, or one stopped short, still has its branch
       cleaned(r, g, state, Object.keys(state.tickets).filter((id) => state.tickets[id].merges.length));
       return;
