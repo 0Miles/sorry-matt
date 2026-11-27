@@ -3,6 +3,7 @@
 // documented responses (GraphQL `repository.mergeQueue`, the rules and branch protection REST endpoints after gh's
 // `--jq`); nothing calls the real GitHub. `git grep` runs for real against a temp repository whose
 // `refs/remotes/origin/main` holds the workflows.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

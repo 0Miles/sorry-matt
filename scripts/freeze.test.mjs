@@ -1,6 +1,7 @@
 // node --test scripts/freeze.test.mjs
 // Drives freeze.mjs through main() with real plan, frontier and list files in a temp dir and a real git repository;
 // gh is a stub, so no test needs a network or a login.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';

@@ -1,6 +1,7 @@
 // node --test scripts/deadline.test.mjs
 // Drives deadline.mjs through main(). Fingerprints come from real git repositories built in a temp dir, with every
 // git setting that could change a tree pinned by the test; times are fixed with --now, never by sleeping.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';

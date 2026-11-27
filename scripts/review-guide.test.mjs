@@ -2,6 +2,7 @@
 // Drives review-guide.mjs through main() against a real git repository built the way get-to-work builds a line:
 // `--no-ff` ticket merges, a red-light fix branch, a conflict resolved in the merge, a simplify commit and a
 // base merge.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';

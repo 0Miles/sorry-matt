@@ -3,6 +3,7 @@
 // created and read back with state.mjs's own main, so the record format is checked against the script that owns
 // it, not against a copy written here. Checks are small `node -e` commands that leave marks in files outside the
 // repository, so the tests can tell which checks ran.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

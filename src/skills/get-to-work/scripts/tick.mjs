@@ -513,6 +513,24 @@ export function gitView(root, deps) {
   return view;
 }
 
+/**
+ * The git view of `root`: built afresh, or (`views` given) the one `run` kept from an earlier list of the same call.
+ * run drops what it keeps whenever an exec it runs may have changed git (keepsGitView).
+ */
+function viewOf(root, deps, views) {
+  if (!views) return gitView(root, deps);
+  if (!views.has(root)) views.set(root, gitView(root, deps));
+  return views.get(root);
+}
+
+/**
+ * The execs that leave the repository's refs, worktrees and MERGE_HEAD as they were: the scripts that only read git (or
+ * nothing of it) and write the run's own files, and `gh`, which reads and writes GitHub, not the local repository.
+ * integrate.mjs, `git` itself and verify.mjs (it runs the project's own checks in a worktree) are not among them.
+ */
+const GIT_NEUTRAL_SCRIPTS = new Set(['state.mjs', 'deadline.mjs', 'brief.mjs', 'overlap.mjs', 'ci.mjs', 'frontier.mjs', 'acceptance.mjs', 'merge-gate.mjs', 'tier.mjs']);
+const keepsGitView = (a) => a.argv[0] === 'gh' || (a.argv[0] === 'node' && GIT_NEUTRAL_SCRIPTS.has(basename(a.argv[1] ?? '')));
+
 /** The merge commit that brought ticket `t` into `target`, or null when it is not merged. */
 function mergedSha(c, id, t, target) {
   const g = c.git;
@@ -628,7 +646,7 @@ function localVerify(c, line, sha, reason, wt, final = false) {
 
 // ---- context --------------------------------------------------------------------------------------------------------
 
-function context(path, state, now, deps) {
+function context(path, state, now, deps, views = null) {
   if (!isObject(state.tick) || state.tick.format !== FORMAT) throw new UsageError(`${path} has no tick configuration: run tick.mjs setup first`);
   const book = structuredClone(state.tick);
   const cfg = book.config;
@@ -662,7 +680,7 @@ function context(path, state, now, deps) {
     W,
     deps,
     limits,
-    git: gitView(cfg.root, deps),
+    git: viewOf(cfg.root, deps, views),
     actions: [],
     reports: [],
     reconcile: [],
@@ -3735,9 +3753,9 @@ function recordLine(c, a) {
   return `${head} --outcome ${a.outcomes.join('|')}${extra.length ? ` ${extra.join(' ')}` : ''}`;
 }
 
-export function next(path, reported, now, deps, { hold = false } = {}) {
+export function next(path, reported, now, deps, { hold = false, views = null } = {}) {
   const state = load(path);
-  const c = context(path, state, now, deps);
+  const c = context(path, state, now, deps, views);
   c.hold = hold; // run's own lists: their batch-1 spawns are handed out only when run returns the list (#146)
   const { book } = c;
   for (const id of reported) if (!book.inbox.includes(id)) book.inbox.push(id);
@@ -4338,16 +4356,20 @@ function markRan(path, a, result, now) {
  * while batch 1 held nothing else and `then` is "tick". An exec an earlier run ran and could not record is recorded,
  * not run. The output is the last list less the execs run, plus `ran`; its batch-1 spawns count as handed out only
  * once it is returned. `now` is read again for each `next` and record: the clock moves while the execs run.
+ * The git view one `next` reads is kept for the next list while every exec run in between leaves git as it was
+ * (keepsGitView): on Windows each git process costs 120-150 ms, and a view takes a few. A commit an agent in flight
+ * makes meanwhile is then seen at the first list after an exec that changes git, or at the next `run`.
  */
 export function run(path, reported, now, deps) {
   const ran = [];
   const lists = []; // each list's own reports, reconcile, dispatch and wrote, with the ids run from it (#147)
+  const views = new Map(); // root → the git view the lists share until an exec may have changed git
   let blocked = null;
   try {
     let out = null;
     for (let i = 0; ; i += 1) {
       if (i > RUN_LISTS) throw new Error(`run: ${RUN_LISTS} lists in a row held nothing but execs; stopping`);
-      out = next(path, i === 0 ? reported : [], now(), deps, { hold: true });
+      out = next(path, i === 0 ? reported : [], now(), deps, { hold: true, views });
       const list = { now: out.now, reports: out.reports, reconcile: out.reconcile, dispatch: out.dispatch, wrote: out.wrote, ran: [] };
       lists.push(list);
       const first = out.actions.filter((a) => a.batch === 1);
@@ -4358,6 +4380,7 @@ export function run(path, reported, now, deps) {
         blocked = { id: a.id, step: a.step, at: result ? 'record' : 'execute', exit: result?.exit ?? null, log: result?.log ?? runLog(path, out.run, a.id), record: a.record };
         if (!result) {
           deps.mkdir(dirname(blocked.log));
+          if (!keepsGitView(a)) views.clear();
           const { code, signal } = deps.execute(a, blocked.log);
           result = { exit: code, ...(signal ? { signal } : {}), log: blocked.log };
           Object.assign(blocked, { at: 'record', exit: code });

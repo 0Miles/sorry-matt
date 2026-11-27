@@ -1,6 +1,7 @@
 // node --test scripts/ci.test.mjs
 // Drives ci.mjs through main(). Every GitHub answer comes from a fixture behind the `gh` seam; nothing calls the
 // real GitHub. `earliest-red` walks real git repositories in a temp dir, built the way get-to-work builds a line.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';

@@ -2,6 +2,7 @@
 // Real git repositories in temp dirs. Expected scopes come from #141 (the affected scope whatever the CI coverage: a
 // line without CI runs its full suite once, at the finish); expected commands and test candidates come from the
 // contract text and the test files each fixture writes.
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';

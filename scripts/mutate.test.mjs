@@ -1,6 +1,7 @@
 // node --test scripts/mutate.test.mjs
 // Real git repositories in temp dirs and real `node` commands; a fake seam stands in only for what cannot be produced
 // reliably (a timeout, a write that throws, a restore that does not match).
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';

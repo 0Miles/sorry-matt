@@ -1,6 +1,7 @@
 // node --test scripts/worktree.test.mjs
 // Real git repositories and real worktrees in temp dirs. Expected values come from how each fixture is built (which
 // commit the branch points at, which files were written) and from git itself (`git worktree list`, `git status`).
+import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
