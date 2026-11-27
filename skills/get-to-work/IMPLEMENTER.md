@@ -17,7 +17,9 @@ section 1, item 3. Where the definition's rules overlap
 together. Change the definition's section 2 commit message format together with the aggregate PR body in
 [`FINISH.md`](FINISH.md), finishing the run, and the ticket-level PR body `integrate.mjs pr-open` writes. Change the definition's section 1 read-only acceptance criteria together
 with the acceptance snapshot in `SKILL.md`'s dispatch, the expansion block format in the expansion agent's
-definition, and the acceptance diff in `prove-it` section 1. Change this file's send-back record placeholder and the
+definition, and the acceptance diff in `prove-it` section 1. Change what the definition's section 1 has an
+awaiting-ruling report carry (the recommendation) together with the on-behalf ruling in `ASKING.md` section 4 and
+`tick.mjs`'s `ruled`. Change this file's send-back record placeholder and the
 definition's section 1 redo rule together with the send-back for a redo in [`SEND-BACK.md`](SEND-BACK.md). The
 definition's sections 1 and 2 are adapted from `mattpocock/skills` `implement` and `tdd` (MIT; source and license in
 [`../take-this/references/upstream/NOTICE.md`](../take-this/references/upstream/NOTICE.md)).

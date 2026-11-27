@@ -84,7 +84,9 @@ which one:
 directly, without Finders or Verifiers: the evidence is the acceptance diff output's path and its `removed` /
 `added`, and the fix direction is to restore the criteria on the tracker to the snapshot, with the implementation
 agent reporting any criterion it needs changed as awaiting ruling. The review carries on as usual, and the acceptance
-check always works from the snapshot, never from the changed version.
+check always works from the snapshot, never from the changed version. When the host amended the criteria under an
+on-behalf ruling, `get-to-work` has already taken the snapshot again: the acceptance diff does not report a change,
+and the acceptance check still works from the snapshot.
 
 Open a **review worktree** in the scratchpad. The live run and mutation happen only there; the implementation
 agent's worktree stays untouched. Inside the repo, run:

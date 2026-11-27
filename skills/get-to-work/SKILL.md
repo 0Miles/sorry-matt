@@ -30,8 +30,10 @@ in field 10. The run's machine state, `<run>.state.json` next to the ledger, is 
 3. Write each ticket's predicted files (section 2, "Predicted files").
 4. Write a plan and run `scripts/freeze.mjs` (preflight, held files, exclusions, **joined lines**, candidate order).
    When `preflight.ok` is false, fix what `checks` lists and rerun; a holder git cannot see (another session you know
-   of) goes into the plan's `held`. Each `excluded` ticket is **awaiting ruling**, with its holder and release
-   condition. The plan's `base` is the base branch the lines merge into (required); its `integrate` is this run's
+   of) goes into the plan's `held`. When composed by `have-it-all-done`, ledger field 2 holds the ruling point's
+   choice on the freeze trial: each holder chosen "go ahead" goes into the plan's `ignore`, and its conflicts are
+   resolved at integration per section 2, "Merge conflicts". Each `excluded` ticket is **awaiting ruling**, with its
+   holder and release condition. The plan's `base` is the base branch the lines merge into (required); its `integrate` is this run's
    `integrate` (the profile step 6 writes, or the tracker's default: `ticket-pr` on GitHub) — without it freeze judges
    by `aggregate-pr`, and `ticket-pr`'s default-branch, tracker and gh-stack checks never run (#202).
    **Base CI**: the `base-ci` check reads the CI of the base's latest SHA and never blocks the freeze. The CI comes
@@ -322,6 +324,13 @@ has exactly one raw ticket, checked item by item against the final tip at the fi
 - Mid-run matters take the three exits of `ASKING.md` section 4, and so does an `ask` action: what cannot be answered
   awaits a ruling, what only a human can do goes on the human-work list. Standalone, with no ruling point, unanswerable
   matters are gathered and asked once, before the next dispatch point.
+- **On-behalf ruling** (when composed by `have-it-all-done`): when an implementation or fix agent's report has an item
+  awaiting ruling that falls under `ASKING.md` section 2(a), (b) or (d) and a recommendation can be written, do not
+  record `blocked`: write the ruling file per `ASKING.md` section 4, amend the tracker first when it amends acceptance,
+  then record `ruled --value <ruling file>`. tick takes the acceptance snapshot again and hands the ticket back to the
+  same agent (a new one when it is gone); the ticket keeps its stage, and it is not a fix round; under `ticket-pr` a
+  ticket whose snapshot changed gets only `left-for-human` at pr-send (`tick.mjs` header, "An on-behalf ruling"). Only
+  when no recommendation can be written record `blocked`, with the reason in `--value`.
 - A spawn the plugin's hook blocks for the budget: no retry, no detour. Set its ticket aside with `state.mjs release`
   and `state.mjs stage awaiting-ruling --reason <the hook's message>`; tick's next limit check stops the run. A blocked
   spawn the finish needs goes on the human-work list.
@@ -330,4 +339,5 @@ has exactly one raw ticket, checked item by item against the final tip at the fi
   gates, the last `judge` pointing to [`FINISH.md`](FINISH.md).
 
 Done when: every initial ticket is reconciled to exactly one of delivered, stuck or awaiting ruling (`check finish`;
-after a stop, `check stopped` too); no spawn blocked by the budget was retried or rerouted.
+after a stop, `check stopped` too); no spawn blocked by the budget was retried or rerouted; when composed, every
+awaiting-ruling report a recommendation could be written for was recorded as `ruled`, with its ruling file in place.

@@ -87,7 +87,9 @@ run's schedule.
 ### (d) Design rulings
 
 Keep asking these, but do not make the most restrictive option the default. Where permissions, trigger surface,
-or an external interface are involved, every proposal carries rate limiting and an audit record.
+or an external interface are involved, every proposal carries rate limiting and an audit record. Ask them only at
+the ruling point: in a run composed by `have-it-all-done`, a design decision that first comes up after the ruling
+point is settled by an on-behalf ruling per section 4.
 
 Done when: every question maps to one of the four classes; everything outside them was answered on their behalf
 per section 3.
@@ -125,9 +127,30 @@ filled.
   1. Answerable → answer it, log it, keep going.
   2. Not answerable → mark it **awaiting ruling**, let that ticket go stuck, keep going on the others.
   3. Only a human can do it → put it on the **human-work list**, keep going on the others.
+- **On-behalf ruling**: in a run composed by `have-it-all-done`, a section 2(a), (b) or (d) matter that comes up after
+  the ruling point — something an implementation or fix agent reports as awaiting ruling, acceptance criteria that
+  cannot be met or contradict each other, a design not yet settled — takes exit 1 whenever a recommendation can be
+  written, and the host settles it without asking:
+  - Filter the options in this order: none removes or loosens an acceptance criterion or a check; none rewrites
+    existing evidence, frozen content or delivered work; within those two, the default of that section 2 class. An
+    option that breaks either rule is not chosen; when none is left, no recommendation can be written: exit 2.
+  - Write the ruling as a **ruling file** next to the ledger, `<run>/rulings/<ticket>-<n>.md`: the matter, the
+    options and the one chosen, the reason, the cost to reverse, and the acceptance it amends (before and after).
+    Log it in the run-level self-answer log as well (section 3), its evidence location pointing at the ruling file.
+  - When it amends acceptance, the host amends the acceptance on the tracker first, then hands the ticket back:
+    on GitHub, edit those criteria in the issue body and leave a comment with the date and the ruling file; under
+    Local Markdown, commit the amended ticket file on the ticket's branch. The host amends acceptance, never the agent
+    that has to pass it. tick takes the acceptance snapshot again after the handback; a ticket whose snapshot changed
+    is merged by a person under `ticket-pr`.
+  - Hand it back to the agent with `get-to-work` section 3's `ruled`. When the fix this matter blocks lands on an
+    in-scope ticket, it is that ticket's work: it goes back to the ticket's agent under the ruling, not into a new
+    ticket.
+  A standalone `get-to-work` has no on-behalf ruling: per its section 3, what it cannot answer is collected and asked
+  at once before the next dispatch point.
 - The final report runs one **review pass**: a single multi-select, "which of these self-answers do you want
-  flipped?", offering the four in the run-level log with the highest cost to reverse; the complete log goes in the
-  report body.
+  flipped?", offering four, taken in order from the on-behalf rulings that amended acceptance, the other on-behalf
+  rulings, then the rest of the run-level log by cost to reverse descending; the complete log goes in the report
+  body.
 - **The run profile**: whether this run relaxes the flow — review depth, fix rounds, the recheck, where findings that
   stay open go, expansion, how tickets are integrated, whether CI is read, the simplify pass — is settled at the ruling
   point (a standalone `get-to-work` settles it at the freeze) and written once with `get-to-work`'s
@@ -156,7 +179,9 @@ filled.
   limit it.
 
 Done when: exactly one ruling point sits between the risk gate and the final review pass, with no questions after
-it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; a run with a relaxed flow
+it; every mid-run item lands in the self-answer log, awaiting ruling, or the human-work list; every on-behalf ruling
+has a ruling file and a row in the self-answer log, and one that amends acceptance amended the tracker first; a run
+with a relaxed flow
 wrote its profile before the ruling point (at the freeze when running standalone); `budget: spawns` and
 `budget: rounds` were rewritten from the ticket count before the ruling point (at the freeze when running
 standalone), unless the user set a value at the ruling point.

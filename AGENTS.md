@@ -453,6 +453,11 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 審查沿用 | review kept |
 | 等待階段（`awaiting-ci`、`awaiting-merge`、`queued`） | waiting stage |
 | 讀不到的狀況 | unreadable condition |
+| 代答裁定 | on-behalf ruling |
+| 裁定檔 | ruling file |
+| 凍結試算 | freeze trial |
+| 照做/等（凍結試算的選項） | go ahead / wait |
+| 續跑 run | continuation run |
 
 ## 外部語義來源
 

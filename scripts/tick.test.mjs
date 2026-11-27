@@ -1420,3 +1420,111 @@ test('record with several results stops at the first refusal; the ones before it
   assert.deepEqual([o.records.length, o.failed], [1, { index: 1, id: 'no-such-action' }]);
   assert.ok(h.state().tick.done[first.id], 'the first is recorded');
 });
+
+// ---- #238: an on-behalf ruling (ruled) --------------------------------------------------------------------------------
+
+/** #238: the first collect of `id`'s implementation agent is ruled on the user's behalf; the ruling amends acceptance when `amend`. */
+function ruleOnce(h, id, { amend = true } = {}) {
+  const ruling = join(h.W, 'rulings', `${numOf(id)}.md`);
+  write(ruling, `# ${id}: ruled on the user's behalf\n\nThe additive option.\n`);
+  let done = false;
+  h.policy.collect = (a) => {
+    if (a.tickets[0] === id && a.meta.stage === 'implementing' && !done) {
+      done = true;
+      if (amend) h.acceptance[id] = { items: [{ from: 'original', text: `amended criterion of ${id}` }], expansions: [] };
+      return { outcome: 'ruled', value: ruling };
+    }
+    return a.meta.stage === 'implementing' ? 'green' : a.meta.stage === 'in-review' ? 'pass' : 'fixed';
+  };
+  return ruling;
+}
+
+test('#238: ruled — the same agent gets the ruling, the acceptance snapshot is taken again, and the ticket goes on to delivery', (t) => {
+  const h = world(t);
+  const [ID1, ID2] = h.ids;
+  const ruling = ruleOnce(h, ID1);
+  const before = () => h.state().tickets[ID1].snapshotSha256;
+  h.wake();
+  const sha0 = before();
+  assert.ok(sha0, 'the first snapshot was recorded at dispatch');
+  for (let i = 0; i < 4 && !distinct(h.log).some((a) => a.step === 'send' && a.tickets[0] === ID1); i += 1) h.wake();
+  const send = distinct(h.log).find((a) => a.step === 'send' && a.tickets[0] === ID1);
+  assert.ok(send, 'the ticket went back to its agent by SendMessage');
+  assert.match(send.do, /ruled on the user's behalf/);
+  assert.ok(send.do.includes(resolve(ruling)), 'the message names the ruling file');
+  const execs = distinct(h.log).filter((a) => a.kind === 'exec').map((a) => a.id);
+  assert.ok(execs.includes(`acceptance:${ID1}:ruled1`), 'the acceptance is read again');
+  assert.ok(execs.includes(`snapshot:${ID1}:ruled1`), 'the changed snapshot is recorded');
+  assert.notEqual(before(), sha0, 'the snapshot sha256 is the amended one');
+  const snap = JSON.parse(readFileSync(join(h.W, 'acceptance', `${numOf(ID1)}.json`), 'utf8'));
+  assert.deepEqual(snap.items.map((x) => x.text), [`amended criterion of ${ID1}`]);
+  assert.equal(h.state().tick.flags[ID1].amended, true);
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+});
+
+test('#238: ruled with the acceptance unchanged — no new snapshot record, the ticket is not marked amended', (t) => {
+  const h = world(t);
+  const [ID1] = h.ids;
+  ruleOnce(h, ID1, { amend: false });
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  const execs = distinct(h.log).filter((a) => a.kind === 'exec').map((a) => a.id);
+  assert.ok(execs.includes(`acceptance:${ID1}:ruled1`));
+  assert.ok(!execs.includes(`snapshot:${ID1}:ruled1`), 'the same sha256 is not recorded again');
+  assert.notEqual(h.state().tick.flags[ID1]?.amended, true);
+});
+
+test('#238: ticket-pr — a ticket whose acceptance a ruling amended is left for a person to merge', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  ruleOnce(h, ID1);
+  h.policy['pr-send'] = (a) => {
+    if (a.tickets[0] === ID1) {
+      assert.ok(!a.outcomes.includes('sent'), 'no sent for an amended ticket');
+      assert.match(a.do, /amended by a ruling made on the user's behalf/);
+      return { outcome: 'left-for-human', value: 'acceptance amended on the user\'s behalf' };
+    }
+    h.mergePr(a.tickets[0]);
+    return 'sent';
+  };
+  h.untilDone();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered');
+  assert.ok(distinct(h.log).some((a) => a.step === 'pr-send' && a.tickets[0] === ID1));
+});
+
+test('#238: ruled needs a ruling file that exists', (t) => {
+  const h = world(t);
+  const [ID1] = h.ids;
+  h.policy.collect = (a) => (a.meta.stage === 'implementing' ? { outcome: 'ruled', value: join(h.W, 'rulings', 'missing.md') } : 'pass');
+  assert.throws(() => {
+    for (let i = 0; i < 4; i += 1) h.wake();
+  }, /does not exist: write the ruling there/);
+  assert.equal(stage(h, ID1), 'implementing');
+});
+
+test('#238: ruled in a fix round — the ticket stays fixing, its agent gets the ruling, and the recheck follows', (t) => {
+  const h = world(t);
+  const [ID1] = h.ids;
+  const ruling = join(h.W, 'rulings', `${numOf(ID1)}-fix.md`);
+  write(ruling, '# ruled\n');
+  h.policy.review = (a) => (a.tickets[0] === ID1 && a.meta.mode === 'initial' ? { outcome: 'fix', findings: 'F1' } : 'pass');
+  let ruled = false;
+  h.policy.collect = (a) => {
+    if (a.meta.stage === 'in-review') return h.policy.review(a);
+    if (a.meta.stage === 'fixing' && a.tickets[0] === ID1 && !ruled) {
+      ruled = true;
+      return { outcome: 'ruled', value: ruling };
+    }
+    return a.meta.stage === 'implementing' ? 'green' : 'fixed';
+  };
+  h.untilDone();
+  assert.ok(ruled, 'the fix round was ruled on');
+  assert.equal(stage(h, ID1), 'delivered');
+  const send = distinct(h.log).find((a) => a.step === 'send' && a.tickets[0] === ID1 && a.do.includes(resolve(ruling)));
+  assert.ok(send, 'the fix agent got the ruling by SendMessage');
+  const to = h.state().tickets[ID1].history.map((x) => x.to);
+  assert.equal(to.filter((x) => x === 'fixing').length, 1, 'one fix round: the ruling did not open another');
+});

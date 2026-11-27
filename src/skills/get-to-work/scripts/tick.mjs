@@ -114,6 +114,17 @@
 //                    reads red again at the same head brings it again. Each of the three judges is logged in
 //                    `judgeLog` when first issued, and its outcome added when recorded.
 //
+// An on-behalf ruling (#238)
+//   The collect of an implementation or fix agent (stage implementing or fixing) also takes `ruled --value <ruling
+//   file>`: the agent reported something awaiting a ruling and the host, in a run composed by have-it-all-done, ruled
+//   on it on the user's behalf (ASKING.md section 4). The file must exist (exit 2 without --value, 3 when it is
+//   missing). The ticket keeps its stage; before it goes back to the same agent (a SendMessage pointing at the ruling;
+//   a spawn when that agent is gone) the acceptance snapshot is taken again: an `acceptance` exec per ticket of the
+//   group (`acceptance:<ticket>:ruled<n>`, stdout `tick/acceptance/ruled<n>-<key>.json`), each snapshot file
+//   rewritten (a bundle's rebuilt) and, when the lead's sha256 changed, `snapshot:<ticket>:ruled<n>` (`state.mjs set
+//   --snapshot`). A snapshot that changed marks the ticket `amended` in its flags: under integrate: ticket-pr its
+//   pr-send judge offers left-for-human only — a person merges a pull request whose acceptance a ruling changed.
+//
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
 //   point> --head <ticket branch>` in the repo (step `tier`, stdout `tick/tier/<ticket key>-<k>.json`, k the number
@@ -818,11 +829,18 @@ function agentReportOk(deps, file) {
   }
 }
 
+/**
+ * #238: `ruled` — the agent reported something awaiting a ruling, and the host ruled on it on the user's behalf
+ * (a composed have-it-all-done run, ASKING.md section 4). The ruling is a file; the ticket goes back to the same agent.
+ */
+const RULED =
+  " ruled: the agent's awaiting-ruling item was ruled on the user's behalf (a run composed by have-it-all-done, ASKING.md section 4): write the ruling to a file first, and amend the ticket's acceptance on the tracker first when the ruling amends it, then record ruled with --value <the ruling file>; the acceptance snapshot is taken again and the ticket goes back to the same agent with the ruling.";
+
 const COLLECT = {
   implementing: {
-    outcomes: ['green', 'red', 'blocked'],
+    outcomes: ['green', 'red', 'blocked', 'ruled'],
     what: (ids, report) =>
-      `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: ${keepReport(report, 'green')}on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.`,
+      `Take the implementation agent's report for ${ids.join(', ')} (its summary and evidence paths, not the diff) and check close-out step 1: are the targeted checks it reports green? green: ${keepReport(report, 'green')}on to review; red: it goes back to the same agent; blocked: awaiting ruling, with --value <reason>.${RULED}`,
     reference: [doc('SKILL.md', 'section 2, Close-out checks and review'), doc('agents/implementer.md', 'section 5, the report it returns')],
   },
   expanding: {
@@ -831,9 +849,9 @@ const COLLECT = {
     reference: [doc('SKILL.md', 'section 1 (the loop)'), doc('agents/expander.md', 'section 4, the report it returns')],
   },
   fixing: {
-    outcomes: ['fixed', 'blocked'],
+    outcomes: ['fixed', 'blocked', 'ruled'],
     what: (ids, report) =>
-      `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: ${report ? keepReport(report, 'fixed') : ''}on to the recheck; blocked: awaiting ruling, with --value <reason>.`,
+      `Take the fix report for ${ids.join(', ')} and check its targeted checks and acceptance comparison are green. fixed: ${report ? keepReport(report, 'fixed') : ''}on to the recheck; blocked: awaiting ruling, with --value <reason>.${RULED}`,
     reference: [doc('SKILL.md', 'section 2, Batched fix')],
   },
   'in-review': {
@@ -1472,7 +1490,9 @@ const reportAt = (flag) => (flag.report ? `${flag.report} (the reviewer's report
  * (#197) the saved failing output for a pr-red fix round — the PR head's CI is red, there are no review findings.
  */
 const whyText = (flag, why) =>
-  why === 'fix' && flag.prRed
+  why === 'ruled'
+    ? `what it reported as awaiting a ruling is ruled on the user's behalf in ${flag.ruling}: read it in full and carry on under it. The acceptance snapshot was taken again after the ruling, so criteria it amends are the acceptance now; every other rule of your spawn file stands, acceptance read-only included`
+    : why === 'fix' && flag.prRed
     ? `the PR head's CI is red at ${flag.prRed.sha}; the failing runs' output is in ${flag.prRed.failure.join(', ') || 'the CI read'}: find the cause, fix it to green (do not weaken a test or a check), and the fix commit is pushed back to the same pull request (no review findings this round)`
     : why === 'fix' && reportAt(flag)
       ? `the review's findings, verbatim, in ${reportAt(flag)}: close them all in this one round (close-out step 3)`
@@ -1504,7 +1524,7 @@ function agentTail(c, id, t, p, after) {
         'send',
         `SendMessage ${p.prevAgent} (it keeps its context) for ${id}: ${whyText(c.flag(id), p.why)}. sent: it has the work again; gone: it no longer exists (a new agent is spawned instead).`,
         ['sent', 'gone'],
-        [doc('SKILL.md', p.why === 'red' ? 'section 2, Close-out checks and review' : p.why === 'fix' ? 'section 2, Batched fix' : 'section 1 (the loop)'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
+        [doc('SKILL.md', p.why === 'red' ? 'section 2, Close-out checks and review' : p.why === 'fix' ? 'section 2, Batched fix' : p.why === 'ruled' ? 'section 3, Rulings and stopping' : 'section 1 (the loop)'), ...(p.why === 'send-back' ? [doc('SEND-BACK.md', 'step 4')] : [])],
         { tickets: [id], line: t.line, after },
       ),
     );
@@ -1956,8 +1976,10 @@ function stepFixing(c, id, t) {
     return;
   }
   const flag = c.flag(id);
+  if (flag.resnapshot && !resnapshot(c, id, t)) return;
   const prev = implementerOf(c, id);
   const respawn = flag.redispatch?.mode === 'spawn' || !prev;
+  const ruled = flag.redispatch?.why === 'ruled';
   dispatchAgent(c, id, t, {
     role: 'fix',
     stage: 'fixing',
@@ -1965,9 +1987,45 @@ function stepFixing(c, id, t) {
     worktree: a?.worktree,
     reassign: !!flag.redispatch?.reassign,
     prevAgent: prev,
-    why: 'fix',
-    note: respawn ? reassignNote(c, id, t, flag.redispatch) : null,
+    why: ruled ? 'ruled' : 'fix',
+    note: respawn ? (ruled && !flag.redispatch?.reassign ? `Taking over from an agent that is gone: ${whyText(flag, 'ruled')}.` : reassignNote(c, id, t, flag.redispatch)) : null,
   });
+}
+
+/**
+ * #238: after an on-behalf ruling (`ruled`), the acceptance snapshot is taken again before the ticket goes back to its
+ * agent — the ruling may have amended the criteria on the tracker. Each ticket of the group is read again with
+ * acceptance.mjs; its snapshot file is rewritten (a bundle's snapshot rebuilt) and the lead's sha256 recorded with
+ * `set --snapshot` when it changed. A changed snapshot marks the ticket `amended`: under integrate: ticket-pr a person
+ * merges its pull request (prSendJudge). True once done; false while an exec is still out.
+ */
+function resnapshot(c, id, t) {
+  const f = c.flag(id);
+  const n = f.resnapshot;
+  const outs = [];
+  let pending = false;
+  for (const m of c.group(id)) {
+    const out = c.tick('acceptance', `ruled${n}-${keyOf(m)}.json`);
+    const acc = c.done(`acceptance:${m}:ruled${n}`) ? readJsonFile(c.deps, out) : null;
+    if (!acc) {
+      c.emit(exec(`acceptance:${m}:ruled${n}`, 'acceptance', acceptanceArgv(c, m, t), { stdout: out, cwd: acceptanceCwd(c), tickets: [id], line: t.line }));
+      pending = true;
+      continue;
+    }
+    outs.push({ m, acc });
+  }
+  if (pending) return false;
+  if (f.resnapshotWritten !== n) {
+    if (outs.some(({ m, acc }) => readJsonFile(c.deps, c.snapshot(m))?.sha256 !== acc.sha256)) f.amended = true;
+    for (const { m, acc } of outs) c.write(c.snapshot(m), `${JSON.stringify(acc, null, 2)}\n`);
+    if (c.members(id).length) bundleSnapshot(c, id);
+    f.resnapshotWritten = n;
+  }
+  const lead = outs.find((x) => x.m === id).acc;
+  if (lead.sha256 !== t.snapshotSha256 && c.emit(exec(`snapshot:${id}:ruled${n}`, 'snapshot', stateArgv(c, 'set', id, '--snapshot', lead.sha256), { tickets: [id], line: t.line })) !== null) return false;
+  delete f.resnapshot;
+  delete f.resnapshotWritten;
+  return true;
 }
 
 function reassignNote(c, id, t, r) {
@@ -1991,6 +2049,7 @@ function stepImplementing(c, id, t) {
   }
   const r = c.flag(id).redispatch;
   if (!r) return pendingAgent(c, id, t);
+  if (c.flag(id).resnapshot && !resnapshot(c, id, t)) return;
   const prev = implementerOf(c, id);
   const mode = r.mode === 'send' && prev ? 'send' : 'spawn';
   dispatchAgent(c, id, t, {
@@ -2692,10 +2751,14 @@ function prSendJudge(c, id, t, ready, after) {
   if (c.done(sid)) return false;
   const gate = ready?.gate ?? null;
   const send = ready?.send ?? null;
-  const human = send?.status !== 'host';
+  const amended = !!c.flag(id).amended; // #238: its acceptance was amended by an on-behalf ruling
+  const human = send?.status !== 'host' || amended;
   const command = send?.command ?? mergeCommand(t.pr);
+  const why = amended
+    ? 'its acceptance was amended by a ruling made on the user\'s behalf, so a person merges it'
+    : `merge-gate.mjs says a person merges it (${gate ? `${gate.decision}: ${gate.reason}` : 'its output could not be read'})`;
   const what = human
-    ? `${id}'s pull request ${t.pr} is ready, and merge-gate.mjs says a person merges it (${gate ? `${gate.decision}: ${gate.reason}` : 'its output could not be read'}). Put the merge on the human-work list and record left-for-human: the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`
+    ? `${id}'s pull request ${t.pr} is ready, and ${why}. Put the merge on the human-work list and record left-for-human: the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`
     : `${id}'s pull request ${t.pr} is ready (merge-gate.mjs: ${gate.decision}, ${gate.reason}). With merge authorization — a standing grant in the ledger's authorization field, or the user's instruction this run — run \`${command}\` with your own tool under the user's permission settings (never --admin, never auto-merge) and record sent: tick then watches for the merge, GitHub's merge queue included. Without authorization record left-for-human: the PR stays ready for a person to merge and the ticket is delivered with a left-for-human record. Or record stuck / awaiting-ruling with --value <reason>.`;
   c.emit(
     judge(sid, 'pr-send', what, [...(human ? [] : ['sent']), 'left-for-human', 'stuck', 'awaiting-ruling'], [doc('FINISH.md', 'the merge where authority allows'), { path: js('merge-gate.mjs'), part: 'header (decisions)' }], {
@@ -4043,12 +4106,25 @@ export function record(path, id, flags, now, deps) {
           throw new Refused(`${meta.agentReport} holds no agent report with a \`targeted checks:\` line: write the report ${meta.agent} returned there, verbatim, and record ${outcome} again`);
         for (const tid of tickets) flag(tid).agentReport = meta.agentReport;
       }
+      // #238: an on-behalf ruling is a file the agent reads; checked before anything is written
+      if (outcome === 'ruled') {
+        if (typeof flags.value !== 'string' || !flags.value) throw new UsageError(`${id}: ruled needs --value <the ruling file>`);
+        if (!deps.exists(flags.value)) throw new Refused(`${flags.value} does not exist: write the ruling there (the item, the option chosen, why, the cost to reverse, and the acceptance it amends), then record ruled again`);
+      }
       release(tickets);
       takeAgent(meta.agent);
       const [tid] = tickets;
+      const ruled = () => {
+        const f = flag(tid);
+        f.ruling = resolve(flags.value);
+        f.rulings = (f.rulings ?? 0) + 1;
+        f.resnapshot = f.rulings;
+        f.redispatch = { mode: 'send', why: 'ruled' };
+      };
       if (meta.stage === 'implementing') {
         if (outcome === 'green') stageIf(tid, 'in-review');
         else if (outcome === 'red') flag(tid).redispatch = { mode: 'send', why: 'red' };
+        else if (outcome === 'ruled') ruled();
         else stageIf(tid, 'awaiting-ruling', flags.value ?? 'blocked: see the status record');
       } else if (meta.stage === 'expanding') {
         const ruling = flags.value ? list(flags.value, '--value') : [];
@@ -4056,6 +4132,7 @@ export function record(path, id, flags, now, deps) {
       } else if (meta.stage === 'fixing') {
         delete flag(tid).prRed; // #197: a pr-red fix round ends with its report; a later fix round is the review's
         if (outcome === 'blocked') stageIf(tid, 'awaiting-ruling', flags.value ?? 'blocked: see the status record');
+        else if (outcome === 'ruled') ruled(); // stays fixing: the same agent finishes the round under the ruling
         else if (live().profile?.recheck === false) {
           if (flags.fixed === undefined && flags.unfixed === undefined) throw new UsageError(`${id}: under recheck: false the fix report needs --fixed and/or --unfixed`);
           if (!currentReport(ticket(tid))) S('report', tid, ...(flags.fixed ? ['--fixed', flags.fixed] : []), ...(flags.unfixed ? ['--unfixed', flags.unfixed] : []));
