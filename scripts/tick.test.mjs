@@ -520,7 +520,7 @@ test("#195 F1 (#222): dist's tick.mjs (skills/get-to-work/scripts) hands out wha
     const h = world(t, { profile: { integrate: 'ticket-pr' }, main });
     git(h.repo, 'branch', LINE, 'main'); // as in the replay above: a ref by the line's name is present
     const text = JSON.stringify(h.wake());
-    return { text: text.split(basename(h.dir)).join('<world>'), outs: JSON.parse(text) }; // the world's own name, in every spelling
+    return { text: text.split(basename(h.dir)).join('<world>'), outs: JSON.parse(text), ran: h.ran }; // the world's own name, in every spelling
   };
   const src = firstWake(tick);
   const dist = firstWake(distTick);
@@ -528,6 +528,13 @@ test("#195 F1 (#222): dist's tick.mjs (skills/get-to-work/scripts) hands out wha
   assert.ok(src.text.includes(at('src/skills/get-to-work')), 'src names its own directory');
   assert.ok(!dist.text.includes(at('src/skills')), 'dist names nothing under src/');
   assert.equal(dist.text, src.text.split(at('src/skills')).join(at('skills')));
+  // #228: each exec runs the copy it names: dist's wake-up runs dist's integrate.mjs, and no script under src/
+  const integrate = (top) => join(root, top, 'get-to-work', 'scripts', 'integrate.mjs');
+  assert.ok(dist.ran?.includes(integrate('skills')), `dist's ticket-init ran dist's integrate.mjs: ${dist.ran}`);
+  assert.ok(src.ran.includes(integrate(join('src', 'skills'))), "src's ran src's");
+  assert.deepEqual(dist.ran.filter((p) => p.startsWith(join(root, 'src'))), [], 'dist ran no script under src/');
+  const rel = (top) => (p) => p.slice(join(root, top).length);
+  assert.deepEqual(dist.ran.map(rel('skills')), src.ran.map(rel(join('src', 'skills'))), 'the same scripts, in the same order');
   const named = dist.outs.flatMap((o) => o.actions).flatMap((a) => [...(a.argv ?? []), ...(a.reference ?? []).map((r) => r.path)]);
   const scripts = [...new Set(named.filter((p) => typeof p === 'string' && p.startsWith(join(root, 'skills'))))];
   assert.ok(scripts.length >= 3, `dist's actions name its scripts and documents: ${scripts.join(', ')}`);
@@ -554,12 +561,12 @@ test('#195: ticket-pr — a report carrying no commit opens no PR; the report go
 });
 
 /**
- * #222: a ticket-pr ticket sent back at its base sync, `via` the send-back judge (the merge agent reports
+ * #222: a ticket-pr world whose #2 is sent back at its base sync, `via` the send-back judge (the merge agent reports
  * unresolved) or a merge agent's timeout (review F1: the timeout's send-back outcome starts the redo over too).
  */
-const ticketPrSendBack = (via) => (t) => {
+function sendBackWorld(t, via) {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
-  const [ID1, ID2] = h.ids;
+  const [, ID2] = h.ids;
   // both tickets change a.js, though #2 predicted b.txt: the clash shows only when #2's push phase merges the base
   // (#1's merge) into its branch, and the merge agent cannot resolve it
   h.change[ID2] = { path: 'a.js' };
@@ -586,6 +593,12 @@ const ticketPrSendBack = (via) => (t) => {
   };
   // TIMEOUTS.md step 2 for an overdue merge agent: send back
   h.policy.timeout = (a) => (a.meta.stage === 'integrating' ? (sendBack(a), 'send-back') : 'reassign');
+  return h;
+}
+
+const ticketPrSendBack = (via) => (t) => {
+  const h = sendBackWorld(t, via);
+  const [ID1, ID2] = h.ids;
   for (let i = 0; i < 14 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
   const s = h.state();
   assert.ok(h.sentBack, 'the ticket was sent back');
@@ -625,6 +638,55 @@ const ticketPrSendBack = (via) => (t) => {
 test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull request: the redo is pushed to the same PR, with no second pr-open', ticketPrSendBack('judge'));
 
 test("#222 review F1: ticket-pr — a merge agent's timeout sent back the same way: nothing pushed before the redo reports, no recheck", ticketPrSendBack('timeout'));
+
+// #228: integrate.mjs pr-push refuses (exit 3) a redo whose PR branch holds a commit that is not the old attempt's —
+// someone else pushed to it during the redo. The refusal goes to the host as a failed judge on that pr-push; tick
+// does not issue the pr-push again by itself, only when the host records retry.
+test('#228: ticket-pr — a redo pr-push refused (exit 3: someone else pushed to the PR branch) hands the host a failed judge, and pr-push goes out again only on retry', (t) => {
+  const h = sendBackWorld(t, 'judge');
+  const [, ID2] = h.ids;
+  const other = join(h.dir, 'someone-else');
+  let refused = null; // { id, branch, before, foreign }
+  const exec = h.exec;
+  h.exec = (a) => {
+    if (a.step !== 'pr-push' || a.tickets[0] !== ID2 || h.state().tickets[ID2].sendBacks < 1 || refused) return exec(a);
+    // someone else pushes a commit to #2's PR branch on origin, on top of the old attempt
+    const branch = h.state().tickets[ID2].branch;
+    git(h.dir, 'clone', '-q', '-b', branch, join(h.dir, 'origin.git'), other);
+    const before = git(other, 'rev-parse', 'HEAD');
+    write(join(other, 'theirs.txt'), 'not the run\'s\n');
+    git(other, 'add', '-A');
+    git(other, 'commit', '-q', '-m', 'someone else');
+    git(other, 'push', '-q', 'origin', branch);
+    refused = { id: a.id, branch, before, foreign: git(other, 'rev-parse', 'HEAD') };
+    const code = exec({ ...a, okExit: [0, 3] }); // the stand-in runs integrate.mjs; 3 is what this replay is about
+    assert.equal(code, 3, 'pr-push refuses the push');
+    assert.equal(git(other, 'ls-remote', 'origin', `refs/heads/${branch}`).split(/\s+/)[0], refused.foreign, 'nothing was pushed');
+    return code;
+  };
+  const failed = [];
+  h.policy.failed = (a) => {
+    failed.push({ ...a, runs: h.log.filter((x) => x.id === refused?.id).length });
+    // the host reads the refusal and puts the PR branch back where the old attempt left it, then retries
+    git(other, 'push', '-q', '-f', 'origin', `${refused.before}:refs/heads/${refused.branch}`);
+    return 'retry';
+  };
+  for (let i = 0; i < 14 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.ok(refused, 'the redo was pushed with pr-push');
+  assert.equal(failed.length, 1, `one failed judge: ${failed.map((a) => a.id)}`);
+  const [j] = failed;
+  assert.equal(j.id, `failed:${refused.id}`);
+  assert.equal(j.meta.of, refused.id, 'the judge is on the refused pr-push');
+  assert.deepEqual(j.tickets, [ID2]);
+  assert.deepEqual(j.outcomes, ['retry', 'settled']);
+  assert.match(j.do, /exited 3/);
+  assert.equal(j.runs, 1, 'until the host answers, the pr-push is not run again');
+  assert.equal(h.log.filter((x) => x.id === refused.id).length, 2, 'run twice in all: refused, then once on retry');
+  const retried = h.log.filter((x) => x.id === refused.id).at(-1);
+  assert.equal(JSON.parse(readFileSync(retried.stdout, 'utf8')).pushed, 'git push --force-with-lease', 'on retry the redo replaces the old attempt on the same PR');
+  assert.equal(stage(h, ID2), 'delivered', 'the redo walks its PR to delivered');
+  assert.throws(() => git(join(h.dir, 'origin.git'), 'merge-base', '--is-ancestor', refused.foreign, 'main'), 'the other push is never merged');
+});
 
 // ---- integrate: ticket-pr — the merge path (#196) ------------------------------------------------------------------
 
