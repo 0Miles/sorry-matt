@@ -1405,6 +1405,31 @@ test('pr-merge --merged: refused until the PR is MERGED, then records the merge 
   assert.equal(state().revision, revision, 'nothing left to record on a rerun');
 });
 
+test('#220: pr-merge --merged on a pull request closed without a merge exits 6 with JSON, apart from the 3 of one still open; nothing is recorded or cleaned', (t) => {
+  let prState = 'CLOSED';
+  const gh = ghStub({
+    'pr view': () => JSON.stringify({ mergeCommit: null, state: prState }),
+  });
+  const env = withPrLine(t, ['#1'], gh);
+  const { integrate, state } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  const revision = state().revision;
+  const closed = integrate('pr-merge', '#1', '--merged');
+  assert.equal(closed.code, 6, closed.err);
+  assert.deepEqual(
+    [closed.json.command, closed.json.phase, closed.json.ticket, closed.json.pr, closed.json.result, closed.json.state],
+    ['pr-merge', 'merged', '#1', 12, 'closed', 'CLOSED'],
+  );
+  assert.equal(state().revision, revision, 'nothing is recorded for a closed PR');
+  assert.equal(state().tickets['#1'].stage, 'queued');
+  assert.equal(existsSync(one.wt), true, 'nothing is cleaned');
+  // still open (the merge queue is running): the refusal of 3, nothing on stdout
+  prState = 'OPEN';
+  const open = integrate('pr-merge', '#1', '--merged');
+  assert.equal(open.code, 3);
+  assert.equal(open.out, '');
+});
+
 test('pr-merge refuses a ticket that is not queued or integrating, or has no branch or PR recorded', (t) => {
   const env = withPrLine(t, ['#1', '#2'], ghStub());
   const { dir, ok, refused } = env;

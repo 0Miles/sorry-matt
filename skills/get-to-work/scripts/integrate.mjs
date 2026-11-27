@@ -146,7 +146,9 @@
 //                                     "branch", "stacked", "base", "gate": { "decision", "reason" },
 //                                     "send": { "status": "host", "command" } | { "status": "human" } }
 //                --merged   Phase "merged", after the host reports the merge done: the merge SHA and confirmation
-//                           are read with `gh pr view <PR> --json mergeCommit,state` (refused unless "MERGED"), the
+//                           are read with `gh pr view <PR> --json mergeCommit,state` (refused unless "MERGED"; #220:
+//                           "CLOSED", closed without a merge, exits 6 with { "result": "closed", "state": "CLOSED" }
+//                           and records nothing, unlike a PR still open — the merge queue running — refused), the
 //                           SHA is recorded (`state.mjs merge`, in integrating or awaiting-merge), the ticket becomes delivered, and the cleanup
 //                           removes the ticket's worktree and local branch (`git branch -D`: the merge lives on the
 //                           remote). The remote branch is never deleted here: it is deleted with the merge itself
@@ -339,7 +341,8 @@
 // arguments; 3 refused: well-formed, but the state or the repository does not allow it (the message says what
 // is missing; steps finished before it stay finished); 4 merge or revert conflict (JSON on stdout; the step that
 // conflicted changed nothing); 5 stack divergence: `gh stack sync` aborted on a diverged stack (JSON on stdout;
-// nothing was pushed and nothing recorded). On 1, 2 and 3 nothing is written to stdout.
+// nothing was pushed and nothing recorded); 6 closed: pr-merge --merged found the pull request closed without a merge
+// (#220; JSON on stdout; nothing recorded, nothing cleaned). On 1, 2 and 3 nothing is written to stdout.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -352,6 +355,7 @@ import { main as gateMain } from './merge-gate.mjs';
 export const FORMAT = 'sorry-matt/integrate@1';
 const CONFLICT = 4;
 const DIVERGED = 5;
+const CLOSED = 6;
 
 /** Well-formed, but the state or the repository does not allow it: exit 3. */
 class Refusal extends Error {}
@@ -795,6 +799,8 @@ function prMergeMerged(ctx, id, s) {
   const repo = ctx.repo;
   const { t, branch, pr } = prMergeTicket(ctx, s, id, ['queued', 'integrating', 'awaiting-merge', 'delivered']);
   const view = parseJson(ctx.gh(['pr', 'view', String(pr), '--json', 'mergeCommit,state'], repo));
+  // #220: closed without a merge is not "not merged yet": its own exit, for tick's pr-closed judge
+  if (view?.state === 'CLOSED') return { code: CLOSED, out: prMergeOut('merged', id, t, { result: 'closed', state: 'CLOSED' }) };
   if (view?.state !== 'MERGED') throw new Refusal(`${id}'s pull request ${pr} is ${view?.state ?? 'in an unknown state'}, not MERGED; the host sends the merge first`);
   const sha = view?.mergeCommit?.oid;
   if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`gh pr view printed no merge commit for pull request ${pr}`);

@@ -450,6 +450,8 @@ skill 之間也 reach 不到 —— 寫成「執行 <user-invoked skill>」的�
 | 合併授權 | merge authorization |
 | 基底紅（合併後） | base red |
 | 審查沿用 | review kept |
+| 等待階段（`awaiting-ci`、`awaiting-merge`、`queued`） | waiting stage |
+| 讀不到的狀況 | unreadable condition |
 
 ## 外部語義來源
 
