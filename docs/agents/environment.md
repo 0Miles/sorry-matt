@@ -2,6 +2,20 @@
 
 這個 repo 已落檔的環境事實（`src/skills/have-it-all-done/ASKING.md` 第 0 節讀它）。
 
+## Git for Windows 與測試
+
+2026-11-27 在本機 Windows 11 實測（#235 之後），git 2.40.1.windows.1、Node 24。
+
+- **一個 git 程序約 120–150 ms**（空機），平行負載下再慢一倍以上；同一套測試 CI 上 ubuntu 約 1.5 分、windows 約 14 分，
+  差距幾乎都在起 git 程序。降低程序數的手法見 `scripts/git-env.mjs`、`tier.mjs` 的 `fileReader` 與 `tick.mjs run`
+  的 `views`。
+- **`GIT_TRACE2_EVENT` 會讓 git 偶爾印不出 stdout、卻以 0 結束**：32 個 worker 各跑 120 次 `git rev-parse HEAD`，
+  不開 trace 0／3840 次空輸出；trace 寫同一個檔 13／3840，寫目錄（每程序一檔）10／3840。測試會因此出現假紅
+  （`got ""`、`does not exist`、`no local branch`、`copyfile … -> ''`）。數 git 程序（`"event":"start"`）與驗正確性
+  要分開跑：開 trace 的那輪只取程序數，紅燈不算。
+- **本機 push 的 receive-pack 拿不到 `GIT_CONFIG_COUNT` 的值**（git 對另一個 repo 清掉這組環境變數），所以
+  `receive.autogc` 要寫在 bare repo 自己的 config 裡（`noAutoGc`）。
+
 ## gh stack（`integrate: ticket-pr`）
 
 2026-11-26 在拋棄式 private repo `0Miles/sorry-matt-stack-sandbox` 實測（#187 裁決 6，#198 留言）。版本：gh 2.65.0、
