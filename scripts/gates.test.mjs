@@ -4,7 +4,7 @@
 // temp dir. Each assertion of gates.mjs has a passing case (it is in `checked` and not in `failures` on a good world)
 // and a failing case that breaks only that assertion. The state is built with state.mjs's own commands; a case that
 // no command can produce (the gate is the redundant check behind a guard) edits the file the way a hand edit would.
-import './git-env.mjs'; // first: the git processes below skip automatic maintenance
+import { noAutoGc } from './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,6 +43,7 @@ function base() {
   git(repo, 'commit', '-q', '-m', 'base');
   const origin = join(dir, 'origin.git');
   execFileSync('git', ['init', '-q', '--bare', origin]);
+  noAutoGc(origin);
   git(repo, 'push', '-q', origin, 'main');
   template = { dir, repo, origin };
   return template;

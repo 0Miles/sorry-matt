@@ -3,13 +3,13 @@
 // config values to it through GIT_CONFIG_COUNT, after any the environment already carries:
 //   maintenance.auto=false  a commit, merge, rebase, fetch or push does not start `git maintenance run --auto`
 //   gc.auto=0               a `git gc --auto` that does start has nothing to do
-//   receive.autogc=false    a push into a bare origin: receive-pack does not start `git gc --auto` (gc.auto=0 alone
-//                           only makes it return at once)
 // The repositories are throwaway; on Windows each of those extra processes cost 120-150 ms.
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 const VALUES = [
   ['maintenance.auto', 'false'],
   ['gc.auto', '0'],
-  ['receive.autogc', 'false'],
 ];
 
 const env = process.env;
@@ -22,3 +22,12 @@ for (const [key, value] of VALUES) {
   count += 1;
 }
 env.GIT_CONFIG_COUNT = String(count);
+
+/**
+ * A push into a local bare repository runs its receive-pack without the GIT_CONFIG_COUNT values (git clears them for
+ * the other repository), and receive-pack starts `git gc --auto` after every push unless that repository's own config
+ * says receive.autogc=false. Written into the bare repository's config file: no git process.
+ */
+export function noAutoGc(bare) {
+  appendFileSync(join(bare, 'config'), '[receive]\n\tautogc = false\n');
+}

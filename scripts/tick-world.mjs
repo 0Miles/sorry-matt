@@ -9,7 +9,7 @@
 // #160: the replays are split over several test files, which node --test runs in parallel. A replay starts a few
 // hundred git processes; on Windows each costs over ten times what it does on Linux, and the tests of one file run one
 // after another, so in one file they took past 600 s there.
-import './git-env.mjs'; // first: the git processes below skip automatic maintenance
+import { noAutoGc } from './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, utimesSync, realpathSync, cpSync, existsSync, openSync, ftruncateSync, writeSync, closeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -74,6 +74,7 @@ function buildGit(dir, { local, ticketPr, check, ID1, ID2 }) {
   const repo = join(dir, 'repo');
   const intWt = join(dir, 'int');
   git(dir, 'init', '-q', '--bare', '-b', 'main', origin);
+  noAutoGc(origin);
   git(dir, 'init', '-q', '-b', 'main', repo);
   git(repo, 'config', 'commit.gpgsign', 'false');
   git(repo, 'config', 'core.autocrlf', 'false');

@@ -2,7 +2,7 @@
 // tick.mjs's gitView, what one `next` reads of git (#160): one git process gives the refs, the worktrees and the
 // origin; it answers what `git rev-parse`, `git worktree list` and `git remote get-url` answer. The expected values
 // come from those git commands run here, not from gitView's own query.
-import './git-env.mjs'; // first: the git processes below skip automatic maintenance
+import { noAutoGc } from './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
@@ -33,6 +33,7 @@ function repoWorld(t, { push = true, origin = true } = {}) {
   const bare = join(dir, 'origin.git');
   const wt = join(dir, 'wt');
   git(dir, 'init', '-q', '--bare', '-b', 'main', bare);
+  noAutoGc(bare);
   git(dir, 'init', '-q', '-b', 'main', repo);
   git(repo, 'config', 'commit.gpgsign', 'false');
   writeFileSync(join(repo, 'a.txt'), 'a\n');

@@ -2,7 +2,7 @@
 // Drives integrate.mjs through main() against real temp repositories (with a bare `origin` where a push is
 // checked) and real state files written by state.mjs's own main. Expected values come from git itself (rev-parse,
 // log, the remote's refs) and from frontier.mjs's reading of a Local Markdown ticket, not from integrate.mjs.
-import './git-env.mjs'; // first: the git processes below skip automatic maintenance
+import { noAutoGc } from './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,6 +43,7 @@ function setup(t, { origin = true, profile, tracker, gh } = {}) {
   if (origin) {
     bare = join(dir, 'origin.git');
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    noAutoGc(bare);
     git('remote', 'add', 'origin', bare);
     git('push', '-q', 'origin', 'main');
   }
