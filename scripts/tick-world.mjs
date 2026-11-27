@@ -1,7 +1,7 @@
 // The harness of the tick replays, scripts/tick.test.mjs and scripts/tick-*.test.mjs: the world a replay plays in,
 // the host's stand-in, and the helpers the replays share. No tests here.
-// The replays are of get-to-work's wake-ups through tick.mjs. Each test builds a real git repository with a bare origin and
-// an integration worktree, a real state file (state.mjs), and plays the host: it runs every action tick hands out
+// The replays are of get-to-work's wake-ups through tick.mjs. Each test gets a real git repository with a bare origin and
+// an integration worktree (a copy of one built once per test file), a real state file (state.mjs), and plays the host: it runs every action tick hands out
 // and records each result. Scripts run for real (state, deadline, brief, overlap, integrate, verify, git); only the network is canned
 // (ci.mjs verdicts, frontier.mjs github, acceptance.mjs github, gh). The expected values are the pipeline's rules
 // as SKILL.md states them, written here by hand.
@@ -11,7 +11,7 @@
 // after another, so in one file they took past 600 s there.
 import './git-env.mjs'; // first: the git processes below skip automatic maintenance
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, utimesSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, utimesSync, realpathSync, cpSync, existsSync, openSync, ftruncateSync, writeSync, closeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -59,16 +59,17 @@ export const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id
  * tick.mjs the run goes through: src's by default, dist's (skills/get-to-work/scripts) for a replay that pins the copy
  * the plugin loads (#222).
  */
-export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"', main = tick } = {}) {
-  const local = tracker === 'local';
-  // #195: under integrate: ticket-pr the line has no integration branch and no worktree (#193): every ticket is its
-  // own pull request, cut from origin/<base>. The world then makes neither, records the line with no tip, and seeds
-  // the state's tracker (state.mjs refuses the profile without a GitHub run).
-  const ticketPr = profile?.integrate === 'ticket-pr';
-  const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
-  // the long form: on a Windows runner tmpdir() is an 8.3 short path (RUNNER~1), git prints the long one
-  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-tick-')));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+// A world's directory: the long form, since on a Windows runner tmpdir() is an 8.3 short path (RUNNER~1) and git
+// prints the long one. Templates and worlds share the prefix and the parent, so a copy's paths differ only in the name.
+const worldDir = () => realpathSync.native(mkdtempSync(join(tmpdir(), 'sorry-matt-tick-')));
+
+/**
+ * The git side of a world as the freeze leaves it: a bare origin, the repository with its first commit pushed, and
+ * (not under ticket-pr) the line's branch in its integration worktree, pushed. Built once per test file and shape
+ * (`template`), then copied for each world: building it starts some twenty git processes (a push alone starts
+ * receive-pack and its pack processes), which on Windows cost 120-150 ms each.
+ */
+function buildGit(dir, { local, ticketPr, check, ID1, ID2 }) {
   const origin = join(dir, 'origin.git');
   const repo = join(dir, 'repo');
   const intWt = join(dir, 'int');
@@ -92,6 +93,58 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     git(repo, 'worktree', 'add', '-q', '-b', LINE, intWt, 'main');
     git(intWt, 'push', '-q', '-u', 'origin', LINE);
   }
+  return { tip: ticketPr ? null : git(intWt, 'rev-parse', 'HEAD') };
+}
+
+/** The files of a world's git side that hold its own absolute path: origin's url, and the worktree's links both ways. */
+const PATH_FILES = ['repo/.git/config', 'int/.git', 'repo/.git/worktrees/int/gitdir'];
+
+const templates = new Map(); // shape → { dir, tip }
+process.on('exit', () => {
+  for (const { dir } of templates.values()) rmSync(dir, { recursive: true, force: true });
+});
+function template(shape) {
+  const key = JSON.stringify(shape);
+  if (!templates.has(key)) {
+    const dir = worldDir();
+    templates.set(key, { dir, ...buildGit(dir, shape) });
+  }
+  return templates.get(key);
+}
+
+/** A copy of the template's git side in `dir`, its absolute paths moved there (the template's name → dir's). */
+function copyGit(from, dir) {
+  cpSync(from, dir, { recursive: true, preserveTimestamps: true });
+  const [was, now] = [basename(from), basename(dir)];
+  for (const rel of PATH_FILES) {
+    const file = join(dir, rel);
+    if (!existsSync(file)) continue;
+    const text = readFileSync(file, 'utf8');
+    assert.ok(text.includes(was), `${rel} names the template's directory`);
+    // r+, not w: Git for Windows marks a worktree's .git file hidden, and Windows refuses to recreate a hidden file
+    const fd = openSync(file, 'r+');
+    try {
+      ftruncateSync(fd, 0);
+      writeSync(fd, text.split(was).join(now), 0);
+    } finally {
+      closeSync(fd);
+    }
+  }
+}
+
+export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"', main = tick } = {}) {
+  const local = tracker === 'local';
+  // #195: under integrate: ticket-pr the line has no integration branch and no worktree (#193): every ticket is its
+  // own pull request, cut from origin/<base>. The world then makes neither, records the line with no tip, and seeds
+  // the state's tracker (state.mjs refuses the profile without a GitHub run).
+  const ticketPr = profile?.integrate === 'ticket-pr';
+  const [ID1, ID2] = local ? ['01-first.md', '02-second.md'] : ['#1', '#2'];
+  const dir = worldDir();
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, 'repo');
+  const intWt = join(dir, 'int');
+  const { dir: from, tip } = template({ local, ticketPr, check, ID1, ID2 });
+  copyGit(from, dir);
   const runs = join(dir, 'runs');
   mkdirSync(runs, { recursive: true });
   const path = join(runs, 'r1.state.json');
@@ -141,7 +194,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
 
   h.S('init', '--run', 'r1', ...(ticketPr ? ['--tracker', 'github'] : []));
   h.S('add', ID1, ID2, '--line', h.line);
-  if (!ticketPr) h.S('line', h.line, '--tip', git(intWt, 'rev-parse', 'HEAD'));
+  if (!ticketPr) h.S('line', h.line, '--tip', tip);
   if (profile) h.S('profile', ...Object.entries(profile).flatMap(([k, v]) => [`--${k}`, String(v)]));
   write(join(W, 'files', `${numOf(ID1)}.txt`), 'a.txt\n');
   write(join(W, 'files', `${numOf(ID2)}.txt`), 'b.txt\n');
