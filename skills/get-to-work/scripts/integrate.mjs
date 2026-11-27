@@ -70,6 +70,10 @@
 //                  only when the branch does not exist yet: a rerun reuses the branch and calls gh not at all. The output's "stack" lists the gh stack subcommands run
 //                  (e.g. ["init <upstream>", "add <branch>"]; [] on a rerun or an unstacked ticket).
 //              `--base` outside ticket-pr is refused (2).
+//              The base rule (#219; ticket-init, pr-open, pr-merge and revert under ticket-pr, checked before
+//              anything is touched): the first of them given `--base` for a ticket records it as the base of the
+//              ticket's PR (`state.mjs set --pr-base`; a stacked ticket's: the base its stack merges toward), and a
+//              later `--base` that differs from the recorded one is refused (3).
 //              Ticket branch rule (ticket-init and merge, checked before anything is touched): the branch is
 //              refused when it is an integration branch of the run (the ticket's line or another), a protected
 //              branch (see push), or another ticket's recorded branch; once the ticket has a recorded branch, a
@@ -81,7 +85,13 @@
 // pr-open      integrate: ticket-pr only (#193; any other integrate is refused). Pushes the ticket branch
 //              (`git push -u origin <branch>`; an origin remote is required) and opens the ticket's draft pull
 //              request. Idempotent: a branch that already has an open PR (`gh pr list --head <branch> --state open`)
-//              reuses it, opens nothing new, and only records its number. Otherwise:
+//              reuses it, opens nothing new, pushes nothing (#219: a restacked branch is no fast-forward of what is on
+//              origin; a fix goes out with pr-push), and records its number. Its body (`gh pr view <number> --json
+//              body`) is made sure of every `Closes` line below (#219: a create interrupted between `gh stack
+//              submit` and `gh pr edit` leaves a PR that would not close the ticket): a body that has them all
+//              (a whole line each, case aside) is kept; one missing some gets the missing ones appended (right
+//              under its last line when that is a `Closes` line, else after a blank line); an empty one gets the body below (`gh pr edit <number> --body`). Otherwise the branch is
+//              pushed, then:
 //                - `stackParent` null: `gh pr create --draft --base <--base> --head <branch>` (`--base` is the base
 //                  branch, required here) with `--title <--title>` and the body below; the number is read from the
 //                  pull request URL it prints.
@@ -89,13 +99,15 @@
 //                  holding the branch; this layer's number is then read with `gh pr list --head <branch>` (not from
 //                  submit's output), and the body below is written onto it with `gh pr edit <number> --body`.
 //              Body: the ticket title (`--title`), then this ticket's commit subjects (oldest first, from
-//              `<cut point>..<branch>`), then one final `Closes <ticket>` line — for a bundle (state.mjs `members`)
+//              `<cut point>..<branch>`, merge commits left out: #219, a base merge taken into the branch is not the
+//              ticket's change), then one final `Closes <ticket>` line — for a bundle (state.mjs `members`)
 //              one `Closes` line per member, the lead first, and the one PR is the lead's branch with the number
 //              recorded on the lead. Commit messages themselves carry no closing keyword. The number is recorded
 //              with `state.mjs set <ticket> --pr <number>` (skipped when already recorded). Refused for a ticket at
 //              an end state or with no recorded branch.
 //              Output: { "format", "command": "pr-open", "ticket", "line", "branch", "stacked": true | false,
-//                        "pr": <number>, "created": true | false }
+//                        "pr": <number>, "created": true | false,
+//                        "body": "created" | "kept" | "appended" | "written" }   (the last three: a reused PR)
 // pr-push      integrate: ticket-pr only (#193). Pushes a fix commit to the same pull request: the ticket branch is
 //              pushed again — `gh stack push` (in the worktree holding the branch) for a stacked ticket,
 //              `git push -u origin <branch>` otherwise. A ticket branch is never a protected branch (the ticket
@@ -121,10 +133,12 @@
 //                               ancestor. A conflict: `git merge --abort`, exit 4 with { "result": "conflict",
 //                               "files" }; the state, the worktree and HEAD are as before (the host hands it to a
 //                               merge agent as with merge; after the resolution is committed a rerun pushes).
-//                               Then `git push -u origin <branch>`.
+//                               Then `git push -u origin <branch>`. The worktree is looked up only for the merge
+//                               (#219): with the base already taken, no worktree needs to hold the branch.
 //                             - stacked: non-interactive `gh stack sync` in the worktree holding the branch. A sync
-//                               that aborted on stack divergence still exits 0: its output is read, and any line
-//                               matching /diverg/i marks the divergence — exit 5 with { "result": "diverged",
+//                               that aborted on stack divergence still exits 0: its output is read — stdout and
+//                               stderr both (#219), so the channel gh stack names it on does not decide — and any
+//                               line matching /diverg/i marks the divergence — exit 5 with { "result": "diverged",
 //                               "divergence": [those lines] }, nothing pushed and nothing recorded, for the host to
 //                               rule on. Then `gh stack push`.
 //                           The output reports the branch and pushed head SHA; waiting for CI is tick's fallback
@@ -344,10 +358,10 @@
 // nothing was pushed and nothing recorded); 6 closed: pr-merge --merged found the pull request closed without a merge
 // (#220; JSON on stdout; nothing recorded, nothing cleaned). On 1, 2 and 3 nothing is written to stdout.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { UsageError, run, canonical, failure, parseJson, runIfEntry } from './cli.mjs';
-import { main as stateMain, load, TERMINAL, profileOf } from './state.mjs';
+import { UsageError, run, gh, canonical, failure, parseJson, runIfEntry } from './cli.mjs';
+import { main as stateMain, load, leadOf, TERMINAL, profileOf } from './state.mjs';
 import { ticketOwners } from './merges.mjs';
 import { scan, ownRows, lastRecordIndex, sectionAt } from './ticket.mjs';
 import { main as gateMain } from './merge-gate.mjs';
@@ -449,9 +463,27 @@ function checkTicketBranch(s, id, t, branch, repo) {
 
 const ticketOf = (s, id) => {
   const t = s.tickets[id];
-  if (!t) throw new Refusal(`${id} is not a ticket of this run (add it with state.mjs add)`);
-  return t;
+  if (t) return t;
+  // #219: a bundle member is not missing; its lead stands for it (state.mjs's own refusal, word for word)
+  const lead = leadOf(s, id);
+  throw new Refusal(lead ? `${id} is a member of bundle ${lead}: name its lead, ${lead}` : `${id} is not a ticket of this run (add it with state.mjs add)`);
 };
+
+/**
+ * #219: the base branch of a ticket's pull request is the state's (`prBase`, written by the first command given
+ * `--base` for the ticket); a `--base` that differs from the recorded one is refused before anything is touched.
+ */
+function checkBase(id, t, base) {
+  const recorded = t.prBase ?? null;
+  if (base !== undefined && recorded !== null && base !== recorded) {
+    throw new Refusal(`${id}'s pull request base is ${recorded} (recorded), not --base ${base}`);
+  }
+}
+
+/** Records `--base` as the ticket's pull request base when none is recorded yet (after checkBase let it through). */
+function recordBase(ctx, id, t, base) {
+  if (base !== undefined && (t.prBase ?? null) === null) state(ctx, 'set', id, '--pr-base', base);
+}
 
 // ---- commands ----------------------------------------------------------------------------------------------------
 
@@ -534,7 +566,8 @@ function ticketInit(ctx, rest, flags) {
 // ---- ticket-pr (#193) ----------------------------------------------------------------------------------------------
 
 /** A non-interactive `gh stack` call, with the update notifier silenced. */
-const ghStack = (ctx, cwd, ...args) => ctx.gh(['stack', ...args], cwd, { GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+const STACK_ENV = Object.freeze({ GH_STACK_NO_UPDATE_NOTIFIER: '1' });
+const ghStack = (ctx, cwd, ...args) => ctx.gh(['stack', ...args], cwd, STACK_ENV);
 
 /** The run's effective integrate mode; a command that is ticket-pr only refuses any other. */
 function ticketPrOnly(s, command) {
@@ -555,6 +588,7 @@ function ticketInitPr(ctx, id, s, t, flags) {
   const waiting = t.waitingOn ?? [];
   if (waiting.length) throw new Refusal(`${id} is waiting on ${waiting.join(', ')} to merge; no branch is cut until they are`);
   checkTicketBranch(s, id, t, flags.branch, repo);
+  checkBase(id, t, flags.base);
   const parent = t.stackParent ?? null;
   let from;
   if (parent !== null) {
@@ -600,6 +634,7 @@ function ticketInitPr(ctx, id, s, t, flags) {
     made = { branch: true, worktree: true, path: wt };
   } else made = ensureWorktree(repo, flags.branch, ctx.path(flags.worktree), from);
   if (t.branch !== flags.branch) state(ctx, 'set', id, '--branch', flags.branch);
+  recordBase(ctx, id, t, flags.base);
   return {
     out: {
       command: 'ticket-init',
@@ -640,11 +675,43 @@ function prTicket(ctx, s, id) {
 /** The number of the open pull request whose head is `branch`, or null. */
 const openPrNumber = (ctx, repo, branch) => parseJson(ctx.gh(['pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'], repo))[0]?.number ?? null;
 
-/** The PR body: the ticket title, this ticket's commit subjects, one final `Closes` line per bundled ticket. */
+/** The `Closes` lines of the PR body: one per bundled ticket, the lead first. */
+const closeLines = (id, t) => [id, ...(t.members ?? [])].map((m) => `Closes ${m}`);
+
+/**
+ * The PR body: the ticket title, this ticket's commit subjects (no merges: a base merge taken into the branch is not
+ * the ticket's change, #219), one final `Closes` line per bundled ticket.
+ */
 function prBody(repo, id, t, title, fromRef, branch) {
-  const subjects = git(repo, 'log', '--reverse', '--format=%s', `${fromRef}..refs/heads/${branch}`).split(/\r?\n/).filter(Boolean);
-  const closes = [id, ...(t.members ?? [])].map((m) => `Closes ${m}`);
-  return [title, '', ...subjects.map((x) => `- ${x}`), '', ...closes].join('\n');
+  const subjects = git(repo, 'log', '--no-merges', '--reverse', '--format=%s', `${fromRef}..refs/heads/${branch}`).split(/\r?\n/).filter(Boolean);
+  return [title, '', ...subjects.map((x) => `- ${x}`), '', ...closeLines(id, t)].join('\n');
+}
+
+/** The ref this ticket's own commits are counted from: origin/<base>, or the upstream ticket's branch. */
+function bodyFrom(repo, s, id, parent, base) {
+  const fromRef = parent === null ? `origin/${base}` : s.tickets[parent]?.branch;
+  if (!fromRef) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
+  if (commitOf(repo, fromRef) === null) throw new Refusal(`${fromRef} is not a commit`);
+  return fromRef;
+}
+
+/**
+ * #219: a reused PR's body holds every `Closes` line, whatever interrupted the create (`gh stack submit` opened it,
+ * then `gh pr edit` failed). "kept": all there; "appended": the missing ones added under what is there; "written":
+ * an empty body gets the body a create writes.
+ */
+function ensureCloses(ctx, repo, s, id, t, pr, flags, parent, branch) {
+  const body = String(parseJson(ctx.gh(['pr', 'view', String(pr), '--json', 'body'], repo))?.body ?? '');
+  const have = new Set(body.split(/\r?\n/).map((l) => l.trim().toLowerCase()));
+  const missing = closeLines(id, t).filter((l) => !have.has(l.toLowerCase()));
+  if (!missing.length) return 'kept';
+  const blank = body.trim() === '';
+  const kept = body.trimEnd();
+  // under a Closes line already there the missing ones join its block; under anything else, after a blank line
+  const gap = /^closes\s/i.test(kept.split(/\r?\n/).at(-1).trim()) ? '\n' : '\n\n';
+  const next = blank ? prBody(repo, id, t, flags.title, bodyFrom(repo, s, id, parent, flags.base), branch) : `${kept}${gap}${missing.join('\n')}`;
+  ctx.gh(['pr', 'edit', String(pr), '--body', next], repo);
+  return blank ? 'written' : 'appended';
 }
 
 function prOpen(ctx, rest, flags) {
@@ -655,21 +722,22 @@ function prOpen(ctx, rest, flags) {
   const s = load(ctx.state);
   ticketPrOnly(s, 'pr-open');
   const { t, branch, parent } = prTicket(ctx, s, id);
+  checkBase(id, t, flags.base);
   if (parent === null && !flags.base) throw new UsageError('pr-open needs --base (the base branch) for a ticket that is not stacked');
 
-  // 1. push
-  git(repo, 'push', '-q', '-u', 'origin', branch);
-
-  // 2. reuse an open PR, else 3. create the draft
+  // 1. reuse an open PR: nothing is pushed (#219: a restacked branch is no fast-forward of what is on origin; a fix
+  //    goes out with pr-push), the body only made sure of its Closes lines
   let pr = openPrNumber(ctx, repo, branch);
   const created = pr === null;
-  if (created) {
-    const fromRef = parent === null ? `origin/${flags.base}` : s.tickets[parent]?.branch;
-    if (!fromRef) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
-    if (commitOf(repo, fromRef) === null) throw new Refusal(`${fromRef} is not a commit`);
-    const body = prBody(repo, id, t, flags.title, fromRef, branch);
+  let body = 'created';
+  if (!created) body = ensureCloses(ctx, repo, s, id, t, pr, flags, parent, branch);
+  else {
+    // 2. push, then 3. create the draft
+    const fromRef = bodyFrom(repo, s, id, parent, flags.base);
+    git(repo, 'push', '-q', '-u', 'origin', branch);
+    const text = prBody(repo, id, t, flags.title, fromRef, branch);
     if (parent === null) {
-      const out = String(ctx.gh(['pr', 'create', '--draft', '--base', flags.base, '--head', branch, '--title', flags.title, '--body', body], repo));
+      const out = String(ctx.gh(['pr', 'create', '--draft', '--base', flags.base, '--head', branch, '--title', flags.title, '--body', text], repo));
       const m = /\/pull\/(\d+)/.exec(out);
       if (!m) throw new Error(`gh pr create printed no pull request URL: ${out.trim()}`);
       pr = Number(m[1]);
@@ -677,13 +745,14 @@ function prOpen(ctx, rest, flags) {
       ghStack(ctx, stackCwd(repo, branch), 'submit', '--auto');
       pr = openPrNumber(ctx, repo, branch);
       if (pr === null) throw new Refusal(`gh stack submit --auto opened no pull request for ${branch}`);
-      ctx.gh(['pr', 'edit', String(pr), '--body', body], repo);
+      ctx.gh(['pr', 'edit', String(pr), '--body', text], repo);
     }
   }
 
   // 4. record
   if ((t.pr ?? null) !== pr) state(ctx, 'set', id, '--pr', String(pr));
-  return { out: { command: 'pr-open', ticket: id, line: t.line, branch, stacked: parent !== null, pr, created } };
+  recordBase(ctx, id, t, flags.base);
+  return { out: { command: 'pr-open', ticket: id, line: t.line, branch, stacked: parent !== null, pr, created, body } };
 }
 
 function prPush(ctx, rest, _flags) {
@@ -742,8 +811,10 @@ function prMergePush(ctx, id, s, flags) {
   const repo = ctx.repo;
   const { t, branch, parent } = prMergeTicket(ctx, s, id, ['queued', 'integrating']);
   pushable(repo, id, branch, 'pr-merge pushes the ticket branch there');
-  const wt = stackCwd(repo, branch);
+  checkBase(id, t, flags.base);
   let synced;
+  // #219: the worktree holding the branch is looked up only where it is used — the merge and the stack — so a rerun
+  // whose base is already taken pushes from the repository with no worktree left holding the branch
   if (parent === null) {
     if (!flags.base) throw new UsageError('pr-merge needs --base (the base branch) for a ticket that is not stacked');
     const from = `origin/${flags.base}`;
@@ -751,20 +822,25 @@ function prMergePush(ctx, id, s, flags) {
     if (fromSha === null) throw new Refusal(`${from} is not a commit; fetch the base branch first`);
     if (isAncestor(repo, fromSha, `refs/heads/${branch}`)) synced = 'already';
     else {
-      const m = mergeBranch(wt, from);
+      const m = mergeBranch(stackCwd(repo, branch), from);
       if (m.files) return { code: CONFLICT, out: prMergeOut('push', id, t, { result: 'conflict', files: m.files }) };
       synced = `merged ${from}`;
     }
     git(repo, 'push', '-q', '-u', 'origin', branch);
   } else {
-    // A sync that aborted on stack divergence exits 0; its output names the divergence (#187 live-run item).
-    const out = String(ghStack(ctx, wt, 'sync'));
+    const wt = stackCwd(repo, branch);
+    // A sync that aborted on stack divergence exits 0; its output names the divergence (#187 live-run item), on
+    // stdout or stderr: both are read (#219), so the channel gh stack picks does not decide it. A seam that answers
+    // with a string gave stdout alone.
+    const r = ctx.gh(['stack', 'sync'], wt, STACK_ENV, { both: true });
+    const out = typeof r === 'string' ? r : `${r?.stdout ?? ''}\n${r?.stderr ?? ''}`;
     const divergence = out.split(/\r?\n/).filter((l) => /diverg/i.test(l));
     if (divergence.length) return { code: DIVERGED, out: prMergeOut('push', id, t, { result: 'diverged', divergence }) };
     synced = 'gh stack sync';
     ghStack(ctx, wt, 'push');
   }
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
+  recordBase(ctx, id, t, flags.base);
   return { out: prMergeOut('push', id, t, { result: 'pushed', synced, head: branchTip(repo, branch) }) };
 }
 
@@ -773,6 +849,7 @@ function prMergeReady(ctx, id, s, flags) {
   const repo = ctx.repo;
   const { t, pr, parent } = prMergeTicket(ctx, s, id, ['queued', 'integrating', 'awaiting-ci']);
   if (!flags.base) throw new UsageError('pr-merge --ready needs --base (the base branch) for merge-gate.mjs');
+  checkBase(id, t, flags.base);
   ctx.gh(['pr', 'ready', String(pr)], repo);
   const slug = parseJson(ctx.gh(['repo', 'view', '--json', 'nameWithOwner'], repo))?.nameWithOwner;
   if (typeof slug !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(slug)) throw new Error(`gh repo view printed no nameWithOwner: ${String(slug)}`);
@@ -791,6 +868,7 @@ function prMergeReady(ctx, id, s, flags) {
     ? { status: 'host', command: inStack ? `gh stack merge ${pr} --yes --squash` : `gh pr merge ${pr}` }
     : { status: 'human' };
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
+  recordBase(ctx, id, t, flags.base);
   return { out: prMergeOut('ready', id, t, { base: flags.base, gate: { decision: gate.decision, reason: gate.reason }, send }) };
 }
 
@@ -1438,6 +1516,7 @@ function revertPr(ctx, rest, flags, s) {
   const [id] = rest;
   const repo = ctx.repo;
   const t = ticketOf(s, id);
+  checkBase(id, t, flags.base);
   if (!['delivered', 'integrating', 'stuck'].includes(t.stage)) {
     throw new Refusal(`${id} is ${t.stage}; revert takes a delivered ticket, or an integrating one with its merge recorded`);
   }
@@ -1737,9 +1816,9 @@ function parseArgs(argv, spec) {
 export function defaultDeps() {
   return {
     cwd: process.cwd(),
-    // The `gh` seam (as in freeze.mjs): env, when given, is added to the environment of that one call.
-    gh: (args, cwd, env) =>
-      execFileSync('gh', args, { cwd, env: env && { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] }),
+    // cli.mjs's gh seam, shared with freeze.mjs (#219): env, when given, is added to the environment of that one
+    // call; `{ both: true }` returns { stdout, stderr }.
+    gh,
   };
 }
 

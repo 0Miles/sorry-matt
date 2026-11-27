@@ -1027,6 +1027,7 @@ test('pr-open (ticket-pr) pushes the branch, opens the draft PR with the body an
   const gh = ghStub({
     'pr list': () => (gh.of('pr', 'create').length ? '[{"number":12}]' : '[]'),
     'pr create': 'https://github.com/o/r/pull/12\n',
+    'pr view': () => JSON.stringify({ body: gh.of('pr', 'create')[0].args.at(-1) }),
   });
   const { dir, bare, git, ok, state, refused, work } = withPrLine(t, ['#1'], gh);
   const wt = join(dir, 'wt-1');
@@ -1037,7 +1038,7 @@ test('pr-open (ticket-pr) pushes the branch, opens the draft PR with the body an
   const head = git('rev-parse', 'refs/heads/run-1/01-a');
 
   const out = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
-  assert.deepEqual(out, { format: 'sorry-matt/integrate@1', command: 'pr-open', ticket: '#1', line: LINE, branch: 'run-1/01-a', stacked: false, pr: 12, created: true });
+  assert.deepEqual(out, { format: 'sorry-matt/integrate@1', command: 'pr-open', ticket: '#1', line: LINE, branch: 'run-1/01-a', stacked: false, pr: 12, created: true, body: 'created' });
   assert.equal(execFileSync('git', ['-C', bare, 'rev-parse', 'refs/heads/run-1/01-a'], { encoding: 'utf8' }).trim(), head, 'the ticket branch is pushed');
   assert.equal(state().tickets['#1'].pr, 12);
   const create = gh.of('pr', 'create');
@@ -1112,6 +1113,7 @@ test('pr-open (ticket-pr) for a bundle opens one PR on the lead with one Closes 
 test('pr-push (ticket-pr) pushes the same branch, gh stack push for a stacked ticket, and marks nothing host', (t) => {
   const gh = ghStub({
     'pr list': () => '[{"number":12}]',
+    'pr view': '{"body":"Add the thing\\n\\nCloses #1"}',
   });
   const { dir, bare, git, ok, st, refused, work } = withPrLine(t, ['#1', '#2'], gh);
   const wt1 = join(dir, 'wt-1');
@@ -1586,4 +1588,183 @@ test('patch-id (ticket-pr, #199): the same own change gives the same id after a 
   const other = setup(t, { tracker: 'github' });
   other.st('add', '#9', '--line', LINE);
   assert.equal(other.integrate('patch-id', '#9', '--from', 'main').code, 3);
+});
+
+// ---- #219: the review observations on pr-open / pr-merge -----------------------------------------------------------
+
+test('#219 a bundle member is refused with its lead named, not pointed at state.mjs add', (t) => {
+  const { ok, st, refused, dir } = withPrLine(t, ['#5', '#6'], ghStub());
+  st('bundle', '#5', '#6');
+  refused(/#6 is a member of bundle #5: name its lead, #5/, 'ticket-init', '#6', '--branch', 'run-1/06-f', '--worktree', join(dir, 'wt-6'), '--base', 'main');
+  ok('ticket-init', '#5', '--branch', 'run-1/05-e', '--worktree', join(dir, 'wt-5'), '--base', 'main');
+  refused(/#6 is a member of bundle #5: name its lead, #5/, 'pr-open', '#6', '--title', 'member', '--base', 'main');
+  refused(/#6 is a member of bundle #5: name its lead, #5/, 'pr-merge', '#6', '--base', 'main');
+  refused(/#9 is not a ticket of this run \(add it with state.mjs add\)/, 'pr-push', '#9');
+});
+
+test('#219 pr-open: the body lists the commits without the base merges taken into the branch', (t) => {
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":12}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/12\n',
+  });
+  const { dir, repo, git, g, ok, work } = withPrLine(t, ['#1'], gh);
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
+  work(wt, { 'one.md': 'one\n' }, '#1: add the thing');
+  work(repo, { 'base2.md': 'the base moves on\n' }, 'base: second commit');
+  git('push', '-q', 'origin', 'main');
+  g(wt, 'fetch', '-q', 'origin');
+  g(wt, 'merge', '-q', '--no-edit', 'origin/main');
+  assert.match(g(wt, 'log', '-1', '--format=%s'), /^Merge /, 'a base merge is on the ticket branch');
+  work(wt, { 'two.md': 'two\n' }, '#1: refine the thing');
+
+  ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  const args = gh.of('pr', 'create')[0].args;
+  const body = args[args.indexOf('--body') + 1].split('\n');
+  assert.deepEqual(body.filter((l) => l.startsWith('- ')), ['- #1: add the thing', '- #1: refine the thing'], 'no bullet for the merge');
+});
+
+test('#219 pr-open: reusing an open PR pushes nothing (a restacked branch is not refused) and makes sure of the Closes lines', (t) => {
+  let body = '';
+  const gh = ghStub({
+    'pr list': () => (gh.of('pr', 'create').length ? '[{"number":12}]' : '[]'),
+    'pr create': 'https://github.com/o/r/pull/12\n',
+    'pr view': () => JSON.stringify({ body }),
+  });
+  const { dir, bare, g, ok, st, state, work } = withPrLine(t, ['#1', '#2'], gh);
+  st('bundle', '#1', '#2');
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
+  work(wt, { 'one.md': 'one\n' }, '#1 #2: add the thing');
+  const first = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.deepEqual([first.pr, first.created, first.body], [12, true, 'created']);
+  const pushed = remoteTip(bare, 'refs/heads/run-1/01-a');
+
+  // the branch is rewritten (as a restack does): a plain push would be refused as non-fast-forward
+  g(wt, 'commit', '-q', '--amend', '-m', '#1 #2: add the thing, restacked');
+  const rewritten = g(wt, 'rev-parse', 'HEAD');
+
+  // an interrupted create: the PR is open but its body has no Closes line (gh stack submit wrote it, the edit failed)
+  body = 'what gh stack wrote';
+  const reuse = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.deepEqual([reuse.pr, reuse.created, reuse.body], [12, false, 'appended']);
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), pushed, 'the reuse path pushes nothing');
+  assert.notEqual(rewritten, pushed);
+  let edit = gh.of('pr', 'edit');
+  assert.equal(edit.length, 1);
+  assert.deepEqual(edit[0].args.slice(0, 3), ['pr', 'edit', '12']);
+  assert.equal(edit[0].args[edit[0].args.indexOf('--body') + 1], 'what gh stack wrote\n\nCloses #1\nCloses #2');
+  assert.deepEqual(gh.of('pr', 'view')[0].args, ['pr', 'view', '12', '--json', 'body']);
+
+  // one line already there: only the missing one is added
+  body = 'Add the thing\n\nCloses #1';
+  ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  edit = gh.of('pr', 'edit');
+  assert.equal(edit[1].args[edit[1].args.indexOf('--body') + 1], 'Add the thing\n\nCloses #1\nCloses #2');
+
+  // every line there: nothing is written (idempotent)
+  body = 'Add the thing\n\n- x\n\nCloses #1\ncloses #2\n';
+  const kept = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.equal(kept.body, 'kept');
+  assert.equal(gh.of('pr', 'edit').length, 2, 'no edit when every Closes line is there');
+
+  // an empty body gets the body a create writes
+  body = '';
+  const written = ok('pr-open', '#1', '--title', 'Add the thing', '--base', 'main');
+  assert.equal(written.body, 'written');
+  edit = gh.of('pr', 'edit');
+  const full = edit[2].args[edit[2].args.indexOf('--body') + 1].split('\n');
+  assert.deepEqual([full[0], full.filter((l) => l.startsWith('- ')), full.slice(-2)], ['Add the thing', ['- #1 #2: add the thing, restacked'], ['Closes #1', 'Closes #2']]);
+  assert.equal(gh.of('pr', 'create').length, 1, 'no second PR');
+  assert.equal(state().tickets['#1'].pr, 12);
+});
+
+test('#219 --base is recorded on the ticket and every later --base is checked against it', (t) => {
+  const gh = ghStub({
+    'pr list': ({ args }) => {
+      const head = args[args.indexOf('--head') + 1];
+      if (head === 'run-1/01-a') return gh.of('pr', 'create').length ? '[{"number":12}]' : '[]';
+      return gh.of('stack', 'submit').length ? '[{"number":13}]' : '[]';
+    },
+    'pr create': 'https://github.com/o/r/pull/12\n',
+    'repo view': '{"nameWithOwner":"o/r"}',
+    'api graphql': '{"data":{"repository":{"mergeQueue":null}}}',
+  });
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, ok, st, state, refused, work, git } = env;
+  git('push', '-q', 'origin', 'main:develop');
+  const wt = join(dir, 'wt-1');
+  ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
+  assert.equal(state().tickets['#1'].prBase, 'main', 'ticket-init records the base');
+  work(wt, { 'one.md': 'one\n' }, '#1: work');
+
+  const before = state().revision;
+  refused(/#1's pull request base is main \(recorded\), not --base develop/, 'pr-open', '#1', '--title', 'x', '--base', 'develop');
+  assert.equal(gh.calls.length, 0, 'refused before anything is pushed or opened');
+  assert.equal(state().revision, before);
+  ok('pr-open', '#1', '--title', 'x', '--base', 'main');
+  env.queue('#1');
+  refused(/#1's pull request base is main \(recorded\), not --base develop/, 'pr-merge', '#1', '--base', 'develop');
+  ok('pr-merge', '#1', '--base', 'main');
+  refused(/#1's pull request base is main \(recorded\), not --base develop/, 'pr-merge', '#1', '--ready', '--base', 'develop');
+  assert.equal(gh.of('pr', 'ready').length, 0);
+  ok('pr-merge', '#1', '--ready', '--base', 'main');
+
+  // a stacked ticket is cut without --base: its first --base is recorded, then held to
+  st('set', '#2', '--stack-parent', '#1');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', join(dir, 'wt-2'));
+  assert.equal(state().tickets['#2'].prBase, null);
+  ok('pr-open', '#2', '--title', 'stacked', '--base', 'main');
+  assert.equal(state().tickets['#2'].prBase, 'main');
+  env.queue('#2');
+  refused(/#2's pull request base is main \(recorded\), not --base develop/, 'pr-merge', '#2', '--base', 'develop');
+});
+
+test('#219 --base: revert checks it against the recorded base', (t) => {
+  const env = withPrLine(t, ['#1'], ghStub());
+  mergedPr(t, env, '#1', 'run-1/01-a', 12);
+  env.refused(/#1's pull request base is main \(recorded\), not --base develop/, 'revert', '#1', '--worktree', join(env.dir, 'wt-revert'), '--reason', 'x', '--base', 'develop');
+});
+
+test('#219 pr-merge push: an unstacked rerun with the base already taken needs no worktree holding the branch', (t) => {
+  const env = withPrLine(t, ['#1'], ghStub());
+  const { bare, git, ok, state } = env;
+  const one = withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  git('worktree', 'remove', one.wt);
+  const out = ok('pr-merge', '#1', '--base', 'main');
+  assert.deepEqual([out.synced, out.result, out.head], ['already', 'pushed', one.tip]);
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), one.tip);
+  assert.equal(state().tickets['#1'].stage, 'integrating');
+});
+
+test('#219 pr-merge push: a divergence gh stack sync names on stderr is read as well as one on stdout', (t) => {
+  const gh = ghStub({
+    'stack sync': () => ({ stdout: 'syncing\n', stderr: 'error: run-1/02-b has diverged from its remote\n' }),
+  });
+  const env = withPrLine(t, ['#1', '#2'], gh);
+  const { dir, ok, st, state, integrate } = env;
+  withQueuedPr(t, env, '#1', 'run-1/01-a', 12);
+  st('set', '#2', '--stack-parent', '#1');
+  ok('ticket-init', '#2', '--branch', 'run-1/02-b', '--worktree', join(dir, 'wt-2'));
+  env.work(join(dir, 'wt-2'), { 'two.md': 'two\n' }, '#2: stacked work');
+  st('set', '#2', '--pr', '13');
+  env.queue('#2');
+  const r = integrate('pr-merge', '#2');
+  assert.equal(r.code, 5, r.err);
+  assert.deepEqual(r.json.divergence, ['error: run-1/02-b has diverged from its remote']);
+  assert.deepEqual(gh.of('stack', 'sync')[0].args, ['stack', 'sync']);
+  assert.equal(gh.of('stack', 'push').length, 0);
+  assert.equal(state().tickets['#2'].stage, 'queued');
+});
+
+test('#219 integrate.mjs and freeze.mjs share one gh seam from cli.mjs, which can read both channels', async () => {
+  const cli = await import('../src/skills/get-to-work/scripts/cli.mjs');
+  const integrate = await import('../src/skills/get-to-work/scripts/integrate.mjs');
+  const freeze = await import('../src/skills/get-to-work/scripts/freeze.mjs');
+  assert.equal(integrate.defaultDeps().gh, cli.gh);
+  assert.equal(freeze.defaultDeps().gh, cli.gh);
+  const script = 'process.stdout.write("out:" + process.env.SORRY_MATT_T); process.stderr.write("err")';
+  assert.equal(cli.run(process.execPath, ['-e', script], undefined, { SORRY_MATT_T: '1' }), 'out:1');
+  assert.deepEqual(cli.run(process.execPath, ['-e', script], undefined, { SORRY_MATT_T: '2' }, { both: true }), { stdout: 'out:2', stderr: 'err' });
+  assert.throws(() => cli.run(process.execPath, ['-e', 'process.stderr.write("bad"); process.exit(3)'], undefined, undefined, { both: true }), (e) => e.status === 3 && e.stderr === 'bad');
 });

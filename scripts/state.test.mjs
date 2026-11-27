@@ -634,6 +634,30 @@ test('#218: import still refuses ticket-pr off GitHub (3) only once the seed is 
   assert.equal(existsSync(r.path), false);
 });
 
+test('#219: set --pr-base records the base branch of a ticket PR; an older file reads it as null; bad values are refused', (t) => {
+  const r = run(t);
+  r.ok('add', '#1', '#2', '--line', LINE);
+  assert.equal(r.state().tickets['#1'].prBase, null);
+  r.ok('set', '#1', '--pr-base', 'main');
+  assert.equal(r.state().tickets['#1'].prBase, 'main');
+  assert.equal(r.ok('show').tickets['#1'].prBase, 'main');
+  for (const v of ['a b', '']) assert.equal(r.cmd('set', '#1', '--pr-base', v).code, 2, `--pr-base ${JSON.stringify(v)}`);
+  assert.equal(r.state().tickets['#1'].prBase, 'main');
+
+  const s = r.state();
+  delete s.tickets['#2'].prBase;
+  writeFileSync(r.path, JSON.stringify(s));
+  assert.equal(r.ok('show').tickets['#2'].prBase, null, 'an older file reads it as null');
+  for (const v of [5, 'a b', '']) {
+    const bad = structuredClone(s);
+    bad.tickets['#1'].prBase = v;
+    writeFileSync(r.path, JSON.stringify(bad));
+    const out = r.cmd('show');
+    assert.equal(out.code, 1, `prBase ${JSON.stringify(v)}: ${out.err}`);
+    assert.match(out.err, /tickets\.#1\.prBase/);
+  }
+});
+
 // ---- assignments and resuming ------------------------------------------------------------------------------------
 
 test('#156: review records the finding counts and the tier reasons; without them both are null', (t) => {
