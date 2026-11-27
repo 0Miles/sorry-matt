@@ -2,9 +2,10 @@
 // the host's stand-in, and the helpers the replays share. No tests here.
 // The replays are of get-to-work's wake-ups through tick.mjs. Each test gets a real git repository with a bare origin and
 // an integration worktree (a copy of one built once per test file), a real state file (state.mjs), and plays the host: it runs every action tick hands out
-// and records each result. Scripts run for real (state, deadline, brief, overlap, integrate, verify, git); only the network is canned
-// (ci.mjs verdicts, frontier.mjs github, acceptance.mjs github, gh). The expected values are the pipeline's rules
-// as SKILL.md states them, written here by hand.
+// and records each result. Scripts run for real (state, deadline, brief, overlap, integrate, verify, ci, tier, git), each
+// the copy the exec names (src's, or dist's under skills/: #228); only the network is canned (gh, the runs ci.mjs reads
+// from h.ci, frontier.mjs github, acceptance.mjs github). The expected values are the pipeline's rules as SKILL.md
+// states them, written here by hand.
 //
 // #160: the replays are split over several test files, which node --test runs in parallel. A replay starts a few
 // hundred git processes; on Windows each costs over ten times what it does on Linux, and the tests of one file run one
@@ -15,19 +16,44 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, utimesSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { main as tick, defaultDeps, bashUsable } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { FINDING_COUNTS, main as stateMain } from '../src/skills/get-to-work/scripts/state.mjs';
-import { main as deadlineMain } from '../src/skills/get-to-work/scripts/deadline.mjs';
-import { main as briefMain } from '../src/skills/get-to-work/scripts/brief.mjs';
-import { main as overlapMain } from '../src/skills/get-to-work/scripts/overlap.mjs';
-import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
-import { main as verifyMain } from '../src/skills/get-to-work/scripts/verify.mjs';
-import { main as ciMain } from '../src/skills/get-to-work/scripts/ci.mjs';
 import { itemsHash } from '../src/skills/get-to-work/scripts/acceptance.mjs';
-import { main as tierMain, defaultDeps as tierDeps } from '../src/skills/prove-it/scripts/tier.mjs';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * #228: the scripts the host's stand-in runs for real, by absolute path, in both copies: src's (src/skills) and the
+ * dist one the plugin loads (skills/). An exec runs the copy its argv names, so a replay through dist's tick.mjs runs
+ * dist's integrate.mjs, not src's.
+ */
+const RUN_FOR_REAL = ['get-to-work/scripts/state.mjs', 'get-to-work/scripts/deadline.mjs', 'get-to-work/scripts/brief.mjs', 'get-to-work/scripts/overlap.mjs', 'get-to-work/scripts/integrate.mjs', 'get-to-work/scripts/verify.mjs', 'get-to-work/scripts/ci.mjs', 'prove-it/scripts/tier.mjs'];
+const SCRIPTS = new Map(
+  await Promise.all(
+    ['src/skills', 'skills'].flatMap((top) =>
+      RUN_FOR_REAL.map(async (rel) => {
+        const path = join(root, top, rel);
+        return [path, await import(pathToFileURL(path).href)];
+      }),
+    ),
+  ),
+);
+
+/**
+ * #221: the one run every SHA's CI has in the canned network (`gh run list`), by h.ci's word for it; ci.mjs turns the
+ * rows into its output itself (latestRows, classify). Its event is pull_request, so a ticket PR's head read with --pr
+ * counts it as the PR's own run; `no-pull-request` is a push run alone (#209), and the stand-in's `git grep` says the
+ * workflows name pull_request.
+ */
+export const RUN_ID = 7;
+const RUN_OF = {
+  green: { event: 'pull_request', status: 'completed', conclusion: 'success' },
+  red: { event: 'pull_request', status: 'completed', conclusion: 'failure' },
+  running: { event: 'pull_request', status: 'in_progress', conclusion: null },
+  cancelled: { event: 'pull_request', status: 'completed', conclusion: 'cancelled' },
+  'no-pull-request': { event: 'push', status: 'completed', conclusion: 'success' },
+};
 
 export const REPO = 'o/r';
 export const LINE = 'r1/line-1';
@@ -161,6 +187,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     now: Date.parse('2026-05-01T10:00:00Z'),
     agents: 0,
     log: [], // every action handed out, with the wake-up it came in
+    ran: [], // #228: the absolute path of every script an exec ran for real
     wakes: [],
     reportsNext: [],
     ids: [ID1, ID2],
@@ -210,42 +237,30 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
   };
 
   // ---- the canned network ----
-  h.verdict = (args) => {
-    const i = args.indexOf('verdict');
-    const [branch, sha] = args.slice(i + 1).filter((x, k, all) => !['--repo', '--pr'].includes(x) && !['--repo', '--pr'].includes(all[k - 1]));
-    const judged = h.ci(branch, sha);
-    // #209: 'no-pull-request' stands for ci.mjs --pr finding a push run but no pull_request run
-    const verdict = judged === 'no-pull-request' ? 'no-run' : judged;
-    const runs =
-      verdict === 'running'
-        ? [{ id: 7, workflow: 'check', status: 'in_progress', conclusion: null }]
-        : verdict === 'no-run'
-          ? []
-          : [{ id: 7, workflow: 'check', status: 'completed', conclusion: verdict === 'red' ? 'failure' : 'success' }];
-    // #197: `failed` holds the red runs' ids, as ci.mjs verdict reports them for `gh run view <id> --log-failed`
-    return { format: 'sorry-matt/ci@1', command: 'verdict', branch, sha, verdict, reason: judged === 'no-pull-request' ? 'no-pull-request' : verdict === 'no-run' ? 'empty' : null, error: null, runs, rerun: [], failed: verdict === 'red' ? [7] : [] };
+  /** #221: `gh run list`'s rows of one SHA, from h.ci: none for no-run; `query-failed` makes the query fail. */
+  h.runRows = (branch, sha) => {
+    const v = h.ci(branch, sha);
+    if (v === 'no-run') return [];
+    if (v === 'query-failed') throw new Error(`gh: could not list the runs of ${sha}`);
+    if (!RUN_OF[v]) throw new Error(`h.ci gave ${v}, which the canned runs do not know`);
+    return [{ headSha: sha, databaseId: RUN_ID, workflowDatabaseId: 1, workflowName: 'check', ...RUN_OF[v] }];
   };
-  /** #197: `ci.mjs base <branch>` — origin's tip of the base branch, judged by h.ci as a verdict is. */
-  h.base = (args) => {
-    const branch = args.filter((x, k, all) => x !== 'base' && x !== '--repo' && all[k - 1] !== '--repo').at(-1);
-    const sha = git(h.repo, 'rev-parse', `origin/${branch}`);
-    const v = h.verdict(['verdict', branch, sha]);
-    return { ...v, command: 'base' };
-  };
-  /** #197: the run list the real `ci.mjs earliest-red` reads — one row per first-parent SHA of the branch, from h.ci. */
-  h.ghRuns = (args) => {
-    if (args[0] !== 'run' || args[1] !== 'list') throw new Error(`no gh stub for earliest-red: gh ${args.join(' ')}`);
-    const branch = args[args.indexOf('--branch') + 1];
-    const commit = args.includes('--commit') ? args[args.indexOf('--commit') + 1] : null;
-    const shas = commit ? [commit] : git(h.repo, 'log', '--first-parent', '--format=%H', `origin/${branch}`).split('\n').filter(Boolean);
-    const rows = [];
-    for (const sha of shas) {
-      const v = h.ci(branch, sha);
-      if (v === 'no-run') continue;
-      rows.push({ headSha: sha, databaseId: 7, workflowName: 'check', event: 'push', status: v === 'running' ? 'in_progress' : 'completed', conclusion: v === 'red' ? 'failure' : v === 'green' ? 'success' : v === 'running' ? null : v });
+  /**
+   * #197, #221: the gh ci.mjs reads, run for real on it: `run list` (one branch, one SHA or the branch's first-parent
+   * SHAs), `api …/commits/<branch>` (origin's tip of it) and `run view <id> --log-failed` (the red run's output).
+   */
+  h.ghCi = (args) => {
+    if (args[0] === 'run' && args[1] === 'list') {
+      const branch = args[args.indexOf('--branch') + 1];
+      const commit = args.includes('--commit') ? args[args.indexOf('--commit') + 1] : null;
+      const shas = commit ? [commit] : git(h.repo, 'log', '--first-parent', '--format=%H', `origin/${branch}`).split('\n').filter(Boolean);
+      return JSON.stringify(shas.flatMap((sha) => h.runRows(branch, sha)));
     }
-    return JSON.stringify(rows);
+    if (args[0] === 'api' && /\/commits\/[^/]+$/.test(args[1])) return `${git(h.repo, 'rev-parse', `origin/${args[1].split('/commits/')[1]}`)}\n`;
+    if (args[0] === 'run' && args[1] === 'view' && args.includes('--log-failed')) return `log of run ${args[2]}\n`;
+    throw new Error(`no gh stub for ci.mjs: gh ${args.join(' ')}`);
   };
+  const ciGit = (cwd, args) => (args[0] === 'grep' ? '.github/workflows/check.yml\n' : execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: ENV }));
   h.frontier = (args) => {
     const flag = (name) => (args.includes(name) ? new Set(args[args.indexOf(name) + 1].split(',')) : new Set());
     const done = flag('--done');
@@ -367,26 +382,26 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     if (cmd === 'node') {
       const script = basename(args[0]);
       const rest = args.slice(1);
+      // #228: the copy the exec names, src's or dist's
+      const mod = () => {
+        const m = SCRIPTS.get(resolve(args[0]));
+        if (!m) throw new Error(`no stand-in for ${args[0]}`);
+        h.ran.push(resolve(args[0]));
+        return m;
+      };
       let r;
-      if (script === 'state.mjs') r = stateMain(rest[0] === 'check' ? rest : [...rest, '--now', h.iso()]);
-      else if (script === 'integrate.mjs') r = integrateMain([...rest, '--now', h.iso()], { gh: h.gh });
-      else if (script === 'verify.mjs') r = verifyMain([...rest, '--now', h.iso()]);
-      else if (script === 'deadline.mjs') r = deadlineMain(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
-      else if (script === 'brief.mjs') r = briefMain(rest);
-      else if (script === 'overlap.mjs') r = overlapMain(rest);
-      else if (script === 'tier.mjs') r = tierMain(rest, tierDeps(a.cwd ?? process.cwd())); // #139: run for real, on the repo
-      else if (script === 'ci.mjs' && rest[0] === 'base') r = { code: 0, out: JSON.stringify(h.base(rest)) };
-      else if (script === 'ci.mjs' && rest[0] === 'earliest-red') {
-        // #197: run for real on the repo, the network canned (gh run list rows built from h.ci per SHA)
-        r = ciMain(rest, {
-          read: (p) => readFileSync(p, 'utf8'),
-          git: (cwd, args2) => execFileSync('git', ['-C', cwd, ...args2], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: ENV }),
-          gh: h.ghRuns,
-          cwd: process.cwd(),
-        });
-      } else if (script === 'ci.mjs' && rest[0] === 'failed-log') r = { code: 0, out: `log of run ${rest.at(-1)}\n` }; // #197, #221: the red run's failing output
-      else if (script === 'ci.mjs') r = { code: 0, out: JSON.stringify(h.verdict(rest)) };
-      else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
+      if (script === 'state.mjs') r = mod().main(rest[0] === 'check' ? rest : [...rest, '--now', h.iso()]);
+      else if (script === 'integrate.mjs') r = mod().main([...rest, '--now', h.iso()], { gh: h.gh });
+      else if (script === 'verify.mjs') r = mod().main([...rest, '--now', h.iso()]);
+      else if (script === 'deadline.mjs') r = mod().main(rest[0] === 'record' ? [...rest, '--now', h.iso()] : rest);
+      else if (script === 'brief.mjs' || script === 'overlap.mjs') r = mod().main(rest);
+      else if (script === 'tier.mjs') {
+        const m = mod();
+        r = m.main(rest, m.defaultDeps(a.cwd ?? process.cwd())); // #139: run for real, on the repo
+      } else if (script === 'ci.mjs') {
+        // #197, #221: run for real on the repo, the network canned (h.ghCi: the runs from h.ci per SHA)
+        r = mod().main(rest, { read: (p) => readFileSync(p, 'utf8'), git: ciGit, gh: h.ghCi, cwd: a.cwd ?? h.repo });
+      } else if (script === 'frontier.mjs') r = { code: 0, out: JSON.stringify(h.frontier(rest)) };
       else if (script === 'acceptance.mjs') r = { code: 0, out: JSON.stringify(h.accept(rest)) };
       else throw new Error(`no stand-in for ${script}`);
       ({ code, out } = r);
