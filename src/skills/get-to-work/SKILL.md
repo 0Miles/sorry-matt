@@ -126,9 +126,14 @@ ledger 旁的 `<run>.state.json`，只經由腳本寫，不手改；schema 與�
    `record` 欄的指令只留第一個的 `node tick.mjs record <state>`，其餘接在後面以 ` + <動作 id> <旗標>` 串起，再以
    `&&` 接下一次 `run`，一次 Bash 呼叫做完（主持人的每次呼叫都要把整段 context 再讀一次）。中間有一筆被拒時，它之後的都沒記，
    輸出的 `failed` 指出是哪一筆；照拒絕的訊息處理後，從那一筆重記。`end` 的最後一個動作收尾這次喚醒：ledger 的敘事欄寫到最新，
-   還有在途 agent 就排 **fallback 喚醒** —— 有 `ScheduleWakeup` 就用它，否則以 Bash 在背景跑 `sleep`，task id
-   記進 record；兩者都不能用時，以 interval 模式重新進入同一個 `/loop`，間隔取最短的階段時限。`done` 是 run
-   已收官。
+   有任何背景工作在跑 —— 在途 agent，或主持人自己在背景跑的命令 —— 就排 **fallback 喚醒** —— 有 `ScheduleWakeup`
+   就用它，否則以 Bash 在背景跑 `sleep`，task id 記進 record；兩者都不能用時，以 interval 模式重新進入同一個
+   `/loop`，間隔取最短的階段時限。只剩主持人自己的命令時 tick 不給等待秒數，最多等 `budget: wake-check` 分鐘。
+   `done` 是 run 已收官。
+   **主持人自己在背景跑的長命令**（例如收尾時自己重跑的全量測試）比照 `verify.mjs` 的 check：輸出導進一個 log 檔，
+   以 `budget: timeout-verify`（沒寫就是 30 分鐘）為上限，另加 10 分鐘的輸出閒置 watchdog。不能只靠完成通知：
+   掛住的命令不會有通知。每次喚醒都看它的 log 有沒有繼續長；超過上限或閒置 10 分鐘，就殺掉整棵程序樹（Windows
+   `taskkill /PID <pid> /T /F`，其他平台殺它的程序群組），在 ledger 記成 timeout，附命令與 log 路徑，不記成紅燈。
 
 `record` 以 3 結束是拒絕：結果不合 state 的守門，照訊息處理，不換一種寫法硬寫。
 

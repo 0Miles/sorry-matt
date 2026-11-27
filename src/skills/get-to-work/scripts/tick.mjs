@@ -99,6 +99,20 @@
 //                    The finish (#200): the finish gate (no line checks), one `pr-polish` judge per PR left for a
 //                    person, and the wrap-up with `meta.tickets` (the reconciliation rows: PR link, stack, merge
 //                    state, PR head CI) and `meta.humanWork` (the merges left for a person, a stack's bottom first)
+//                    The waiting stages' failure face (#220), counted in wake-ups, not in time (awaiting-ci is no
+//                    stage with a time limit): one unreadable condition — at awaiting-ci the ticket branch missing
+//                    here (`ref-missing`), its tip out of step with origin (`tip-unsynced`), or ci.mjs verdict
+//                    query-failed or unreadable (`query-failed`); a queued ticket that is not stacked with no PR
+//                    (`no-pr`) or no branch (`no-branch`) recorded; a base-red episode whose `rev-list` of the
+//                    stretch fails (`rev-list`, subject `base`) — seen on the same subject UNREADABLE_AFTER (3)
+//                    wake-ups in a row brings an `unreadable` judge: wait (the count starts again) or stuck (for the
+//                    base: the episode settled, as base-red-unmatched has it). The condition gone, or another one,
+//                    starts the count again. A PR closed without a merge (pr-merge --merged exits 6, apart from the
+//                    3 of a PR still open) brings a `pr-closed` judge: reopen (the host reopens it, and the pr-send
+//                    prompting call is issued again) or stuck. The pr-red judge is keyed by the PR head and the
+//                    ticket's fix rounds (`pr-red:<ticket>@<head12>:f<n>`), so a fix round that pushed nothing and
+//                    reads red again at the same head brings it again. Each of the three judges is logged in
+//                    `judgeLog` when first issued, and its outcome added when recorded.
 //
 // The review tier picks the review (#139)
 //   Under review: full, before a ticket's review tick hands out an exec of prove-it's `tier.mjs judge --base <fixed
@@ -298,6 +312,10 @@
 //   "baseSeen": { "tip", "verdict" } | absent,     // #197: the base-red episode under integrate: ticket-pr; n counts
 //                                                  // episode instances (it keys the fetch and the unmatched judge);
 //                                                  // baseSeen is the last base read and the tip it was taken at
+//   "unreadable": { "<ticket> | base": { "kind", "n", "w", "since", "judge"? } },   // #220: a waiting stage's
+//                                                  // unreadable condition, counted per wake-up (w: the last counted)
+//   "judgeLog": [{ "id", "step", "tickets", "line", "at", "wakeup", …, "outcome"?, "decided"?, "value"? }],
+//                                                  // #220: each unreadable, pr-closed and pr-red judge issued
 //   "expansions": { "<round>": [<ticket>] }, "dispatches": { "<ticket>": <n> },
 //   "dispatch": <open dispatch point> | null, "lastDispatch": {…} | null, "finished": "<UTC>" | null }
 // So a resumed host needs nothing but the state file, the ledger and git: `next` gives the same list again.
@@ -367,6 +385,7 @@ export const LIMIT_DEFAULTS = Object.freeze({
   'timeout-expand': 15,
   'timeout-merge': 15,
   'timeout-review': 60,
+  'timeout-verify': 30, // each check of a local verification, minutes: verify.mjs --timeout (#215)
   'wake-check': 20, // the fallback wake-up's longest wait, minutes
 });
 // The ledger's `budget: <name> <integer>` line, in the shape hooks/runs.mjs reads it.
@@ -555,7 +574,7 @@ export const OPERATIONS = {
     exec(
       `verify${selfFound ? '-self' : ''}:${line}@${sha}:${tag}`,
       'verify-local',
-      ['node', js('verify.mjs'), c.path, line, '--worktree', wt ?? c.cfg.root, '--reason', reason, '--sha', sha, ...(selfFound ? ['--self-found', selfFound] : [])],
+      ['node', js('verify.mjs'), c.path, line, '--worktree', wt ?? c.cfg.root, '--reason', reason, '--sha', sha, '--timeout', String(c.limits['timeout-verify']), ...(selfFound ? ['--self-found', selfFound] : [])],
       { stdout: c.tick('verify', `${slugOf(line)}-${sha.slice(0, 12)}-${tag}${selfFound ? '-self' : ''}.json`), okExit: [0, 4, 5], line },
     ),
   // state.mjs check: a stage-exit gate (gates.mjs)
@@ -2053,6 +2072,7 @@ function stepPrMerge(c) {
   for (const tickets of byLine.values()) {
     let busy = false;
     for (const [id, t] of tickets) {
+      if (t.stage === 'queued' && (t.stackParent ?? null) === null) prQueuedReadable(c, id, t);
       if (t.stage === 'integrating') prIntegrating(c, id, t);
       else if (t.stage === 'awaiting-ci') prAwaitCi(c, id, t);
       else if (t.stage === 'awaiting-merge') prAwaitMerge(c, id, t);
@@ -2110,6 +2130,7 @@ function prBaseRed(c) {
   c.book.baseSeen = { tip: baseTip, verdict: v?.verdict ?? null }; // the finish waits for a concluded read at the current tip
   if (v?.verdict === 'green') {
     delete c.book.baseRed; // the revert landed (or the red cleared): the episode is over
+    clearUnreadable(c, 'base'); // #220
     return false;
   }
   const redNow = v?.verdict === 'red' && v.sha ? v.sha : null;
@@ -2204,7 +2225,12 @@ function baseRedCause(c, red, merged, revertedOnBase) {
       .filter(Boolean)
       .reverse();
   } catch {}
-  if (stretch === null) return true; // git could not walk the stretch: tried again at the next list or wake-up
+  if (stretch === null) {
+    // git could not walk the stretch: tried again at the next list or wake-up, and counted (#220)
+    unreadable(c, 'base', 'rev-list', `The base branch ${c.cfg.base} is red at ${red.sha}, but git could not walk ${scan.lowerBound.sha}..${scan.earliestRed} (rev-list --first-parent) to map the red to a ticket`);
+    return true;
+  }
+  clearUnreadable(c, 'base');
   const at = (t) => Math.min(...t.merges.map((m) => stretch.indexOf(m.sha)).filter((i) => i >= 0));
   const causing = merged.filter(([, t]) => t.merges.some((m) => stretch.includes(m.sha)) && !revertedOnBase(t)).sort((a, b) => at(a[1]) - at(b[1]));
   if (!causing.length) {
@@ -2337,6 +2363,16 @@ function prCloseIssues(c) {
   }
 }
 
+/**
+ * #220: a queued ticket that is not stacked walks the merge path only with its PR and branch recorded; one that has
+ * neither (a report that carried no commit opens no PR, #195) would wait in silence. It is counted instead.
+ */
+function prQueuedReadable(c, id, t) {
+  if ((t.pr ?? null) !== null && t.branch) return void clearUnreadable(c, id);
+  const missing = [...(t.branch ? [] : ['no ticket branch']), ...((t.pr ?? null) === null ? ['no pull request'] : [])].join(' and ');
+  unreadable(c, id, t.branch ? 'no-pr' : 'no-branch', `${id} is queued for its merge, but it has ${missing} recorded: the merge path cannot start it`, { tickets: [id], line: t.line });
+}
+
 /** A ticket integrating under ticket-pr: its base sync's conflict goes to a merge agent, else the push phase runs. */
 function prIntegrating(c, id, t) {
   const flag = c.flag(id);
@@ -2451,14 +2487,77 @@ function stackOf(c, id) {
   return [...out];
 }
 
+// ---- #220: the waiting stages' failure face ---------------------------------------------------------------------------
+
+/** #220 ruling 1: the wake-ups in a row one unreadable condition is seen on one subject before its judge. */
+const UNREADABLE_AFTER = 3;
+
+/**
+ * #220 ruling 4: a waiting stage's judge — `unreadable`, `pr-closed`, `pr-red` — is logged in the bookkeeping's
+ * `judgeLog` (in the state file) when it is first issued, and record adds its outcome: each trigger can be audited
+ * afterwards. Returns c.emit's value.
+ */
+function emitLogged(c, a, detail = {}) {
+  const log = (c.book.judgeLog ??= []);
+  if (!c.done(a.id) && !log.some((x) => x.id === a.id)) log.push({ id: a.id, step: a.step, tickets: a.tickets, line: a.line, at: c.now, wakeup: c.book.wakeup, ...detail });
+  return c.emit(a);
+}
+
+/**
+ * #220 ruling 1: an unreadable condition of a waiting stage on `subject` (a ticket, or `base` for the base-red
+ * episode) — `kind` names it, `what` says it in a sentence. It is counted once per wake-up, over wake-ups in a row
+ * (`book.unreadable[subject]`: { kind, n, w, since, judge? }); another kind, or a wake-up that skipped it, starts the
+ * count at 1, and clearUnreadable (the condition gone) drops it. At UNREADABLE_AFTER wake-ups in a row an
+ * `unreadable` judge: wait (the count starts again from this wake-up) or stuck. The caller waits either way.
+ */
+function unreadable(c, subject, kind, what, { tickets = [], line = null } = {}) {
+  const all = (c.book.unreadable ??= {});
+  let s = all[subject];
+  if (!s || s.kind !== kind) s = all[subject] = { kind, n: 0, w: null, since: c.now };
+  if (s.w !== c.book.wakeup) {
+    s.n = s.w === c.book.wakeup - 1 ? s.n + 1 : 1;
+    s.w = c.book.wakeup;
+  }
+  if (!s.judge && s.n < UNREADABLE_AFTER) return;
+  s.judge ??= `unreadable:${subject}:${kind}:${(c.book.judgeLog?.length ?? 0) + 1}`;
+  const stuck =
+    subject === 'base'
+      ? 'record stuck with --value <reason> to settle the episode as base-red-unmatched has it (the red goes on the human-work list; tick reads the base each wake-up until it is green)'
+      : `record stuck with --value <reason> (${tickets.join(', ')} goes to stuck)`;
+  emitLogged(
+    c,
+    judge(
+      s.judge,
+      'unreadable',
+      `${what}. It has been so for ${s.n} wake-ups in a row (since ${s.since}). Find out why and put it right where you can. Record wait to go on waiting: the count starts again, and this judge comes back after ${UNREADABLE_AFTER} more wake-ups in a row of it; or ${stuck}.`,
+      ['wait', 'stuck'],
+      [{ path: SELF, part: "header (integrate: ticket-pr: the waiting stages' failure face, #220)" }],
+      { tickets, line, meta: { subject, kind, n: s.n, since: s.since } },
+    ),
+    { subject, kind, n: s.n, since: s.since },
+  );
+}
+
+/** #220 ruling 1: the condition on `subject` is gone: its count is dropped (an open judge with it). */
+function clearUnreadable(c, subject) {
+  if (c.book.unreadable?.[subject]) delete c.book.unreadable[subject];
+}
+
 /** A ticket awaiting CI on its PR head: one ci.mjs read per wake-up; green goes on to the ready phase. */
 function prAwaitCi(c, id, t) {
   const flag = c.flag(id);
   const tip = c.git.ref(t.branch);
   const head = c.git.remote(t.branch);
-  if (!tip || !head || head !== tip) return; // stepTicketPr pushes the tip first; CI is read at the pushed head
+  // stepTicketPr pushes the tip first; CI is read at the pushed head. #220: a ref that stays missing, or a tip that
+  // stays out of step with origin, is counted, not waited on in silence.
+  const where = { tickets: [id], line: t.line };
+  if (!tip) return void unreadable(c, id, 'ref-missing', `${id} is awaiting CI, but its ticket branch ${t.branch ?? '(none recorded)'} is not in this repository: its PR head cannot be read`, where);
+  if (!head || head !== tip) return void unreadable(c, id, 'tip-unsynced', `${id} is awaiting CI, but its ticket branch ${t.branch} is at ${tip} here and ${head ? `at ${head}` : 'missing'} on origin: CI is read at the pushed head only`, where);
   const head12 = head.slice(0, 12);
-  if (flag.prCiWaived === head) return void prReadyPhase(c, id, t, head12);
+  if (flag.prCiWaived === head) {
+    clearUnreadable(c, id);
+    return void prReadyPhase(c, id, t, head12);
+  }
   const out = c.tick('ci', `pr-${keyOf(id)}-w${c.book.wakeup}.json`);
   const readId = `pr-ci:${id}@${head12}:w${c.book.wakeup}`;
   if (c.emit(exec(readId, 'ci-read', ['node', js('ci.mjs'), 'verdict', ...(c.cfg.repo ? ['--repo', c.cfg.repo] : []), t.branch, head], { stdout: out, cwd: c.cfg.repo ? null : c.cfg.root, tickets: [id], line: t.line })) !== null) return;
@@ -2469,6 +2568,11 @@ function prAwaitCi(c, id, t) {
     delete flag.prNoRun;
     delete flag.prNoRunAt;
   }
+  if (verdict === null || verdict === 'query-failed') {
+    const why = verdict === null ? `its output ${out} could not be read` : `query-failed${v?.error ? ` (${v.error})` : ''}`;
+    return void unreadable(c, id, 'query-failed', `${id} is awaiting CI, but ci.mjs verdict could not read its PR head ${head}: ${why}`, where);
+  }
+  clearUnreadable(c, id);
   if (verdict === 'green') return void prReadyPhase(c, id, t, head12);
   if (verdict === 'red') {
     const fixable = t.fixRounds < c.profile.fixRounds;
@@ -2489,9 +2593,12 @@ function prAwaitCi(c, id, t) {
       if (did) after.push(did);
       logs.push(log);
     }
-    c.emit(
+    // #220 ruling 3: keyed by the head and the fix round, so a fix round that pushed nothing new and reads red again at
+    // the same head brings the judge again
+    emitLogged(
+      c,
       judge(
-        `pr-red:${id}@${head12}`,
+        `pr-red:${id}@${head12}:f${t.fixRounds}`,
         'pr-red',
         `${id}'s pull request head ${head} (${t.branch}) is red on CI${logs.length ? `; the failing runs' output is saved to ${logs.join(', ')}` : ''}. This red belongs to this ticket alone: no earliest-red scan.${fixable ? ' Record fix: the ticket goes to a fix round for its original agent, pointed at that failing output (not at review findings), and the fix commit is pushed back to the same PR.' : ` The ${c.profile.fixRounds} fix rounds are used.`} Or record stuck / awaiting-ruling with --value <reason>.`,
         [...(fixable ? ['fix'] : []), 'stuck', 'awaiting-ruling'],
@@ -2575,14 +2682,23 @@ function prAwaitMerge(c, id, t) {
   const ready = flag.prReady ? readJsonFile(c.deps, flag.prReady) : null;
   if (prSendJudge(c, id, t, ready, [])) return;
   if (c.book.done[`pr-send:${id}:${t.pr}`]?.outcome !== 'sent') return; // left-for-human and the rulings moved it in record
-  // exit 3: the PR is not merged yet (the queue is running); checked again next wake-up — the fallback wake-up waits
-  c.emit(
-    exec(`pr-merged:${id}:w${c.book.wakeup}`, 'pr-merged', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--merged', '--repo', c.cfg.root], {
-      stdout: c.tick('pr', `${keyOf(id)}-merged-w${c.book.wakeup}.json`),
-      okExit: [0, 3],
-      tickets: [id],
-      line: t.line,
-    }),
+  // exit 3: the PR is not merged yet (the queue is running); checked again next wake-up — the fallback wake-up waits.
+  // #220: exit 6, closed without a merge, is no wait: a pr-closed judge, reopen or stuck.
+  const mid = `pr-merged:${id}:w${c.book.wakeup}`;
+  const out = c.tick('pr', `${keyOf(id)}-merged-w${c.book.wakeup}.json`);
+  if (c.emit(exec(mid, 'pr-merged', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--merged', '--repo', c.cfg.root], { stdout: out, okExit: [0, 3, 6], tickets: [id], line: t.line })) !== null) return;
+  if (c.book.done[mid]?.exit !== 6) return;
+  emitLogged(
+    c,
+    judge(
+      `pr-closed:${id}:${t.pr}:w${c.book.wakeup}`,
+      'pr-closed',
+      `${id}'s pull request ${t.pr} was closed without a merge (integrate.mjs pr-merge --merged exited 6; ${out}). Find out who closed it and why. When the change is still wanted, run \`gh pr reopen ${t.pr}\` with your own tool under the user's permission settings and record reopen: the merge comes back to you as its prompting call (pr-send), under the same merge authorization. Otherwise record stuck with --value <reason>.`,
+      ['reopen', 'stuck'],
+      [doc('FINISH.md', 'the merge where authority allows'), { path: js('integrate.mjs'), part: 'header, pr-merge --merged (closed)' }],
+      { tickets: [id], line: t.line, meta: { pr: t.pr, of: mid } },
+    ),
+    { pr: t.pr },
   );
 }
 
@@ -3642,7 +3758,7 @@ export function next(path, reported, now, deps, { hold = false } = {}) {
       `Nothing else this wake-up. Write the ledger's narrative fields up to date (next action, self-answer log, human-work list). ${
         f
           ? `Then schedule the fallback wake-up: ScheduleWakeup ${f.scheduleWakeup} seconds; without it, stop the previous background sleep and start \`sleep ${Math.ceil(f.seconds)}\` in the background, recording its task id with --value.`
-          : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep).'
+          : 'No agent is in flight: let /loop pace itself (record --value none to clear a background sleep) — unless a command of your own still runs in the background: then schedule a fallback wake-up all the same and check its log on waking (SKILL.md section 1, step 3).'
       } Record done.`,
       ['done'],
       [doc('SKILL.md', 'section 1 (the loop: fallback wake-up)'), doc('ASKING.md', 'section 7 (the ledger)')],
@@ -4059,6 +4175,30 @@ export function record(path, id, flags, now, deps) {
       } else if (outcome !== 'sent') stageIf(tid, outcome, flags.value ?? 'the merge could not be sent');
       break;
     }
+    // #220: the waiting stages' failure face
+    case 'unreadable': {
+      const s = book.unreadable?.[meta.subject];
+      if (outcome === 'wait') {
+        // the count starts again from this wake-up: the judge comes back after UNREADABLE_AFTER more in a row
+        if (s && s.judge === id) {
+          s.n = 0;
+          s.w = book.wakeup;
+          s.since = now;
+          delete s.judge;
+        }
+        break;
+      }
+      if (s && s.judge === id) delete book.unreadable[meta.subject];
+      if (meta.subject === 'base') {
+        if (book.baseRed) book.baseRed.settled = true; // as base-red-unmatched: the base is read until it is green
+      } else for (const x of tickets) stageIf(x, 'stuck', flags.value ?? `unreadable while waiting: ${meta.kind}`);
+      break;
+    }
+    case 'pr-closed':
+      // reopen: the PR was reopened; the merge goes back to the host as its prompting call
+      if (outcome === 'reopen') reissue(`pr-send:${tickets[0]}:${meta.pr}`);
+      else stageIf(tickets[0], 'stuck', flags.value ?? `pull request ${meta.pr} was closed without a merge`);
+      break;
     case 'pr-diverged':
       if (outcome === 'retry') reissue(meta.of);
       else stageIf(tickets[0], outcome, flags.value ?? 'the stack diverged while pr-merge synced it');
@@ -4150,6 +4290,9 @@ export function record(path, id, flags, now, deps) {
   }
   if (outcome !== 'retry') book.done[id] = entry; // a retry issues the same thing again
   if (book.ran) delete book.ran[id]; // recorded: what run kept of it is spent (#146)
+  // #220 ruling 4: a logged trigger gets its outcome, for the audit
+  const logged = book.judgeLog?.find((x) => x.id === id);
+  if (logged && outcome !== null) Object.assign(logged, { outcome, decided: now, ...(flags.value !== undefined ? { value: flags.value } : {}) });
   update(path, now, (s) => {
     s.tick = book;
     return {};

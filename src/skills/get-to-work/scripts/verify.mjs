@@ -9,7 +9,8 @@
 // Usage
 //   node verify.mjs <state> <integration branch> --worktree <integration worktree>
 //                   --reason no-origin|ci-not-covering|no-verdict
-//                   [--sha <full sha>] [--self-found <commands.txt>] [--shell <shell>] [--now <UTC>]
+//                   [--sha <full sha>] [--self-found <commands.txt>] [--shell <shell>] [--timeout <minutes>]
+//                   [--now <UTC>]
 //
 //   <state>      the run's `<run>.state.json` (see state.mjs); the branch must be one of its integration branches.
 //   --worktree   the integration worktree; git and the checks run here.
@@ -24,6 +25,8 @@
 //                the source is `self-found`.
 //   --shell      the shell each check runs in, passed to Node's spawn as `shell` (e.g. `bash`); default the
 //                platform's (`/bin/sh`, or `cmd.exe` on Windows).
+//   --timeout    the time limit of each check, a positive whole number of minutes; default 30. tick.mjs passes the
+//                ledger's `budget: timeout-verify <minutes>` (ASKING.md section 7, field 9).
 //
 // Steps, in this order
 //   1. The SHA already has a record on this branch: print it (`reused: true`) and stop. Nothing runs, whatever
@@ -46,6 +49,14 @@
 //      stderr of every check go to the log, `<state dir>/<run>/verify/<line-slug>-<sha>.log` (<line-slug> is the
 //      branch without its `<run>/` prefix, `/` turned into `-`), overwritten when it exists; each check is headed
 //      `$ <command>` and followed by `exit <code>`. A red log is the failure output RED-LIGHT.md step 3 reads.
+//      Each check has two bounds (#215): it runs longer than --timeout (`limit`), or its log has not grown for 10
+//      minutes (`idle`: no output on stdout or stderr). Either kills the check's whole process tree — on Windows
+//      `taskkill /PID <pid> /T /F`, elsewhere its process group (the check runs detached, then
+//      `process.kill(-pid, 'SIGKILL')`) — and its part of the log ends with `timeout <kind>`, not `exit <code>`.
+//      A timeout is neither green nor red: the rest are skipped, nothing is recorded (step 5 is not reached, so the
+//      SHA can be verified again later), and the script exits 6. Each check is watched by a child `node` process,
+//      so verify.mjs itself stays synchronous: the child starts the check with the log as its stdout and stderr,
+//      polls the log's size, and kills the tree.
 //   5. The record `{ sha, result, reason, at }` is appended to the line's `local` through state.mjs's update (its
 //      lock). Another process that recorded the SHA meanwhile wins: its record is printed with `reused: true`.
 //
@@ -65,11 +76,17 @@
 //                                  "why": "missing" | "no-section" | "none" | "no-commands" }
 //   exit 5, worktree not at SHA: { "format", "branch", "sha", "verdict": "not-at-sha", "head": "<worktree HEAD>",
 //                                  "dirty": true | false }
+//   exit 6, a check timed out:   { "format", "branch", "sha", "verdict": "timeout", "check": "<command>",
+//                                  "kind": "limit" | "idle", "log": "<log path>",
+//                                  "checks": [{ "command", "exit", "signal" }, …] }   // ran, in order; the last is
+//                                  // the one that timed out: { "command", "exit": null, "signal": null,
+//                                  // "timeout": "limit" | "idle" }
 //
 // Exit codes: 0 a result (green or red; red is a result, not a failure of this script); 1 the state, git, the
 // worktree, the log or a check's shell could not be read, run or written; 2 bad arguments or an empty --self-found
 // file; 3 refused: the branch is not an integration branch of the run; 4 no usable contract (above); 5 the worktree
-// is not at the SHA (above). On 1, 2 and 3 nothing is written to stdout; on every code but 0 the state is unchanged.
+// is not at the SHA (above); 6 a check timed out (above). On 1, 2 and 3 nothing is written to stdout; on every code
+// but 0 the state is unchanged.
 import { closeSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
@@ -82,7 +99,9 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const SHELL_INFO = new Set(['', 'bash', 'sh', 'shell', 'console', 'zsh', 'powershell', 'pwsh', 'cmd', 'bat']);
 const CONTRACT = 'docs/agents/commands.md';
-const SPEC = { worktree: 'one', reason: 'one', sha: 'one', 'self-found': 'one', shell: 'one', now: 'one' };
+const SPEC = { worktree: 'one', reason: 'one', sha: 'one', 'self-found': 'one', shell: 'one', timeout: 'one', now: 'one' };
+const TIMEOUT_DEFAULT = 30; // minutes: ASKING.md section 7's `budget: timeout-verify` default
+const IDLE_MS = 10 * 60_000; // a check whose log has not grown this long is killed
 
 /** Thrown inside the state update when the SHA got a record meanwhile: abandons the write. */
 class Recorded extends Error {
@@ -180,15 +199,77 @@ function slugOf(run, branch) {
   return tail.replace(/[\\/]+/g, '-').replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-function runChecks(commands, { worktree, shell, log }) {
+// The watcher of one check. It runs in a child `node -e`, never in this module: its source is sent as text, so it
+// is CommonJS and uses nothing from outside itself. fd 3 is the log. It starts the check with the log as stdout and
+// stderr, kills the check's process tree when it outlives `limitMs` or the log stops growing for `idleMs`, and
+// prints one JSON line: { status, signal } | { timeout: 'limit' | 'idle' } | { error }.
+function watch({ command, cwd, shell, limitMs, idleMs }) {
+  const { spawn, spawnSync } = require('node:child_process');
+  const { fstatSync } = require('node:fs');
+  const win = process.platform === 'win32';
+  let ended = false;
+  const done = (body) => {
+    if (ended) return;
+    ended = true;
+    process.stdout.write(`${JSON.stringify(body)}\n`, () => process.exit(0));
+  };
+  let timeout = null;
+  // detached on POSIX: the check leads its own process group, so one kill reaches every process it started
+  const child = spawn(command, { cwd, shell, stdio: ['ignore', 3, 3], windowsHide: true, detached: !win });
+  const kill = (kind) => {
+    if (timeout || child.pid === undefined) return;
+    timeout = kind;
+    if (win) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    else {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {}
+    }
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+  };
+  let size = fstatSync(3).size;
+  let grew = Date.now();
+  setTimeout(() => kill('limit'), limitMs);
+  setInterval(() => {
+    const now = fstatSync(3).size;
+    if (now !== size) {
+      size = now;
+      grew = Date.now();
+    } else if (Date.now() - grew >= idleMs) kill('idle');
+  }, Math.max(10, Math.min(1000, Math.floor(idleMs / 10))));
+  child.on('error', (e) => done({ error: e.message }));
+  child.on('exit', (status, signal) => done(timeout ? { timeout } : { status, signal }));
+}
+
+function runChecks(commands, { worktree, shell, log, limitMs, idleMs }) {
   mkdirSync(dirname(log), { recursive: true });
   const fd = openSync(log, 'w');
   const checks = [];
   try {
     for (const command of commands) {
       writeSync(fd, `$ ${command}\n`);
-      const r = spawnSync(command, { cwd: worktree, shell: shell ?? true, stdio: ['ignore', fd, fd], windowsHide: true });
-      if (r.error) throw new Error(`could not run ${JSON.stringify(command)} (${r.error.message})`);
+      const opts = { command, cwd: worktree, shell: shell ?? true, limitMs, idleMs };
+      // the log is the watcher's fd 3, one file description with this fd: their writes share one offset
+      const w = spawnSync(process.execPath, ['-e', `(${watch.toString()})(${JSON.stringify(opts)})`], {
+        stdio: ['ignore', 'pipe', 'pipe', fd],
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (w.error) throw new Error(`could not watch ${JSON.stringify(command)} (${w.error.message})`);
+      let r;
+      try {
+        r = JSON.parse(w.stdout.trim().split('\n').at(-1));
+      } catch {
+        throw new Error(`the watcher of ${JSON.stringify(command)} gave no result (exit ${w.status ?? w.signal}): ${w.stderr.trim()}`);
+      }
+      if (r.error) throw new Error(`could not run ${JSON.stringify(command)} (${r.error})`);
+      if (r.timeout) {
+        writeSync(fd, `timeout ${r.timeout}\n`);
+        checks.push({ command, exit: null, signal: null, timeout: r.timeout });
+        break;
+      }
       writeSync(fd, `exit ${r.status ?? r.signal}\n`);
       checks.push({ command, exit: r.status, signal: r.signal ?? null });
       if (r.status !== 0) break;
@@ -216,7 +297,8 @@ const reusedOutput = (branch, r) => ({
 const json = (code, body) => ({ code, out: `${JSON.stringify({ format: FORMAT, ...body }, null, 2)}\n`, err: '' });
 
 export function defaultDeps() {
-  return { read: (p) => readFileSync(p, 'utf8'), clock: () => Date.now() };
+  // minuteMs and idleMs are the check bounds' units: tests shorten them, the CLI never does
+  return { read: (p) => readFileSync(p, 'utf8'), clock: () => Date.now(), minuteMs: 60_000, idleMs: IDLE_MS };
 }
 
 // Returns { code, out, err } instead of touching the process, so tests can drive it.
@@ -231,6 +313,11 @@ export function main(argv, deps = defaultDeps()) {
     if (flags.now !== undefined && !(TIME.test(flags.now) && !Number.isNaN(Date.parse(flags.now)))) {
       throw new UsageError(`--now: expected a UTC time like 2026-01-31T23:59:59Z, got ${JSON.stringify(flags.now)}`);
     }
+    if (flags.timeout !== undefined && !/^[1-9]\d*$/.test(flags.timeout)) {
+      throw new UsageError(`--timeout: expected a positive whole number of minutes, got ${JSON.stringify(flags.timeout)}`);
+    }
+    const limitMs = Number(flags.timeout ?? TIMEOUT_DEFAULT) * (deps.minuteMs ?? 60_000);
+    const idleMs = deps.idleMs ?? IDLE_MS;
     let selfFound;
     if (flags['self-found'] !== undefined) {
       selfFound = commandLines(deps.read(flags['self-found']).replace(/^﻿/, '').split(/\r?\n/));
@@ -265,7 +352,10 @@ export function main(argv, deps = defaultDeps()) {
 
     // 4. run them
     const log = join(dirname(statePath), state.run, 'verify', `${slugOf(state.run, branch)}-${sha}.log`);
-    const checks = runChecks(commands, { worktree, shell: flags.shell, log });
+    const checks = runChecks(commands, { worktree, shell: flags.shell, log, limitMs, idleMs });
+    // a timeout is neither green nor red: nothing is recorded, so the SHA can be verified again
+    const late = checks.at(-1).timeout;
+    if (late) return json(6, { branch, sha, verdict: 'timeout', check: checks.at(-1).command, kind: late, log, checks });
     const result = checks.every((c) => c.exit === 0) ? 'green' : 'red';
 
     // 5. the record; a record another process wrote meanwhile wins, and nothing is written

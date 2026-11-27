@@ -134,9 +134,8 @@
 // Exit codes: 0 output written (read `preflight.ok`); 1 a list, git or gh read failed after the preflight;
 // 2 bad arguments or plan.
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
-import { UsageError, canonical, failure, runIfEntry } from './cli.mjs';
+import { UsageError, canonical, failure, gh, run, runIfEntry } from './cli.mjs';
 import { overlaps, parseList, parseEntry, whole, display } from './overlap.mjs';
 import { baseVerdict } from './ci.mjs';
 
@@ -663,13 +662,12 @@ export function freeze(plan, deps) {
 }
 
 export function defaultDeps() {
-  const exec = (cmd, args, cwd, env) =>
-    execFileSync(cmd, args, { cwd, env: env && { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] });
   return {
     read: (p) => readFileSync(p, 'utf8'),
-    git: (cwd, args) => exec('git', ['-C', cwd, ...args]),
-    // cwd: a local tracker's base CI, which gh reads from the repository's remotes; env: added to the environment
-    gh: (args, cwd, env) => exec('gh', args, cwd, env),
+    git: (cwd, args) => run('git', ['-C', cwd, ...args]),
+    // cli.mjs's gh seam, shared with integrate.mjs (#219). cwd: a local tracker's base CI, which gh reads from the
+    // repository's remotes; env: added to the environment of that one call
+    gh,
   };
 }
 

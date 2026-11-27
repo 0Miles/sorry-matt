@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
+import { main as tick, defaultDeps } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as distTick } from '../skills/get-to-work/scripts/tick.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
 import { REPO, LINE, git, write, numOf, Crash, BASH, NO_BASH, world, ids, distinct, stage, briefOf, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
@@ -1001,6 +1001,249 @@ test('#197 review observation: a revert PR left for a person does not hold the f
 
 /** #198: the freeze's preflight with the gh-stack check passed (#189), as freeze.json records it. */
 const freezeWithStack = (h, stack = true) => write(join(h.W, 'freeze.json'), `${JSON.stringify({ preflight: { ok: true, checks: [{ name: 'gh-stack', ok: true, stack }] } })}\n`);
+
+// ---- integrate: ticket-pr — the waiting stages' failure face (#220) ------------------------------------------------
+
+const unreadables = (h) => distinct(h.log).filter((a) => a.step === 'unreadable');
+
+test('#220: a PR head CI read that stays query-failed brings an unreadable judge at the third wake-up in a row; a readable wake-up starts the count again; wait counts again, stuck ends it', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1] = h.ids;
+  let ci1 = 'running';
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? ci1 : 'green');
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  ci1 = 'query-failed';
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 0, 'two wake-ups in a row: no judge yet');
+  ci1 = 'running'; // a readable wake-up: the condition is gone, the count starts again
+  h.wake();
+  ci1 = 'query-failed';
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 0, 'the count started again after the readable wake-up');
+  let answer = 'wait';
+  h.policy.unreadable = () => answer;
+  h.wake();
+  assert.equal(unreadables(h).length, 1, 'the third wake-up in a row brings the judge');
+  const [j1] = unreadables(h);
+  assert.deepEqual(j1.tickets, [ID1]);
+  assert.deepEqual(j1.outcomes, ['wait', 'stuck']);
+  assert.deepEqual([j1.meta.subject, j1.meta.kind, j1.meta.n], [ID1, 'query-failed', 3]);
+  assert.match(j1.do, /could not read its PR head [0-9a-f]{40}: query-failed/);
+  assert.equal(stage(h, ID1), 'awaiting-ci', 'wait goes on waiting');
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 1, 'after wait the count starts again: two more wake-ups bring nothing');
+  answer = 'stuck';
+  h.wake();
+  const all = unreadables(h);
+  assert.equal(all.length, 2, 'three more wake-ups in a row bring it again');
+  assert.notEqual(all[1].id, j1.id, 'a new trigger is a new judge');
+  assert.equal(stage(h, ID1), 'stuck');
+  // ruling 4: every trigger is in the state, with its outcome
+  const log = h.state().tick.judgeLog.filter((x) => x.step === 'unreadable');
+  assert.deepEqual(log.map((x) => [x.id, x.kind, x.n, x.outcome]), [[j1.id, 'query-failed', 3, 'wait'], [all[1].id, 'query-failed', 3, 'stuck']]);
+  assert.ok(log.every((x) => x.at && x.decided && Number.isInteger(x.wakeup)));
+});
+
+test('#220: a ticket branch gone from the repository at awaiting-ci is counted as ref-missing; stuck lets the line go on', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  let ci1 = 'running';
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? ci1 : 'green');
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  git(h.repo, 'update-ref', '-d', `refs/heads/${h.state().tickets[ID1].branch}`);
+  h.policy.unreadable = () => ({ outcome: 'stuck', value: 'the ticket branch is gone' });
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 0);
+  h.wake();
+  const [j] = unreadables(h);
+  assert.deepEqual([j.meta.subject, j.meta.kind, j.meta.n], [ID1, 'ref-missing', 3]);
+  assert.equal(stage(h, ID1), 'stuck');
+  assert.equal(h.state().tickets[ID1].reason, 'the ticket branch is gone');
+  ci1 = 'green';
+  assert.equal(h.untilDone()?.then, 'done', 'the run goes on and ends');
+  assert.equal(stage(h, ID2), 'delivered');
+});
+
+test('#220: a ticket branch whose tip stays out of step with origin at awaiting-ci is counted as tip-unsynced; wait, and the merge goes on once it is in step', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1] = h.ids;
+  let ci1 = 'running';
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? ci1 : 'green');
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  const branch = h.state().tickets[ID1].branch;
+  const tip = git(h.repo, 'rev-parse', branch);
+  const behind = git(h.repo, 'rev-parse', `${tip}~1`);
+  // origin's copy falls one commit behind, and the push that would put it right does not land
+  const exec = h.exec;
+  h.exec = (a) => (a.step === 'pr-push' && a.tickets[0] === ID1 ? 0 : exec(a));
+  git(h.repo, 'update-ref', `refs/remotes/origin/${branch}`, behind);
+  h.policy.unreadable = () => 'wait';
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 0, 'two wake-ups in a row: no judge yet');
+  h.wake();
+  const [j] = unreadables(h);
+  assert.ok(j, 'the third wake-up in a row brings the judge');
+  assert.deepEqual([j.meta.subject, j.meta.kind, j.meta.n], [ID1, 'tip-unsynced', 3]);
+  assert.deepEqual(j.tickets, [ID1]);
+  assert.ok(j.do.includes(`is at ${tip} here and at ${behind} on origin`), j.do);
+  assert.equal(stage(h, ID1), 'awaiting-ci', 'wait goes on waiting');
+  // in step again: the count is dropped and the merge path goes on
+  h.exec = exec;
+  git(h.repo, 'update-ref', `refs/remotes/origin/${branch}`, tip);
+  ci1 = 'green';
+  h.wake();
+  assert.ok(!h.state().tick.unreadable?.[ID1], 'the count is dropped once the tip is in step');
+  assert.equal(h.untilDone()?.then, 'done', 'the run goes on and ends');
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.deepEqual(h.state().tick.judgeLog.filter((x) => x.step === 'unreadable').map((x) => [x.kind, x.outcome]), [['tip-unsynced', 'wait']]);
+});
+
+test('#220: a queued ticket that is not stacked with no PR recorded is counted as no-pr, and stuck ends the run', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  // the agents commit nothing: green with no commit opens no PR (#195), and the ticket reaches queued without one
+  h.work = (agent) => h.reportsNext.push(agent);
+  const report = h.agentReport;
+  h.agentReport = (a) => report(a).replace(/^commit: .*$/m, 'commit: none');
+  h.policy.unreadable = (a) => ({ outcome: 'stuck', value: `no PR: ${a.tickets[0]}` });
+  for (let i = 0; i < 10 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends instead of waiting in silence');
+  const js = unreadables(h);
+  assert.deepEqual(js.map((a) => a.tickets[0]).sort(), [ID1, ID2]);
+  assert.ok(js.every((a) => a.meta.kind === 'no-pr' && a.meta.n === 3), JSON.stringify(js.map((a) => a.meta)));
+  assert.match(js[0].do, /is queued for its merge, but it has no pull request recorded/);
+  for (const id of [ID1, ID2]) {
+    assert.equal(stage(h, id), 'stuck');
+    assert.equal(h.state().tickets[id].reason, `no PR: ${id}`);
+  }
+  // the judge came at the third wake-up the ticket was seen queued with no PR
+  const queuedAt = (id) => h.wakes.findIndex((outs) => outs.some((o) => o.actions.some((a) => a.tickets?.includes(id) && a.step === 'unreadable')));
+  const firstQueued = (id) => h.state().tick.judgeLog.find((x) => x.tickets[0] === id).wakeup;
+  for (const id of [ID1, ID2]) assert.ok(queuedAt(id) >= 0 && firstQueued(id) >= 3, `${id}: logged at wake-up ${firstQueued(id)}`);
+});
+
+test('#220: a PR closed without a merge brings a pr-closed judge apart from the merge queue wait; reopen hands the merge back, stuck ends the ticket', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  const sends = [];
+  h.policy['pr-send'] = (a) => {
+    const id = a.tickets[0];
+    sends.push(id);
+    if (sends.filter((x) => x === id).length === 1) {
+      h.prs[h.state().tickets[id].branch].closed = true; // someone closes the PR instead of merging it
+      return 'sent';
+    }
+    h.mergePr(id);
+    return 'sent';
+  };
+  const closedJudges = [];
+  h.policy['pr-closed'] = (a) => {
+    closedJudges.push(a);
+    if (a.tickets[0] === ID1) {
+      h.prs[h.state().tickets[ID1].branch].closed = false; // the host reopens it
+      return 'reopen';
+    }
+    return { outcome: 'stuck', value: 'closed on purpose' };
+  };
+  assert.equal(h.untilDone()?.then, 'done');
+  assert.equal(stage(h, ID1), 'delivered', 'reopened, merged and delivered');
+  assert.equal(stage(h, ID2), 'stuck');
+  assert.equal(h.state().tickets[ID2].reason, 'closed on purpose');
+  assert.deepEqual(closedJudges.map((a) => a.tickets[0]).sort(), [ID1, ID2], 'one pr-closed judge per closed PR');
+  assert.ok(closedJudges.every((a) => a.outcomes.join() === 'reopen,stuck' && a.do.includes(`gh pr reopen ${a.meta.pr}`)));
+  assert.equal(sends.filter((x) => x === ID1).length, 2, 'reopen hands the merge back as its prompting call');
+  const merged = distinct(h.log).filter((a) => a.step === 'pr-merged');
+  assert.ok(merged.every((a) => a.okExit.includes(3) && a.okExit.includes(6)));
+  const log = h.state().tick.judgeLog.filter((x) => x.step === 'pr-closed');
+  assert.deepEqual(log.map((x) => [x.tickets[0], x.outcome]).sort(), [[ID1, 'reopen'], [ID2, 'stuck']]);
+});
+
+test('#220: a fix round that pushes nothing and reads red again at the same head brings the pr-red judge again', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.blockers[ID2] = [ID1]; // #2 starts after #1: the base does not move, so the push phase brings no new head
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? 'red' : 'green');
+  let quiet = false;
+  const work = h.work;
+  h.work = (agent, tid) => (quiet && tid === ID1 ? h.reportsNext.push(agent) : work(agent, tid)); // the fix commits nothing
+  const reds = [];
+  h.policy['pr-red'] = (a) => {
+    reds.push(a);
+    if (reds.length === 1) {
+      quiet = true;
+      return 'fix';
+    }
+    return { outcome: 'stuck', value: 'red again at the same head' };
+  };
+  for (let i = 0; i < 10 && reds.length < 2; i += 1) h.wake();
+  assert.equal(reds.length, 2, 'the second red at the same head brings the judge again');
+  assert.equal(reds[0].meta.sha, reds[1].meta.sha, 'at the same head');
+  assert.deepEqual(reds.map((a) => a.id.replace(/@[0-9a-f]{12}/, '@<head>')), [`pr-red:${ID1}@<head>:f0`, `pr-red:${ID1}@<head>:f1`]);
+  assert.equal(stage(h, ID1), 'stuck');
+  const log = h.state().tick.judgeLog.filter((x) => x.step === 'pr-red');
+  assert.deepEqual(log.map((x) => [x.id, x.outcome]), reds.map((a, i) => [a.id, i ? 'stuck' : 'fix']));
+});
+
+test('#220: a base-red rev-list that keeps failing brings an unreadable judge on the base at the third wake-up in a row; wait, and the mapping goes on once it reads', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  h.S('set', ID2, '--waiting-on', ID1);
+  h.blockers[ID2] = [ID1];
+  const initSha = git(h.repo, 'rev-parse', 'origin/main');
+  let reverted = false;
+  h.ci = (branch, sha) => {
+    if (branch !== 'main') return 'green';
+    return !reverted && sha !== initSha && h.state().tickets[ID1].merges.length ? 'red' : 'green';
+  };
+  h.policy['revert-send'] = (a) => {
+    h.mergeBranch(a.meta.branch);
+    git(h.repo, 'fetch', '-q', 'origin');
+    reverted = true;
+    return 'sent';
+  };
+  // tick's own git: the stretch's rev-list fails until the judge is answered
+  let failing = true;
+  const failedAt = new Set();
+  const deps = defaultDeps();
+  const realGit = deps.git;
+  const flaky = {
+    ...deps,
+    git: (cwd, args, env) => {
+      if (failing && args[0] === 'rev-list' && args[1] === '--first-parent' && args.length === 3) {
+        failedAt.add(h.wakes.length);
+        throw new Error('rev-list failed');
+      }
+      return realGit(cwd, args, env);
+    },
+  };
+  h.tick = (...args) => tick([...args, '--now', h.iso()], flaky);
+  h.policy.unreadable = (a) => {
+    h.baseJudge = a;
+    h.failedBefore = failedAt.size;
+    failing = false;
+    return 'wait';
+  };
+  for (let i = 0; i < 12 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(h.wakes.at(-1).at(-1).then, 'done', 'the run ends');
+  assert.ok(h.baseJudge, 'the unreadable judge on the base came');
+  assert.deepEqual([h.baseJudge.meta.subject, h.baseJudge.meta.kind, h.baseJudge.meta.n], ['base', 'rev-list', 3]);
+  assert.deepEqual(h.baseJudge.tickets, []);
+  assert.equal(h.failedBefore, 3, 'at the third wake-up in a row of the failing rev-list');
+  assert.match(h.baseJudge.do, /git could not walk [0-9a-f]{40}\.\.[0-9a-f]{40}/);
+  // once rev-list reads, the red is mapped and reverted as ever
+  assert.equal(stage(h, ID1), 'stuck');
+  assert.ok(h.log.findIndex((a) => a.step === 'revert') > h.log.findIndex((a) => a.step === 'unreadable'), 'the revert follows the judge');
+  assert.deepEqual(h.state().tick.judgeLog.filter((x) => x.step === 'unreadable').map((x) => [x.subject, x.outcome]), [['base', 'wait']]);
+  assert.ok(!h.state().tick.unreadable?.base, 'the count is dropped once the stretch reads');
+});
 
 test('#198: a ticket with one unmerged upstream is stacked on it once it has a branch: cut from the upstream branch, gh stack init + add, the PR via gh stack submit on the upstream branch', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });

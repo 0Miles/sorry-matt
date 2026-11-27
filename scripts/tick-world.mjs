@@ -273,7 +273,8 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = Object.values(h.prs).find((x) => x.number === Number(args[2]));
-      return JSON.stringify({ mergeCommit: pr?.merged ? { oid: pr.mergeOid } : null, state: pr?.merged ? 'MERGED' : 'OPEN' });
+      // #220: a PR closed without a merge (pr.closed) reads CLOSED
+      return JSON.stringify({ mergeCommit: pr?.merged ? { oid: pr.mergeOid } : null, state: pr?.merged ? 'MERGED' : pr?.closed ? 'CLOSED' : 'OPEN' });
     }
     if (args[0] === 'repo' && args[1] === 'view') return JSON.stringify({ nameWithOwner: REPO });
     if (args[0] === 'api' && args[1] === 'graphql') return JSON.stringify(h.mergeQueue ?? { data: { repository: { mergeQueue: null } } });

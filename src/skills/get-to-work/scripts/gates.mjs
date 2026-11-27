@@ -87,7 +87,9 @@
 //     fields             the ten fields `## 1.` … `## 10.` appear once each, in order, each with content.
 //     budget-limits      field 9 has `budget: spawns|rounds|hours|no-progress <integer>`.
 //     stage-limits       field 9 has `budget: timeout-implement|timeout-fix|timeout-expand|timeout-merge|timeout-review
-//                        <integer>`.
+//                        <integer>`. `budget: timeout-verify` (#215) and `budget: wake-check` are not required: a
+//                        ledger without them, one a run began before they existed, passes, and tick.mjs uses their
+//                        defaults (30 and 20).
 //     session            when CLAUDE_CODE_SESSION_ID is set, the ledger's first `session:` line is that id.
 //     rule-files         field 10 has at least one `rule: <path>` line; every one is an absolute path to a file.
 //   Ledger lines take hooks/runs.mjs's line shape: an optional list bullet, optional backticks.

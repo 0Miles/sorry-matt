@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { main as verify, fullChecks } from '../src/skills/get-to-work/scripts/verify.mjs';
+import { main as verify, fullChecks, defaultDeps as verifyDeps } from '../src/skills/get-to-work/scripts/verify.mjs';
 import { main as state } from '../src/skills/get-to-work/scripts/state.mjs';
 
 const NOW = '2026-03-10T12:00:00Z';
@@ -174,6 +174,105 @@ test('bad input and refusals', (t) => {
   assert.equal(unknown.code, 3);
   assert.match(unknown.err, /not an integration branch/);
   assert.equal(verify([join(r.dir, 'missing.json'), LINE, '--worktree', r.repo, '--reason', 'no-origin']).code, 1);
+});
+
+// ---- #215: the check bounds ------------------------------------------------------------------------------------------
+
+/** A check that never ends and never prints. */
+const hang = `node -e "setInterval(()=>{},1e9)"`;
+/** verify with shortened bound units: --timeout <minutes> counts `minuteMs` each; `idleMs` is the idle bound. */
+const bounded = (r, { minuteMs = 60_000, idleMs = 60_000, timeout = null } = {}) =>
+  verify([r.statePath, LINE, '--worktree', r.repo, '--now', NOW, '--reason', 'no-origin', ...(timeout ? ['--timeout', timeout] : [])], {
+    ...verifyDeps(),
+    minuteMs,
+    idleMs,
+  });
+const gone = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return e.code === 'ESRCH';
+  }
+};
+
+for (const [kind, bounds] of [
+  // bounds wide enough that the first check (a node start-up, slow in a loaded parallel run) is never cut
+  ['limit', { minuteMs: 3000, timeout: '1' }],
+  ['idle', { idleMs: 3000 }],
+]) {
+  test(`#215: a check past its ${kind} bound is killed: exit 6, verdict timeout, the rest skipped, nothing recorded`, (t) => {
+    const r = setup(t, {});
+    r.commit({ 'docs/agents/commands.md': contract(fenced(say('first'), hang, mark(join(r.dir, 'after')))) });
+    const sha = r.git('rev-parse', 'HEAD');
+    const before = r.stateText();
+    const started = Date.now();
+    const res = bounded(r, bounds);
+    assert.equal(res.code, 6, res.err);
+    assert.ok(Date.now() - started < 20_000, 'killed at the bound, not left to run');
+    const out = JSON.parse(res.out);
+    const log = join(r.dir, 'runs', 'run-1', 'verify', `line-a-${sha}.log`);
+    assert.deepEqual(out, {
+      format: 'sorry-matt/verify@1',
+      branch: LINE,
+      sha,
+      verdict: 'timeout',
+      check: hang,
+      kind,
+      log,
+      checks: [
+        { command: say('first'), exit: 0, signal: null },
+        { command: hang, exit: null, signal: null, timeout: kind },
+      ],
+    });
+    assert.equal(r.count('after'), 0, 'a check after the timeout does not run');
+    assert.equal(r.stateText(), before, 'the state is unchanged');
+    assert.deepEqual(r.records(), [], 'neither red nor green: no per-SHA record');
+    const text = readFileSync(log, 'utf8');
+    assert.match(text, /first\s+exit 0\s+\$ node -e "setInterval/);
+    assert.ok(text.endsWith(`$ ${hang}\ntimeout ${kind}\n`), `the check's part ends with timeout ${kind}: ${JSON.stringify(text)}`);
+  });
+}
+
+test('#215: a check that keeps printing is not idle; --timeout defaults to 30 minutes and must be a whole number', (t) => {
+  const r = setup(t, {});
+  const chatty = `node -e "let n=0;const i=setInterval(()=>{console.log(n);if(++n===10)clearInterval(i)},500)"`;
+  r.commit({ 'docs/agents/commands.md': contract(fenced(chatty)) });
+  const res = bounded(r, { idleMs: 2500 });
+  assert.equal(res.code, 0, res.err);
+  assert.equal(JSON.parse(res.out).result, 'green', 'about 5 s of output, never 2.5 s of silence');
+  // no --timeout: 30 units; with 200 ms units a check gets 6 s, so a 0.8 s check passes and the hang is killed late
+  const nap = `node -e "setTimeout(()=>{},800)"`;
+  r.commit({ 'docs/agents/commands.md': contract(fenced(nap, hang)) });
+  const started = Date.now();
+  const late = bounded(r, { minuteMs: 200 });
+  const took = Date.now() - started;
+  assert.equal(late.code, 6, late.err);
+  const out = JSON.parse(late.out);
+  assert.deepEqual([out.kind, out.checks.map((c) => c.exit)], ['limit', [0, null]]);
+  assert.ok(took >= 800 + 6000, `the hang ran its 30 units: ${took} ms in all`);
+  for (const bad of ['0', '-5', '1.5', 'soon']) assert.equal(r.run('--reason', 'no-origin', '--timeout', bad).code, 2, `--timeout ${bad}`);
+});
+
+test('#215: a timeout kills the whole process tree, grandchildren included', (t) => {
+  const r = setup(t, {});
+  const pidFile = join(r.dir, 'pids');
+  // the check (under the shell) starts a long-lived grandchild and writes "<its own pid> <the grandchild's pid>"
+  const parent = `node -e "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e9)'],{stdio:'ignore'});require('fs').writeFileSync('${fwd(pidFile)}',process.pid+' '+c.pid);setInterval(()=>{},1e9)"`;
+  r.commit({ 'docs/agents/commands.md': contract(fenced(parent)) });
+  const res = bounded(r, { minuteMs: 3000, timeout: '1' });
+  const pids = existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim().split(' ').map(Number) : [];
+  // cleaned up here, not in t.after: setup's hook removes the temp dir first, and fails while they hold it
+  try {
+    assert.equal(res.code, 6, res.err);
+    assert.equal(JSON.parse(res.out).kind, 'limit');
+    assert.equal(pids.length, 2, 'the grandchild started before the bound');
+    const until = Date.now() + 10_000;
+    while (pids.some((p) => !gone(p)) && Date.now() < until) execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},100)']);
+    assert.deepEqual(pids.filter((p) => !gone(p)), [], 'the check and its grandchild are gone');
+  } finally {
+    for (const pid of pids) if (!gone(pid)) process.kill(pid, 'SIGKILL');
+  }
 });
 
 test('fullChecks: fences, inline code, joined lines, non-shell blocks', () => {

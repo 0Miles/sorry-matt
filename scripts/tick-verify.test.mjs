@@ -7,7 +7,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as ciMain, defaultDeps as ciDeps } from '../src/skills/get-to-work/scripts/ci.mjs';
-import { root, LINE, git, write, world, distinct, stage } from './tick-world.mjs';
+import { root, LINE, REPO, git, write, world, distinct, stage } from './tick-world.mjs';
 /** Seeds the line as settled "CI does not cover the integration branch" (state.mjs ci sets it after two empty reads). */
 const settleNotCovering = (h) => {
   const st = h.state();
@@ -35,6 +35,24 @@ for (const [name, reason, setup] of [
     assert.deepEqual(L.local.map((x) => [x.sha, x.result]), [[tip, 'green']], 'one per-SHA record: the latest SHA');
     assert.ok(!h.log.some((a) => a.step === 'ci-read'), 'nothing reads CI');
     assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['delivered', 'delivered']);
+  });
+}
+
+for (const [ledgerLine, minutes] of [
+  [null, '30'],
+  ['- `budget: timeout-verify 45`', '45'],
+]) {
+  test(`#215: verify.mjs gets --timeout ${minutes}, ${ledgerLine ? "the ledger's timeout-verify" : 'the default with no timeout-verify line'}`, (t) => {
+    const h = world(t);
+    git(h.repo, 'remote', 'remove', 'origin');
+    const ledger = join(h.dir, 'runs', 'r1.md');
+    write(ledger, `<!-- sorry-matt:run active -->\n- budget: timeout-implement 30\n${ledgerLine ?? ''}\n`);
+    const s = h.tick('setup', h.path, '--tracker', 'github', '--repo', REPO, '--root', h.repo, '--base', 'main', '--ledger', ledger, '--worktrees', join(h.dir, 'wts'));
+    assert.equal(s.code, 0, s.err);
+    assert.equal(h.untilDone().then, 'done');
+    const verifies = h.log.filter((a) => a.step === 'verify-local');
+    assert.ok(verifies.length, 'the finish verifies locally');
+    for (const a of verifies) assert.equal(a.argv[a.argv.indexOf('--timeout') + 1], minutes, a.argv.join(' '));
   });
 }
 
