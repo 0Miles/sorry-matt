@@ -57,6 +57,7 @@ claude plugin validate .
   | `src/skills/get-to-work/scripts/integrate.mjs` | `scripts/integrate.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`（同上） |
   | `src/skills/get-to-work/scripts/gates.mjs` | `scripts/gates.test.mjs`、`scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`（同上） |
   | `src/skills/get-to-work/scripts/tick.mjs` | `scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs`、`scripts/git-view.test.mjs`（`gitView`） |
+  | `scripts/git-env.mjs`（測試共用的 git 環境：關掉自動 maintenance／gc，`noAutoGc` 給 bare origin；沒有自己的測試） | Full checks 的 `node --test` 那條（每支起 git 的測試檔與 `tick-world.mjs` 都在第一行 import 它） |
   | `scripts/tick-world.mjs`（tick 重播共用的 harness，沒有自己的測試） | `scripts/tick.test.mjs`、`scripts/tick-minimal.test.mjs`、`scripts/tick-review.test.mjs`、`scripts/tick-bundle.test.mjs`、`scripts/tick-verify.test.mjs`、`scripts/tick-run.test.mjs`、`scripts/tick-finish.test.mjs` |
   | `src/skills/get-to-work/scripts/merge-gate.mjs` | `scripts/merge-gate.test.mjs` |
   | `scripts/check-*.mjs`、`scripts/lib.mjs` | `scripts/checks.test.mjs` |
