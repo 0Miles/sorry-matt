@@ -183,6 +183,39 @@ test('#129: run stops at then end without recording wakeup-end, and at then done
   assert.deepEqual(done.ran, []);
 });
 
+// run keeps the git view of one list for the next while the execs run in between leave git as it was (each git process
+// costs 120-150 ms on Windows): a list reads git again only after an exec that may have changed it.
+const KEEPS_GIT = new Set(['state.mjs', 'deadline.mjs', 'brief.mjs', 'overlap.mjs', 'ci.mjs', 'frontier.mjs', 'acceptance.mjs', 'merge-gate.mjs', 'tier.mjs']);
+const keepsGit = (a) => a.argv[0] === 'gh' || (a.argv[0] === 'node' && KEEPS_GIT.has(basename(a.argv[1])));
+test('run reads git once for the lists whose execs leave it as it was, and again after an exec that may change it', (t) => {
+  const h = world(t);
+  const deps = defaultDeps();
+  const runs = [];
+  h.runTick = (...args) => {
+    const seen = { views: 0, changes: new Set() };
+    const git = (cwd, gitArgs, env) => {
+      if (gitArgs[0] === 'for-each-ref') seen.views += 1; // the one query each git view starts with
+      return deps.git(cwd, gitArgs, env);
+    };
+    const execute = (a) => {
+      if (!keepsGit(a)) seen.changes.add(a.id);
+      return { code: h.exec(a) };
+    };
+    const r = tick(['run', h.path, ...args, '--now', h.iso()], { ...deps, git, execute });
+    if (r.code === 0) runs.push({ ...seen, lists: JSON.parse(r.out).lists });
+    return r;
+  };
+  h.runWake();
+  const lists = runs.reduce((n, x) => n + x.lists.length, 0);
+  assert.ok(runs.some((x) => x.changes.size > 0), 'an exec that changes git ran (a ticket branch)');
+  for (const [i, x] of runs.entries()) {
+    const rebuilt = x.lists.slice(0, -1).filter((l) => l.ran.some((id) => x.changes.has(id))).length;
+    assert.equal(x.views, 1 + rebuilt, `run ${i + 1}: one view, and one more after each list that ran an exec that changes git`);
+  }
+  assert.ok(runs.reduce((n, x) => n + x.views, 0) < lists, `fewer views than the ${lists} lists`);
+  assert.deepEqual(Object.values(h.state().tickets).map((x) => x.stage), ['implementing', 'implementing']);
+});
+
 test('#129: run leaves a push to the host: integrate: direct lists push:main as an exec, and origin main is not pushed', (t) => {
   const h = world(t, { profile: { integrate: 'direct' } });
   let out = null;
