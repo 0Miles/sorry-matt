@@ -1070,6 +1070,42 @@ test('#220: a ticket branch gone from the repository at awaiting-ci is counted a
   assert.equal(stage(h, ID2), 'delivered');
 });
 
+test('#220: a ticket branch whose tip stays out of step with origin at awaiting-ci is counted as tip-unsynced; wait, and the merge goes on once it is in step', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1] = h.ids;
+  let ci1 = 'running';
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? ci1 : 'green');
+  for (let i = 0; i < 6 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  const branch = h.state().tickets[ID1].branch;
+  const tip = git(h.repo, 'rev-parse', branch);
+  const behind = git(h.repo, 'rev-parse', `${tip}~1`);
+  // origin's copy falls one commit behind, and the push that would put it right does not land
+  const exec = h.exec;
+  h.exec = (a) => (a.step === 'pr-push' && a.tickets[0] === ID1 ? 0 : exec(a));
+  git(h.repo, 'update-ref', `refs/remotes/origin/${branch}`, behind);
+  h.policy.unreadable = () => 'wait';
+  h.wake();
+  h.wake();
+  assert.equal(unreadables(h).length, 0, 'two wake-ups in a row: no judge yet');
+  h.wake();
+  const [j] = unreadables(h);
+  assert.ok(j, 'the third wake-up in a row brings the judge');
+  assert.deepEqual([j.meta.subject, j.meta.kind, j.meta.n], [ID1, 'tip-unsynced', 3]);
+  assert.deepEqual(j.tickets, [ID1]);
+  assert.ok(j.do.includes(`is at ${tip} here and at ${behind} on origin`), j.do);
+  assert.equal(stage(h, ID1), 'awaiting-ci', 'wait goes on waiting');
+  // in step again: the count is dropped and the merge path goes on
+  h.exec = exec;
+  git(h.repo, 'update-ref', `refs/remotes/origin/${branch}`, tip);
+  ci1 = 'green';
+  h.wake();
+  assert.ok(!h.state().tick.unreadable?.[ID1], 'the count is dropped once the tip is in step');
+  assert.equal(h.untilDone()?.then, 'done', 'the run goes on and ends');
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.deepEqual(h.state().tick.judgeLog.filter((x) => x.step === 'unreadable').map((x) => [x.kind, x.outcome]), [['tip-unsynced', 'wait']]);
+});
+
 test('#220: a queued ticket that is not stacked with no PR recorded is counted as no-pr, and stuck ends the run', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
   const [ID1, ID2] = h.ids;
