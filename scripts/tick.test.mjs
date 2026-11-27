@@ -533,7 +533,11 @@ test('#195: ticket-pr — a report carrying no commit opens no PR; the report go
   assert.match(readFileSync(briefOf(rev), 'utf8'), /git diff origin\/main\.\.\./);
 });
 
-test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull request: the redo is pushed to the same PR, with no second pr-open', (t) => {
+/**
+ * #222: a ticket-pr ticket sent back at its base sync, `via` the send-back judge (the merge agent reports
+ * unresolved) or a merge agent's timeout (review F1: the timeout's send-back outcome starts the redo over too).
+ */
+const ticketPrSendBack = (via) => (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
   const [ID1, ID2] = h.ids;
   // both tickets change a.js, though #2 predicted b.txt: the clash shows only when #2's push phase merges the base
@@ -543,11 +547,10 @@ test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull req
   h.policy['merge-agent'] = (a) => {
     h.mergeAgent = { ...a, stage: stage(h, a.tickets[0]) };
     const agent = `a${++h.agents}`;
-    h.reportsNext.push(agent); // it ran git merge --abort and reports unresolved
-    return { outcome: 'spawned', agent };
+    if (via === 'judge') h.reportsNext.push(agent); // it ran git merge --abort and reports unresolved
+    return { outcome: 'spawned', agent }; // via timeout: it never reports, and goes past its time limit
   };
-  h.policy['send-back'] = (a) => {
-    h.sendBackJudge = a;
+  const sendBack = (a) => {
     const id = a.tickets[0];
     const r = integrateMain(['send-back', h.path, id, '--conflicts', 'a.js', '--predicted', 'b.txt', '--base', 'main', '--repo', h.repo, '--now', h.iso()], { gh: h.gh });
     assert.equal(r.code, 0, r.err);
@@ -555,8 +558,14 @@ test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull req
     h.sentBack = o;
     write(join(h.W, 'sendback', `${numOf(id)}.md`), `Sent back: the old attempt is at ${o.ref} (${o.sha}); conflicts ${o.conflicts.join(', ')}.\n`);
     write(join(h.W, 'files', `${numOf(id)}.txt`), `${o.predicted.join('\n')}\n`);
+  };
+  h.policy['send-back'] = (a) => {
+    h.sendBackJudge = a;
+    sendBack(a);
     return 'sent-back';
   };
+  // TIMEOUTS.md step 2 for an overdue merge agent: send back
+  h.policy.timeout = (a) => (a.meta.stage === 'integrating' ? (sendBack(a), 'send-back') : 'reassign');
   for (let i = 0; i < 14 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
   const s = h.state();
   assert.ok(h.sentBack, 'the ticket was sent back');
@@ -565,11 +574,12 @@ test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull req
   assert.equal(stage(h, ID2), 'delivered', 'the redo walks its PR to delivered');
   const log = distinct(h.log);
   // the conflict: one sync, the ticket moved to integrating, and the merge agent handed it (not a sync per pass)
-  const sendAt = h.log.findIndex((a) => a.step === 'send-back');
+  const sendAt = h.log.findIndex((a) => (via === 'judge' ? a.step === 'send-back' : a.step === 'timeout' && a.meta.stage === 'integrating'));
+  assert.ok(sendAt >= 0, `sent back via ${via}`);
   const syncsBefore = distinct(h.log.slice(0, sendAt)).filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID2);
   assert.deepEqual(syncsBefore.map((a) => a.id), [`pr-sync:${ID2}:1`], 'one base sync before the send-back');
   assert.equal(h.mergeAgent?.stage, 'integrating', 'the merge agent is handed the conflict with the ticket at integrating');
-  assert.match(h.sendBackJudge.do, /--base main/, 'the send-back is told the base the redo is cut from');
+  if (via === 'judge') assert.match(h.sendBackJudge.do, /--base main/, 'the send-back is told the base the redo is cut from');
   assert.equal(h.sentBack.lineTip, h.prs[s.tickets[ID1].branch].mergeOid, 'under ticket-pr the tip the redo starts from is origin/main, with #1 merged');
   assert.deepEqual(h.sentBack.touched, ['a.js'], 'what the attempt changed, against origin/main');
   // the redo: cut anew from origin/main (it holds #1's a.js), the PR the same, its head replaced by the redo
@@ -590,7 +600,11 @@ test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull req
   assert.ok(h.ghCalls.filter((g) => g[0] === 'pr' && g[1] === 'create').length === 2, 'two PRs in all: one per ticket');
   assert.throws(() => git(h.repo, 'merge-base', '--is-ancestor', h.sentBack.sha, 'origin/main'), 'the old attempt is never merged');
   assert.equal(git(h.repo, 'rev-parse', h.sentBack.ref), h.sentBack.sha, 'it is kept at its sent-back ref');
-});
+};
+
+test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull request: the redo is pushed to the same PR, with no second pr-open', ticketPrSendBack('judge'));
+
+test("#222 review F1: ticket-pr — a merge agent's timeout sent back the same way: nothing pushed before the redo reports, no recheck", ticketPrSendBack('timeout'));
 
 // ---- integrate: ticket-pr — the merge path (#196) ------------------------------------------------------------------
 

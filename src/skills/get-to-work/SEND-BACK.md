@@ -14,7 +14,8 @@
 3. **加寬預測**：把輸出的 `predicted` 寫回該票的預計檔案。
 4. 重派由 tick 在下一個派票點做：沿用驗收快照，從整合分支最新尖端重建同名分支。舊嘗試只供參考，不合併。
    `ticket-pr` 下從 fixed point 的最新尖端重建；重做的 agent 回報 commit 後，tick 發 `pr-push` 到同一支 PR，不再
-   `pr-open`，而 `pr-push` 以 `--force-with-lease`（lease 在舊嘗試推上去的 head）換掉 PR 的 head。
+   `pr-open`，而 `pr-push` 以 `--force-with-lease` 換掉 PR 的 head：head 從 origin 讀，必須屬於留在 `sent-back` ref
+   的舊嘗試，lease 就在它上面；別人推上去的 head 不屬於舊嘗試，`pr-push` 拒絕（3）、不覆蓋，交給人處理。
 
 **標卡住**（本 skill 各處寫「標卡住」時都照這裡做）：
 

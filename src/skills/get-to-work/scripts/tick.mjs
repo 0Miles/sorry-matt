@@ -3761,6 +3761,18 @@ export function record(path, id, flags, now, deps) {
   const live = () => load(path);
   const ticket = (tid) => live().tickets[tid];
   const flag = (tid) => (book.flags[tid] ??= {});
+  /**
+   * #222: a ticket sent back for a redo — by the send-back judge or a merge agent's timeout — starts over. Under
+   * ticket-pr the redo's base syncs are attempts of their own (its first is not the rerun after the old attempt's
+   * conflict, so it brings no recheck), and the old attempt's report is not the redo's: nothing is pushed to the
+   * pull request before the redo reports.
+   */
+  const sentBack = (tid) => {
+    const f = flag(tid);
+    delete f.sendBack;
+    if (f.prSync !== undefined || book.done[`pr-sync:${tid}:1`]) f.prSync = f.prSyncFrom = (f.prSync ?? 1) + 1;
+    delete f.agentReport;
+  };
   const stageIf = (tid, to, reason) => {
     const t = ticket(tid);
     if (t && t.stage !== to) S('stage', to, tid, ...(reason ? ['--reason', reason] : []));
@@ -4025,17 +4037,10 @@ export function record(path, id, flags, now, deps) {
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
       if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
       break;
-    case 'send-back': {
-      const f = flag(tickets[0]);
-      delete f.sendBack;
-      // #222 (ticket-pr): the redo's base syncs are attempts of their own — its first is not the rerun after the old
-      // attempt's conflict, so it is not taken for a resolution that needs a recheck
-      if (f.prSync !== undefined || book.done[`pr-sync:${tickets[0]}:1`]) f.prSync = f.prSyncFrom = (f.prSync ?? 1) + 1;
-      // the old attempt's report is not the redo's: nothing is pushed to the pull request before the redo reports
-      delete f.agentReport;
+    case 'send-back':
+      sentBack(tickets[0]);
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
       break;
-    }
     // #196: the ticket-pr merge path's judges
     case 'pr-red':
       // #197: the fix round is pointed at the saved failing output, not at review findings
@@ -4085,7 +4090,10 @@ export function record(path, id, flags, now, deps) {
       if (outcome === 'reassign') for (const x of tickets) flag(x).redispatch = { mode: 'spawn', reassign: true };
       else if (outcome === 'stuck') for (const x of tickets) stageIf(x, 'stuck', flags.value ?? 'timed out twice');
       else if (outcome === 'awaiting-ruling') for (const x of tickets) stageIf(x, 'awaiting-ruling', flags.value ?? 'timed out');
-      else if (outcome === 'send-back') stageIf(tid, 'candidate', flags.value ?? 'the merge agent timed out: sent back');
+      else if (outcome === 'send-back') {
+        sentBack(tid);
+        stageIf(tid, 'candidate', flags.value ?? 'the merge agent timed out: sent back');
+      }
       else if (outcome === 'collected') {
         if (book.agents[meta.agent]) book.agents[meta.agent].status = 'collected';
         if (meta.stage === 'implementing' || meta.stage === 'fixing') delete flag(tid).agentReport; // #138: an earlier round's report is not this one's; the review has it written

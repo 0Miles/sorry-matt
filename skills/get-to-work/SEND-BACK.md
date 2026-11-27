@@ -21,7 +21,9 @@ integration. Do not force a resolution: redo the ticket from the latest integrat
    is rebuilt from the latest tip of the integration branch. The old attempt is reference only, never merged. Under
    `ticket-pr` it is rebuilt from the latest tip of the fixed point; once the redo's agent reports a commit, tick
    issues `pr-push` to the same PR, never a second `pr-open`, and `pr-push` replaces the PR's head with
-   `--force-with-lease` (leased on the head the old attempt pushed).
+   `--force-with-lease`: the head is read from origin, must be part of the old attempt kept at the `sent-back` ref,
+   and the lease is on it; a head someone else pushed is not part of it, so `pr-push` refuses (3) and overwrites
+   nothing, for a person to sort out.
 
 **Mark stuck** (whenever this skill says "mark stuck", do this):
 

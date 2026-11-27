@@ -101,10 +101,12 @@
 //              `git push -u origin <branch>` otherwise. A ticket branch is never a protected branch (the ticket
 //              branch rule holds), so the push always runs here and the output carries no `host` marker. #222: a
 //              ticket sent back (`sendBacks` 1 or more) is redone from its fixed point, so origin's head of the
-//              branch (the old attempt) is not in the redo's history: when that head is no ancestor of the branch,
-//              the push is `git push --force-with-lease=refs/heads/<branch>:<that head>` — the same pull request
-//              takes the redo, and a head someone else moved meanwhile refuses it. A ticket never sent back is
-//              never force-pushed.
+//              branch (the old attempt) is not in the redo's history. That head is read from origin
+//              (`git ls-remote`, never the tracking ref a fetch moves); when it is no ancestor of the branch, it must
+//              be part of the old attempt kept at `sent-back-<sendBacks>` (an ancestor of that ref, or the ref
+//              itself), and the push is `git push --force-with-lease=refs/heads/<branch>:<that head>`: the same
+//              pull request takes the redo. A head that is not part of it (someone else pushed to the PR branch) is
+//              refused (3), nothing pushed. A ticket never sent back is never force-pushed.
 //              Output: { "format", "command": "pr-push", "ticket", "branch", "stacked", "pushed": "git push" |
 //                        "git push --force-with-lease" | "gh stack push", "head": "<sha pushed>" }
 // pr-merge     integrate: ticket-pr only (#194). Brings a reviewed ticket-level PR (recorded with pr-open) to
@@ -692,11 +694,18 @@ function prPush(ctx, rest, _flags) {
     ghStack(ctx, stackCwd(repo, branch), 'push');
     pushed = 'gh stack push';
   } else {
-    // #222: a redo after a send-back is cut anew from the base, so the pull request's head (the old attempt, kept
-    // at its sent-back ref) is not in its history: it is replaced, leased on that head, on the same pull request
-    const remote = commitOf(repo, `refs/remotes/origin/${branch}`);
+    // #222: a redo after a send-back is cut anew from the base, so the pull request's head (the old attempt) is not
+    // in its history. Origin's head is read from origin itself, never from the tracking ref a fetch moves; it is
+    // replaced — leased on it, on the same pull request — only when it is part of the old attempt kept at the
+    // sent-back ref. A head that is not (someone else pushed to the PR branch) is refused, and nothing is pushed.
     const tip = branchTip(repo, branch);
-    if (t.sendBacks >= 1 && remote !== null && !isAncestor(repo, remote, tip)) {
+    const remote = t.sendBacks >= 1 ? (tryGit(repo, 'ls-remote', 'origin', `refs/heads/${branch}`) ?? '').split(/\s+/)[0] || null : null;
+    if (remote !== null && !(commitOf(repo, remote) !== null && isAncestor(repo, remote, tip))) {
+      const ref = keptRef(s.run, branch, `sent-back-${t.sendBacks}`);
+      const kept = commitOf(repo, ref);
+      if (kept === null || commitOf(repo, remote) === null || !isAncestor(repo, remote, kept)) {
+        throw new Refusal(`origin's ${branch} is at ${remote}, which is not part of the old attempt kept at ${ref}: someone else pushed to the pull request's branch; it is not overwritten`);
+      }
       git(repo, 'push', '-q', '-u', `--force-with-lease=refs/heads/${branch}:${remote}`, 'origin', branch);
       pushed = 'git push --force-with-lease';
     } else git(repo, 'push', '-q', '-u', 'origin', branch);

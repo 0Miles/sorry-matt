@@ -1255,6 +1255,20 @@ test('send-back (ticket-pr, #222): --base is the fixed point the attempt is comp
   const wt = join(dir, 'wt-redo');
   ok('ticket-init', '#1', '--branch', 'run-1/01-a', '--worktree', wt, '--base', 'main');
   const redo = work(wt, { 'a.md': 'one\nTHREE\nTWO\n' }, '#1: redo on the latest base');
+  // review F2: someone else pushes a third commit to the PR branch meanwhile. Fetched or not, pr-push refuses to
+  // overwrite it: origin's head is read from origin and is not part of the old attempt
+  const other = join(dir, 'wt-other');
+  git('worktree', 'add', '-q', '--detach', other, attempt);
+  const theirs = work(other, { 'theirs.md': 'theirs\n' }, 'a collaborator on the PR');
+  g(other, 'push', '-q', 'origin', 'HEAD:refs/heads/run-1/01-a');
+  refused(/origin's run-1\/01-a is at .*not part of the old attempt kept at refs\/sorry-matt\/run-1\/01-a\/sent-back-1/, 'pr-push', '#1');
+  git('fetch', '-q', 'origin');
+  assert.equal(git('rev-parse', 'refs/remotes/origin/run-1/01-a'), theirs, 'the tracking ref has moved to their commit');
+  refused(/not part of the old attempt/, 'pr-push', '#1');
+  assert.equal(remoteTip(bare, 'refs/heads/run-1/01-a'), theirs, "origin keeps their commit");
+  // put back as the old attempt left it (a person settles it), and the redo goes on
+  g(other, 'push', '-q', '--force', 'origin', `${attempt}:refs/heads/run-1/01-a`);
+  git('fetch', '-q', 'origin');
   const pushed = ok('pr-push', '#1');
   assert.equal(pushed.pushed, 'git push --force-with-lease');
   assert.equal(pushed.head, redo);
