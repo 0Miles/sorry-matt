@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { main as tick, defaultDeps } from '../src/skills/get-to-work/scripts/tick.mjs';
 import { main as distTick } from '../skills/get-to-work/scripts/tick.mjs';
 import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
-import { REPO, LINE, git, write, numOf, Crash, BASH, NO_BASH, world, ids, distinct, stage, briefOf, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
+import { root, REPO, LINE, git, write, numOf, Crash, BASH, NO_BASH, world, ids, distinct, stage, briefOf, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
 test('a plain run: dispatch, close-out, finish, in batches', (t) => {
   const h = world(t);
   const w1 = h.wake();
@@ -511,8 +511,28 @@ const ticketPrReplay = (main) => (t) => {
 
 test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR at the first reported commit, pushes each fix to the same PR, and nothing merges into an integration branch', ticketPrReplay(tick));
 
-// #222: the F1 pin above holds for the copy the plugin loads too; check-structure.mjs compares the bytes, this the behaviour
-test("#195 F1 (#222): the same ticket-pr replay through dist's tick.mjs (skills/get-to-work/scripts)", ticketPrReplay(distTick));
+// #222: the F1 pin above holds for the copy the plugin loads too. check-structure.mjs compares the bytes of the two
+// copies (tick.mjs and every script it imports), so what is left to pin is what depends on where the copy sits: the
+// scripts and documents its actions name. The first ticket-pr wake-up through each copy lists the same actions, the
+// dist one naming skills/ where the src one names src/skills/, and every such path it names exists.
+test("#195 F1 (#222): dist's tick.mjs (skills/get-to-work/scripts) hands out what src's does, naming its own scripts", (t) => {
+  const firstWake = (main) => {
+    const h = world(t, { profile: { integrate: 'ticket-pr' }, main });
+    git(h.repo, 'branch', LINE, 'main'); // as in the replay above: a ref by the line's name is present
+    const text = JSON.stringify(h.wake());
+    return { text: text.split(basename(h.dir)).join('<world>'), outs: JSON.parse(text) }; // the world's own name, in every spelling
+  };
+  const src = firstWake(tick);
+  const dist = firstWake(distTick);
+  const at = (where) => JSON.stringify(join(root, where)).slice(1, -1);
+  assert.ok(src.text.includes(at('src/skills/get-to-work')), 'src names its own directory');
+  assert.ok(!dist.text.includes(at('src/skills')), 'dist names nothing under src/');
+  assert.equal(dist.text, src.text.split(at('src/skills')).join(at('skills')));
+  const named = dist.outs.flatMap((o) => o.actions).flatMap((a) => [...(a.argv ?? []), ...(a.reference ?? []).map((r) => r.path)]);
+  const scripts = [...new Set(named.filter((p) => typeof p === 'string' && p.startsWith(join(root, 'skills'))))];
+  assert.ok(scripts.length >= 3, `dist's actions name its scripts and documents: ${scripts.join(', ')}`);
+  for (const p of scripts) assert.ok(existsSync(p), `${p} exists`);
+});
 
 test('#195: ticket-pr — a report carrying no commit opens no PR; the report goes on through the existing rules', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
