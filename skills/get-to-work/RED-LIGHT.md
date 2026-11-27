@@ -20,7 +20,7 @@ do not queue.
    matching rules are in the header of `scripts/review-guide.mjs`). When `unmatched` is `true` — the red came from a
    host commit, the simplify pass or the base sync, or the line has no green and the base was already red at the
    merge base (`baseCi.verdict` is `red`) — it **maps to no ticket**.
-3. **Failure output**: on a line with CI, save `gh run view <id> --log-failed` for every id in `failed` of the
+3. **Failure output**: on a line with CI, save `node <scripts>/ci.mjs failed-log <id>` (`gh run view <id> --log-failed` through ci.mjs's seam, #221) for every id in `failed` of the
    `earliestRed` entry of the same output, and, when `baseCi` is red, for every id in its `failed` as well; a local red
    is the `log` of the `verify.mjs` output. The host takes only the failing lines.
 4. **Fix, at most two rounds**:
@@ -77,7 +77,7 @@ Under `integrate: ticket-pr` (#197) there is no integration branch; a red comes 
 procedure above does not apply:
 
 - **A red PR head** (`awaiting-ci` reads `red`): this red belongs to this ticket alone — no `ci.mjs earliest-red`,
-  no earliest red SHA. tick first saves the failing output with `gh run view <id> --log-failed` (the `<id>`s from
+  no earliest red SHA. tick first saves the failing output with `ci.mjs failed-log <id>` (#221; the `<id>`s from
   the verdict output's `failed`), then hands out the `pr-red` judge. Record `fix`: the CI failure is the finding
   and goes through the batched fix — back to that ticket's original agent (a SendMessage while it is there, a
   respawn as usual when it is gone), pointed at the saved failing output, not at review findings, under the

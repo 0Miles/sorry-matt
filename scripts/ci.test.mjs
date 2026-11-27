@@ -15,7 +15,9 @@ const SHA = 'a'.repeat(40);
 // --- verdict ---------------------------------------------------------------------------------------------------
 
 let nextId = 100;
-const ghRun = (status, conclusion, workflow = 'check', event = 'push') => ({ databaseId: (nextId += 1), workflowName: workflow, event, status, conclusion });
+// Each fixture run is its own workflow (its own workflowDatabaseId) unless a test says otherwise: only the latest run
+// of a workflow and event counts (#209).
+const ghRun = (status, conclusion, workflow = 'check', event = 'push') => ({ databaseId: (nextId += 1), workflowDatabaseId: nextId, workflowName: workflow, event, status, conclusion });
 const done = (conclusion, workflow, event) => ghRun('completed', conclusion, workflow, event);
 const inProgress = (event) => ghRun('in_progress', '', 'check', event);
 
@@ -57,7 +59,7 @@ test('verdict: the output carries the format, the branch, the SHA and every run'
     failed: [],
   });
   assert.deepEqual(r.calls, [
-    ['run', 'list', '--branch', 'line', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowDatabaseId,workflowName,event,status,conclusion'],
   ]);
 });
 
@@ -198,7 +200,7 @@ test('base: reads the latest SHA of the base branch, then judges its runs like v
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(r.calls, [
     ['api', 'repos/acme/app/commits/main', '--jq', '.sha'],
-    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowName,event,status,conclusion', '--repo', 'acme/app'],
+    ['run', 'list', '--branch', 'main', '--commit', SHA, '--limit', '100', '--json', 'databaseId,workflowDatabaseId,workflowName,event,status,conclusion', '--repo', 'acme/app'],
   ]);
   assert.deepEqual([r.json.command, r.json.branch, r.json.sha, r.json.verdict, r.json.failed], ['base', 'main', SHA, 'red', [rows[0].databaseId]]);
 });
@@ -219,6 +221,73 @@ test('base: a failed SHA lookup is query-failed with no SHA, exits 0, and reads 
   }
   const runsFail = baseOf(['main'], { rows: ghFailure('HTTP 502\n') });
   assert.deepEqual([runsFail.json.sha, runsFail.json.verdict, runsFail.json.error], [SHA, 'query-failed', 'HTTP 502']);
+});
+
+test('#209: of the runs sharing a workflow and an event only the latest counts: an older red or cancelled run is left out', () => {
+  const oldRed = { ...done('failure', 'check', 'pull_request'), workflowDatabaseId: 9 };
+  const newGreen = { ...done('success', 'check', 'pull_request'), workflowDatabaseId: 9 };
+  const push = { ...done('success', 'check', 'push'), workflowDatabaseId: 9 };
+  const r = verdictOf([newGreen, oldRed, push].sort((a, b) => b.databaseId - a.databaseId));
+  assert.equal(r.json.verdict, 'green', 'the closed PR\'s old red run no longer holds the head red');
+  assert.deepEqual(r.json.runs.map((x) => x.id).sort(), [newGreen.databaseId, push.databaseId].sort());
+  assert.deepEqual(r.json.failed, []);
+  // a newer red beside an older green is red; without a workflow id the name is the key
+  const noId = (r) => ({ ...r, workflowDatabaseId: undefined });
+  const g = noId(done('success', 'lint'));
+  const red = noId(done('failure', 'lint'));
+  assert.equal(verdictOf([g, red]).json.verdict, 'red');
+  const cancelledOld = noId(done('cancelled', 'check'));
+  const rerunGreen = noId(done('success', 'check'));
+  const rr = verdictOf([cancelledOld, rerunGreen]).json;
+  assert.deepEqual([rr.verdict, rr.rerun], ['green', []], 'a cancelled run that was rerun is not rerun again');
+});
+
+test('#209: --pr <base ref>: a PR head with only a push run, where the base\'s workflows name pull_request, is no-run (no-pull-request)', () => {
+  const grep = (out, status = 0) => (cwd, args) => {
+    assert.deepEqual(args, ['grep', '-l', 'pull_request', 'origin/main', '--', '.github/workflows']);
+    if (status !== 0) throw Object.assign(new Error('git grep'), { status });
+    return out;
+  };
+  const run = (rows, git) => {
+    const r = main(['verdict', '--pr', 'origin/main', 'ticket', SHA], { ...defaultDeps(), gh: () => JSON.stringify(rows), git });
+    return r.out ? JSON.parse(r.out) : r;
+  };
+  const pushOnly = [done('success', 'check', 'push')];
+  assert.deepEqual([run(pushOnly, grep('.github/workflows/check.yml\n')).verdict, run(pushOnly, grep('.github/workflows/check.yml\n')).reason], ['no-run', 'no-pull-request']);
+  assert.equal(run(pushOnly, grep('', 1)).verdict, 'green', 'a push-only repository keeps green');
+  assert.equal(run(pushOnly, grep('', 128)).verdict, 'green', 'a grep that fails keeps the verdict');
+  assert.equal(run([...pushOnly, done('success', 'check', 'pull_request')], grep('x\n')).verdict, 'green');
+  assert.equal(run([done('failure', 'check', 'push')], grep('x\n')).verdict, 'red', 'a red push run stays red');
+  const plain = main(['verdict', 'ticket', SHA], { ...defaultDeps(), gh: () => JSON.stringify(pushOnly), git: () => assert.fail('no --pr: git is not called') });
+  assert.equal(JSON.parse(plain.out).verdict, 'green');
+});
+
+test('#209: each usage error names what the command takes', () => {
+  const deps = { ...defaultDeps(), gh: () => assert.fail('gh must not be called') };
+  for (const [argv, re] of [
+    [['verdict', 'line'], /verdict takes <branch> <sha>/],
+    [['base'], /base takes <base branch>/],
+    [['verdict', '--pr'], /--pr takes <base ref>/],
+    [['base', '--pr', 'x', 'main'], /unknown option --pr/],
+  ]) {
+    const r = main(argv, deps);
+    assert.equal(r.code, 2, JSON.stringify(argv));
+    assert.match(r.err, re);
+  }
+});
+
+test('#221: failed-log prints a red run\'s failing output through the gh seam', () => {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    return 'step 3 failed\n';
+  };
+  const r = main(['failed-log', '--repo', 'acme/app', '42'], { ...defaultDeps(), gh });
+  assert.deepEqual([r.code, r.out], [0, 'step 3 failed\n']);
+  assert.deepEqual(calls, [['run', 'view', '42', '--log-failed', '--repo', 'acme/app']]);
+  for (const argv of [['failed-log'], ['failed-log', 'x7'], ['failed-log', '1', '2']]) assert.equal(main(argv, { ...defaultDeps(), gh }).code, 2, JSON.stringify(argv));
+  const failed = main(['failed-log', '42'], { ...defaultDeps(), gh: ghFailure('HTTP 404') });
+  assert.equal(failed.code, 1, failed.err);
 });
 
 test('bad arguments exit 2', () => {
@@ -339,7 +408,7 @@ test('earliest-red: a red SHA right after a green one maps to the one ticket mer
   assert.deepEqual(j.verdicts[0].failed, [red.databaseId]);
   assert.deepEqual(j.verdicts[1].failed, []);
   assert.deepEqual(ci.calls, [
-    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowDatabaseId,workflowName,event,status,conclusion'],
   ]);
 });
 
@@ -489,8 +558,8 @@ test('earliest-red: with no green on the line and the base already red at the me
     failed: [failed.databaseId],
   });
   assert.deepEqual(ci.calls, [
-    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
-    ['run', 'list', '--branch', 'main', '--commit', r.base, '--limit', '100', '--json', 'headSha,databaseId,workflowName,event,status,conclusion'],
+    ['run', 'list', '--branch', 'line', '--limit', '200', '--json', 'headSha,databaseId,workflowDatabaseId,workflowName,event,status,conclusion'],
+    ['run', 'list', '--branch', 'main', '--commit', r.base, '--limit', '100', '--json', 'headSha,databaseId,workflowDatabaseId,workflowName,event,status,conclusion'],
   ]);
 });
 

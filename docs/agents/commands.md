@@ -142,7 +142,9 @@ src/skills/get-to-work/scripts/state.mjs#namesTwice
 src/skills/get-to-work/scripts/state.mjs#stackProblem
 src/skills/get-to-work/scripts/state.mjs#check
 src/skills/get-to-work/scripts/state.mjs#profileProblem
-src/skills/get-to-work/scripts/state.mjs#INTEGRATE_WHERE
+src/skills/get-to-work/scripts/state.mjs#OLDER_FILE_DEFAULTS
+src/skills/get-to-work/scripts/state.mjs#fillIn
+src/skills/get-to-work/scripts/cli.mjs#TRACKERS
 src/skills/get-to-work/scripts/state.mjs#integrateProblem
 src/skills/get-to-work/scripts/state.mjs#lastEntry
 src/skills/get-to-work/scripts/state.mjs#currentReview
@@ -177,7 +179,9 @@ skills/get-to-work/scripts/state.mjs#namesTwice
 skills/get-to-work/scripts/state.mjs#stackProblem
 skills/get-to-work/scripts/state.mjs#check
 skills/get-to-work/scripts/state.mjs#profileProblem
-skills/get-to-work/scripts/state.mjs#INTEGRATE_WHERE
+skills/get-to-work/scripts/state.mjs#OLDER_FILE_DEFAULTS
+skills/get-to-work/scripts/state.mjs#fillIn
+skills/get-to-work/scripts/cli.mjs#TRACKERS
 skills/get-to-work/scripts/state.mjs#integrateProblem
 skills/get-to-work/scripts/state.mjs#lastEntry
 skills/get-to-work/scripts/state.mjs#currentReview

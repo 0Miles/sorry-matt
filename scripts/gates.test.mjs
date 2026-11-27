@@ -256,6 +256,23 @@ test('freeze fails on commands-contract: the branch tip has no docs/agents/comma
   failsOnly(w.check('freeze', '--base', 'main'), 'commands-contract', /commands\.md/);
 });
 
+test('#223: under integrate: ticket-pr freeze checks only the base: no integration branch or worktree is asked for', (t) => {
+  const w = world(t);
+  w.edit((s) => {
+    s.tracker = 'github';
+  });
+  w.ok('profile', '--integrate', 'ticket-pr');
+  w.ok('add', '#1', '#2', '--line', LINE);
+  w.ok('line', LINE);
+  passes(w.check('freeze', '--base', 'main'), ['tickets', 'not-dispatched', 'commands-contract']);
+  failsOnly(w.check('freeze', '--base', 'nope'), 'commands-contract', /not a commit/);
+  const other = join(w.dir, 'main-wt');
+  w.git('worktree', 'add', '-q', '--detach', other, 'main');
+  git(other, 'rm', '-q', 'docs/agents/commands.md');
+  git(other, 'commit', '-q', '-m', 'drop the contract');
+  failsOnly(w.check('freeze', '--base', git(other, 'rev-parse', 'HEAD')), 'commands-contract', /commands\.md/);
+});
+
 // ---- ci ------------------------------------------------------------------------------------------------------------
 
 const verdict = (w, sha, v = 'green') =>

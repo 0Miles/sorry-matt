@@ -177,11 +177,11 @@
 //              Output: { "format", "command": "patch-id", "ticket", "branch", "from": "<ref>", "base": "<merge
 //                        base sha>", "head": "<sha>", "patchId": "<id>" | null }   (null: the diff is empty)
 //              Every `gh stack` call these commands make is non-interactive (explicit branch names or flags, no
-//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. Three gh behaviours are
-//              stubbed here per their docs and are #187 live-run items: whether `gh stack submit --auto` is
-//              idempotent over PRs already open lower in the stack, this layer's number being read back with
-//              `gh pr list` rather than parsed from submit's output, and `gh stack sync` naming a divergence it
-//              aborted on in its output while exiting 0.
+//              wizard) and runs with GH_STACK_NO_UPDATE_NOTIFIER=1 in its environment. The #187 live run (#199,
+//              docs/agents/environment.md) confirmed that `gh stack submit --auto` is idempotent over PRs already open
+//              lower in the stack and that this layer's number is read back with `gh pr list`; how `gh stack sync`
+//              names a divergence it aborted on while exiting 0 is still stubbed per its docs, read from stdout and
+//              stderr both (#219).
 // merge        Integrates one ticket (stage queued, integrating, or delivered for a rerun) in the integration
 //              worktree, which must have the ticket's line checked out. The steps, in order; each one checks
 //              whether it is already done and only does what is missing, so a rerun after an interruption at any
@@ -362,7 +362,7 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { UsageError, run, gh, canonical, failure, parseJson, runIfEntry } from './cli.mjs';
 import { main as stateMain, load, leadOf, TERMINAL, profileOf } from './state.mjs';
-import { ticketOwners } from './merges.mjs';
+import { mergeCommand, ticketOwners } from './merges.mjs';
 import { scan, ownRows, lastRecordIndex, sectionAt } from './ticket.mjs';
 import { main as gateMain } from './merge-gate.mjs';
 
@@ -474,7 +474,7 @@ const ticketOf = (s, id) => {
  * `--base` for the ticket); a `--base` that differs from the recorded one is refused before anything is touched.
  */
 function checkBase(id, t, base) {
-  const recorded = t.prBase ?? null;
+  const recorded = t.prBase;
   if (base !== undefined && recorded !== null && base !== recorded) {
     throw new Refusal(`${id}'s pull request base is ${recorded} (recorded), not --base ${base}`);
   }
@@ -482,7 +482,7 @@ function checkBase(id, t, base) {
 
 /** Records `--base` as the ticket's pull request base when none is recorded yet (after checkBase let it through). */
 function recordBase(ctx, id, t, base) {
-  if (base !== undefined && (t.prBase ?? null) === null) state(ctx, 'set', id, '--pr-base', base);
+  if (base !== undefined && t.prBase === null) state(ctx, 'set', id, '--pr-base', base);
 }
 
 // ---- commands ----------------------------------------------------------------------------------------------------
@@ -585,11 +585,11 @@ function stackCwd(repo, branch) {
 /** ticket-init under integrate: ticket-pr — cut by the ticket's #188 fields (see the header). */
 function ticketInitPr(ctx, id, s, t, flags) {
   const repo = ctx.repo;
-  const waiting = t.waitingOn ?? [];
+  const waiting = t.waitingOn;
   if (waiting.length) throw new Refusal(`${id} is waiting on ${waiting.join(', ')} to merge; no branch is cut until they are`);
   checkTicketBranch(s, id, t, flags.branch, repo);
   checkBase(id, t, flags.base);
-  const parent = t.stackParent ?? null;
+  const parent = t.stackParent;
   let from;
   if (parent !== null) {
     const up = s.tickets[parent];
@@ -669,7 +669,7 @@ function prTicket(ctx, s, id) {
   if (TERMINAL.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}, an end state`);
   const branch = recordedBranch(s, id, t, ctx.repo);
   pushable(ctx.repo, id, branch, 'ticket-pr pushes every ticket branch there');
-  return { t, branch, parent: t.stackParent ?? null };
+  return { t, branch, parent: t.stackParent };
 }
 
 /** The number of the open pull request whose head is `branch`, or null. */
@@ -750,7 +750,7 @@ function prOpen(ctx, rest, flags) {
   }
 
   // 4. record
-  if ((t.pr ?? null) !== pr) state(ctx, 'set', id, '--pr', String(pr));
+  if (t.pr !== pr) state(ctx, 'set', id, '--pr', String(pr));
   recordBase(ctx, id, t, flags.base);
   return { out: { command: 'pr-open', ticket: id, line: t.line, branch, stacked: parent !== null, pr, created, body } };
 }
@@ -798,12 +798,12 @@ function prMergeTicket(ctx, s, id, stages) {
   const t = ticketOf(s, id);
   if (!stages.includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; pr-merge takes a ticket that is ${stages.join(' or ')}`);
   const branch = recordedBranch(s, id, t, ctx.repo);
-  if ((t.pr ?? null) === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
-  return { t, branch, pr: t.pr, parent: t.stackParent ?? null };
+  if (t.pr === null) throw new Refusal(`${id} has no pull request recorded (pr-open first)`);
+  return { t, branch, pr: t.pr, parent: t.stackParent };
 }
 
 const prMergeOut = (phase, id, t, rest) => ({
-  command: 'pr-merge', phase, ticket: id, line: t.line, pr: t.pr, branch: t.branch, stacked: (t.stackParent ?? null) !== null, ...rest,
+  command: 'pr-merge', phase, ticket: id, line: t.line, pr: t.pr, branch: t.branch, stacked: t.stackParent !== null, ...rest,
 });
 
 /** Phase "push": sync the base into the ticket branch, push it, and report the head for tick's CI wake-up. */
@@ -865,7 +865,7 @@ function prMergeReady(ctx, id, s, flags) {
   // #199: a PR in a stack — stacked itself, or with a live ticket stacked on it — merges with gh stack merge only
   const inStack = parent !== null || Object.values(s.tickets).some((o) => o.stackParent === id && !['stuck', 'awaiting-ruling'].includes(o.stage));
   const send = ['merge', 'queue'].includes(gate.decision)
-    ? { status: 'host', command: inStack ? `gh stack merge ${pr} --yes --squash` : `gh pr merge ${pr}` }
+    ? { status: 'host', command: mergeCommand(pr, { stacked: inStack }) }
     : { status: 'human' };
   if (t.stage === 'queued') state(ctx, 'stage', 'integrating', id);
   recordBase(ctx, id, t, flags.base);
@@ -1341,6 +1341,35 @@ function ciMerge(ctx, id, s, wt, flags) {
 
 // ---- revert --------------------------------------------------------------------------------------------------------
 
+/**
+ * #221: one dependent of a reverted ticket, the one treatment the line revert and the ticket-pr revert share. An
+ * integrated dependent becomes stuck (`record(state)` writes its blocker record first — Local Markdown — and returns
+ * what it wrote, or 'none'); an in-flight one awaits a ruling, its branch kept at a ref and cleaned up in `cwd` (the
+ * integration worktree, or the repository under ticket-pr) unless an agent is still at work on it. Returns its row.
+ */
+function treatDependent(ctx, depId, upstream, cwd, record) {
+  const s = load(ctx.state);
+  const d = s.tickets[depId];
+  const row = { ticket: depId, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
+  if (INTEGRATED(d)) {
+    row.treatment = 'integrated';
+    row.record = record(s);
+    if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', depId, '--reason', upstream);
+  } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
+    row.treatment = 'in-flight';
+    if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', depId, '--reason', upstream);
+    if (d.assignment?.deadline) {
+      row.agent = d.assignment.agentId ?? null;
+      row.cleanup = 'agent-in-flight';
+    } else if (d.branch) {
+      row.kept = keepTip(cwd, d.branch, keptRef(s.run, d.branch, 'upstream-reverted'));
+      row.cleanup = cleanBranch(cwd, d.branch, `${depId} is awaiting a ruling`, true);
+    }
+  }
+  row.stage = load(ctx.state).tickets[depId].stage;
+  return row;
+}
+
 /** A dependent whose merge is on the line: it stays, and the dependent becomes stuck. */
 const INTEGRATED = (t) => t.merges.length > 0 && t.stage !== 'awaiting-ruling';
 
@@ -1439,36 +1468,18 @@ function revert(ctx, rest, flags) {
 
   // 4. dependents
   const upstream = `upstream reverted: ${id} (${revertShas})`;
-  const dependents = [];
-  for (const dep of deps) {
-    s = load(ctx.state);
-    const d = s.tickets[dep.id];
-    const row = { ticket: dep.id, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
-    if (INTEGRATED(d)) {
-      row.treatment = 'integrated';
-      if (local) {
-        row.record = blockLocal(wt, dep.file, line, dep.id, merges[0], [
-          `Reason: ${upstream}`,
-          ...reverts.map((r) => `Upstream merge: ${r.merge} reverted by ${r.revert}`),
-          `Integration branch: ${line}`,
-          `Run: ${s.run}`,
-        ]);
-      }
-      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep.id, '--reason', upstream);
-    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
-      row.treatment = 'in-flight';
-      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep.id, '--reason', upstream);
-      if (d.assignment?.deadline) {
-        row.agent = d.assignment.agentId ?? null;
-        row.cleanup = 'agent-in-flight';
-      } else if (d.branch) {
-        row.kept = keepTip(wt, d.branch, keptRef(s.run, d.branch, 'upstream-reverted'));
-        row.cleanup = cleanBranch(wt, d.branch, `${dep.id} is awaiting a ruling`, true);
-      }
-    }
-    row.stage = load(ctx.state).tickets[dep.id].stage;
-    dependents.push(row);
-  }
+  const dependents = deps.map((dep) =>
+    treatDependent(ctx, dep.id, upstream, wt, (s) =>
+      local
+        ? blockLocal(wt, dep.file, line, dep.id, merges[0], [
+            `Reason: ${upstream}`,
+            ...reverts.map((r) => `Upstream merge: ${r.merge} reverted by ${r.revert}`),
+            `Integration branch: ${line}`,
+            `Run: ${s.run}`,
+          ])
+        : 'none',
+    ),
+  );
 
   // 5. tip and push
   const tip = git(wt, 'rev-parse', 'HEAD');
@@ -1567,28 +1578,7 @@ function revertPr(ctx, rest, flags, s) {
 
   // 3. dependents, treated as the line revert treats them; the cleanup runs in the repository, there is no line worktree
   const upstream = `upstream reverted: ${id} (${revertShas})`;
-  const dependents = [];
-  for (const dep of deps) {
-    const live = load(ctx.state);
-    const d = live.tickets[dep];
-    const row = { ticket: dep, treatment: 'none', stage: d.stage, record: 'none', kept: null, agent: null, cleanup: null };
-    if (INTEGRATED(d)) {
-      row.treatment = 'integrated';
-      if (d.stage !== 'stuck') state(ctx, 'stage', 'stuck', dep, '--reason', upstream);
-    } else if (!TERMINAL.includes(d.stage) || (d.stage === 'awaiting-ruling' && d.reason === upstream)) {
-      row.treatment = 'in-flight';
-      if (d.stage !== 'awaiting-ruling') state(ctx, 'stage', 'awaiting-ruling', dep, '--reason', upstream);
-      if (d.assignment?.deadline) {
-        row.agent = d.assignment.agentId ?? null;
-        row.cleanup = 'agent-in-flight';
-      } else if (d.branch) {
-        row.kept = keepTip(repo, d.branch, keptRef(live.run, d.branch, 'upstream-reverted'));
-        row.cleanup = cleanBranch(repo, d.branch, `${dep} is awaiting a ruling`, true);
-      }
-    }
-    row.stage = load(ctx.state).tickets[dep].stage;
-    dependents.push(row);
-  }
+  const dependents = deps.map((dep) => treatDependent(ctx, dep, upstream, repo, () => 'none'));
 
   // 4. push the revert branch (never the base) and open the revert PR; an open one with that head is reused
   pushable(repo, id, branch, 'the revert PR needs the revert branch on origin');
@@ -1649,7 +1639,7 @@ function sendBack(ctx, rest, flags) {
   // point — origin/<--base>, or its upstream's branch when stacked — and the attempt is compared with that
   let from = `refs/heads/${t.line}`;
   if (prMode) {
-    const parent = t.stackParent ?? null;
+    const parent = t.stackParent;
     if (parent !== null) {
       const up = s.tickets[parent]?.branch;
       if (!up) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
