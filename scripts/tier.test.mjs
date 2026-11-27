@@ -218,25 +218,27 @@ test("#139: this repo's contract: agent definitions are full; other skill script
 
 // #152: this repo's contract names the state script's schema by symbol: the constants, the shape and the stage
 // rules. A change there is full however small; a change to the rest of the file (commands, IO, argument parsing)
-// goes by its line count. Both the src and the dist copy.
+// goes by its line count. Both the src and the dist copy: each case changes the two copies the same way in one diff,
+// so each copy's own contract entries must list it (or leave it out) on their own. The line counts are the two
+// copies' sum: 2 lines is still light, 102 still standard.
 test("#152: this repo's contract: the state script's schema symbols are full; the rest of it goes by line count", (t) => {
-  for (const path of ['src/skills/get-to-work/scripts/state.mjs', 'skills/get-to-work/scripts/state.mjs']) {
-    const own = { 'docs/agents/commands.md': OWN_CONTRACT, [path]: OWN_STATE };
-    for (const [what, from, to] of [
-      ['check', "need(isText(state.run), 'run', 'is not a run name');", "need(typeof state.run === 'string', 'run', 'is not a run name');"],
-      ['queueFromReview', "if (r.verdict === 'pass') return null;", "if (r.verdict !== 'stuck') return null;"],
-      ['EDGES', "delivered: ['stuck'],", "delivered: ['stuck', 'candidate'],"],
-      ['newTicket', '  sendBacks: 0,\n  fixRounds: 0,\n  reviews: [],', '  sendBacks: 0,\n  fixRounds: 1,\n  reviews: [],'],
-    ]) {
-      const out = judge(repo(t, own, { [path]: swap(OWN_STATE, from, to) }));
-      assert.deepEqual([out.tier, out.reasons, out.signals.sensitive], ['full', ['sensitive'], [path]], `${path}: ${what}`);
-    }
-    const marker = 'function parseArgs(argv, spec) {';
-    const small = judge(repo(t, own, { [path]: swap(OWN_STATE, marker, `${marker}\n  void 0;`) }));
-    assert.deepEqual([small.tier, small.reasons, small.signals.sensitive], ['light', ['few-lines'], []], `${path}: parseArgs, 1 line`);
-    const larger = judge(repo(t, own, { [path]: swap(OWN_STATE, marker, `${marker}\n${lines(51, '  void ')}`.trimEnd()) }));
-    assert.deepEqual([larger.tier, larger.reasons, larger.signals.sensitive], ['standard', ['default'], []], `${path}: parseArgs, 51 lines`);
+  const paths = ['skills/get-to-work/scripts/state.mjs', 'src/skills/get-to-work/scripts/state.mjs']; // sorted, as sensitive is
+  const both = (text) => Object.fromEntries(paths.map((p) => [p, text]));
+  const own = { 'docs/agents/commands.md': OWN_CONTRACT, ...both(OWN_STATE) };
+  for (const [what, from, to] of [
+    ['check', "need(isText(state.run), 'run', 'is not a run name');", "need(typeof state.run === 'string', 'run', 'is not a run name');"],
+    ['queueFromReview', "if (r.verdict === 'pass') return null;", "if (r.verdict !== 'stuck') return null;"],
+    ['EDGES', "delivered: ['stuck'],", "delivered: ['stuck', 'candidate'],"],
+    ['newTicket', '  sendBacks: 0,\n  fixRounds: 0,\n  reviews: [],', '  sendBacks: 0,\n  fixRounds: 1,\n  reviews: [],'],
+  ]) {
+    const out = judge(repo(t, own, both(swap(OWN_STATE, from, to))));
+    assert.deepEqual([out.tier, out.reasons, out.signals.sensitive], ['full', ['sensitive'], paths], what);
   }
+  const marker = 'function parseArgs(argv, spec) {';
+  const small = judge(repo(t, own, both(swap(OWN_STATE, marker, `${marker}\n  void 0;`))));
+  assert.deepEqual([small.tier, small.reasons, small.signals.sensitive, small.signals.codeLines], ['light', ['few-lines'], [], 2], 'parseArgs, 1 line in each');
+  const larger = judge(repo(t, own, both(swap(OWN_STATE, marker, `${marker}\n${lines(51, '  void ')}`.trimEnd()))));
+  assert.deepEqual([larger.tier, larger.reasons, larger.signals.sensitive], ['standard', ['default'], []], 'parseArgs, 51 lines in each');
 });
 
 test('#152: every state.mjs symbol the contract names resolves in the state script, src and dist alike', () => {
