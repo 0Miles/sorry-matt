@@ -313,7 +313,7 @@
 //              upstream's ticket branch for a stacked one — and `lineTip` is its tip; `--base` is refused under any
 //              other integrate. The ticket's pull request and its branch on origin are left as they are (the PR
 //              number stays recorded): the redo is pushed to the same PR by pr-push.
-// stuck       The git part of "mark stuck" (SEND-BACK.md), for a ticket with no merge recorded, at any stage but
+// stuck        The git part of "mark stuck" (SEND-BACK.md), for a ticket with no merge recorded, at any stage but
 //              awaiting-ruling (stuck: a rerun). A ticket with a merge on the line (delivered, or integrating after a
 //              refused later step) is refused: rerun merge to finish it, or revert it (revert marks it stuck).
 //                1. record  Local Markdown (`--local`, with `--worktree` the integration worktree on the ticket's
