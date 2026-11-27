@@ -2345,7 +2345,7 @@ function prIntegrating(c, id, t) {
       judge(
         `send-back:${id}:h${hist(t)}`,
         'send-back',
-        `Send ${id} back for a redo as SEND-BACK.md says (integrate.mjs send-back, then the send-back record, also written to ${c.sendBack(id)}, and the widened prediction). Record sent-back; when it was sent back once already, mark it stuck instead (SEND-BACK.md) and record stuck with --value <reason>.`,
+        `Send ${id} back for a redo as SEND-BACK.md says (integrate.mjs send-back with --base ${c.cfg.base}, then the send-back record, also written to ${c.sendBack(id)}, and the widened prediction; the pull request #${t.pr} stays open, and the redo is pushed to it). Record sent-back; when it was sent back once already, mark it stuck instead (SEND-BACK.md) and record stuck with --value <reason>.`,
         ['sent-back', 'stuck'],
         [doc('SEND-BACK.md', 'Send back for a redo')],
         { tickets: [id], line: t.line },
@@ -2367,7 +2367,9 @@ function prPushPhase(c, id, t) {
   let n = flag.prSync ?? 1;
   // A ticket back at queued with its attempt already spent (a pr-red fix round re-queued it; the push phase itself
   // leaves queued at once) starts a new attempt: the spent exec id must not swallow the new round (review F1).
-  if (t.stage === 'queued' && c.book.done[`pr-sync:${id}:${n}`]) flag.prSync = n += 1;
+  // #222: spent means it pushed (exit 0). A conflict (4) or a divergence (5) leaves the ticket at queued too, and
+  // that attempt is not spent: its merge agent or its ruling comes first, or each pass would sync again for ever.
+  if (t.stage === 'queued' && c.book.done[`pr-sync:${id}:${n}`]?.exit === 0) flag.prSync = n += 1;
   const pid = `pr-sync:${id}:${n}`;
   const out = c.tick('pr', `${keyOf(id)}-sync-${n}.json`);
   if (c.emit(exec(pid, 'pr-merge', ['node', js('integrate.mjs'), 'pr-merge', c.path, id, '--base', c.cfg.base, '--repo', c.cfg.root], { stdout: out, okExit: [0, 4, 5], tickets: [id], line: t.line })) !== null) return;
@@ -2375,7 +2377,7 @@ function prPushPhase(c, id, t) {
   if (done.exit === 0) {
     // #199: a resolved conflict of the base sync changed the ticket's own change: a recheck (the initial review's
     // tier) before the PR head's CI, as for a fix
-    if (n > 1 && c.book.done[`pr-sync:${id}:${n - 1}`]?.exit === 4 && t.reviews.length) return void stageTo(c, id, t, 'in-review');
+    if (n > (flag.prSyncFrom ?? 1) && c.book.done[`pr-sync:${id}:${n - 1}`]?.exit === 4 && t.reviews.length) return void stageTo(c, id, t, 'in-review');
     // #199: a stacked ticket's sync rebased it (new SHAs): its own patch-id against its fixed point now is compared
     // with the one taken when its review passed — the same keeps the review, any other (or none on record) rechecks
     if ((t.stackParent ?? null) !== null && t.reviews.length) {
@@ -2389,13 +2391,18 @@ function prPushPhase(c, id, t) {
   }
   if (done.exit === 4) {
     // the conflict of merging origin/<base> into the ticket branch; the rerun after the resolution is a new attempt
-    flag.prSync = n + 1;
     const handed = Object.values(c.book.agents).some((x) => x.role === 'merge' && x.tickets.includes(id) && x.at >= done.at);
     if (!handed) {
       const o = readJsonFile(c.deps, out);
       dispatchAgent(c, id, t, { role: 'merge', stage: 'integrating', mode: 'merge', worktree: c.git.wtOf(t.branch) ?? c.cfg.root, files: Array.isArray(o?.files) ? o.files : null, mergeOf: `origin/${c.cfg.base}` });
+      // #222: a conflict leaves the state as it was (integrate.mjs pr-merge), so a queued ticket is moved to
+      // integrating here, at once: back at queued its spent attempt would start a new sync, never the merge agent's
+      // wait. The attempt stays this one until the merge agent is handed the conflict.
+      if (t.stage === 'queued') stageTo(c, id, t, 'integrating', { reason: 'base sync conflict' });
+      return;
     }
-    return;
+    flag.prSync = n + 1; // handed and reported: the rerun after the resolution, now
+    return void prPushPhase(c, id, t);
   }
   // exit 5: gh stack sync aborted on stack divergence — a ruling, not a retry
   c.emit(
@@ -4018,10 +4025,17 @@ export function record(path, id, flags, now, deps) {
       if (!flags.value) throw new UsageError(`${id}: record filed with --value <issue id>`);
       if (ticket(tickets[0]).unfixedIssue !== flags.value) S('set', tickets[0], '--unfixed-issue', flags.value);
       break;
-    case 'send-back':
-      delete flag(tickets[0]).sendBack;
+    case 'send-back': {
+      const f = flag(tickets[0]);
+      delete f.sendBack;
+      // #222 (ticket-pr): the redo's base syncs are attempts of their own — its first is not the rerun after the old
+      // attempt's conflict, so it is not taken for a resolution that needs a recheck
+      if (f.prSync !== undefined || book.done[`pr-sync:${tickets[0]}:1`]) f.prSync = f.prSyncFrom = (f.prSync ?? 1) + 1;
+      // the old attempt's report is not the redo's: nothing is pushed to the pull request before the redo reports
+      delete f.agentReport;
       stageIf(tickets[0], outcome === 'stuck' ? 'stuck' : 'candidate', flags.value ?? (outcome === 'stuck' ? 'the integration conflict could not be resolved after a send back' : 'sent back for a redo'));
       break;
+    }
     // #196: the ticket-pr merge path's judges
     case 'pr-red':
       // #197: the fix round is pointed at the saved failing output, not at review findings

@@ -7,7 +7,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { main as tick } from '../src/skills/get-to-work/scripts/tick.mjs';
-import { REPO, LINE, git, write, Crash, BASH, NO_BASH, world, ids, distinct, stage, briefOf, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
+import { main as distTick } from '../skills/get-to-work/scripts/tick.mjs';
+import { main as integrateMain } from '../src/skills/get-to-work/scripts/integrate.mjs';
+import { REPO, LINE, git, write, numOf, Crash, BASH, NO_BASH, world, ids, distinct, stage, briefOf, unmatchedRed, ciFixSpawns } from './tick-world.mjs';
 test('a plain run: dispatch, close-out, finish, in batches', (t) => {
   const h = world(t);
   const w1 = h.wake();
@@ -450,8 +452,9 @@ test('#128 D2: a background spawn listed at batch 2 or later and not recorded co
 
 // ---- integrate: ticket-pr (#195) -----------------------------------------------------------------------------------
 
-test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR at the first reported commit, pushes each fix to the same PR, and nothing merges into an integration branch', (t) => {
-  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+/** #195's ticket-pr replay, through `main` — src's tick.mjs, or dist's, the copy the plugin loads (#222). */
+const ticketPrReplay = (main) => (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' }, main });
   const [ID1, ID2] = h.ids;
   // F1 pin: a ref by the line's name is present from the start; stepIntegration must never merge into it
   git(h.repo, 'branch', LINE, 'main');
@@ -504,7 +507,12 @@ test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR
   // or a no-worktree judge: the delivery went through the tickets' own pull requests (#196)
   assert.ok(log.every((a) => a.step !== 'no-worktree'), 'no no-worktree judge under ticket-pr');
   assert.equal(git(h.repo, 'rev-parse', LINE), lineSha, 'the ref by the line name is untouched');
-});
+};
+
+test('#195: ticket-pr — the ticket cuts from origin/<base>, opens its draft PR at the first reported commit, pushes each fix to the same PR, and nothing merges into an integration branch', ticketPrReplay(tick));
+
+// #222: the F1 pin above holds for the copy the plugin loads too; check-structure.mjs compares the bytes, this the behaviour
+test("#195 F1 (#222): the same ticket-pr replay through dist's tick.mjs (skills/get-to-work/scripts)", ticketPrReplay(distTick));
 
 test('#195: ticket-pr — a report carrying no commit opens no PR; the report goes on through the existing rules', (t) => {
   const h = world(t, { profile: { integrate: 'ticket-pr' } });
@@ -523,6 +531,65 @@ test('#195: ticket-pr — a report carrying no commit opens no PR; the report go
   const rev = log.find((a) => a.step === 'review' && a.tickets[0] === ID1);
   assert.equal(rev.meta.kind, 'minimal');
   assert.match(readFileSync(briefOf(rev), 'utf8'), /git diff origin\/main\.\.\./);
+});
+
+test('#222: ticket-pr — a ticket sent back at its base sync keeps its pull request: the redo is pushed to the same PR, with no second pr-open', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  // both tickets change a.js, though #2 predicted b.txt: the clash shows only when #2's push phase merges the base
+  // (#1's merge) into its branch, and the merge agent cannot resolve it
+  h.change[ID2] = { path: 'a.js' };
+  h.policy.collect = (a) => ({ implementing: 'green', fixing: 'fixed', integrating: 'unresolved' })[a.meta.stage] ?? 'logged';
+  h.policy['merge-agent'] = (a) => {
+    h.mergeAgent = { ...a, stage: stage(h, a.tickets[0]) };
+    const agent = `a${++h.agents}`;
+    h.reportsNext.push(agent); // it ran git merge --abort and reports unresolved
+    return { outcome: 'spawned', agent };
+  };
+  h.policy['send-back'] = (a) => {
+    h.sendBackJudge = a;
+    const id = a.tickets[0];
+    const r = integrateMain(['send-back', h.path, id, '--conflicts', 'a.js', '--predicted', 'b.txt', '--base', 'main', '--repo', h.repo, '--now', h.iso()], { gh: h.gh });
+    assert.equal(r.code, 0, r.err);
+    const o = JSON.parse(r.out);
+    h.sentBack = o;
+    write(join(h.W, 'sendback', `${numOf(id)}.md`), `Sent back: the old attempt is at ${o.ref} (${o.sha}); conflicts ${o.conflicts.join(', ')}.\n`);
+    write(join(h.W, 'files', `${numOf(id)}.txt`), `${o.predicted.join('\n')}\n`);
+    return 'sent-back';
+  };
+  for (let i = 0; i < 14 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  const s = h.state();
+  assert.ok(h.sentBack, 'the ticket was sent back');
+  assert.equal(s.tickets[ID2].sendBacks, 1);
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'delivered', 'the redo walks its PR to delivered');
+  const log = distinct(h.log);
+  // the conflict: one sync, the ticket moved to integrating, and the merge agent handed it (not a sync per pass)
+  const sendAt = h.log.findIndex((a) => a.step === 'send-back');
+  const syncsBefore = distinct(h.log.slice(0, sendAt)).filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID2);
+  assert.deepEqual(syncsBefore.map((a) => a.id), [`pr-sync:${ID2}:1`], 'one base sync before the send-back');
+  assert.equal(h.mergeAgent?.stage, 'integrating', 'the merge agent is handed the conflict with the ticket at integrating');
+  assert.match(h.sendBackJudge.do, /--base main/, 'the send-back is told the base the redo is cut from');
+  assert.equal(h.sentBack.lineTip, h.prs[s.tickets[ID1].branch].mergeOid, 'under ticket-pr the tip the redo starts from is origin/main, with #1 merged');
+  assert.deepEqual(h.sentBack.touched, ['a.js'], 'what the attempt changed, against origin/main');
+  // the redo: cut anew from origin/main (it holds #1's a.js), the PR the same, its head replaced by the redo
+  const pr2 = s.tickets[ID2].pr;
+  assert.equal(log.filter((a) => a.step === 'pr-open' && a.tickets[0] === ID2).length, 1, 'no second pr-open after the redo');
+  const pushes = distinct(h.log.slice(sendAt)).filter((a) => a.step === 'pr-push' && a.tickets[0] === ID2);
+  assert.equal(pushes.length, 1, `the redo's commit goes to the same PR with one pr-push: ${pushes.map((a) => a.id)}`);
+  // the redo's first base sync is an attempt of its own, not the rerun after the old conflict: no recheck
+  const redo = s.tickets[ID2].history.slice(s.tickets[ID2].history.findIndex((x) => x.to === 'candidate') + 1).map((x) => x.to);
+  assert.deepEqual(redo, ['implementing', 'in-review', 'queued', 'integrating', 'awaiting-ci', 'awaiting-merge', 'delivered']);
+  assert.deepEqual(distinct(h.log.slice(sendAt)).filter((a) => a.step === 'pr-merge' && a.tickets[0] === ID2).map((a) => a.id), [`pr-sync:${ID2}:2`], "the redo's push phase is a new attempt, run once");
+  const pushed = JSON.parse(readFileSync(pushes[0].stdout, 'utf8'));
+  assert.equal(pushed.pushed, 'git push --force-with-lease', "the old attempt is not in the redo's history: its head is replaced");
+  assert.notEqual(pushed.head, h.sentBack.lineTip, "the push waits for the redo's report: the bare rebuilt branch is never pushed");
+  assert.equal(git(h.repo, 'rev-parse', `${pushed.head}^`), h.sentBack.lineTip, 'the redo is one commit on origin/main');
+  assert.equal(pr2, h.prs[s.tickets[ID2].branch].number, 'the same PR number throughout');
+  assert.equal(Object.values(h.prs).filter((p) => p.number === pr2).length, 1);
+  assert.ok(h.ghCalls.filter((g) => g[0] === 'pr' && g[1] === 'create').length === 2, 'two PRs in all: one per ticket');
+  assert.throws(() => git(h.repo, 'merge-base', '--is-ancestor', h.sentBack.sha, 'origin/main'), 'the old attempt is never merged');
+  assert.equal(git(h.repo, 'rev-parse', h.sentBack.ref), h.sentBack.sha, 'it is kept at its sent-back ref');
 });
 
 // ---- integrate: ticket-pr — the merge path (#196) ------------------------------------------------------------------
@@ -617,6 +684,47 @@ test('#196: ticket-pr — awaiting-ci holds its in-flight slot, awaiting-merge d
   assert.equal(stage(h, ID1), 'delivered');
   if (stage(h, ID2) === 'candidate') h.wake();
   assert.equal(stage(h, ID2), 'implementing');
+});
+
+/** #222: holds `id`'s first agent work (its commit and report) until the returned function is called. */
+function holdWork(h, id) {
+  const work = h.work;
+  let held = null;
+  h.work = (agent, tid) => {
+    if (tid === id && held === null) held = () => work(agent, tid);
+    else work(agent, tid);
+  };
+  return () => held();
+}
+
+test("#222: ticket-pr — a dispatch point while a ticket is at awaiting-ci counts its planned files as running: a candidate on them waits", (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  const ID3 = '#3';
+  // a third ticket that plans #1's file: the first dispatch point holds it back
+  h.S('add', ID3, '--line', h.line);
+  h.titles[ID3] = 'Third thing';
+  h.change[ID3] = { path: 'c.js' };
+  write(join(h.W, 'files', '3.txt'), 'a.txt\n');
+  h.ci = (branch) => (branch === h.state().tickets[ID1].branch ? 'running' : 'green'); // #1's PR head CI never ends here
+  const release = holdWork(h, ID2);
+  h.wake();
+  assert.deepEqual([stage(h, ID1), stage(h, ID2), stage(h, ID3)], ['implementing', 'implementing', 'candidate']);
+  for (let i = 0; i < 4 && stage(h, ID1) !== 'awaiting-ci'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'awaiting-ci');
+  // #2 reports blocked: it leaves the pipeline, and that opens a dispatch point with #1 still at awaiting-ci
+  h.policy.collect = (a) => (a.tickets[0] === ID2 ? { outcome: 'blocked', value: 'blocked: see the status record' } : a.meta.stage === 'implementing' ? 'green' : 'fixed');
+  release();
+  const w = h.wake();
+  assert.equal(stage(h, ID2), 'awaiting-ruling');
+  assert.equal(stage(h, ID1), 'awaiting-ci', 'still waiting on its PR head CI');
+  const dispatch = w.map((o) => o.dispatch).find((d) => d?.reasons.includes('a ticket left the pipeline'));
+  assert.ok(dispatch, `the dispatch point ran: ${JSON.stringify(w.map((o) => o.dispatch))}`);
+  const plan = JSON.parse(readFileSync(join(h.W, 'overlap', `${dispatch.round}.plan.json`), 'utf8'));
+  assert.deepEqual(plan.running.map((x) => x.id), [ID1], "the awaiting-ci ticket's planned files are running");
+  const out = JSON.parse(readFileSync(join(h.W, 'overlap', `${dispatch.round}.json`), 'utf8'));
+  assert.deepEqual(out.wait.map((x) => x.id), [ID3]);
+  assert.equal(stage(h, ID3), 'candidate', "the overlap with #1's planned files holds #3 back");
 });
 
 test('#196 F1: a red PR head goes to a fix round, and the re-queued ticket re-runs the push phase and delivers', (t) => {
@@ -832,6 +940,31 @@ test('#197 review F2+F3: a base already red below the merges goes to the host, n
   assert.equal(stage(h, ID2), 'delivered');
   assert.ok(!h.state().tick.baseRed, 'the episode is closed');
   assert.ok(h.log.every((a) => a.step !== 'revert'), 'still no revert');
+});
+
+test('#222: an open base-red episode pauses new push phases: a ticket reviewed meanwhile waits at queued until the base is green', (t) => {
+  const h = world(t, { profile: { integrate: 'ticket-pr' } });
+  const [ID1, ID2] = h.ids;
+  let outsideRed = false;
+  h.ci = (branch) => (branch === 'main' && outsideRed ? 'red' : 'green');
+  h.policy['base-red-unmatched'] = () => 'settled';
+  const release = holdWork(h, ID2); // #2 reports only once the episode is open
+  for (let i = 0; i < 8 && stage(h, ID1) !== 'delivered'; i += 1) h.wake();
+  assert.equal(stage(h, ID1), 'delivered');
+  assert.equal(stage(h, ID2), 'implementing');
+  outsideRed = true; // the base turns red: the episode opens, and settled keeps it open while the base stays red
+  h.wake();
+  assert.ok(h.state().tick.baseRed, 'the episode is open');
+  release();
+  for (let i = 0; i < 3; i += 1) h.wake();
+  assert.equal(stage(h, ID2), 'queued', 'reviewed, then held at queued');
+  assert.ok(h.log.every((a) => !(a.step === 'pr-merge' && a.tickets[0] === ID2)), 'no push phase starts while the base is red');
+  // the base turns green: the episode closes, and the push phase of #2 runs on to delivery
+  outsideRed = false;
+  const greenAt = h.log.length;
+  for (let i = 0; i < 10 && h.wakes.at(-1)?.at(-1)?.then !== 'done'; i += 1) h.wake();
+  assert.equal(stage(h, ID2), 'delivered');
+  assert.ok(h.log.findIndex((a, i) => i >= greenAt && a.step === 'pr-merge' && a.tickets[0] === ID2) >= greenAt, 'the push phase runs once the base is green');
 });
 
 test('#197 review observation: a revert PR left for a person does not hold the finish; the merge is on the human-work list', (t) => {

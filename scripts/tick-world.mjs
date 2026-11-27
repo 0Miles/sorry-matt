@@ -54,9 +54,11 @@ export const localTicket = (id, title) => `# ${title}\n\nThe ticket text of ${id
 
 /**
  * A run with two tickets on one line, set up as the freeze leaves it: #1 and #2 on GitHub, or (`tracker: 'local'`)
- * two ticket files under TICKETS_DIR. `h.ids` holds the two ids. `check` is the contract's Full checks.
+ * two ticket files under TICKETS_DIR. `h.ids` holds the two ids. `check` is the contract's Full checks. `main` is the
+ * tick.mjs the run goes through: src's by default, dist's (skills/get-to-work/scripts) for a replay that pins the copy
+ * the plugin loads (#222).
  */
-export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"' } = {}) {
+export function world(t, { profile = null, tracker = 'github', check = 'node -e "process.exit(0)"', main = tick } = {}) {
   const local = tracker === 'local';
   // #195: under integrate: ticket-pr the line has no integration branch and no worktree (#193): every ticket is its
   // own pull request, cut from origin/<base>. The world then makes neither, records the line with no tip, and seeds
@@ -134,7 +136,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
     return JSON.parse(r.out);
   };
   h.state = () => JSON.parse(readFileSync(path, 'utf8'));
-  h.tick = (...args) => tick([...args, '--now', h.iso()]);
+  h.tick = (...args) => main([...args, '--now', h.iso()]);
 
   h.S('init', '--run', 'r1', ...(ticketPr ? ['--tracker', 'github'] : []));
   h.S('add', ID1, ID2, '--line', h.line);
@@ -532,7 +534,7 @@ export function world(t, { profile = null, tracker = 'github', check = 'node -e 
 
   /** `tick.mjs run`, its execs through the host's stand-in (h.exec) unless `execute` is given (#129). */
   h.execute = null;
-  h.runTick = (...args) => tick(['run', path, ...args, '--now', h.iso()], { ...defaultDeps(), execute: h.execute ?? ((a) => ({ code: h.exec(a) })) });
+  h.runTick = (...args) => main(['run', path, ...args, '--now', h.iso()], { ...defaultDeps(), execute: h.execute ?? ((a) => ({ code: h.exec(a) })) });
   /** One wake-up as SKILL.md has it with run: run, then the host does batch 1 of what is left, until end or done. */
   h.runWake = ({ minutes = 5 } = {}) => h.wake({ minutes, via: h.runTick });
   /** Wake-ups (`wake`, h.wake by default) until the run is done, at most six; returns the last output. */

@@ -19,7 +19,7 @@
 //                                  [--local <ticket file>] [--dependent <ticket>[=<ticket file>]]... [--push]
 //                                  [--base <base branch>] [--repo <dir>]     (the last two: integrate: ticket-pr)
 //   node integrate.mjs send-back   <state> <ticket> [--conflicts <file>,<file>] [--predicted <file>,<file>]
-//                                  [--repo <dir>]
+//                                  [--base <base branch>] [--repo <dir>]     (--base: integrate: ticket-pr)
 //   node integrate.mjs stuck       <state> <ticket> --reason <text> [--worktree <integration worktree>
 //                                  [--local <ticket file> [--attempts <text>]]] [--review-worktree <path>] [--push]
 //                                  [--repo <dir>]
@@ -99,9 +99,14 @@
 // pr-push      integrate: ticket-pr only (#193). Pushes a fix commit to the same pull request: the ticket branch is
 //              pushed again — `gh stack push` (in the worktree holding the branch) for a stacked ticket,
 //              `git push -u origin <branch>` otherwise. A ticket branch is never a protected branch (the ticket
-//              branch rule holds), so the push always runs here and the output carries no `host` marker.
+//              branch rule holds), so the push always runs here and the output carries no `host` marker. #222: a
+//              ticket sent back (`sendBacks` 1 or more) is redone from its fixed point, so origin's head of the
+//              branch (the old attempt) is not in the redo's history: when that head is no ancestor of the branch,
+//              the push is `git push --force-with-lease=refs/heads/<branch>:<that head>` — the same pull request
+//              takes the redo, and a head someone else moved meanwhile refuses it. A ticket never sent back is
+//              never force-pushed.
 //              Output: { "format", "command": "pr-push", "ticket", "branch", "stacked", "pushed": "git push" |
-//                        "gh stack push", "head": "<sha pushed>" }
+//                        "git push --force-with-lease" | "gh stack push", "head": "<sha pushed>" }
 // pr-merge     integrate: ticket-pr only (#194). Brings a reviewed ticket-level PR (recorded with pr-open) to
 //              mergeable: the ticket is queued or integrating (a first call moves it queued → integrating; #196:
 //              --ready also takes awaiting-ci and --merged also takes awaiting-merge, the waiting stages tick
@@ -271,8 +276,10 @@
 //              `completion` "not-found": the file at HEAD is delivered but no completion commit was found; the
 //              blocker after it still makes frontier.mjs read the ticket as stuck.
 //              Under integrate: ticket-pr (#197) the ticket's merges are on the base branch, so the revert goes out
-//              as a pull request and the base branch itself is never pushed. `--base` is required (`--local` and
-//              `--push` are refused: the record is the host's raw issue, and the revert branch is always pushed):
+//              as a pull request and the base branch itself is never pushed (#222: `--base` and `--repo` belong to
+//              this form only; under any other integrate either is a usage error, 2). `--base` is required
+//              (`--local` and `--push` are refused: the record is the host's raw issue, and the revert branch is
+//              always pushed):
 //              each merge is reverted, newest first, on the revert branch `<ticket branch>-revert`, cut from
 //              `origin/<--base>` with a worktree at `--worktree` (an existing one is reused; a merge is already
 //              reverted when a commit on the revert branch says `This reverts commit <merge>`). The ticket and each
@@ -299,7 +306,12 @@
 //              `touched` is what the old attempt changed (`git diff --name-only <line>...<ref>`); with
 //              `--predicted`, `uncovered` is touched minus predicted and `predicted` the widened list (predicted,
 //              then the conflicts and touched files not in it): the send-back record and step 2 of SEND-BACK.md.
-// stuck        The git part of "mark stuck" (SEND-BACK.md), for a ticket with no merge recorded, at any stage but
+//              #222, integrate: ticket-pr: the line has no integration branch, so `<line>` above is the ticket's
+//              fixed point — `origin/<--base>` (`--base` required for a ticket that is not stacked), or the
+//              upstream's ticket branch for a stacked one — and `lineTip` is its tip; `--base` is refused under any
+//              other integrate. The ticket's pull request and its branch on origin are left as they are (the PR
+//              number stays recorded): the redo is pushed to the same PR by pr-push.
+// stuck       The git part of "mark stuck" (SEND-BACK.md), for a ticket with no merge recorded, at any stage but
 //              awaiting-ruling (stuck: a rerun). A ticket with a merge on the line (delivered, or integrating after a
 //              refused later step) is refused: rerun merge to finish it, or revert it (revert marks it stuck).
 //                1. record  Local Markdown (`--local`, with `--worktree` the integration worktree on the ticket's
@@ -674,11 +686,23 @@ function prPush(ctx, rest, _flags) {
   const repo = ctx.repo;
   const s = load(ctx.state);
   ticketPrOnly(s, 'pr-push');
-  const { branch, parent } = prTicket(ctx, s, id);
-  if (parent !== null) ghStack(ctx, stackCwd(repo, branch), 'push');
-  else git(repo, 'push', '-q', '-u', 'origin', branch);
+  const { t, branch, parent } = prTicket(ctx, s, id);
+  let pushed = 'git push';
+  if (parent !== null) {
+    ghStack(ctx, stackCwd(repo, branch), 'push');
+    pushed = 'gh stack push';
+  } else {
+    // #222: a redo after a send-back is cut anew from the base, so the pull request's head (the old attempt, kept
+    // at its sent-back ref) is not in its history: it is replaced, leased on that head, on the same pull request
+    const remote = commitOf(repo, `refs/remotes/origin/${branch}`);
+    const tip = branchTip(repo, branch);
+    if (t.sendBacks >= 1 && remote !== null && !isAncestor(repo, remote, tip)) {
+      git(repo, 'push', '-q', '-u', `--force-with-lease=refs/heads/${branch}:${remote}`, 'origin', branch);
+      pushed = 'git push --force-with-lease';
+    } else git(repo, 'push', '-q', '-u', 'origin', branch);
+  }
   return {
-    out: { command: 'pr-push', ticket: id, branch, stacked: parent !== null, pushed: parent !== null ? 'gh stack push' : 'git push', head: branchTip(repo, branch) },
+    out: { command: 'pr-push', ticket: id, branch, stacked: parent !== null, pushed, head: branchTip(repo, branch) },
   };
 }
 
@@ -1234,6 +1258,7 @@ function revert(ctx, rest, flags) {
   const s0 = load(ctx.state);
   if (profileOf(s0).integrate === 'ticket-pr') return revertPr(ctx, rest, flags, s0);
   if (flags.base !== undefined) throw new UsageError('--base is for integrate: ticket-pr');
+  if (flags.repo !== undefined) throw new UsageError('--repo is for integrate: ticket-pr (the integration worktree is --worktree)');
   const local = flags.local !== undefined;
   const deps = (flags.dependent ?? []).map((d) => {
     const at = d.indexOf('=');
@@ -1516,6 +1541,8 @@ function sendBack(ctx, rest, flags) {
   const [id] = rest;
   const repo = ctx.repo;
   const s = load(ctx.state);
+  const prMode = profileOf(s).integrate === 'ticket-pr';
+  if (flags.base !== undefined && !prMode) throw new UsageError('--base is for integrate: ticket-pr');
   const t = ticketOf(s, id);
   const rerun = t.stage === 'candidate' && t.sendBacks >= 1;
   if (!rerun && !['queued', 'integrating'].includes(t.stage)) throw new Refusal(`${id} is ${t.stage}; send-back takes a ticket that is queued or integrating`);
@@ -1524,14 +1551,28 @@ function sendBack(ctx, rest, flags) {
   if (!t.branch) throw new Refusal(`${id} has no ticket branch recorded`);
   const branch = t.branch;
   checkTicketBranch(s, id, t, branch, repo);
-  const lineTip = branchTip(repo, t.line);
-  if (lineTip === null) throw new Refusal(`${id}'s integration branch ${t.line} does not exist`);
+  // #222: under integrate: ticket-pr the line has no integration branch: the redo is cut from the ticket's fixed
+  // point — origin/<--base>, or its upstream's branch when stacked — and the attempt is compared with that
+  let from = `refs/heads/${t.line}`;
+  if (prMode) {
+    const parent = t.stackParent ?? null;
+    if (parent !== null) {
+      const up = s.tickets[parent]?.branch;
+      if (!up) throw new Refusal(`${id} is stacked on ${parent}, which has no ticket branch recorded`);
+      from = `refs/heads/${up}`;
+    } else {
+      if (!flags.base) throw new UsageError('send-back under integrate: ticket-pr needs --base (the base branch the redo is cut from) for a ticket that is not stacked');
+      from = `origin/${flags.base}`;
+    }
+  }
+  const lineTip = commitOf(repo, from);
+  if (lineTip === null) throw new Refusal(prMode ? `${from} is not a commit; fetch the base branch first` : `${id}'s integration branch ${t.line} does not exist`);
   const k = rerun ? t.sendBacks : t.sendBacks + 1;
 
   // 1. keep
   const kept = keepTip(repo, branch, keptRef(s.run, branch, `sent-back-${k}`));
   if (kept === null) throw new Refusal(`${branch} does not exist and nothing is kept for it; there is no attempt to send back`);
-  const touched = git(repo, 'diff', '--name-only', `refs/heads/${t.line}...${kept.sha}`).split(/\r?\n/).filter(Boolean);
+  const touched = git(repo, 'diff', '--name-only', `${lineTip}...${kept.sha}`).split(/\r?\n/).filter(Boolean);
   const conflicts = list(flags.conflicts);
   let predicted = null;
   let uncovered = null;
@@ -1650,7 +1691,7 @@ const COMMANDS = {
   merge: [merge, { worktree: 'one', branch: 'one', local: 'one', checks: 'one', push: 'bool', ci: 'bool', now: 'one' }],
   'ci-init': [ciInit, { worktree: 'one', repo: 'one', now: 'one' }],
   revert: [revert, { worktree: 'one', reason: 'one', local: 'one', dependent: 'many', push: 'bool', base: 'one', repo: 'one', now: 'one' }],
-  'send-back': [sendBack, { conflicts: 'one', predicted: 'one', repo: 'one', now: 'one' }],
+  'send-back': [sendBack, { conflicts: 'one', predicted: 'one', base: 'one', repo: 'one', now: 'one' }],
   stuck: [stuck, { reason: 'one', worktree: 'one', local: 'one', attempts: 'one', 'review-worktree': 'one', push: 'bool', repo: 'one', now: 'one' }],
 };
 
